@@ -97,9 +97,10 @@ from utils import (
     log_line_included,
     predbat_log_file_prev,
     is_secret_key,
+    find_battery_temperature_cap,
 )
 from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
-from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
+from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES, BATTERY_TEMPERATURE_CURVE_TEMP_MAX
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
@@ -3473,6 +3474,9 @@ chart.render();
         """
         Return the HTML for a chart
         """
+        if chart == "Curves":
+            # Needs no plan or history, so it is shown before the first plan too
+            return self.get_curves_chart()
         now_str = self.now_utc.strftime(TIME_FORMAT)
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
@@ -3961,6 +3965,134 @@ chart.render();
 
         return text
 
+    def get_curves_chart(self):
+        """
+        The Curves chart page: a status table for each battery curve, the charge and discharge power curves against SoC on
+        one chart, and the temperature curves on a second, each plotted as the plan looks them up.
+        """
+        dashboard_values = getattr(self.base, "dashboard_values", {}) or {}
+        text = "<br><h2>Battery Curves</h2>\n"
+        text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n<tr>"
+        for heading in ("Curve", "Learned", "Source", "Learned at", "Evidence days", "Last scan"):
+            text += "<th style='padding:6px 12px;border:1px solid #555;text-align:left;'>{}</th>".format(heading)
+        text += "</tr>\n"
+        for title, name in (("Charge power", "battery_charge_power_curve"), ("Discharge power", "battery_discharge_power_curve"), ("Temperature charge", "battery_temperature_charge_curve")):
+            item = dashboard_values.get("binary_sensor.{}_{}".format(self.prefix, name), {})
+            attributes = item.get("attributes", {}) or {}
+            learned = item.get("state") == "on"
+            cells = [
+                title,
+                "Yes" if learned else ("No" if item else "Not yet run"),
+                attributes.get("source", ""),
+                attributes.get("updated") or "",
+                attributes.get("days", ""),
+                attributes.get("last_scan") or "",
+            ]
+            text += "<tr>"
+            for index, cell in enumerate(cells):
+                style = "padding:6px 12px;border:1px solid #555;"
+                if index == 1 and learned:
+                    style += "background:#00B050;color:#fff;"
+                text += "<td style='{}'>{}</td>".format(style, html_module.escape(str(cell)))
+            text += "</tr>\n"
+        text += "</table>\n"
+
+        def int_keys(curve):
+            """A curve with int keys (sensor attributes and apps.yaml can give strings)."""
+            result = {}
+            for key, value in (curve or {}).items():
+                try:
+                    result[int(key)] = float(value)
+                except (TypeError, ValueError):
+                    continue
+            return result
+
+        # SoC curves: the plan reads the value for the whole SoC percent, 1.0 where the curve does not set one
+        power_series = []
+        for label, curve, color in (("Charge", self.base.battery_charge_power_curve, "#3291a8"), ("Discharge", self.base.battery_discharge_power_curve, "#f5a442")):
+            curve = int_keys(curve)
+            power_series.append({"name": "{} curve".format(label), "data": [{"x": soc, "y": curve.get(soc, 1.0)} for soc in range(0, 101)], "color": color, "stroke_width": 3})
+        text += self.render_curve_chart(power_series, "State of charge (%)", "Fraction of the maximum rate", "Battery charge and discharge power curves", "chart_power_curve", 0, 100, y_min=0)
+
+        # Temperature curves: the curve values are a rate cap as a fraction of the battery capacity per hour (C), shown in kW
+        # when the capacity is known; find_battery_temperature_cap with a capacity of 60 and no rate limit returns the curve value itself
+        soc_max = float(getattr(self.base, "soc_max", 0) or 0)
+        scale = soc_max if soc_max > 0 else 1.0
+        unit = "kW" if soc_max > 0 else "C"
+        temperatures = list(range(-20, BATTERY_TEMPERATURE_CURVE_TEMP_MAX + 1))
+        in_use = int_keys(self.base.battery_temperature_charge_curve)
+        configured = int_keys(getattr(self.base, "battery_temperature_charge_curve_configured", {}))
+        learned = int_keys(getattr(self.base, "battery_temperature_curve_learned", {})) if getattr(self.base, "battery_temperature_charge_curve_auto", False) else {}
+        discharge = int_keys(getattr(self.base, "battery_temperature_discharge_curve", {}))
+        temperature_series = []
+        if in_use:
+            temperature_series.append({"name": "Charge cap in use", "data": [{"x": t, "y": round(find_battery_temperature_cap(t, in_use, 60.0, 1e9) * scale, 3)} for t in temperatures], "color": "#15eb8b", "stroke_width": 3})
+        if configured and configured != in_use:
+            temperature_series.append({"name": "Charge cap configured", "data": [{"x": t, "y": round(find_battery_temperature_cap(t, configured, 60.0, 1e9) * scale, 3)} for t in temperatures], "color": "#9b59b6", "stroke_width": 2, "dash": 6})
+        if learned:
+            temperature_series.append({"name": "Learned", "data": [{"x": t, "y": round(learned[t] * scale, 3)} for t in sorted(learned)], "color": "#eb2323", "stroke_width": 0, "markers": 5})
+        if discharge:
+            temperature_series.append({"name": "Discharge cap configured", "data": [{"x": t, "y": round(find_battery_temperature_cap(t, discharge, 60.0, 1e9) * scale, 3)} for t in temperatures], "color": "#f5a442", "stroke_width": 2})
+        rate_max_charge = float(getattr(self.base, "battery_rate_max_charge", 0) or 0) * 60.0
+        if temperature_series and soc_max > 0 and rate_max_charge > 0:
+            temperature_series.append({"name": "Maximum charge rate", "data": [{"x": temperatures[0], "y": round(rate_max_charge, 3)}, {"x": temperatures[-1], "y": round(rate_max_charge, 3)}], "color": "#777777", "stroke_width": 2, "dash": 4})
+        if temperature_series:
+            text += self.render_curve_chart(temperature_series, "Battery temperature (C)", "Rate cap ({})".format(unit), "Battery temperature curves", "chart_temperature_curve", temperatures[0], temperatures[-1], y_min=0)
+            text += "<p>The plan charges at the lower of the SoC curve rate and the temperature cap. A degree the curve does not set uses the 20 degree value above zero (then no cap) and the 0 degree value below.</p>\n"
+        else:
+            text += "<p>No battery temperature curve is set or learned - set <code>battery_temperature_charge_curve</code> or turn on <code>battery_temperature_charge_curve_auto</code> in apps.yaml.</p>\n"
+        return text
+
+    def render_curve_chart(self, series_data, xaxis_name, yaxis_name, chart_name, tagname, x_min, x_max, y_min=None, y_max=None):
+        """
+        Render a line chart over a numeric x axis (SoC or temperature rather than time).
+
+        series_data is a list of dicts: {"name", "data": [{"x": number, "y": number}, ...], "color", "stroke_width", "dash", "markers"}.
+        A series with stroke_width 0 and markers is drawn as points only.
+        """
+        series = [{"name": entry["name"], "data": entry["data"], "color": entry.get("color", "#3291a8")} for entry in series_data]
+        widths = [entry.get("stroke_width", 2) for entry in series_data]
+        dashes = [entry.get("dash", 0) for entry in series_data]
+        markers = [entry.get("markers", 0) for entry in series_data]
+        yaxis = {"title": {"text": yaxis_name}, "decimalsInFloat": 2}
+        if y_min is not None:
+            yaxis["min"] = y_min
+        if y_max is not None:
+            yaxis["max"] = y_max
+        options = {
+            "chart": {"type": "line", "animations": {"enabled": False}, "zoom": {"enabled": False}},
+            "series": series,
+            "stroke": {"width": widths, "curve": "stepline", "dashArray": dashes},
+            "markers": {"size": markers},
+            "xaxis": {"type": "numeric", "min": x_min, "max": x_max, "tickAmount": 10, "title": {"text": xaxis_name}},
+            "yaxis": yaxis,
+            "legend": {"position": "top"},
+            "tooltip": {"shared": False, "intersect": False},
+        }
+        # JSON in a script block: escape '<' so a name can never close the script tag
+        options_js = json.dumps(options).replace("<", "\\u003c")
+        title_js = json.dumps(str(chart_name)).replace("<", "\\u003c")
+        text = "<div id='{}'></div>\n".format(tagname)
+        text += "<script>\n"
+        text += "(function() {\n"
+        text += "  window.onresize = function(){ location.reload(); };\n"
+        text += "  var width = Math.max(window.innerWidth / 3 * 2, 600);\n"
+        text += "  var height = width / 1.68;\n"
+        text += "  var options = {};\n".format(options_js)
+        text += "  options.chart.width = width;\n"
+        text += "  options.chart.height = height;\n"
+        text += "  options.xaxis.labels = { formatter: function(value) { return Math.round(value); } };\n"
+        text += "  var container = document.getElementById('{}');\n".format(tagname)
+        text += "  var heading = document.createElement('h2');\n"
+        text += "  heading.textContent = {};\n".format(title_js)
+        text += "  var wrapper = document.createElement('div');\n"
+        text += "  wrapper.appendChild(heading);\n"
+        text += "  container.parentNode.insertBefore(wrapper, container);\n"
+        text += "  new ApexCharts(container, options).render();\n"
+        text += "})();\n"
+        text += "</script>\n"
+        return text
+
     async def html_charts(self, request):
         """
         Render apps.yaml as an HTML page
@@ -3985,13 +4117,14 @@ chart.render();
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
+        text += f'<a href="./charts?chart=Curves" class="{"active" if chart == "Curves" else ""}">Curves</a>'
         # Only show LoadML chart if ML is enabled
         if self.base.get_arg("load_ml_enable", False):
             text += f'<a href="./charts?chart=LoadML" class="{"active" if chart == "LoadML" else ""}">LoadML</a>'
             text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
-        if chart != "MarginalCosts":
+        if chart not in ("MarginalCosts", "Curves"):
             text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
         text += "</body></html>\n"

@@ -4163,8 +4163,11 @@ class Fetch:
             if found:
                 self.log("Saved computed battery {} power curve".format(kind))
                 setattr(self, name, found)
+                self.battery_power_curve_source[kind] = "learned"
+                self.battery_power_curve_updated[kind] = self.now_utc.strftime(TIME_FORMAT)
             elif default:
                 setattr(self, name, default)
+                self.battery_power_curve_source[kind] = "default"
                 self.log("Using default battery {} power curve".format(kind))
             # Stop retrying every cycle when not in auto mode
             setattr(self, computed_name, True)
@@ -4206,6 +4209,9 @@ class Fetch:
                         self.log("Restored the saved battery {} power curve".format(kind))
                         setattr(self, name, curve)
                         setattr(self, computed_name, True)
+                        self.battery_power_curve_source[kind] = "learned"
+                        updated = data.get("updated")
+                        self.battery_power_curve_updated[kind] = updated if isinstance(updated, str) else None
             return curve
 
         last_scan = self.battery_power_curve_last_scan.get(kind)
@@ -4232,11 +4238,16 @@ class Fetch:
 
         found = inverter.learn_charge_curve(samples, discharge=discharge) if samples else {}
         new_curve = curve
+        source = self.battery_power_curve_source.get(kind, "")
         if found:
-            if found != curve:
+            if found != curve or source != "learned" or not self.battery_power_curve_updated.get(kind):
                 self.log("Saved computed battery {} power curve".format(kind))
+                self.battery_power_curve_updated[kind] = self.now_utc.strftime(TIME_FORMAT)
             new_curve = found
+            source = "learned"
         elif discharge and curve and curve != default:
+            source = ""
+            self.battery_power_curve_updated[kind] = None
             self.log("Battery discharge power curve: the stored samples ({} days) no longer make a curve - aged past {} days, or too few days left after a re-scan - so it is no longer used".format(len(samples), BATTERY_POWER_CURVE_MAX_AGE_DAYS))
             new_curve = {}
 
@@ -4245,10 +4256,18 @@ class Fetch:
             if curve != default:
                 self.log("Using default battery {} power curve".format(kind))
             new_curve = default
+            source = "default"
+        if not new_curve:
+            source = ""
+        self.battery_power_curve_source[kind] = source
         saved_curve = {} if new_curve == default and not found else new_curve
         if storage and (samples != stored_samples or new_curve != curve or merged_on_load[0]):
             try:
-                payload = {"curve": {str(soc): value for soc, value in saved_curve.items()}, "samples": {day: {str(point): entry for point, entry in day_points.items()} for day, day_points in samples.items()}}
+                payload = {
+                    "curve": {str(soc): value for soc, value in saved_curve.items()},
+                    "updated": self.battery_power_curve_updated.get(kind) if saved_curve else None,
+                    "samples": {day: {str(point): entry for point, entry in day_points.items()} for day, day_points in samples.items()},
+                }
                 if not run_async(storage.save("predbat", name, payload, format="json")):
                     self.log("Warn: {}: failed to save the computed curve".format(name))
             except Exception as e:
@@ -4295,6 +4314,9 @@ class Fetch:
                 # Days scanned while the store could not be read are kept, the stored days merged under them (and saved
                 # with the next scan's merge)
                 self.battery_temperature_samples = merge_battery_temperature_samples(stored, self.battery_temperature_samples, today) if self.battery_temperature_samples else stored
+                updated = data.get("updated")
+                if isinstance(updated, str) and not self.battery_temperature_curve_updated:
+                    self.battery_temperature_curve_updated = updated
             self.battery_temperature_curve_learned, self.battery_temperature_curve_minutes = learn_battery_temperature_curve(self.battery_temperature_samples, today)
 
         scan_due = self.battery_temperature_curve_last_scan is None or (self.now_utc - self.battery_temperature_curve_last_scan) >= timedelta(minutes=BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES)
@@ -4309,31 +4331,74 @@ class Fetch:
             scanned = inverter.find_battery_temperature_samples()
             if scanned is not None:
                 merged = merge_battery_temperature_samples(self.battery_temperature_samples, scanned, today, covered_from_day=getattr(inverter, "curve_scan_coverage", {}).get("temperature"))
-                if merged != self.battery_temperature_samples:
+                learned, minutes = learn_battery_temperature_curve(merged, today)
+                learned_changed = learned != self.battery_temperature_curve_learned or (learned and not self.battery_temperature_curve_updated)
+                if learned_changed:
+                    self.log("Info: Battery temperature charge curve learned (rate in C per degree): {}".format(learned))
+                    self.battery_temperature_curve_updated = self.now_utc.strftime(TIME_FORMAT) if learned else None
+                if merged != self.battery_temperature_samples or learned_changed:
                     self.battery_temperature_samples = merged
                     if storage:
                         try:
-                            if not run_async(storage.save("predbat", "battery_temperature_curve", {"samples": merged}, format="json")):
+                            if not run_async(storage.save("predbat", "battery_temperature_curve", {"samples": merged, "updated": self.battery_temperature_curve_updated}, format="json")):
                                 self.log("Warn: battery_temperature_charge_curve_auto: failed to save the learned samples")
                         except Exception as e:
                             self.log("Warn: battery_temperature_charge_curve_auto: failed to save the learned samples: {}".format(e))
-                learned, minutes = learn_battery_temperature_curve(self.battery_temperature_samples, today)
-                if learned != self.battery_temperature_curve_learned:
-                    self.log("Info: Battery temperature charge curve learned (rate in C per degree): {}".format(learned))
                 self.battery_temperature_curve_learned, self.battery_temperature_curve_minutes = learned, minutes
 
         configured = self.battery_temperature_charge_curve_configured
         self.battery_temperature_charge_curve = overlay_battery_temperature_curve(configured, self.battery_temperature_curve_learned)
+
+    def publish_battery_curve_sensors(self):
+        """
+        Publish one binary sensor per battery curve: on while a curve learned from this battery's history is in use, with
+        the curve in use, where it came from and when it was learned in the attributes. Called every cycle, after the
+        learners, so a curve set in apps.yaml (or none at all) shows too.
+        """
+
+        def curve_text(curve):
+            """Curve with string keys in ascending order, as sensor attributes need."""
+            return {str(point): value for point, value in sorted(curve.items())}
+
+        def time_text(when):
+            """A last-scan time as TIME_FORMAT text, or None."""
+            return when.strftime(TIME_FORMAT) if when else None
+
+        for kind, icon in (("charge", "mdi:battery-charging-high"), ("discharge", "mdi:battery-arrow-down")):
+            name = "battery_{}_power_curve".format(kind)
+            curve = getattr(self, name, {}) or {}
+            source = self.battery_power_curve_source.get(kind, "") if curve else ""
+            self.dashboard_item(
+                "binary_sensor." + self.prefix + "_" + name,
+                state="on" if source == "learned" else "off",
+                attributes={
+                    "curve": curve_text(curve),
+                    "source": source or "none",
+                    "auto": bool(getattr(self, name + "_auto", False)),
+                    "updated": self.battery_power_curve_updated.get(kind) if source == "learned" else None,
+                    "last_scan": time_text(self.battery_power_curve_last_scan.get(kind)),
+                    "days": len(self.battery_power_curve_samples.get(kind, {})),
+                    "friendly_name": "Battery {} power curve learned".format(kind),
+                    "icon": icon,
+                },
+            )
+
+        auto = bool(self.battery_temperature_charge_curve_auto)
+        learned = self.battery_temperature_curve_learned if auto else {}
         self.dashboard_item(
-            self.prefix + ".battery_temperature_charge_curve",
-            state=len(self.battery_temperature_curve_learned),
+            "binary_sensor." + self.prefix + "_battery_temperature_charge_curve",
+            state="on" if learned else "off",
             attributes={
-                "curve": {str(temp): rate for temp, rate in sorted(self.battery_temperature_charge_curve.items())},
-                "learned": {str(temp): rate for temp, rate in sorted(self.battery_temperature_curve_learned.items())},
-                "learned_minutes": {str(temp): count for temp, count in sorted(self.battery_temperature_curve_minutes.items())},
-                "configured": {str(temp): rate for temp, rate in sorted(configured.items())},
-                "days": len(self.battery_temperature_samples),
-                "friendly_name": "Battery temperature charge curve (learned degrees)",
+                "curve": curve_text(self.battery_temperature_charge_curve),
+                "learned": curve_text(learned),
+                "learned_minutes": curve_text(self.battery_temperature_curve_minutes) if auto else {},
+                "configured": curve_text(self.battery_temperature_charge_curve_configured),
+                "source": "learned" if learned else ("configured" if self.battery_temperature_charge_curve else "none"),
+                "auto": auto,
+                "updated": self.battery_temperature_curve_updated if learned else None,
+                "last_scan": time_text(self.battery_temperature_curve_last_scan) if auto else None,
+                "days": len(self.battery_temperature_samples) if auto else 0,
+                "friendly_name": "Battery temperature charge curve learned",
                 "icon": "mdi:thermometer-chevron-up",
             },
         )
@@ -4986,6 +5051,7 @@ class Fetch:
             # it is only computed once, so resetting it here every cycle threw it away after the first plan
             if configured_curve or not self.computed_charge_curve:
                 self.battery_charge_power_curve = configured_curve
+                self.battery_power_curve_source["charge"] = "configured" if configured_curve else ""
         self.battery_charge_power_curve_default = self.validate_curve(self.args.get("battery_charge_power_curve_default", {}), "battery_charge_power_curve_default")
 
         # Discharge curve
@@ -4996,6 +5062,7 @@ class Fetch:
             configured_curve = self.validate_curve(self.args.get("battery_discharge_power_curve", {}), "battery_discharge_power_curve")
             if configured_curve or not self.computed_discharge_curve:
                 self.battery_discharge_power_curve = configured_curve
+                self.battery_power_curve_source["discharge"] = "configured" if configured_curve else ""
         self.battery_discharge_power_curve_default = self.validate_curve(self.args.get("battery_discharge_power_curve_default", {}), "battery_discharge_power_curve_default")
 
         # Temperature curve charge/discharge

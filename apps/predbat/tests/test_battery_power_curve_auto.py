@@ -15,7 +15,7 @@ import tempfile
 from datetime import timedelta
 
 from tests.test_infra import MockStorageComponents, make_test_storage, run_async
-from const import BATTERY_POWER_CURVE_RESCAN_MINUTES, BATTERY_POWER_CURVE_RETRY_MINUTES
+from const import BATTERY_POWER_CURVE_RESCAN_MINUTES, BATTERY_POWER_CURVE_RETRY_MINUTES, TIME_FORMAT
 
 from battery_curve import charge_day
 
@@ -31,6 +31,9 @@ FIELDS = [
     "battery_power_curve_loaded",
     "battery_power_curve_last_scan",
     "battery_power_curve_samples",
+    "battery_power_curve_source",
+    "battery_power_curve_updated",
+    "now_utc",
     "components",
 ]
 DEFAULT = {100: 0.9}
@@ -122,6 +125,14 @@ def _restart(my_predbat, auto=True, default=None, discharge_default=None):
     my_predbat.battery_power_curve_loaded = {}
     my_predbat.battery_power_curve_last_scan = {}
     my_predbat.battery_power_curve_samples = {}
+    my_predbat.battery_power_curve_source = {}
+    my_predbat.battery_power_curve_updated = {}
+
+
+def _sensor(my_predbat, kind, attribute=None):
+    """The published binary sensor for a power curve, or one of its attributes."""
+    my_predbat.publish_battery_curve_sensors()
+    return my_predbat.get_state_wrapper("binary_sensor.{}_battery_{}_power_curve".format(my_predbat.prefix, kind), attribute=attribute)
 
 
 def _stored(storage, name):
@@ -303,6 +314,44 @@ def _run(my_predbat, storage):
     failed |= _check("t12c stored day kept", set(samples) == {day0, day7}, samples)
     failed |= _check("t12c learned from both", my_predbat.battery_charge_power_curve == {99: 0.4}, my_predbat.battery_charge_power_curve)
     my_predbat.components = MockStorageComponents(storage)
+
+    print("Test 13: the curve sensors say whether a learned curve is in use, where it came from and when it was learned")
+    run_async(storage.save("predbat", "battery_charge_power_curve", {"curve": {}, "samples": {}}, format="json"))
+    run_async(storage.save("predbat", "battery_discharge_power_curve", {"curve": {}, "samples": {}}, format="json"))
+    _restart(my_predbat, default=DEFAULT)
+    inv.scan[False] = {}
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    failed |= _check("t13 default is off", _sensor(my_predbat, "charge") == "off" and _sensor(my_predbat, "charge", "source") == "default" and _sensor(my_predbat, "charge", "updated") is None, _sensor(my_predbat, "charge", "source"))
+    learned_at = my_predbat.now_utc.strftime(TIME_FORMAT)
+    inv.scan[False] = _samples(day0, {99: 0.5, 98: 0.7})
+    _rescan_due(my_predbat, "charge", BATTERY_POWER_CURVE_RETRY_MINUTES + 1)
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    failed |= _check("t13 learned is on", _sensor(my_predbat, "charge") == "on" and _sensor(my_predbat, "charge", "curve") == {"98": 0.7, "99": 0.5}, _sensor(my_predbat, "charge", "curve"))
+    failed |= _check("t13 learned date", _sensor(my_predbat, "charge", "updated") == learned_at and _sensor(my_predbat, "charge", "days") == 1 and _sensor(my_predbat, "charge", "auto") is True, _sensor(my_predbat, "charge", "updated"))
+    failed |= _check("t13 date saved", run_async(storage.load("predbat", "battery_charge_power_curve")).get("updated") == learned_at)
+    # A restart a day later restores the curve with the date it was learned, and the same curve found again keeps that date
+    _restart(my_predbat, default=DEFAULT)
+    my_predbat.now_utc = my_predbat.now_utc + timedelta(days=1)
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    failed |= _check("t13 date restored", _sensor(my_predbat, "charge") == "on" and _sensor(my_predbat, "charge", "updated") == learned_at, _sensor(my_predbat, "charge", "updated"))
+    # A changed curve (a second day's evidence) moves the date on
+    inv.scan[False] = _samples(day1, {99: 0.3})
+    _rescan_due(my_predbat, "charge", BATTERY_POWER_CURVE_RESCAN_MINUTES + 1)
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    failed |= _check("t13 new curve, new date", _sensor(my_predbat, "charge", "updated") == my_predbat.now_utc.strftime(TIME_FORMAT), _sensor(my_predbat, "charge", "updated"))
+    failed |= _check("t13 discharge not learned is off", _sensor(my_predbat, "discharge") == "off" and _sensor(my_predbat, "discharge", "source") == "none", _sensor(my_predbat, "discharge", "source"))
+    saved_args = {key: my_predbat.args.get(key) for key in ("battery_charge_power_curve",)}
+    try:
+        my_predbat.args["battery_charge_power_curve"] = {"100": 0.3}
+        my_predbat.fetch_config_options()
+        failed |= _check("t13 apps.yaml curve is off", _sensor(my_predbat, "charge") == "off" and _sensor(my_predbat, "charge", "source") == "configured" and _sensor(my_predbat, "charge", "auto") is False, _sensor(my_predbat, "charge", "source"))
+    finally:
+        for key, value in saved_args.items():
+            if value is None:
+                my_predbat.args.pop(key, None)
+            else:
+                my_predbat.args[key] = value
+        my_predbat.fetch_config_options()
 
     print("Test 12: with no storage auto mode still learns")
     my_predbat.components = MockStorageComponents(None)

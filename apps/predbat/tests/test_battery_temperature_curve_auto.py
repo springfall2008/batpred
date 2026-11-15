@@ -21,6 +21,7 @@ from predbat import PredBat
 from inverter import Inverter
 from battery_curve import charge_day, clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve
 from utils import find_battery_temperature_cap
+from const import TIME_FORMAT
 
 TEMP_SENSOR = "sensor.battery_temperature"
 HISTORY_DAYS = 3
@@ -264,16 +265,22 @@ def _test_update(my_predbat):
         curve = my_predbat.battery_temperature_charge_curve
         # 15 lies inside the learned 5-30 range, so the learned neighbours (12 and 21, both 0.26) replace the configured 0.2
         failed |= _check("t8 curve", curve.get(5) == 0.13 and curve.get(12) == 0.26 and curve.get(15) == 0.26 and curve.get(30) == 0.2 and curve.get(3) == 0.04 and curve.get(1) == 0.13, curve)
-        state = my_predbat.get_state_wrapper(my_predbat.prefix + ".battery_temperature_charge_curve")
-        attributes = my_predbat.get_state_wrapper(my_predbat.prefix + ".battery_temperature_charge_curve", attribute="learned")
-        failed |= _check("t8 published", str(state) == "4" and attributes == {"5": 0.13, "12": 0.26, "21": 0.26, "30": 0.2}, "{} {}".format(state, attributes))
+        my_predbat.battery_temperature_charge_curve_auto = True
+        my_predbat.publish_battery_curve_sensors()
+        sensor = "binary_sensor." + my_predbat.prefix + "_battery_temperature_charge_curve"
+        state = my_predbat.get_state_wrapper(sensor)
+        attributes = my_predbat.get_state_wrapper(sensor, attribute="learned")
+        updated = my_predbat.get_state_wrapper(sensor, attribute="updated")
+        failed |= _check("t8 published", state == "on" and attributes == {"5": 0.13, "12": 0.26, "21": 0.26, "30": 0.2}, "{} {}".format(state, attributes))
+        failed |= _check("t8 learned date", updated == my_predbat.now_utc.strftime(TIME_FORMAT) and my_predbat.get_state_wrapper(sensor, attribute="source") == "learned", updated)
         saved = run_async(storage.load("predbat", "battery_temperature_curve"))
-        failed |= _check("t8 saved", isinstance(saved, dict) and clean_battery_temperature_samples(saved.get("samples")) == my_predbat.battery_temperature_samples, saved)
+        failed |= _check("t8 saved", isinstance(saved, dict) and clean_battery_temperature_samples(saved.get("samples")) == my_predbat.battery_temperature_samples and saved.get("updated") == updated, saved)
 
         print("Test 9: the next cycle re-applies the overlay without scanning the history again")
         my_predbat.battery_temperature_curve_auto_update(inv)  # a second fetch_inverter_data() in the same cycle, no reset in between
         failed |= _check("t9 one scan", len(scans) == 1, scans)
-        configured = my_predbat.get_state_wrapper(my_predbat.prefix + ".battery_temperature_charge_curve", attribute="configured")
+        my_predbat.publish_battery_curve_sensors()
+        configured = my_predbat.get_state_wrapper(sensor, attribute="configured")
         failed |= _check("t9 configured still the apps.yaml curve", configured == {"3": 0.04, "15": 0.2}, configured)
         failed |= _check("t9 overlay", my_predbat.battery_temperature_charge_curve.get(5) == 0.13, my_predbat.battery_temperature_charge_curve)
         my_predbat.battery_temperature_curve_last_scan = my_predbat.now_utc - timedelta(minutes=61)
@@ -285,12 +292,14 @@ def _test_update(my_predbat):
         my_predbat.battery_temperature_samples_loaded = False
         my_predbat.battery_temperature_curve_learned = {}
         my_predbat.battery_temperature_curve_last_scan = None
+        my_predbat.battery_temperature_curve_updated = None
         my_predbat.battery_temperature_charge_curve = {}
         my_predbat.battery_temperature_charge_curve_configured = {}
         _install_history(my_predbat, enabled=False)
         my_predbat.battery_temperature_curve_auto_update(inv)
         curve = my_predbat.battery_temperature_charge_curve
         failed |= _check("t10 restored", curve.get(5) == 0.13 and curve.get(12) == 0.26, curve)
+        failed |= _check("t10 learned date restored", my_predbat.battery_temperature_curve_updated == updated, my_predbat.battery_temperature_curve_updated)
 
         print("Test 10b: a failed read at start-up does not lose the stored days")
         saved = run_async(storage.load("predbat", "battery_temperature_curve"))

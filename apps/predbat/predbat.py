@@ -672,6 +672,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_power_curve_loaded = {}  # "charge"/"discharge" -> True once the saved auto curve has been read from storage
         self.battery_power_curve_last_scan = {}  # "charge"/"discharge" -> time of the last auto curve history scan
         self.battery_power_curve_samples = {}  # "charge"/"discharge" -> {day: {soc_percent: [sum, steps, minutes]}} kept in storage with the auto curve
+        self.battery_power_curve_source = {}  # "charge"/"discharge" -> where the curve in use came from: learned, configured or default
+        self.battery_power_curve_updated = {}  # "charge"/"discharge" -> when the learned curve last changed (TIME_FORMAT string), kept in storage
         self.isCharging = False
         self.isCharging_Target = 0
         self.isExporting = False
@@ -764,6 +766,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_temperature_curve_learned = {}
         self.battery_temperature_curve_minutes = {}
         self.battery_temperature_curve_last_scan = None
+        self.battery_temperature_curve_updated = None  # when the learned temperature curve last changed (TIME_FORMAT string), kept in storage
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}
         self.battery_temperature_prediction = {}

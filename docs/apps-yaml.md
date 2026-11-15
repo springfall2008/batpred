@@ -3041,6 +3041,28 @@ Example:
     1 : 0.05
 ```
 
+### Checking the curves
+
+Predbat publishes one binary sensor per curve:
+
+- **binary_sensor.predbat_battery_charge_power_curve**
+- **binary_sensor.predbat_battery_discharge_power_curve**
+- **binary_sensor.predbat_battery_temperature_charge_curve**
+
+Each is **on** while a curve learned from your battery's history is in use, and **off** otherwise (still learning, using a default, using a curve set in `apps.yaml`, or no curve at all).
+The attributes give:
+
+- **curve** - the curve the plan is using now
+- **source** - where it came from: `learned`, `configured` (set in `apps.yaml`), `default` (from the `_default` setting) or `none`
+- **updated** - when the learned curve last changed
+- **last_scan** - when the history was last scanned
+- **days** - how many days of evidence are stored
+- **auto** - whether the curve is learned automatically
+
+The temperature sensor also has **learned** (the degrees learned), **learned_minutes** (the minutes behind each) and **configured** (your `battery_temperature_charge_curve`).
+
+The **Curves** chart in the web interface (Charts, then Curves) shows the same status, the charge and discharge power curves against SoC on one chart, and the temperature curves on a second.
+
 ## Battery temperature curves
 
 Your battery's maximum charge and discharge rate can be impacted by cold weather, Predbat can predict this if you provide a temperature sensor and define a curve.
@@ -3115,7 +3137,7 @@ If you have set **input_number.battery_rate_max_scaling**, the rate is divided b
   (a BMS or inverter limit below **battery_rate_max**) ends up planned at the rate it really charges at, below 80% SoC.
 - 0 degrees is never learned: an exact 0 is how several integrations report a missing reading.
 
-The entity **predbat.battery_temperature_charge_curve** shows how many degrees have been learned, with the learned and combined curves (and the minutes behind each degree) in its attributes.
+The entity **binary_sensor.predbat_battery_temperature_charge_curve** is on once a curve has been learned, with the learned and combined curves (and the minutes behind each degree) in its attributes - see [Checking the curves](#checking-the-curves).
 
 With more than one inverter the combined battery is learned from, as Predbat plans them as one: the batteries' power is added up and divided by their combined size, and a minute only counts when every inverter was set to charge at its maximum rate.
 Only the charge curve is learned; `battery_temperature_discharge_curve` is unchanged.

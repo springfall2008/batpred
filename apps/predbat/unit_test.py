@@ -151,6 +151,7 @@ from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
+from tests.test_web_curves_chart import run_web_curves_chart_tests
 from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol, test_pv_chart_forecast_history_is_uncalibrated
 from tests.test_currency_scale import run_currency_scale_tests
 from tests.test_web_debug_history_routes import test_web_debug_history_routes
@@ -695,6 +696,7 @@ def main():
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("web_apps_edit", run_web_apps_edit_tests, "Apps.yaml editor add/delete tests (issue #4714)", False),
         ("web_apps_filter", run_web_apps_filter_tests, "Apps.yaml page filter box tests (issue #5210)", False),
+        ("web_curves_chart", run_web_curves_chart_tests, "Curves chart page: curve sensor status, SoC and temperature curve charts", False),
         ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
         ("currency_scale", run_currency_scale_tests, "apps.yaml currency_scale widens money setting ranges tests (#6155)", False),
         ("web_chart_pv_forecast", test_pv_chart_forecast_history_is_uncalibrated, "PV chart plots the uncalibrated forecast history tests", False),

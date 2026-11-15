@@ -1626,6 +1626,7 @@ class Execute:
                 self.battery_temperature_curve_auto_update(self.inverters[0])
             self.battery_power_curve_update(self.inverters[0], discharge=False)
             self.battery_power_curve_update(self.inverters[0], discharge=True)
+            self.publish_battery_curve_sensors()
 
         # Atomically publish all accumulated totals so the web server never reads partial sums
         self.current_charge_limit_kwh = current_charge_limit_kwh
