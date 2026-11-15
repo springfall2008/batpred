@@ -206,7 +206,6 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         saved = run_async(storage.load("predbat", "battery_rate_grid_charge"))
         failed |= _check("t6 old day kept", isinstance(saved, dict) and old_day in saved.get("samples", {}), saved and sorted(saved.get("samples", {}).keys()))
 
-
         print("Test 6b: a storage outage longer than one cycle does not overwrite the stored year")
         my_predbat = _make()
         storage = make_test_storage(my_predbat, tmpdir + "/t6b")
