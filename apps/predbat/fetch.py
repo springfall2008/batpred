@@ -2858,20 +2858,31 @@ class Fetch:
         ..._bms_temperature to ..._battery_temperature, leaving the old name reading 0, so name it.
         Only the symptom triggers the warning: on older GivTCP the old name is still the right one.
 
-        Only the most recent BATTERY_TEMPERATURE_STUCK_MINUTES are checked, so the warning starts a day
-        after a sensor dies rather than once the whole fetch window has rolled over. minute_data pads the
-        oldest sample back across the window, so a sensor with a single 0 reading also counts as stuck.
+        Only the most recent BATTERY_TEMPERATURE_STUCK_MINUTES are checked, so a sensor that read a real
+        temperature within the last day is not reported. minute_data pads the oldest sample back across the
+        whole window, so a sensor whose only history is 0 - however short - is reported at once: one that
+        has never reported a temperature is as dead as one that stopped.
+
+        The plan effect is only claimed when a temperature curve is set: without one a 0 °C reading changes
+        nothing. Reported once per sensor through record_status, so it reaches the status sensor without
+        repeating every cycle, and re-armed when the sensor reads a real temperature again.
         """
         recent = [battery_temperature_history.get(minute) for minute in range(BATTERY_TEMPERATURE_STUCK_MINUTES)]
         if any(value is None or value != 0 for value in recent):
+            self.battery_temperature_stuck_warned = None
             return
         entity_id = self.get_arg("battery_temperature_history", "", indirect=False)
-        message = "Warn: battery_temperature_history sensor {} has read 0 for the last {} hours, so Predbat is planning at the 0 °C rates of your battery temperature curves - check the sensor in Home Assistant".format(
-            entity_id, int(BATTERY_TEMPERATURE_STUCK_MINUTES / 60)
-        )
+        if self.battery_temperature_stuck_warned == str(entity_id):
+            return
+        self.battery_temperature_stuck_warned = str(entity_id)
+        if self.battery_temperature_charge_curve or self.battery_temperature_discharge_curve:
+            effect = "so Predbat is planning at the 0 °C rates of your battery temperature curves"
+        else:
+            effect = "which will cap charging and discharging if you set a battery temperature curve"
+        message = "Warn: battery_temperature_history sensor {} has read 0 for the last {} hours, {} - check the sensor in Home Assistant".format(entity_id, int(BATTERY_TEMPERATURE_STUCK_MINUTES / 60), effect)
         if isinstance(entity_id, str) and re.search(r"_battery_stack_\d+_bms_temperature$", entity_id):
             message += ". GivTCP 3.6.13 renamed this sensor, use {} instead".format(re.sub(r"_bms_temperature$", "_battery_temperature", entity_id))
-        self.log(message)
+        self.record_status(message, had_errors=True)
 
     def predict_battery_temperature(self, battery_temperature_history, step):
         """

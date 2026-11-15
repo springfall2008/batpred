@@ -3051,7 +3051,7 @@ Your battery's maximum charge and discharge rate can be impacted by cold weather
 to `sensor.givtcp_battery_stack_1_battery_temperature`, and the old sensor now reads 0. If your `apps.yaml` still uses the old name,
 Predbat predicts your battery at 0 °C and plans charging and discharging at the 0 °C rates in your temperature curves.
 Check the sensor in Home Assistant and update **battery_temperature** and **battery_temperature_history** to the new name.
-Predbat logs a warning when the temperature history has read 0 for the last 24 hours.
+Predbat warns once (in the log and on its status) when the temperature history has read 0 for the last 24 hours.
 
 An example for GivEnergy Gen2 battery is below.
 
