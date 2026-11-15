@@ -442,6 +442,10 @@ class TestInverter:
         """No temperature history."""
         return None
 
+    def find_rate_grid_samples(self, discharge=False):
+        """No rate grid history (the grids gather evidence every cycle, auto mode or not)."""
+        return None
+
 
 class MockConfigProvider:
     """

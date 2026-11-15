@@ -1800,17 +1800,6 @@ class Execute:
             grid_power += inverter.grid_power
             battery_temperature += inverter.battery_temperature
 
-        # The curve learners read the whole fleet's history (the plan models it as one battery), so they run once every
-        # inverter exists and is refreshed - on a fresh start the others are only created after inverter 0. Temperature
-        # first, so the SoC curve learner can leave out the charges the temperature curve says were limited.
-        # With auto mode off the learners only gather evidence for the Curves chart (and for auto mode later).
-        if self.inverters:
-            self.battery_temperature_curve_auto_update(self.inverters[0])
-            self.battery_temperature_discharge_evidence_update(self.inverters[0])
-            self.battery_power_curve_update(self.inverters[0], discharge=False)
-            self.battery_power_curve_update(self.inverters[0], discharge=True)
-            self.publish_battery_curve_sensors()
-
         # Atomically publish all accumulated totals so the web server never reads partial sums
         self.current_charge_limit_kwh = current_charge_limit_kwh
         self.soc_max = dp3(soc_max)
@@ -1878,6 +1867,14 @@ class Execute:
                     100 - int(self.inverter_loss * 100),
                 )
             )
+
+        # The rate grids read the whole fleet's history (the plan models it as one battery), so they are updated once every
+        # inverter exists and is refreshed - on a fresh start the others are only created after inverter 0 - and after the
+        # totals above, which size the manual grid. With battery_rate_grid_auto off they only gather evidence.
+        if self.inverters:
+            self.battery_rate_grid_update(self.inverters[0], False)
+            self.battery_rate_grid_update(self.inverters[0], True)
+            self.publish_battery_rate_grid_sensors()
 
         # Work out current charge limits and publish charge limit base
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window))]

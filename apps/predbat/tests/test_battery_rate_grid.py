@@ -14,6 +14,7 @@ from datetime import date, timedelta
 
 from battery_rate_grid import manual_rate_grid, fit_rate_grid, combine_rate_grid, rate_grid_curve, rate_grid_table, merge_rate_grid_samples
 from const import BATTERY_RATE_GRID_MAX
+from utils import battery_temperature_index, find_battery_temperature_cap
 
 TODAY = "2026-11-15"
 
@@ -179,10 +180,48 @@ def test_table_and_merge():
     return failed
 
 
+def _check(name, condition, detail=""):
+    """Print and return a failure when condition is false (moved with the temperature cap tests)."""
+    if not condition:
+        print("ERROR: {} failed {}".format(name, detail))
+        return True
+    return False
+
+
+def test_temperature_cap_rules():
+    """find_battery_temperature_cap and battery_temperature_index, which manual_rate_grid builds on (moved from the old temperature curve tests)."""
+    failed = False
+    print("Test 4c: the cap looks degrees up to 30 up, and a degree the curve does not set still falls back to 20, then uncapped")
+
+    def cap_c(temp, curve):
+        """The temperature cap in C for a 10 kWh battery with no other limit."""
+        return round(find_battery_temperature_cap(temp, curve, 10.0, float("inf")) * 60 / 10.0, 3)
+
+    failed |= _check("t4c warm degree honoured", cap_c(25.5, {25: 0.4, 20: 0.3}) == 0.4)
+    failed |= _check("t4c missing degree uses 20", cap_c(27, {25: 0.4, 20: 0.3}) == 0.3)
+    failed |= _check("t4c no 20 entry is uncapped", cap_c(25, {19: 0.27}) == 1.0 and cap_c(40, {19: 0.27}) == 1.0)
+    failed |= _check("t4c hotter than 30 uses 30", cap_c(40, {30: 0.6}) == 0.6)
+    failed |= _check("t4c a curve that only sets 20 still caps every warmer reading", cap_c(35, {20: 0.3}) == 0.3)
+
+    print("Test 4d: only an exact 0 reading is treated as missing; any other cold reading uses the coldest value the curve gives")
+    fleet = {1: 0.05, 9: 0.08, 19: 0.27}  # like the fox_ess layer curve: no 0 entry
+    failed |= _check("t4d index", [battery_temperature_index(t) for t in (0, 0.0, 0.4, -0.4, 0.99, -0.99, 1.5, -1.5, -30, 45)] == [0, 0, 1, -1, 1, -1, 1, -1, -20, 30])
+    failed |= _check("t4d exact 0 with no 0 entry is uncapped", cap_c(0, fleet) == 1.0 and cap_c(0.0, fleet) == 1.0)
+    failed |= _check("t4d just above freezing uses 1", cap_c(0.4, fleet) == 0.05)
+    failed |= _check("t4d just above freezing with no 1 entry uses the 0 entry, not the 20 fallback", cap_c(0.4, {0: 0.02, 10: 0.2, 20: 0.5}) == 0.02)
+    failed |= _check("t4d a gap at 1 degree or warmer still uses 20", cap_c(3, {0: 0.02, 10: 0.2, 20: 0.5}) == 0.5)
+    failed |= _check("t4d below freezing uses the coldest set degree, not uncapped", cap_c(-0.4, fleet) == 0.05 and cap_c(-3, fleet) == 0.05 and cap_c(-25, fleet) == 0.05)
+    failed |= _check("t4d a 0 entry still covers below freezing", cap_c(-3, {0: 0.02, 1: 0.05}) == 0.02 and cap_c(0, {0: 0.02, 1: 0.05}) == 0.02)
+    failed |= _check("t4d a set negative degree is used", cap_c(-5, {-5: 0.01, 1: 0.05}) == 0.01 and cap_c(-10, {-5: 0.01, 1: 0.05}) == 0.01)
+    failed |= _check("t4d string keys", cap_c(-3, {"1": 0.05, "9": 0.08}) == 0.05)
+    failed |= _check("t4d no curve is uncapped", cap_c(-3, {}) == 1.0)
+    return failed
+
+
 def run_battery_rate_grid_tests(my_predbat=None):
     """Run the battery rate grid tests."""
     failed = False
-    for test in (test_manual_grid, test_fit_rule_and_noise, test_fit_thresholds, test_fit_no_temperature, test_fit_weights_and_cap, test_combine_and_lookup, test_table_and_merge):
+    for test in (test_manual_grid, test_fit_rule_and_noise, test_fit_thresholds, test_fit_no_temperature, test_fit_weights_and_cap, test_combine_and_lookup, test_table_and_merge, test_temperature_cap_rules):
         print("**** {} ****".format(test.__name__))
         failed = test() or failed
     return failed

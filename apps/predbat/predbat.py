@@ -689,6 +689,17 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_power_curve_source = {}  # "charge"/"discharge" -> where the curve in use came from: learned, configured or default
         self.battery_power_curve_stored = {}  # "charge"/"discharge" -> {"curve", "updated"} as last read from or written to storage, written back unchanged while auto mode is off
         self.battery_power_curve_updated = {}  # "charge"/"discharge" -> when the learned curve last changed (TIME_FORMAT string), kept in storage
+        self.battery_rate_grid_auto = True  # battery_rate_grid_auto: learn the charge/discharge rate grids from history
+        self.battery_charge_rate_grid = None  # engine grid (battery_rate_grid.py) the plan reads the charge ceiling from
+        self.battery_discharge_rate_grid = None  # ... and the discharge ceiling
+        self.battery_rate_grid_manual = {}  # "charge"/"discharge" -> the grid built from the manual curves (fallback and prior)
+        self.battery_rate_grid_learned = {}  # "charge"/"discharge" -> the learned grid, or None
+        self.battery_rate_grid_samples = {}  # "charge"/"discharge" -> {day: [[soc %, temperature or None, rate], ...]}, kept in storage
+        self.battery_rate_grid_source = {}  # "charge"/"discharge" -> learned, manual or default
+        self.battery_rate_grid_updated = {}  # "charge"/"discharge" -> when the learned grid last changed (TIME_FORMAT string), kept in storage
+        self.battery_rate_grid_last_scan = {}  # "charge"/"discharge" -> time of the last history scan
+        self.battery_rate_grid_loaded = {}  # "charge"/"discharge" -> True once the stored samples have been read
+        self.battery_rate_grid_fit_key = {}  # "charge"/"discharge" -> the manual curves and battery size the learned grid was fitted with
         self.isCharging = False
         self.isCharging_Target = 0
         self.isExporting = False

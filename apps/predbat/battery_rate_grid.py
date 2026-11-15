@@ -328,3 +328,30 @@ def merge_rate_grid_samples(stored, scanned, today, max_age_days, covered_from_d
         if value:
             merged[day] = value
     return merged
+
+
+def clean_rate_grid_samples(data):
+    """Samples read back from storage, with anything malformed dropped: {day: [[soc %, temperature or None, rate], ...]}."""
+    cleaned = {}
+    if not isinstance(data, dict):
+        return cleaned
+    for day, entries in data.items():
+        try:
+            date.fromisoformat(day)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(entries, list):
+            continue
+        rows = []
+        for entry in entries:
+            if not isinstance(entry, (list, tuple)) or len(entry) != 3:
+                continue
+            soc, temperature, rate = entry
+            if not isinstance(soc, (int, float)) or not isinstance(rate, (int, float)) or isinstance(soc, bool) or isinstance(rate, bool):
+                continue
+            if temperature is not None and (not isinstance(temperature, (int, float)) or isinstance(temperature, bool)):
+                continue
+            rows.append([soc, temperature, rate])
+        if rows:
+            cleaned[day] = rows
+    return cleaned
