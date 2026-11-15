@@ -75,6 +75,8 @@ from tests.test_car_charging_sentence import test_car_charging_sentence
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
+from tests.test_battery_temperature_curve_auto import run_battery_temperature_curve_auto_tests
+from tests.test_battery_power_curve_auto import run_battery_power_curve_auto_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
 from tests.test_optimise_solar import run_optimise_solar_tests
@@ -160,6 +162,7 @@ from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
+from tests.test_web_curves_chart import run_web_curves_chart_tests
 from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol, test_pv_chart_forecast_history_is_uncalibrated
 from tests.test_currency_scale import run_currency_scale_tests
 from tests.test_web_debug_history_routes import test_web_debug_history_routes
@@ -708,6 +711,7 @@ def main():
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("web_apps_edit", run_web_apps_edit_tests, "Apps.yaml editor add/delete tests (issue #4714)", False),
         ("web_apps_filter", run_web_apps_filter_tests, "Apps.yaml page filter box tests (issue #5210)", False),
+        ("web_curves_chart", run_web_curves_chart_tests, "Curves chart page: curve sensor status, SoC and temperature curve charts", False),
         ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
         ("currency_scale", run_currency_scale_tests, "apps.yaml currency_scale widens money setting ranges tests (#6155)", False),
         ("web_chart_pv_forecast", test_pv_chart_forecast_history_is_uncalibrated, "PV chart plots the uncalibrated forecast history tests", False),
@@ -777,6 +781,8 @@ def main():
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
+        ("battery_temperature_curve_auto", run_battery_temperature_curve_auto_tests, "Learn the battery temperature charge curve from history", False),
+        ("battery_power_curve_auto", run_battery_power_curve_auto_tests, "Auto SoC power curve kept in storage, replaced only when a scan finds data", False),
         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),

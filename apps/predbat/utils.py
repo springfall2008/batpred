@@ -41,6 +41,8 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
+    BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
 )
 import copy
 import pytz
@@ -2688,21 +2690,54 @@ def get_curve_value(curve, index, default=1.0):
     return curve.get(index, default)
 
 
+def battery_temperature_index(battery_temperature):
+    """
+    The whole degree a battery temperature reading is looked up (and learned) at.
+
+    The reading is clamped to -20..BATTERY_TEMPERATURE_CURVE_TEMP_MAX and truncated, except that a reading between -1 and
+    1 that is not exactly 0 goes to 1 (or -1): an exact 0 is how several integrations report a missing reading, so only
+    it keeps the 0 entry, and a real reading just either side of freezing is capped like its neighbours.
+    """
+    temperature = max(min(battery_temperature, BATTERY_TEMPERATURE_CURVE_TEMP_MAX), -20)
+    index = int(temperature)
+    if index == 0 and temperature != 0:
+        index = 1 if temperature > 0 else -1
+    return index
+
+
 def find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, max_rate):
     """
     Find the battery temperature cap
+
+    The reading is looked up by whole degree (battery_temperature_index()) between -20 and
+    BATTERY_TEMPERATURE_CURVE_TEMP_MAX (30); a warmer reading uses the warmest degree. A positive degree the curve does
+    not set falls back to the 20 entry (then to uncapped), as it did when 20 was the warmest degree looked up, so a curve
+    that sets 20 still caps every warmer reading it does not set and a curve without one leaves them uncapped.
+
+    A reading of exactly 0 (often a missing reading) uses the 0 entry, else is uncapped. Any other reading below 1 degree
+    whose degree the curve does not set uses the 0 entry, else the coldest degree the curve sets: a battery below
+    freezing is never expected to charge faster than the coldest rate given, and was planned uncapped when the curve had
+    no 0 entry.
     """
-    battery_temperature_idx = min(battery_temperature, 20)
-    battery_temperature_idx = max(battery_temperature_idx, -20)
-    battery_temperature_idx = int(battery_temperature_idx)  # Convert to int for proper key matching
-    # Try to get the temperature adjustment from the curve (handles both int and string keys)
+    battery_temperature_idx = battery_temperature_index(battery_temperature)
     battery_temperature_adjust = get_curve_value(battery_temperature_curve, battery_temperature_idx, None)
     if battery_temperature_adjust is None:
         # If not found, try fallback values
-        if battery_temperature_idx > 0:
-            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 20, 1.0)
-        else:
+        if battery_temperature_idx == 0:
             battery_temperature_adjust = get_curve_value(battery_temperature_curve, 0, 1.0)
+        elif battery_temperature >= 1:
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK, 1.0)
+        else:
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 0, None)
+            if battery_temperature_adjust is None:
+                coldest = None
+                for key, value in (battery_temperature_curve or {}).items():
+                    try:
+                        if coldest is None or int(key) < coldest[0]:
+                            coldest = (int(key), value)
+                    except (TypeError, ValueError):
+                        continue
+                battery_temperature_adjust = coldest[1] if coldest else 1.0
     battery_temperature_rate_cap = soc_max * battery_temperature_adjust / 60.0
 
     return min(battery_temperature_rate_cap, max_rate)
