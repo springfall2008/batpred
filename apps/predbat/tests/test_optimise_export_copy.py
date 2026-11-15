@@ -21,6 +21,7 @@ enough to keep the caller from reordering the list underneath a pending batch.
 Both halves are pinned here: that no deep copy is taken, and that the caller's window dicts still
 come back untouched - the guarantee the deepcopy was there to provide.
 """
+
 from tests.test_export_commitment import setup_single_export_window
 
 

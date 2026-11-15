@@ -22,8 +22,8 @@ is never installed and the update is aborted instead.
 
 import os
 import re
-import requests
 import yaml
+from http_sync import http_get
 import hashlib
 import tarfile
 import tempfile
@@ -113,7 +113,7 @@ def get_github_directory_listing(tag, repository=None):
     url = "https://api.github.com/repos/{}/contents/apps/predbat?ref={}".format(repository, tag)
     print("Fetching directory listing from {}".format(url))
     try:
-        r = requests.get(url, headers={})
+        r = http_get(url, headers={})
         if r.ok:
             data = r.json()
             # Filter out directories, keep only files with full metadata
@@ -265,7 +265,7 @@ def download_predbat_file_from_github(tag, filename, new_filename, repository=No
             print("Downloading {} (attempt {} of {})".format(url, attempt, attempts))
 
         try:
-            r = requests.get(url, headers={})
+            r = http_get(url, headers={})
         except Exception as e:
             print("Warn: Exception while downloading {}: {}".format(url, e))
             continue
@@ -332,7 +332,7 @@ def download_predbat_release_archive(tag, repository=None, target_dir=None):
     temp_path = None
     response = None
     try:
-        response = requests.get(url, headers={}, stream=True)
+        response = http_get(url, headers={}, stream=True, max_bytes=MAX_ARCHIVE_BYTES)
         if not response.ok:
             # Not an error in itself, the caller downloads the files individually instead
             print("Warn: No release archive at {}, status code: {}".format(url, getattr(response, "status_code", "unknown")))

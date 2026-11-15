@@ -43,9 +43,7 @@ next_joined_event_end: null
 next_joined_event_duration_in_minutes: null
 icon: mdi:leaf
 friendly_name: Octoplus Saving Session (A-4DD6C5EE)
-""".format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset
-    )
+""".format(date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, date_before_yesterday=date_before_yesterday, tz_offset=tz_offset)
 
     session_sensor = f"""
 state: '2025-01-23T12:10:11.108+{tz_offset}:00'
@@ -86,9 +84,7 @@ joined_events:
       rewarded_octopoints: null
       octopoints_per_kwh: 448
 friendly_name: Octoplus Saving Session Events (A-12345678)
-""".format(
-        date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, tz_offset=tz_offset
-    )
+""".format(date_last_year=date_last_year, date_yesterday=date_yesterday, date_today=date_today, tz_offset=tz_offset)
     ha.dummy_items["binary_sensor.octopus_energy_a_12345678_octoplus_saving_sessions"] = yaml.safe_load(session_binary)
     ha.dummy_items["event.octopus_energy_a_12345678_octoplus_saving_session_event"] = yaml.safe_load(session_sensor)
     ha.dummy_items["sensor.octopus_free_session"] = {}
@@ -124,6 +120,27 @@ friendly_name: Octoplus Saving Session Events (A-12345678)
         failed = 1
     if octopus_free_slots:
         print("ERROR: Expecting no free slots")
+        failed = 1
+    # Every joined session is kept for the History view's billing comparison, last year's included, which the planner drops
+    if [event.get("id") for event in my_predbat.octopus_saving_joined_events] != [1327, 1334, 1335, 1336]:
+        print("ERROR: Expecting every joined session kept for History, got {}".format(my_predbat.octopus_saving_joined_events))
+        failed = 1
+    # An entity HA doesn't have for a moment (after a restart, before the integration loads) leaves the list as it was rather than emptying it
+    kept = ha.dummy_items.pop("event.octopus_energy_a_12345678_octoplus_saving_session_event")
+    my_predbat.fetch_octopus_sessions()
+    ha.dummy_items["event.octopus_energy_a_12345678_octoplus_saving_session_event"] = kept
+    if [event.get("id") for event in my_predbat.octopus_saving_joined_events] != [1327, 1334, 1335, 1336]:
+        print("ERROR: Expecting the joined sessions kept while the entity has no attributes, got {}".format(my_predbat.octopus_saving_joined_events))
+        failed = 1
+    # ... and handed to it priced as the planner prices them (here 10 Octopoints a penny)
+    billing_entity = "sensor." + my_predbat.prefix + "_billing"
+    my_predbat.dashboard_item(billing_entity, state=0.0, attributes={"slots": {"import": {"2026-11-09T17:00:00Z": {"kwh": 0.0, "cost": 0.0, "standing": 0.0, "buckets": {}}}}})
+    try:
+        history_sessions = (my_predbat.history_billing() or {}).get("saving_events")
+    finally:
+        my_predbat.dashboard_item(billing_entity, state=None, attributes={})
+    if [(event["id"], event["pence_per_kwh"]) for event in history_sessions or []] != [(1327, 57.6), (1334, 19.2), (1335, 44.8), (1336, 44.8)]:
+        print("ERROR: Expecting the History billing to carry the joined sessions at their p/kWh, got {}".format(history_sessions))
         failed = 1
 
     rate_import_replicated = {}
@@ -1571,6 +1588,53 @@ def test_templates_ship_octopus_free_session(my_predbat):
         failed = True
     elif not failed:
         print(f"PASS: {checked} templates ship a working octopus_free_session alongside octopus_saving_session")
+
+    return failed
+
+
+def test_templates_do_not_watch_octopus_saving_session(my_predbat):
+    """
+    Test that no shipped template, the example apps.yaml or the watch list docs put octopus_saving_session or
+    car_charging_soc in watch_list.
+    Predbat reads both on every update cycle, so watching them only forces out-of-phase replans - and a car SoC
+    from a cloud integration changes while the car is out driving.
+    Covers GitHub issue #6106 (givenergy_ems.yaml shipped both entries live, every other template as a commented example).
+    """
+    print("Test apps.yaml templates and docs do not watch octopus_saving_session or car_charging_soc (issue #6106)")
+    failed = False
+
+    repo_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+    templates_dir = os.path.join(repo_dir, "templates")
+    watch_entry = re.compile(r"^\s*(#\s*)?-\s*['\"]?(\{octopus_saving_session\}|\+\[car_charging_soc\])['\"]?(?:\s+#.*)?\s*$", re.MULTILINE)
+
+    # The check itself: finds live and commented watch_list entries, leaves the sensor regex and car config that Predbat does read
+    for sample, expected in [
+        ("  watch_list:\n    - '{octopus_saving_session}'\n", True),
+        ("  #  - '{octopus_saving_session}'\n", True),
+        ("  #  - '{octopus_saving_session}'  # example only\n", True),
+        ("  octopus_saving_session: 're:(event.octopus_energy_saving_session_events)'\n", False),
+        ("  watch_list:\n    - '+[car_charging_soc]'\n", True),
+        ('  #   - "+[car_charging_soc]"\n', True),
+        ("  car_charging_soc:\n    - 'sensor.myenergi_my_car_soc'\n", False),
+    ]:
+        if bool(watch_entry.search(sample)) != expected:
+            print(f"ERROR: watch entry pattern gave {not expected} for {sample!r}")
+            failed = True
+
+    paths = [os.path.join(templates_dir, name) for name in sorted(os.listdir(templates_dir)) if name.endswith(".yaml")]
+    paths += [os.path.join(repo_dir, "apps", "predbat", "config", "apps.yaml"), os.path.join(repo_dir, "docs", "apps-yaml.md")]
+    for path in paths:
+        with open(path, encoding="utf-8") as handle:
+            text = handle.read()
+        for match in watch_entry.finditer(text):
+            print(f"ERROR: {os.path.relpath(path, repo_dir)} lists {match.group(2)} in watch_list")
+            failed = True
+
+    if len(paths) < 12:
+        print(f"ERROR: expected the templates to be found and checked, only saw {len(paths)} files")
+        failed = True
+    elif not failed:
+        print(f"PASS: none of {len(paths)} files list octopus_saving_session or car_charging_soc in watch_list")
 
     return failed
 

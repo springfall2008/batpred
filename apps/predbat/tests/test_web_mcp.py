@@ -1710,11 +1710,11 @@ def test_mcp_oauth_scopes(my_predbat):
         for claim in [None, ["mcp:read"], {"mcp:read": True}]:
             payload = server.verify_access_token(read_token)
             payload["scope"] = claim
-            token = web_mcp.pyjwt.encode(payload, server.jwt_secret, algorithm=server.jwt_algorithm)
+            token = web_mcp.jwt_hs256.encode(payload, server.jwt_secret)
             response, _ = await call(token, "tools/call", {"name": "get_config"})
             assert response.status == 403
         payload.pop("scope")
-        token = web_mcp.pyjwt.encode(payload, server.jwt_secret, algorithm=server.jwt_algorithm)
+        token = web_mcp.jwt_hs256.encode(payload, server.jwt_secret)
         response, _ = await call(token, "initialize")
         assert response.status == 403
         # An earlier privileged request must not lend its scopes to the next client.

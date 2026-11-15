@@ -111,8 +111,11 @@ def run_web_charts_tests(my_predbat):
     stamp = my_predbat.now_utc.strftime(TIME_FORMAT)
     forecast = {stamp: 21.5}
     entities = {"heating_test." + name: {"attributes": {"results": forecast}} for name in ("internal_temp", "external_temp", "target_temp", "heat_to_temp")}
-    with patch.object(my_predbat, "predheat", SimpleNamespace(prefix="heating_test")), patch.object(my_predbat, "dashboard_values", {}), patch.object(my_predbat, "get_arg", return_value=True), patch.object(
-        web, "get_state_wrapper", side_effect=lambda entity, attribute=None, default=None: entities.get(entity, {}).get("attributes", {}).get(attribute, default)
+    with (
+        patch.object(my_predbat, "predheat", SimpleNamespace(prefix="heating_test")),
+        patch.object(my_predbat, "dashboard_values", {}),
+        patch.object(my_predbat, "get_arg", return_value=True),
+        patch.object(web, "get_state_wrapper", side_effect=lambda entity, attribute=None, default=None: entities.get(entity, {}).get("attributes", {}).get(attribute, default)),
     ):
         with patch.object(web, "get_history_wrapper", return_value=[[{"last_updated": stamp, "state": "20.5"}]]):
             data = web.get_predheat_chart_data()

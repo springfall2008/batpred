@@ -5,7 +5,6 @@ import re
 
 from aiohttp import web
 
-
 COLOUR_KEYS = {"battery-low", "battery-medium", "battery-high", "charge", "export", "flow-solar", "flow-grid", "flow-home"}
 DEFAULT_THEME = {"version": 1, "revision": 0, "preset": "predbat", "colours": {"light": {}, "dark": {}}, "socBoundaries": {"low": 20, "medium": 50}}
 

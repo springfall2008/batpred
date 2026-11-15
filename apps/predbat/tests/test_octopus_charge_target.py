@@ -15,6 +15,7 @@ cannot see the car, so the same number is how much to add. Read as a SoC, a car 
 "add 40%" was taken as already charged as soon as the charge Octopus does at plug-in took it past 40%,
 and its Intelligent slots were then ignored.
 """
+
 import copy
 from datetime import timedelta
 

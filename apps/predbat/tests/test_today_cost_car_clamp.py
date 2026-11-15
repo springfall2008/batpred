@@ -15,6 +15,7 @@ by its own sensor as import. The car sits between the clamp and the meter, so wh
 into the car first and only the rest is imported, as the prediction treats it. On Octopus Intelligent the import rate
 is the one the completed dispatches gave each minute, with the peak rate beyond the cap.
 """
+
 import copy
 
 from tests.test_iog_cap_cost_today import EXTRA_FIELDS, RATE_PEAK, _car_minutes, _incrementing, _setup_friday

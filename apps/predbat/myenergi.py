@@ -32,7 +32,7 @@ from typing import Optional
 
 import aiohttp
 
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session, writes
 from coordinator import charger_with_stub_car
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -124,6 +124,8 @@ MYENERGI_STORAGE_MODULE = "myenergi"
 MYENERGI_CONTROL_STATE = "control_state"
 # And each held Zappi's own mode, so a restart cannot lose where to put it back.
 MYENERGI_CONTROL_MODES = "control_saved_modes"
+# When each Zappi was last seen online, so the offline grace survives a restart (#6117)
+MYENERGI_ZAPPI_LIVENESS = "zappi_last_online"
 
 # aiohttp only grew DigestAuthMiddleware and ClientSession(middlewares=...) in 3.12, and
 # the direct transport cannot authenticate without them. requirements.txt pins the floor,
@@ -238,10 +240,17 @@ def normalise_direct_device(raw, kind):
         kind: Either DEVICE_KIND_ZAPPI or DEVICE_KIND_EDDI.
     """
     serial = str(raw.get("sno", "") or "")
+    # The direct API has no online flag, so a dead Zappi still on the account is listed like a live one (#6117).
+    # A live Zappi always reports its pilot state, and a dead one was seen reporting none, so a missing pst is
+    # read as offline. The raw field is checked rather than the mapped plug status, so a pilot code this module
+    # does not know yet still counts as a reading. An Eddi has no equivalent field and stays online.
+    online = True
     if kind == DEVICE_KIND_ZAPPI:
         status = _index_lookup(ZAPPI_STATES, raw.get("sta"))
         mode = _index_lookup(ZAPPI_CHARGE_MODES, raw.get("zmo"))
-        plug_status = ZAPPI_PLUG_STATES.get(str(raw.get("pst", "") or ""), "")
+        raw_plug = str(raw.get("pst", "") or "").strip()
+        online = bool(raw_plug)
+        plug_status = ZAPPI_PLUG_STATES.get(raw_plug, "")
         boost_active = status == "Boosting"
         boost_remaining_mins = 0
         temp_1 = None
@@ -260,7 +269,7 @@ def normalise_direct_device(raw, kind):
         kind=kind,
         serial=serial,
         name="{}-{}".format(kind, serial),
-        online=True,
+        online=online,
         status=status,
         mode=mode,
         plug_status=plug_status,
@@ -331,9 +340,11 @@ class MyEnergiTransport(ABC):
     never touches publishing, auto-configuration or the controls.
     """
 
-    def __init__(self, log):
-        """Store the logging function and initialise the one-shot warning set."""
+    def __init__(self, log, session_factory=None):
+        """Store the logging function and session factory and initialise the one-shot warning set."""
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
         self._warned_stubs = set()
 
     @abstractmethod
@@ -399,9 +410,9 @@ class MyEnergiDirectTransport(MyEnergiTransport):
     whose X_MYENERGI-asn response header names the host to use from then on.
     """
 
-    def __init__(self, log, hub_serial, api_key):
+    def __init__(self, log, hub_serial, api_key, session_factory=None):
         """Store credentials and start with an unresolved active server."""
-        super().__init__(log)
+        super().__init__(log, session_factory)
         self.hub_serial = str(hub_serial)
         self.api_key = api_key
         self.base_url = None
@@ -412,7 +423,7 @@ class MyEnergiDirectTransport(MyEnergiTransport):
         if not digest_auth_available():
             raise MyEnergiApiError(AIOHTTP_DIGEST_REQUIRED.format(getattr(aiohttp, "__version__", "unknown")))
         digest = aiohttp.DigestAuthMiddleware(self.hub_serial, self.api_key)
-        return aiohttp.ClientSession(middlewares=(digest,), headers={"User-Agent": USER_AGENT})
+        return self._session_factory(middlewares=(digest,), headers={"User-Agent": USER_AGENT})
 
     def _update_asn(self, headers):
         """Follow the active server named by the X_MYENERGI-asn response header."""
@@ -599,9 +610,9 @@ class MyEnergiCloudTransport(MyEnergiTransport):
     performed by OAuthMixin on the component takes effect immediately.
     """
 
-    def __init__(self, log, access_token_getter):
+    def __init__(self, log, access_token_getter, session_factory=None):
         """Store the token accessor and initialise the device list cache."""
-        super().__init__(log)
+        super().__init__(log, session_factory)
         self.access_token_getter = access_token_getter
         self.device_meta = {}
         # Wall-clock stamp of the last GET /devices. A counter was tried first and never
@@ -621,7 +632,7 @@ class MyEnergiCloudTransport(MyEnergiTransport):
         """Perform one cloud API request and return the decoded JSON body."""
         url = MYENERGI_CLOUD_URL + path
         try:
-            async with aiohttp.ClientSession(headers=self._headers()) as session:
+            async with self._session_factory(headers=self._headers()) as session:
                 async with session.request(method, url, json=body, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
                     if response.status == 401:
                         record_api_call("myenergi", success=False, reason="auth_error")
@@ -761,6 +772,16 @@ DEFAULT_EDDI_BOOST_MINUTES = 60
 MIN_POLL_SECONDS = 60
 MAX_POLL_SECONDS = 30 * 60
 
+# How long a Zappi that has been seen online keeps its car after it stops reporting as online, or drops out of a
+# poll altogether. Cars are numbered by position in the live Zappi list, so dropping a unit renumbers the ones after
+# it: a Wi-Fi dropout, a hub restart or a myenergi outage must not do that, so the window is long - many times
+# MAX_POLL_SECONDS. A Zappi never seen online since start-up is left out at once, and one that starts reporting again
+# gets its car back on the next poll, so only the unit that has genuinely gone waits this long.
+ZAPPI_OFFLINE_GRACE_SECONDS = 8 * 60 * 60
+# How often the last-online times are re-saved while nothing changes. A change in which Zappis are online is saved at
+# once, so this only bounds how much of the grace a restart can lose for a Zappi that is still online.
+ZAPPI_LIVENESS_SAVE_SECONDS = 30 * 60
+
 
 class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
     """myenergi component providing Zappi and Eddi monitoring and boost control."""
@@ -792,6 +813,24 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.charger_control_setup("myenergi", "Zappi", MYENERGI_STORAGE_MODULE, MYENERGI_CONTROL_STATE, "control_enabled", control=self.zappi_control, switch_prefix="myenergi", control_setting="myenergi_zappi_control")
         self.queued_events = []
         self._auto_configured = False
+        # Device liveness (#6117): when each Zappi was last seen online, when each device was last seen at all, the
+        # time of the last poll those were judged against, the live Zappi device_ids and the Eddi device_id the inputs
+        # were last wired from, and the Zappis already logged as left out, so the reason is logged once per change
+        self.zappi_offline_grace = ZAPPI_OFFLINE_GRACE_SECONDS
+        self.zappi_last_online = {}
+        self.device_last_seen = {}
+        # The device_ids the latest poll actually read, as opposed to ones carried over from an earlier poll
+        self.polled_device_ids = None
+        self.zappi_liveness_time = None
+        self.wired_zappi_ids = None
+        # The Zappi ids charge control last drove, in car order, so a renumber can clear what was kept per car number
+        self.control_zappi_ids = None
+        self.wired_eddi_id = None
+        self.zappi_offline_logged = set()
+        # Persistence of zappi_last_online: whether it has been read back yet, and the online set and time it was last saved at
+        self.zappi_liveness_loaded = False
+        self.zappi_liveness_saved_online = None
+        self.zappi_liveness_saved_at = None
         self.transport = None
 
         if configured_auth_method == "oauth":
@@ -805,7 +844,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             if not key and not token_hash:
                 self.log("Error: myenergi: auth_method is 'oauth' but neither myenergi_key nor myenergi_token_hash is set")
                 return
-            self.transport = MyEnergiCloudTransport(self.log, lambda: self.access_token)
+            self.transport = MyEnergiCloudTransport(self.log, lambda: self.access_token, self.http_session)
         else:
             self._init_oauth("api_key", None, None, "myenergi")
             self.auth_method_config = configured_auth_method
@@ -815,7 +854,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             if not digest_auth_available():
                 self.log("Error: myenergi: " + AIOHTTP_DIGEST_REQUIRED.format(getattr(aiohttp, "__version__", "unknown")))
                 return
-            self.transport = MyEnergiDirectTransport(self.log, hub_serial, api_key)
+            self.transport = MyEnergiDirectTransport(self.log, hub_serial, api_key, self.http_session)
 
     def entity_prefix(self, device):
         """Return the entity name prefix for a device, e.g. predbat_myenergi_zappi_12345678."""
@@ -900,21 +939,32 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         water diverter, so automatic_zappi off leaves the Eddi wiring in place while
         contributing no car inputs, and automatic_eddi off does the reverse, for an account
         that owns only one of the two things it does.
+
+        Only live Zappis are wired (controlled_zappis()), and run() calls this again whenever
+        that list or the Eddi pick (wired_eddi()) changes, so a Zappi that dies or comes back,
+        or an Eddi added later, re-wires without a restart. When the last live Zappi or the
+        Eddi goes, its keys are left on what they were rather than cleared, since another
+        value may since have been set for them.
         """
         zappi_energy_entities = []
         zappi_power_entities = []
         zappi_plug_entities = []
         zappi_plugged_entities = []
         eddi_entity = None
-        for device in sorted(self.devices.values(), key=lambda item: item.serial):
+        # The live Zappis only, in controlled_zappis() order, so charge control and these per-car lists agree on
+        # which Zappi is which car, and a dead unit still on the account does not take one (#6117)
+        wired_zappis = self.controlled_zappis() if self.automatic_zappi else []
+        for device in wired_zappis:
             prefix = self.entity_prefix(device)
-            if device.kind == DEVICE_KIND_ZAPPI and self.automatic_zappi:
-                zappi_energy_entities.append("sensor.{}_session_energy".format(prefix))
-                zappi_power_entities.append("sensor.{}_power".format(prefix))
-                zappi_plug_entities.append("sensor.{}_plug_status".format(prefix))
-                zappi_plugged_entities.append("binary_sensor.{}_plugged".format(prefix))
-            elif device.kind == DEVICE_KIND_EDDI and self.automatic_eddi and eddi_entity is None:
-                eddi_entity = "sensor.{}_session_energy".format(prefix)
+            zappi_energy_entities.append("sensor.{}_session_energy".format(prefix))
+            zappi_power_entities.append("sensor.{}_power".format(prefix))
+            zappi_plug_entities.append("sensor.{}_plug_status".format(prefix))
+            zappi_plugged_entities.append("binary_sensor.{}_plugged".format(prefix))
+        self.wired_zappi_ids = [device.device_id for device in wired_zappis]
+        eddi = self.wired_eddi()
+        self.wired_eddi_id = eddi.device_id if eddi else None
+        if eddi:
+            eddi_entity = "sensor.{}_session_energy".format(self.entity_prefix(eddi))
 
         if zappi_energy_entities:
             self.log("Info: myenergi: setting car_charging_energy to {}".format(zappi_energy_entities))
@@ -957,12 +1007,114 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         self.log("Info: myenergi: Predbat-led Zappi charge control enabled")
 
     def controlled_zappis(self):
-        """The Zappis to drive, in serial order, so Zappi N is the same car as auto-config's Nth.
+        """The live Zappis to drive, in serial order, so Zappi N is the same car as auto-config's Nth.
 
         automatic_config() wires car_charging_energy and car_charging_planned as per-car
         lists in this same order, so the two cannot disagree about which Zappi is which car.
+        A dead or removed Zappi still listed on the account is left out (see zappi_is_live()),
+        or it would take a car - car 0 when its serial sorts first (#6117).
         """
-        return [device for device in sorted(self.devices.values(), key=lambda item: item.serial) if device.kind == DEVICE_KIND_ZAPPI]
+        return [device for device in sorted(self.devices.values(), key=lambda item: item.serial) if device.kind == DEVICE_KIND_ZAPPI and self.zappi_is_live(device)]
+
+    def zappi_is_live(self, device):
+        """Should this Zappi have a car - online now, or seen online within zappi_offline_grace of the last poll.
+
+        Before any poll has been tracked (or for a Zappi the tracker has never seen) the device's own online flag decides.
+        A Zappi that has never been online since start-up therefore gets no car at all, while one seen online keeps its
+        car through a brief dropout, so a single bad poll does not renumber the cars after it.
+        """
+        if device.online:
+            return True
+        last_online = self.zappi_last_online.get(device.device_id)
+        if last_online is None or self.zappi_liveness_time is None:
+            return False
+        return (self.zappi_liveness_time - last_online) < self.zappi_offline_grace
+
+    def wired_eddi(self):
+        """The Eddi that feeds iboost_energy_today - the first by serial - or None when there is none or the Eddi half is off."""
+        if not self.automatic_eddi:
+            return None
+        for device in sorted(self.devices.values(), key=lambda item: item.serial):
+            if device.kind == DEVICE_KIND_EDDI:
+                return device
+        return None
+
+    def update_device_liveness(self, devices, now):
+        """Record which devices this poll saw, and which Zappis online, and carry one that dropped out of it for the grace period.
+
+        Returns the device dict to keep. The cloud transport skips a device whose status call fails, so without the
+        carry-over a single failed call would remove a live Zappi from the car list and renumber the rest, or move
+        iboost_energy_today to a second Eddi on the poll that re-wires. A device missing for longer than
+        zappi_offline_grace is let go.
+        """
+        self.zappi_liveness_time = now
+        kept = {device.device_id: device for device in devices}
+        self.polled_device_ids = set(kept)
+        for device in devices:
+            self.device_last_seen[device.device_id] = now
+            if device.kind == DEVICE_KIND_ZAPPI and device.online:
+                self.zappi_last_online[device.device_id] = now
+        for device_id, device in self.devices.items():
+            if device_id in kept:
+                continue
+            last_seen = self.device_last_seen.get(device_id)
+            if last_seen is not None and (now - last_seen) < self.zappi_offline_grace:
+                kept[device_id] = device
+        # A time past the grace decides nothing any more, so a device removed from the account is forgotten here too
+        for times in (self.device_last_seen, self.zappi_last_online):
+            for device_id in [device_id for device_id, when in times.items() if (now - when) >= self.zappi_offline_grace]:
+                del times[device_id]
+        return kept
+
+    def log_zappi_liveness(self):
+        """Log each Zappi left out of the car wiring, once until it comes back, so a user can see why it has no car.
+
+        Silent when the Zappi half of automatic configuration is off, since no Zappi is given a car then anyway.
+        """
+        if not (self.automatic and self.automatic_zappi):
+            return
+        for device in sorted(self.devices.values(), key=lambda item: item.serial):
+            if device.kind != DEVICE_KIND_ZAPPI:
+                continue
+            if self.zappi_is_live(device):
+                if device.device_id in self.zappi_offline_logged:
+                    self.zappi_offline_logged.discard(device.device_id)
+                    self.log("Info: myenergi: Zappi {} is reporting again, giving it a car".format(device.serial))
+            elif device.device_id not in self.zappi_offline_logged:
+                self.zappi_offline_logged.add(device.device_id)
+                self.log("Warn: myenergi: Zappi {} is offline (myenergi lists it but it reports no plug state or is flagged offline), leaving it out of the car inputs and charge control".format(device.serial))
+
+    def wiring_changed(self):
+        """Has what automatic_config() would wire changed since it last ran - a Zappi died, came back or was added, or the Eddi pick moved.
+
+        Each half only counts while it is switched on, so a Zappi change cannot re-wire for a user with automatic_zappi
+        off, nor an Eddi change for one with automatic_eddi off.
+        """
+        if self.wired_zappi_ids is None:
+            return False
+        zappis_changed = self.automatic_zappi and [device.device_id for device in self.controlled_zappis()] != self.wired_zappi_ids
+        eddi = self.wired_eddi()
+        eddi_changed = self.automatic_eddi and (eddi.device_id if eddi else None) != self.wired_eddi_id
+        return bool(zappis_changed or eddi_changed)
+
+    def forget_renumbered_cars(self):
+        """Clear what charge control keeps per car number for each car whose Zappi changed this poll.
+
+        charger_control_octopus_cars and charger_control_discovery_since are keyed by car number, not by Zappi,
+        so when a Zappi drops out or comes back and the cars renumber, the Zappi now behind a car would otherwise
+        inherit the last one's "left alone" reason - its own reason never logged - and its discovery wait clock.
+        Cars whose Zappi did not move keep theirs. The plan windows are left alone: they are re-read from the
+        car's slot sensor every cycle, and follow the new numbering once Predbat next publishes the car plans.
+        """
+        zappi_ids = [device.device_id for device in self.controlled_zappis()]
+        previous = self.control_zappi_ids
+        self.control_zappi_ids = zappi_ids
+        if previous is None or previous == zappi_ids:
+            return
+        for cache in (self.charger_control_octopus_cars, self.charger_control_discovery_since):
+            for car_n in list(cache):
+                if car_n >= len(zappi_ids) or car_n >= len(previous) or zappi_ids[car_n] != previous[car_n]:
+                    del cache[car_n]
 
     def charger_control_chargers(self):
         """The Zappis to drive, in car order - see controlled_zappis()."""
@@ -983,10 +1135,21 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         """Is a car plugged in to this Zappi - an unknown or faulted plug state reads as plugged in."""
         return device.plug_status != ZAPPI_PLUG_STATES["A"]
 
+    def charger_control_connected(self, device):
+        """Can Predbat act on this Zappi this cycle - only when this poll actually read it.
+
+        A Zappi missing from the poll is kept, with its last reading, so it keeps its car (update_device_liveness()).
+        That reading is frozen, so judging drift from it would re-send the same mode every poll to a unit that is not
+        answering. Returning False leaves it alone, and held as it was, until it is read again. Before any poll has
+        been tracked every Zappi counts as read.
+        """
+        return self.polled_device_ids is None or device.device_id in self.polled_device_ids
+
     def charger_control_drifted(self, device, charge):
         """Has the Zappi been put in a different mode, e.g. from the myenergi app."""
         return device.mode != (ZAPPI_MODE_CHARGING if charge else ZAPPI_MODE_STOPPED)
 
+    @writes
     async def charger_control_send(self, device, charge, car_n):
         """Fast inside a planned window, Stopped outside one.
 
@@ -1017,6 +1180,53 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         except Exception as exc:
             self.log("Warn: myenergi: could not save the Zappi modes to restore on release, a restart may lose them: {}".format(exc))
 
+    async def load_zappi_liveness(self, now):
+        """Read back when each Zappi was last online, so a restart mid-dropout does not cost a live Zappi its car.
+
+        Without this a Zappi that happened to be offline at start-up would be treated as dead since start-up - left out
+        at once, then given its car back when it reported, renumbering the cars twice. A restored time only ever moves a
+        Zappi's last-online later, and one already past the grace is dropped. Fails soft, like the saved modes.
+        """
+        self.zappi_liveness_loaded = True
+        if self.storage is None:
+            return
+        try:
+            saved = await self.storage.load(MYENERGI_STORAGE_MODULE, MYENERGI_ZAPPI_LIVENESS)
+        except Exception as exc:
+            self.log("Warn: myenergi: could not read when each Zappi was last online, an offline Zappi may lose its car early: {}".format(exc))
+            return
+        last_online = saved.get("last_online") if isinstance(saved, dict) else None
+        if not isinstance(last_online, dict):
+            return
+        for device_id, when in last_online.items():
+            when = _to_float(when, None)
+            if when is None or (now - when) >= self.zappi_offline_grace:
+                continue
+            device_id = str(device_id)
+            self.zappi_last_online[device_id] = max(when, self.zappi_last_online.get(device_id, when))
+
+    async def save_zappi_liveness(self, now):
+        """Save when each Zappi was last online - at once when which Zappis are online changes, otherwise every ZAPPI_LIVENESS_SAVE_SECONDS.
+
+        Only times still inside the grace are kept, so a Zappi removed from the account is forgotten here once its grace
+        has run out. Fails soft: a failed save is retried on the next poll.
+        """
+        if self.storage is None:
+            return
+        online_now = frozenset(device_id for device_id, when in self.zappi_last_online.items() if when == now)
+        due = self.zappi_liveness_saved_at is None or (now - self.zappi_liveness_saved_at) >= ZAPPI_LIVENESS_SAVE_SECONDS
+        if online_now == self.zappi_liveness_saved_online and not due:
+            return
+        current = {device_id: when for device_id, when in self.zappi_last_online.items() if (now - when) < self.zappi_offline_grace}
+        try:
+            if await self.storage.save(MYENERGI_STORAGE_MODULE, MYENERGI_ZAPPI_LIVENESS, {"last_online": current}) is False:
+                raise OSError("storage refused the save")
+        except Exception as exc:
+            self.log("Warn: myenergi: could not save when each Zappi was last online, a restart may cost an offline Zappi its car early: {}".format(exc))
+            return
+        self.zappi_liveness_saved_online = online_now
+        self.zappi_liveness_saved_at = now
+
     async def load_control_modes(self):
         """Restore the saved Zappi modes from storage - called once control has been decided.
 
@@ -1039,6 +1249,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         else:
             await self.save_control_modes()
 
+    @writes
     async def charger_control_release_one(self, device, charge):
         """Hand a held Zappi back, restoring the mode it had before Predbat took over.
 
@@ -1058,6 +1269,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         if self.control_saved_modes.pop(device.device_id, None) is not None:
             await self.save_control_modes()
 
+    @writes
     async def charger_control_hand_to_octopus(self, device, charge):
         """Hand a Zappi to Octopus in the mode it had before Predbat took over, but never Fast.
 
@@ -1124,7 +1336,14 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 self.log("Warn: myenergi: poll failed: {}".format(exc))
                 return False
             if devices:
-                self.devices = {device.device_id: device for device in devices}
+                now = time.time()
+                if not self.zappi_liveness_loaded:
+                    # Before the first liveness update, so a Zappi offline at start-up is judged on when it was last online
+                    await self.load_zappi_liveness(now)
+                self.devices = self.update_device_liveness(devices, now)
+                await self.save_zappi_liveness(now)
+                self.log_zappi_liveness()
+                self.forget_renumbered_cars()
                 if first:
                     # Before the first publish: the switch has to carry its restored state
                     # from the start, or a restart with control switched off would show it
@@ -1136,6 +1355,14 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
                 if self.automatic and not self._auto_configured:
                     self.automatic_config()
                     self._auto_configured = True
+                elif self.automatic and self.wiring_changed():
+                    # Wiring otherwise only happens once per process (#4648), so without this a Zappi that dies
+                    # mid-session would keep its car, and a Zappi or Eddi brought back or added would get none until a restart
+                    eddi = self.wired_eddi()
+                    self.log(
+                        "Info: myenergi: the live devices changed (Zappis {} to {}, Eddi {} to {}), re-wiring".format(self.wired_zappi_ids, [device.device_id for device in self.controlled_zappis()], self.wired_eddi_id, eddi.device_id if eddi else None)
+                    )
+                    self.automatic_config()
                 # Whether or not control is on: with myenergi_zappi_control since turned off, a Zappi an
                 # earlier session stopped is still released (#5788). Not with myenergi_enable_controls off,
                 # which means Predbat must not write to the Zappi at all
@@ -1213,6 +1440,7 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
             amount = max(BOOST_MINUTES_MIN, min(BOOST_MINUTES_MAX, amount))
         self.boost_amounts[device.device_id] = amount
 
+    @writes
     async def switch_event_handler(self, entity_id, service):
         """Send or cancel a boost in response to the boost switch.
 

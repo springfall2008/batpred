@@ -20,7 +20,6 @@ import aiohttp
 import asyncio
 from datetime import datetime
 
-
 # Refresh when less than this remains (seconds). Kept well under the shortest token lifetime in
 # use: EDF's Kraken OAuth token lives one hour, so the old 2-hour threshold made every single
 # request refresh first - one oauth-refresh edge-function call per Kraken query.
@@ -154,7 +153,7 @@ class OAuthMixin:
             last_error = None
             for attempt in range(OAUTH_REFRESH_RETRIES):
                 try:
-                    async with aiohttp.ClientSession(timeout=timeout) as session:
+                    async with self.http_session(timeout=timeout) as session:
                         async with session.post(url, headers=headers, json=payload) as response:
                             if response.status == 200:
                                 data = await response.json()

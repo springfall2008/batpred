@@ -376,7 +376,7 @@ The default of 24 hours is the recommended value (to match energy rate cycles). 
 When turned Off, any forced export that occurs while solar power is being generated will be scored against `metric_keep` (as if that solar energy had to be re-imported), making those export slots far less attractive to the optimiser.
 This prevents Predbat from planning unnecessary forced exports during sunny periods, since the PV output would be exported anyway without requiring the battery to discharge.
 
-**switch.predbat_set_discharge_during_charge** - When turned On disables inverter discharge during charge slots, useful for multi-inverter setups to avoid cross-charging when batteries are out of balance. Default is On.
+**switch.predbat_set_discharge_during_charge** - When turned On the battery may discharge to cover the house during a charge slot while it is above the slot's target. When turned Off, discharge is disabled during charge slots, which is useful for multi-inverter setups to avoid cross-charging when batteries are out of balance. Default is On.
 
 **switch.predbat_inverter_set_charge_before** - (_expert_mode_) When turned On (the default), charge slots will be programmed before their start time, when Off they will only be configured when the charging time starts.
 
@@ -402,6 +402,9 @@ By default with this option On the latest export slots of the same value will be
 This alternative plan is only kept if it does not increase the overall plan metric by more than **input_number.predbat_export_more_solar_threshold** (_expert mode_, default 1p), otherwise the original plan is restored. This lets you favour exporting solar over storing it when doing so is roughly cost-neutral. The feature relies on **switch.predbat_set_export_freeze** being enabled (and your inverter supporting export/discharge freeze); it is an optimiser-only setting and uses the existing Freeze Export execution behaviour. If you turn this on when it cannot have any effect - **switch.predbat_set_export_freeze** is off, your inverter does not support freeze export, or **select.predbat_mode** is not _Control charge & discharge_ - Predbat will log a warning saying so.
 
 ## Battery margins and metrics options
+
+The money thresholds below are in your minor currency unit, with defaults and ranges chosen in pence.
+If your minor unit is worth much less than a penny, set [currency_scale](apps-yaml.md#currency_scale) in `apps.yaml` to widen their ranges.
 
 **input_number.predbat_best_soc_keep** is the battery level in kWh that Predbat will try to keep the battery above in the plan.
 This is a soft constraint: for each hour the planned SoC spends below it, the plan is charged the shortfall in kWh times the import rate at that time, scaled by **input_number.predbat_best_soc_keep_weight**. The plan only goes below it when doing so saves more than that.
@@ -630,6 +633,28 @@ Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It i
 
 Equal SoC across the batteries is not in itself worth much, which is why the two SoC balancing switches are
 off by default. They remain fully functional if you want them.
+
+Once the cross-charge correction has stopped a battery charging from the others, it keeps that battery's charge
+held while the batteries are still discharging, so you may see its charge rate stay at 0 through the evening.
+Releasing it every minute would only let the battery's own control loop wind straight back into charging from
+its neighbours. The hold ends as soon as the batteries should be charging again (spare solar, or a charge slot) or
+stop discharging. The same applies the other way round, while the batteries soak up a solar surplus of at least
+1kW.
+
+If you turn on either SoC balancing switch, leave **switch.predbat_balance_inverters_crosscharge** on as well. SoC
+balancing holds one battery's charge (or discharge) back while the others carry on. Under broken cloud, when your
+solar is close to your house load, the site keeps tipping between surplus and deficit faster than Predbat's
+once-a-minute balancing pass. A battery held from charging then discharges into the others' charging whenever a
+cloud passes. The cross-charge correction is what stops that.
+
+Balancing only holds a battery back when the others can cover for it. It judges that from each inverter's
+charge and discharge rate, but a battery can deliver much less than its rate: when it is cold, when its BMS
+limits it, or when its inverter's AC limit is lower than Predbat was told. If a hold leaves the house importing
+(or leaves PV surplus going to the grid while charging), the batteries still running must already be giving all
+they can. Predbat records what each of them was delivering at that moment and uses it in place of its rate,
+so it releases the hold on the next pass and does not take it again while that battery cannot cover the house.
+A recorded limit is forgotten as soon as the battery delivers more, or after 30 minutes, so a battery that has
+warmed up gets its full rate back.
 
 ## Freeze Export during Demand
 
@@ -887,7 +912,11 @@ This is useful when you know you need a certain battery level at a particular ti
 
 The SoC target percentage will be that configured in **input_number.predbat_manual_soc_value** (default 100%) which can be adjusted prior to making a selection.
 
-For example, if you want the battery to be at 100% by 05:30, select that time slot. Predbat will plan charging to ensure the battery reaches the target SoC by that time.
+For example, if you want the battery to be at 100% by 05:30, select that time slot. Predbat will plan charging so the battery reaches the target SoC by that time.
+
+The target is weighed as a cost rather than enforced as a hard limit: for a 30-minute slot, missing it costs about five times what importing the shortfall would cost at that slot's import rate.
+That rate is taken as at least 1 (1p or 1c - your currency's 1/100 unit) per kWh, so a target that falls in a free or negative-price slot still counts; the same applies to a [weather alert](apps-yaml.md#weather-alert-system) SoC target.
+A high **metric_battery_cycle**, or a shortfall that could only be charged in dearer slots before a very cheap target slot, can still outweigh it - if your plan misses a target, add a [manual charge](#manual-control) slot before the target time.
 
 Note that the manual SoC target is a _minimum_ SoC level for that time slot.
 If based upon your predicted load, solar generation and energy costs Predbat determines that your battery needs to be charged to a higher SoC level to minimise your costs, Predbat will charge to that required level.
@@ -903,6 +932,8 @@ The SoC ceiling percentage will be that configured in **input_number.predbat_man
 A ceiling of 0% is a real target meaning empty the battery as far as the reserve and the inverter allow, not 'no ceiling' - to remove a ceiling, clear the selection instead.
 
 For example, to run the battery down to 4% by 00:00 (just ahead of a midnight cheap slot), set **input_number.predbat_manual_soc_max_value** to 4 and select the 00:00 slot on **select.predbat_manual_soc_max**. Predbat will plan discharging so the battery is at or below that ceiling by that time, preferring to use the energy against load or export rather than simply forcing a fixed-duration export block, so it stays coordinated with the rest of the plan (car charging, existing charge/export windows, etc).
+Like the minimum target, the ceiling is weighed as a cost: for a 30-minute slot, about five times the slot's export rate per kWh held above it, with the rate taken as at least 1 per kWh so the ceiling still counts with no export tariff or at a negative export rate.
+Holding the charge for a dearer import slot later, or a strongly negative export rate, can still outweigh it - if your plan keeps the battery above a ceiling, add a [manual export](#manual-control) slot before that time.
 
 If a manual SoC target (floor) and a manual SoC maximum (ceiling) ever apply to the same time and the ceiling is below the floor, that is a contradiction - the floor wins and the conflicting ceiling is dropped, with a warning logged.
 

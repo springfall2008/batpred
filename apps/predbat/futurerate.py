@@ -7,7 +7,7 @@ Octopus tariff period.
 
 from datetime import datetime, timedelta
 import hashlib
-import requests
+from http_sync import http_get
 import json
 import copy
 
@@ -74,7 +74,7 @@ class FutureRate:
 
             # Take into account the flat-rate 3.34p/kWh discount applied to energy prices after discounting green levies and policy costs
             #
-            # NB if VAT is ever re-instated on import prices, this will need to be increased accordingly
+            # This needs to be ex VAT
             discount = 3.34
 
         else:
@@ -97,8 +97,7 @@ class FutureRate:
                 for minute in real_mdata:
                     minute_mod = minute % (24 * 60)
 
-                    # Add the discount back on, to synthesise the Agile prices from the original Agile formula
-                    rate_real = real_mdata[minute] + discount
+                    rate_real = real_mdata[minute]
                     rate_nord = mdata.get(minute, None)
                     if minute_mod >= peak_start_minutes and minute_mod < peak_end_minutes:
                         continue
@@ -107,7 +106,9 @@ class FutureRate:
                         rate_nord *= correlate_multiply
 
                         if is_import:
-                            rate_nord = min(rate_nord, 95)  # Cap
+                            # Apply the discount before the price cap
+                            rate_nord -= discount
+                            rate_nord = min(rate_nord, 95.23)  # Cap
                         else:
                             rate_nord = max(rate_nord, 0)
 
@@ -126,8 +127,8 @@ class FutureRate:
                 diff = 0
                 for minute in real_mdata:
                     minute_mod = minute % (24 * 60)
-                    # Add the discount back on, to synthesise the Agile prices from the original Agile formula
-                    rate_real = real_mdata[minute] + discount
+
+                    rate_real = real_mdata[minute]
                     rate_nord = mdata.get(minute, None)
 
                     if rate_nord is not None:
@@ -138,7 +139,9 @@ class FutureRate:
                             continue
 
                         if is_import:
-                            rate_nord = min(rate_nord, 95)  # Cap
+                            # Apply the discount before the price cap
+                            rate_nord -= discount
+                            rate_nord = min(rate_nord, 95.23)  # Cap
                         else:
                             rate_nord = max(rate_nord, 0)
 
@@ -153,8 +156,8 @@ class FutureRate:
                 diff = 0
                 for minute in real_mdata:
                     minute_mod = minute % (24 * 60)
-                    # Add the discount back on, to synthesise the Agile prices from the original Agile formula
-                    rate_real = real_mdata[minute] + discount
+
+                    rate_real = real_mdata[minute]
                     rate_nord = mdata.get(minute, None)
                     if rate_nord is not None:
                         rate_nord *= best_diff_multiply
@@ -163,7 +166,9 @@ class FutureRate:
                             rate_nord += correlate_add
 
                         if is_import:
-                            rate_nord = min(rate_nord, 95)  # Cap
+                            # Apply the discount before the price cap
+                            rate_nord -= discount
+                            rate_nord = min(rate_nord, 95.23)  # Cap
                         else:
                             rate_nord = max(rate_nord, 0)
 
@@ -186,11 +191,10 @@ class FutureRate:
                 rate_nord += best_diff_add_peak
             rate_nord += best_diff_add_all
 
-            # Apply the discount before capping the price
-            rate_nord -= discount
-
             if is_import:
-                rate_nord = min(rate_nord, 95)  # Cap
+                # Apply the discount before capping the price
+                rate_nord -= discount
+                rate_nord = min(rate_nord, 95.23)  # Cap
             else:
                 rate_nord = max(rate_nord, 0)
 
@@ -509,7 +513,7 @@ class FutureRate:
         the plan falls back to copying the previous day's rates.
         """
         try:
-            r = requests.get(url, timeout=60)
+            r = http_get(url, timeout=60)
         except Exception as e:  # pylint: disable=broad-except
             self.log("Warn: Error downloading AgilePredict data from URL {}, request exception {}".format(url, e))
             return None
@@ -604,7 +608,7 @@ class FutureRate:
 
     def download_futurerate_data_func(self, url):
         try:
-            r = requests.get(url, timeout=120)
+            r = http_get(url, timeout=120)
         except Exception as e:
             self.log("Warn: Error downloading futurerate data from URL {}, request exception {}".format(url, e))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
@@ -620,7 +624,7 @@ class FutureRate:
 
         try:
             struct = json.loads(r.text)
-        except requests.exceptions.JSONDecodeError:
+        except ValueError:
             self.log("Warn: Error downloading futurerate data from URL {}".format(url))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}

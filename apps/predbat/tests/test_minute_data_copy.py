@@ -18,6 +18,7 @@ That makes "did it copy?" a behaviour worth pinning in both directions: no copy 
 written, and the caller's data still untouched when the filter does run. A dict subclass counts its
 own deep copies so the first of those is observable rather than merely faster.
 """
+
 from datetime import datetime
 
 import pytz

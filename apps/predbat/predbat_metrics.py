@@ -142,6 +142,12 @@ class PredbatMetrics:
         self.control_conflicts_events = []
         self.control_conflicts_sustained_controls = []
 
+        # -- Inverter balancing -----------------------------------------------------
+        self.balance_held = _gauge("predbat_balance_held", "Inverters balancing is holding now")
+        self.balance_holds_24h = _gauge("predbat_balance_holds_24h", "Balancing holds taken in the last 24h")
+        self.balance_cross_charges_24h = _gauge("predbat_balance_cross_charges_24h", "Inverters caught cross-charging and held in the last 24h")
+        self.balance_ceilings_learned_24h = _gauge("predbat_balance_ceilings_learned_24h", "Rate ceilings balancing learned in the last 24h")
+
         # -- Control failure monitor ----------------------------------------------
         self.control_failures_24h = _gauge("predbat_control_failures_24h", "Slots where the battery did not follow Predbat's command in the last 24h")
         self.control_failures_total = _gauge("predbat_control_failures_total", "Lifetime count of slots where the battery did not follow Predbat's command")
@@ -251,6 +257,11 @@ class PredbatMetrics:
             "control_conflicts_sustained_total": _val(self.control_conflicts_sustained_total),
             "control_conflicts_events": self.control_conflicts_events,
             "control_conflicts_sustained_controls": self.control_conflicts_sustained_controls,
+            # Inverter balancing
+            "balance_held": _val(self.balance_held),
+            "balance_holds_24h": _val(self.balance_holds_24h),
+            "balance_cross_charges_24h": _val(self.balance_cross_charges_24h),
+            "balance_ceilings_learned_24h": _val(self.balance_ceilings_learned_24h),
             # Control failure monitor
             "control_failures_24h": _val(self.control_failures_24h),
             "control_failures_total": _val(self.control_failures_total),

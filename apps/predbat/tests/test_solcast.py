@@ -10,7 +10,6 @@
 
 import os
 import json
-import hashlib
 import re
 import shutil
 import tempfile
@@ -385,9 +384,7 @@ def test_cache_get_url_hit(my_predbat):
         url = "https://api.solcast.com.au/test/cached"
         params = {}
 
-        # Compute hash key same as cache_get_url
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
+        hash_key = test_api.solar.solar_cache_key(url, params)
 
         # Pre-populate storage with a non-expired, recently-created entry (age ~0 < max_age)
         cached_data = {"cached": True, "from": "file"}
@@ -442,8 +439,7 @@ def test_cache_get_url_stale(my_predbat):
         url = "https://api.solcast.com.au/test/stale"
         params = {}
 
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
+        hash_key = test_api.solar.solar_cache_key(url, params)
 
         # Save data with 7-day expiry so it won't be removed, then backdate creation to 2 hours ago
         old_data = {"stale": True}
@@ -489,8 +485,7 @@ def test_cache_get_url_failure_with_stale_cache(my_predbat):
         url = "https://api.solcast.com.au/test/failure"
         params = {}
 
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
+        hash_key = test_api.solar.solar_cache_key(url, params)
 
         # Save data with 7-day expiry then backdate creation to 2 hours ago to make it stale
         stale_data = {"stale": True, "fallback": "data"}
@@ -556,6 +551,58 @@ def test_cache_get_url_metrics_forecast_solar(my_predbat):
 
         if test_api.solar.solcast_requests_total != 0:
             print(f"ERROR: solcast_requests_total should be 0, got {test_api.solar.solcast_requests_total}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+# The Open-Meteo forecast URL from #6161 - long enough that embedding it in the cache filename exceeded the 255-character limit
+OPEN_METEO_LONG_URL = "https://api.open-meteo.com/v1/forecast?latitude=52.145899374311014&longitude=12.844656407833101&hourly=global_tilted_irradiance,temperature_2m,wind_speed_10m&wind_speed_unit=ms&tilt=39&azimuth=-48&forecast_days=4&timezone=UTC"
+
+
+def test_cache_get_url_long_url(my_predbat):
+    """
+    Test cache_get_url with a long Open-Meteo URL (#6161) - the cache must be written under a short filename and used on the next call.
+    """
+    print("  - test_cache_get_url_long_url")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        mock_data = {"hourly": {"time": ["2025-06-15T12:00"], "global_tilted_irradiance": [500]}}
+        test_api.set_mock_response("api.open-meteo.com", mock_data, 200)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(OPEN_METEO_LONG_URL, {}, max_age=60))
+        if result != mock_data:
+            print(f"ERROR: Expected {mock_data}, got {result}")
+            failed = True
+
+        cache_path = os.path.join(test_api.mock_base.config_root, "cache")
+        cache_files = os.listdir(cache_path)
+        if len(cache_files) != 2:
+            print(f"ERROR: Expected a data file and a meta file in the cache, got {cache_files}")
+            failed = True
+        for name in cache_files:
+            if len(name) > 64:
+                print(f"ERROR: Cache filename should be short, got {len(name)} characters: {name}")
+                failed = True
+
+        # Second call within max_age must be served from the cache, not re-downloaded
+        test_api.mock_responses = {}
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(OPEN_METEO_LONG_URL, {}, max_age=60))
+        if result != mock_data:
+            print(f"ERROR: Expected cached data {mock_data} on second call, got {result}")
+            failed = True
+        if len(test_api.request_log) != 1:
+            print(f"ERROR: Expected one HTTP request in total, got {len(test_api.request_log)}")
             failed = True
 
     finally:
@@ -4883,6 +4930,115 @@ def test_fetch_pv_forecast_solcast_band_follows_calibration(my_predbat):
     return failed
 
 
+def test_fetch_pv_forecast_solcast_band_does_not_compound(my_predbat):
+    """
+    Calibrating Solcast's own band must not compound across fetches of the same forecast (#6049).
+
+    The Solcast integration's detailedForecast entries come back from the HA state cache by
+    reference. When calibration wrote the scaled P10/P90 back into those same entries, every
+    later fetch of the unchanged sensor started from the band it had already scaled and scaled it
+    again, so P90 doubled per fetch on a forecast calibrated up 2x until the integration published
+    a fresh state. Calibration doubles today's 1 kW forecast here; the planner's P10 and P90 and the
+    published P10 and P90 must be identical on every fetch, and the source sensor must be left
+    untouched. The HA sensor run reproduces #6049; the direct API run builds fresh entries on every
+    fetch today, so it guards against that path coming to share its cached entries the same way.
+    """
+    print("  - test_fetch_pv_forecast_solcast_band_does_not_compound")
+    failed = False
+    window_start = 13 * 60
+    window_length = 60
+    p10_ratio, p90_ratio = 0.5, 1.6
+
+    for source in ("solcast_api", "ha_sensors"):
+        test_api = create_test_solar_api()
+        try:
+            solar = test_api.solar
+            base = test_api.mock_base
+            minutes_now = base.minutes_now
+
+            # Cumulative pv_today kWh keyed by minutes-ago: 2 kW across the window on each of three days
+            hist = {}
+            for day_idx in range(3):
+                midnight_ago = (day_idx + 1) * 1440 + minutes_now
+                for step in range(0, 24 * 60, 5):
+                    if midnight_ago - step >= 0:
+                        hist[midnight_ago - step] = 2.0 * min(max(step - window_start, 0), window_length) / 60.0
+            # Recorded forecast history of 1 kW across the same window on each of those days
+            pv_forecast_hist = {}
+            for day_num in range(1, 4):
+                for m_of_day in range(window_start, window_start + window_length):
+                    pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = 1.0
+
+            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+                """Return the synthetic pv_today history."""
+                return dict(_hist) if key == "pv_today" else {}
+
+            base.minute_data_import_export = mock_minute_import_export
+            solar.get_history_wrapper = lambda entity_id, days, required=False: []
+            solar.forecast_solar = None
+
+            detailed = None
+            if source == "solcast_api":
+                solar.solcast_host = "https://api.solcast.com.au"
+                solar.solcast_api_key = "test_key"
+                solar.solcast_sites = ["site123"]
+                forecasts = [{"period_end": end, "period": "PT30M", "pv_estimate": 1.0, "pv_estimate10": p10_ratio, "pv_estimate90": p90_ratio} for end in ("2025-06-15T13:30:00.0000000Z", "2025-06-15T14:00:00.0000000Z")]
+                test_api.set_mock_response("forecasts", {"forecasts": forecasts}, 200)
+            else:
+                solar.solcast_host = None
+                solar.solcast_api_key = None
+                solar.pv_forecast_today = "sensor.solcast_pv_forecast_today"
+                detailed = [{"period_start": start, "pv_estimate": 1.0, "pv_estimate10": p10_ratio, "pv_estimate90": p90_ratio} for start in ("2025-06-15T13:00:00+0000", "2025-06-15T13:30:00+0000")]
+                test_api.set_mock_ha_state("sensor.solcast_pv_forecast_today", {"state": "1.0", "detailedForecast": detailed})
+            detailed_before = [dict(entry) for entry in detailed] if detailed else None
+
+            stored = {}
+            real_pack_and_store = solar.pack_and_store_forecast
+
+            def spy_pack_and_store(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, _stored=stored, _real=real_pack_and_store):
+                """Record the P10 and P90 series handed to the planner, then store them as normal."""
+                _stored["band"] = {"P10": dict(pv_forecast_minute10), "P90": dict(pv_forecast_minute90)}
+                return _real(pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90)
+
+            solar.pack_and_store_forecast = spy_pack_and_store
+
+            def create_mock_session(*args, _api=test_api, **kwargs):
+                """Create a mock aiohttp session."""
+                return _api.mock_aiohttp_session()
+
+            # Three fetches of the same unchanged forecast, as Predbat makes between Solcast updates
+            runs = []
+            with patch("solcast.history_attribute_to_minute_data", return_value=(pv_forecast_hist, 3)):
+                with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+                    for _ in range(3):
+                        stored.clear()
+                        run_async(solar.fetch_pv_forecast())
+                        published = test_api.dashboard_items.get("sensor.predbat_pv_today", {}).get("attributes", {}).get("detailedForecast", [])
+                        runs.append((stored.get("band", {"P10": {}, "P90": {}}), {entry["period_start"]: (entry.get("pv_estimate10"), entry.get("pv_estimate90")) for entry in published}))
+
+            first_band, first_published = runs[0]
+            peak = max([first_band["P90"].get(minute, 0) for minute in range(window_start, window_start + window_length)] or [0])
+            if peak < 1.5 * p90_ratio / 60.0:
+                print("ERROR: {}: first fetch P90 peak {} per minute, expected calibration to scale it up from Solcast's raw {}".format(source, peak, p90_ratio / 60.0))
+                failed = True
+            for run_idx, (band, published) in enumerate(runs[1:], start=2):
+                for label in ("P10", "P90"):
+                    for minute in range(window_start, window_start + window_length, 10):
+                        if abs(band[label].get(minute, 0) - first_band[label].get(minute, 0)) > 1e-6:
+                            print("ERROR: {}: fetch {} planner {} at minute {} is {}, first fetch gave {}".format(source, run_idx, label, minute, band[label].get(minute), first_band[label].get(minute)))
+                            failed = True
+                if published != first_published:
+                    print("ERROR: {}: fetch {} published P10/P90 {} differs from the first fetch {}".format(source, run_idx, published, first_published))
+                    failed = True
+            if detailed_before is not None and detailed != detailed_before:
+                print("ERROR: {}: the Solcast sensor's own detailedForecast was modified: {} -> {}".format(source, detailed_before, detailed))
+                failed = True
+        finally:
+            test_api.cleanup()
+
+    return failed
+
+
 def test_pv_calibration_no_history_not_zeroed(my_predbat):
     """
     Regression test: when there is no valid historical data (e.g. all days excluded as
@@ -6917,6 +7073,7 @@ def run_solcast_tests(my_predbat):
 
     # Cache tests
     failed |= test_cache_get_url_miss(my_predbat)
+    failed |= test_cache_get_url_long_url(my_predbat)
     failed |= test_cache_get_url_hit(my_predbat)
     failed |= test_cache_get_url_stale(my_predbat)
     failed |= test_cache_get_url_failure_with_stale_cache(my_predbat)
@@ -7000,6 +7157,7 @@ def run_solcast_tests(my_predbat):
     failed |= test_pv_calibration_keeps_provider_band(my_predbat)
     failed |= test_fetch_pv_forecast_open_meteo_uses_ensemble_band(my_predbat)
     failed |= test_fetch_pv_forecast_solcast_band_follows_calibration(my_predbat)
+    failed |= test_fetch_pv_forecast_solcast_band_does_not_compound(my_predbat)
     failed |= test_pv_calibration_no_history_not_zeroed(my_predbat)
     failed |= test_pv_calibration_no_history_ceiling_clips_raw(my_predbat)
     failed |= test_pv_calibration_raw_exceeds_ceiling_warns(my_predbat)

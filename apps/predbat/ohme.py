@@ -26,7 +26,7 @@ import time
 from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA, DISPATCH_SOURCE_CHARGER_SCHEDULE
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session, writes
 from coordinator import car_record, charger_record
 from car_charger_control import CarChargerControl, parse_control_setting
 from predbat_metrics import record_api_call
@@ -236,7 +236,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """Initialise the Ohme API component"""
         self.email = email
         self.password = password
-        self.client = OhmeApiClient(email, password, self.log)
+        self.client = OhmeApiClient(email, password, self.log, self.http_session)
         self.queued_events = []
         self.ohme_automatic = ohme_automatic
         # Tri-state: True/False force the Intelligent wiring on or off, None auto-detects it
@@ -436,6 +436,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         if saved.get("max_charge_started"):
             self.control_max_charge_started = True
 
+    @writes
     async def charger_control_send(self, client, charge, car_n):
         """Max charge inside a planned window, paused outside one."""
         if charge:
@@ -449,6 +450,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             self.log("Info: Ohme API: Outside the charge plan, pausing the charger")
             await client.async_pause_charge()
 
+    @writes
     async def charger_control_release_one(self, client, charge):
         """Hand the charger back to Ohme's own smart schedule."""
         self.log("Info: Ohme API: Releasing the charger back to Ohme")
@@ -464,6 +466,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             self.log("Info: Ohme API: Restored the charger target to {}%".format(self.control_saved_target))
             self.control_saved_target = None
 
+    @writes
     async def charger_control_hand_to_octopus(self, client, charge):
         """Hand the charger to Octopus without starting a charge.
 
@@ -1157,6 +1160,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.queued_events.append((self.switch_event_handler, entity_id, service))
 
     # event handlers
+    @writes
     async def select_event_handler(self, entity_id, value):
         """
         Select event
@@ -1169,6 +1173,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             else:
                 self.log(f"Warn: Ohme API: Invalid target time value: {value}")
 
+    @writes
     async def number_event_handler(self, entity_id, value):
         """
         Number event
@@ -1193,6 +1198,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
                 self.log(f"Info: Ohme API: Set preconditioning length to {int(value)} mins")
                 await self.client.async_set_target(pre_condition_length=int(value))
 
+    @writes
     async def switch_event_handler(self, entity_id, service):
         """
         Switch event
@@ -1216,7 +1222,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
 class OhmeApiClient:
     """API client for Ohme EV chargers."""
 
-    def __init__(self, email: str, password: str, log):
+    def __init__(self, email: str, password: str, log, session_factory=None):
         if email is None or password is None:
             raise AuthException("Credentials not provided")
 
@@ -1224,6 +1230,8 @@ class OhmeApiClient:
         self.email = email
         self._password = password
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
 
         # Charger and its capabilities
         self.device_info: dict[str, Any] = {}
@@ -1262,7 +1270,7 @@ class OhmeApiClient:
     async def async_login(self) -> bool:
         """Refresh the user auth token from the stored credentials."""
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = self._session_factory()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
@@ -1294,7 +1302,7 @@ class OhmeApiClient:
             return True
 
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = self._session_factory()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
@@ -1342,7 +1350,7 @@ class OhmeApiClient:
         await self._async_refresh_session()
 
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = self._session_factory()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
@@ -1727,9 +1735,7 @@ class OhmeApiClient:
 
 
 # Exceptions
-class ApiException(Exception):
-    ...
+class ApiException(Exception): ...
 
 
-class AuthException(ApiException):
-    ...
+class AuthException(ApiException): ...
