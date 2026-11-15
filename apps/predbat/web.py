@@ -4033,7 +4033,7 @@ chart.render();
             )
             series = []
             for name, keep, group_color in groups:
-                data = [{"x": point[x_key], "y": round(point["value"] * scale, 3)} for point in points if keep(point)]
+                data = [{"x": point[x_key], "y": round(point["value"] * scale, 3), "minutes": point["minutes"], "age": point["age_days"]} for point in points if keep(point)]
                 if data:
                     series.append({"name": name, "data": data, "color": group_color, "type": "scatter", "stroke_width": 0, "markers": 4})
             return series
@@ -4052,7 +4052,7 @@ chart.render();
             evidence += evidence_series(label, power_curve_evidence(power_samples.get(kind, {}), power_today, scaling), "soc", 1.0, color, faded)
         text += self.render_curve_chart(power_series + evidence, "State of charge (%)", "Fraction of the maximum rate", "Battery charge and discharge power curves", "chart_power_curve", 0, 100, y_min=0)
         if evidence:
-            text += "<p>Each dot is one day's average rate at that SoC, from full-rate charges (or exports), on the curve's scale. Faded dots are over {} days old and count for less (half every {} days); grey ones have too little evidence (under {} days or {} minutes) to be learned.</p>\n".format(
+            text += "<p>Each dot is one day's average rate at that SoC, from full-rate charges (or exports), on the curve's scale; hover over one for its minutes and age, as a day with more minutes counts for more. Faded dots are over {} days old and count for less (half every {} days); grey ones have too little evidence (under {} days or {} minutes) to be learned.</p>\n".format(
                 CURVE_EVIDENCE_RECENT_DAYS, BATTERY_POWER_CURVE_HALF_LIFE_DAYS, BATTERY_POWER_CURVE_MIN_DAYS, BATTERY_POWER_CURVE_MIN_MINUTES
             )
 
@@ -4104,7 +4104,7 @@ chart.render();
             text += self.render_curve_chart(temperature_series, "Battery temperature (C)", "Rate cap ({})".format(unit), "Battery temperature curves", "chart_temperature_curve", temperatures[0], temperatures[-1], y_min=0)
             text += "<p>The plan charges at the lower of the SoC curve rate and the temperature cap. A degree the curve does not set uses the 20 degree value above zero (then no cap), and below zero the 0 degree value, else the coldest value the curve sets. A reading of exactly 0, which often means the temperature is missing, uses the 0 degree value, else no cap.</p>\n"
             if temperature_evidence:
-                text += "<p>Each dot is one day's average charge rate at that temperature, from full-rate charges below {}% SoC. Faded dots are over {} days old and count for less (half every {} days); grey ones have too little evidence (under {} minutes, or fewer than {} days) to be learned.</p>\n".format(
+                text += "<p>Each dot is one day's average charge rate at that temperature, from full-rate charges below {}% SoC; hover over one for its minutes and age, as a day with more minutes counts for more. Faded dots are over {} days old and count for less (half every {} days); grey ones have too little evidence (under {} minutes, or fewer than {} days) to be learned.</p>\n".format(
                     BATTERY_TEMPERATURE_CURVE_SOC_MAX, CURVE_EVIDENCE_RECENT_DAYS, BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS, BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, BATTERY_TEMPERATURE_CURVE_MIN_DAYS
                 )
         else:
@@ -4150,6 +4150,14 @@ chart.render();
         text += "  options.chart.width = width;\n"
         text += "  options.chart.height = height;\n"
         text += "  options.xaxis.labels = { formatter: function(value) { return Math.round(value); } };\n"
+        # An evidence dot's tooltip says how much it counts for: its minutes and its age
+        text += "  options.tooltip.y = { formatter: function(value, opts) {\n"
+        text += "    if (value === null || value === undefined) { return value; }\n"
+        text += "    var point = opts.w.config.series[opts.seriesIndex].data[opts.dataPointIndex];\n"
+        text += "    var text = (Math.round(value * 100) / 100).toFixed(2);\n"
+        text += "    if (point && point.minutes !== undefined) { text += ' (' + point.minutes + ' min, ' + (point.age === 0 ? 'today' : point.age + ' days ago') + ')'; }\n"
+        text += "    return text;\n"
+        text += "  } };\n"
         text += "  var container = document.getElementById('{}');\n".format(tagname)
         text += "  var heading = document.createElement('h2');\n"
         text += "  heading.textContent = {};\n".format(title_js)

@@ -143,8 +143,10 @@ def _test_pure_helpers():
     curve, minutes = learn_battery_temperature_curve(samples, today)
     failed |= _check("t3 too few minutes", 9 not in curve, curve)
     failed |= _check("t3 minutes", minutes == {5: 40}, minutes)
-    # 30 days old weighs half: (4 + 2 * 0.5) / (20 + 20 * 0.5) = 0.1667
-    failed |= _check("t3 weighted", curve == {5: 0.17}, curve)
+    # 30 days old weighs 0.5 ** (30 / 90) = 0.794 with the 90-day half-life: (4 + 2 * 0.794) / (20 + 20 * 0.794) = 0.156
+    failed |= _check("t3 weighted", curve == {5: 0.156}, curve)
+    curve, _ = learn_battery_temperature_curve(samples, today, half_life_days=30)
+    failed |= _check("t3 half-life honoured", curve == {5: 0.167}, curve)
     curve, _ = learn_battery_temperature_curve({"2026-11-14": {5: [0.2 * 90, 90]}}, today)
     failed |= _check("t3 one day is not enough, however long", curve == {}, curve)
     curve, _ = learn_battery_temperature_curve({"2026-11-14": {5: [0.2 * 90, 90]}, "2026-11-13": {5: [0.2 * 3, 3]}}, today)
@@ -160,8 +162,8 @@ def _test_pure_helpers():
     configured = {15: 0.2, 8: 0.5, 3: 0.04, 0: 0.0}
     curve = overlay_battery_temperature_curve(configured, {5: 0.13, 12: 0.26})
     failed |= _check("t4 learned", curve[5] == 0.13 and curve[12] == 0.26, curve)
-    failed |= _check("t4 interpolated", curve[6] == round(0.13 + 0.13 / 7, 2) and curve[11] == round(0.13 + 0.13 * 6 / 7, 2), curve)
-    failed |= _check("t4 learned range replaces configured", curve[8] == round(0.13 + 0.13 * 3 / 7, 2), curve)
+    failed |= _check("t4 interpolated", curve[6] == round(0.13 + 0.13 / 7, 3) and curve[11] == round(0.13 + 0.13 * 6 / 7, 3), curve)
+    failed |= _check("t4 learned range replaces configured", curve[8] == round(0.13 + 0.13 * 3 / 7, 3), curve)
     failed |= _check("t4 configured kept outside the learned range", curve[3] == 0.04 and curve[15] == 0.2, curve)
     failed |= _check("t4 colder filled", curve[1] == 0.13 and curve[2] == 0.13 and curve[4] == 0.13, curve)
     failed |= _check("t4 zero and warm untouched", curve[0] == 0.0 and 20 not in curve and 13 not in curve, curve)

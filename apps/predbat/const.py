@@ -144,7 +144,9 @@ BATTERY_TEMPERATURE_CURVE_MIN_POWER = 0.02  # Ignore charging minutes below this
 BATTERY_TEMPERATURE_CURVE_MIN_MINUTES = 30  # Charging minutes a whole degree needs before its learned rate is used
 BATTERY_TEMPERATURE_CURVE_MIN_DAYS = 2  # ... from at least this many different days, so one night whose recorded charge rate was wrong (seen in the fleet) cannot set it
 BATTERY_TEMPERATURE_CURVE_MIN_DAY_MINUTES = 5  # A day counts towards BATTERY_TEMPERATURE_CURVE_MIN_DAYS only with at least this many minutes at that degree
-BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS = 30  # Weight of a day's samples halves every this many days, so a battery that ages or a heater that is re-set is followed
+BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS = (
+    90  # Weight of a day's samples halves every this many days, so a battery that ages or a heater that is re-set is followed; long, as a BMS's temperature limits change slowly and last winter's evidence should still count
+)
 BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS = 400  # Samples older than this are dropped, a little over a year so last winter is still known when the next one starts
 BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES = 60  # Minimum gap between history scans, the curve changes over days not minutes
 BATTERY_POWER_CURVE_RESCAN_MINUTES = 24 * 60  # battery_charge/discharge_power_curve: auto - gap between re-scans once a curve is known, so a newer full-rate cycle replaces it

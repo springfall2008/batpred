@@ -233,7 +233,8 @@ def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERAT
     curve_minutes = {}
     for temp in sorted(minutes):
         if minutes[temp] >= min_minutes and days.get(temp, 0) >= min_days and weighted_minutes[temp] > 0:
-            curve[temp] = round(weighted_sum[temp] / weighted_minutes[temp] / rate_scaling, 2)
+            # 3 places: at 2 a 10 kWh battery's curve could only move in 100 W steps
+            curve[temp] = round(weighted_sum[temp] / weighted_minutes[temp] / rate_scaling, 3)
             curve_minutes[temp] = minutes[temp]
     return curve, curve_minutes
 
@@ -252,7 +253,7 @@ def power_curve_evidence(samples, today, rate_scaling=1.0):
         rate_scaling: battery_rate_max_scaling (or _discharge)
 
     Returns:
-        [{"soc": int, "value": float, "age_days": int, "enough": bool}] sorted by SoC
+        [{"soc": int, "value": float, "age_days": int, "minutes": float, "enough": bool}] sorted by SoC
     """
     rate_scaling = rate_scaling if rate_scaling and rate_scaling > 0 else 1.0
     days, minutes = {}, {}
@@ -263,10 +264,10 @@ def power_curve_evidence(samples, today, rate_scaling=1.0):
     points = []
     for day, day_points in (samples or {}).items():
         age = max((today - datetime.strptime(day, "%Y-%m-%d").date()).days, 0)
-        for point, (value_sum, steps, _minutes) in day_points.items():
+        for point, (value_sum, steps, point_minutes) in day_points.items():
             if steps > 0:
                 enough = days[point] >= BATTERY_POWER_CURVE_MIN_DAYS and minutes[point] >= BATTERY_POWER_CURVE_MIN_MINUTES
-                points.append({"soc": int(point), "value": round(value_sum / steps / rate_scaling, 3), "age_days": age, "enough": enough})
+                points.append({"soc": int(point), "value": round(value_sum / steps / rate_scaling, 3), "age_days": age, "minutes": round(point_minutes, 1), "enough": enough})
     return sorted(points, key=lambda item: (item["soc"], item["age_days"]))
 
 
@@ -284,7 +285,7 @@ def temperature_curve_evidence(samples, today, rate_scaling=1.0):
         rate_scaling: battery_rate_max_scaling
 
     Returns:
-        [{"temperature": int, "value": float, "age_days": int, "enough": bool}] sorted by temperature
+        [{"temperature": int, "value": float, "age_days": int, "minutes": int, "enough": bool}] sorted by temperature
     """
     rate_scaling = rate_scaling if rate_scaling and rate_scaling > 0 else 1.0
     days, minutes = {}, {}
@@ -299,7 +300,7 @@ def temperature_curve_evidence(samples, today, rate_scaling=1.0):
         for temp, (rate_sum, count) in day_bins.items():
             if count > 0:
                 enough = minutes[temp] >= BATTERY_TEMPERATURE_CURVE_MIN_MINUTES and days.get(temp, 0) >= BATTERY_TEMPERATURE_CURVE_MIN_DAYS
-                points.append({"temperature": int(temp), "value": round(rate_sum / count / rate_scaling, 4), "age_days": age, "enough": enough})
+                points.append({"temperature": int(temp), "value": round(rate_sum / count / rate_scaling, 4), "age_days": age, "minutes": count, "enough": enough})
     return sorted(points, key=lambda item: (item["temperature"], item["age_days"]))
 
 
@@ -341,7 +342,7 @@ def overlay_battery_temperature_curve(configured, learned):
         for temp in range(lower + 1, upper):
             if temp != 0:
                 fraction = (temp - lower) / (upper - lower)
-                curve[temp] = round(learned[lower] + (learned[upper] - learned[lower]) * fraction, 2)
+                curve[temp] = round(learned[lower] + (learned[upper] - learned[lower]) * fraction, 3)
     warmest = temps[-1]
     if warmest >= BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK:
         for temp in range(warmest + 1, BATTERY_TEMPERATURE_CURVE_TEMP_MAX + 1):

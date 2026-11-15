@@ -59,6 +59,11 @@ def _chart_options(html, tagname):
     return json.loads(script[start + len("var options = ") : end])
 
 
+def _xy(data):
+    """A series' points as (x, y) pairs."""
+    return [(point["x"], point["y"]) for point in data or []]
+
+
 def _check(name, condition, detail=""):
     """Print and return a failure when condition is false."""
     if not condition:
@@ -134,15 +139,16 @@ def run_web_curves_chart_tests(my_predbat):
         html = web.get_chart("Curves")
         options = _chart_options(html, "chart_power_curve")
         series = {entry["name"]: entry for entry in options["series"]} if options else {}
-        failed |= _check("t3b recent", series.get("Charge evidence, last 14 days", {}).get("data") == [{"x": 99, "y": 1.0}], series.get("Charge evidence, last 14 days"))
-        failed |= _check("t3b older", series.get("Charge evidence, older", {}).get("data") == [{"x": 99, "y": 0.8}], series.get("Charge evidence, older"))
-        failed |= _check("t3b too little", series.get("Charge evidence, too little to learn", {}).get("data") == [{"x": 50, "y": 1.8}], series.get("Charge evidence, too little to learn"))
+        failed |= _check("t3b recent", series.get("Charge evidence, last 14 days", {}).get("data") == [{"x": 99, "y": 1.0, "minutes": 10.0, "age": 0}], series.get("Charge evidence, last 14 days"))
+        failed |= _check("t3b older", _xy(series.get("Charge evidence, older", {}).get("data")) == [(99, 0.8)], series.get("Charge evidence, older"))
+        failed |= _check("t3b too little", _xy(series.get("Charge evidence, too little to learn", {}).get("data")) == [(50, 1.8)], series.get("Charge evidence, too little to learn"))
+        failed |= _check("t3b tooltip shows minutes", "point.minutes" in html)
         failed |= _check("t3b scatter", series.get("Charge evidence, older", {}).get("type") == "scatter" and series.get("Charge curve", {}).get("type") == "line")
         failed |= _check("t3b no discharge evidence", not any(name.startswith("Discharge evidence") for name in series), list(series))
         options = _chart_options(html, "chart_temperature_curve")
         series = {entry["name"]: entry["data"] for entry in options["series"]} if options else {}
         failed |= _check("t3b temperature recent", sorted(point["y"] for point in series.get("Charge evidence, last 14 days", [])) == [4.0, 4.0], series.get("Charge evidence, last 14 days"))
-        failed |= _check("t3b temperature too little", series.get("Charge evidence, too little to learn") == [{"x": 12, "y": 6.0}], series.get("Charge evidence, too little to learn"))
+        failed |= _check("t3b temperature too little", _xy(series.get("Charge evidence, too little to learn")) == [(12, 6.0)], series.get("Charge evidence, too little to learn"))
         failed |= _check("t3b caption", "Each dot is one day" in html)
         my_predbat.battery_rate_max_scaling = 1.0
 
