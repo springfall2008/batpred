@@ -186,6 +186,21 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     _install(my_predbat, _export(25, grid=-2000))
     failed |= _check("t7b inverted grid sensor", _segments(inv.find_rate_grid_samples(True)) == [], "inverted export at the limit learned")
 
+    print("Test 7c: without grid_power history an ignored export cannot be told apart, so no discharge evidence is gathered")
+
+    def no_grid(my_predbat):
+        """No grid_power sensor."""
+        my_predbat.args.pop("grid_power", None)
+
+    _, samples = _scan(_export(25), discharge=True, setup=no_grid)
+    failed |= _check("t7c", samples is None, samples)
+
+    print("Test 7d: a charge command the inverter ignored (battery charging from PV, nothing imported) is not evidence")
+    _, samples = _scan([("Charging", RATED_W, -1560, 40, 15.3, 0) for _ in range(25)])
+    failed |= _check("t7d", _segments(samples) == [], samples)
+    _, samples = _scan(_charge(25), setup=no_grid)
+    failed |= _check("t7d charge without grid history still counts", len(_segments(samples)) == 3, samples)
+
     print("Test 8: a run written below the full rate does not count")
     block = [("Charging", 1000, -1000, 40, 15.3, -1000) for _ in range(25)]
     _, samples = _scan(block)

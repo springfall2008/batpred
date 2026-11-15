@@ -690,6 +690,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_rate_grid_last_scan = {}  # "charge"/"discharge" -> time of the last history scan
         self.battery_rate_grid_loaded = {}  # "charge"/"discharge" -> True once the stored samples have been read
         self.battery_rate_grid_fit_key = {}  # "charge"/"discharge" -> the manual curves and battery size the learned grid was fitted with
+        self.battery_rate_grid_load_failures = {}  # "charge"/"discharge" -> times of cycles whose store reads all came back empty
+        self.battery_rate_grid_pending_save = {}  # "charge"/"discharge" -> True while a save waits for the store to read back
         self.isCharging = False
         self.isCharging_Target = 0
         self.isExporting = False

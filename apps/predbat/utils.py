@@ -288,6 +288,8 @@ class MinuteArray:
 # log-repeat bookkeeping. Shared with is_debug_excluded_key(). io_slot_log_gate keys its history by
 # tuples, which a dump writes as YAML sequences that cannot be loaded back as dict keys, so a dump
 # carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
+# The rate grid evidence (a year of samples) and the grids derived from the learned ones are rebuilt on replay
+# (rate_grids()), so only battery_rate_grid_learned is dumped - every debug_history snapshot would otherwise carry them.
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -310,6 +312,11 @@ DEBUG_EXCLUDE_LIST = [
     "secrets",
     "status_lock",
     "io_slot_log_gate",
+    "battery_rate_grid_samples",
+    "battery_rate_grid_cache",
+    "battery_rate_grid_manual",
+    "battery_charge_rate_grid",
+    "battery_discharge_rate_grid",
 ]
 
 
@@ -2641,17 +2648,18 @@ def rate_curve_ceiling(soc, soc_max, rate_max, rate_curve):
     return rate_curve[soc_percent] * (rate_max / rated)
 
 
-@lru_cache(maxsize=1024)
+@lru_cache(maxsize=64)
 def rate_curve_function(rate_curve):
     """
     A cached rate lookup bound to one battery ceiling curve: lookup(soc, rate_setting, soc_max, rate_max, rate_min).
 
     The plan's hot path makes millions of these lookups; keying one shared cache on the 101-entry curve would hash it on
-    every call, so each distinct curve gets its own small-keyed cache instead and is hashed once, here. Gives the same
+    every call, so each distinct curve gets its own small-keyed cache instead and is hashed once, here. Both caches are
+    bounded (64 curves of 2048 lookups): a new curve appears for each forecast degree each time a grid is refitted. Gives the same
     answer as get_charge_rate_curve_cached() (charge) and get_discharge_rate_curve_cached() (discharge).
     """
 
-    @lru_cache(maxsize=8192)
+    @lru_cache(maxsize=2048)
     def lookup(soc, rate_setting, soc_max, rate_max, rate_min):
         """The true rate for this SoC and setting under the bound curve."""
         return max(min(rate_setting, rate_curve_ceiling(soc, soc_max, rate_max, rate_curve)), rate_min)

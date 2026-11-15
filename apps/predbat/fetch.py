@@ -45,6 +45,8 @@ from const import (
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
+    BATTERY_RATE_GRID_LOAD_ATTEMPTS,
+    BATTERY_RATE_GRID_LOAD_WAIT_MINUTES,
     BATTERY_RATE_GRID_MAX_AGE_DAYS,
     BATTERY_RATE_GRID_SCAN_MINUTES,
 )
@@ -4223,27 +4225,35 @@ class Fetch:
             return True
 
         refit = kind not in self.battery_rate_grid_learned or self.battery_rate_grid_fit_key.get(kind) != manual_key
-        save = False
-        last_scan = self.battery_rate_grid_last_scan.get(kind)
-        if not self.battery_rate_grid_loaded.get(kind) and last_scan is None:
+        save = self.battery_rate_grid_pending_save.get(kind, False)
+        failures = self.battery_rate_grid_load_failures.setdefault(kind, [])  # one time per cycle whose reads all came back empty
+        if not self.battery_rate_grid_loaded.get(kind):
             refit |= load_store()
+        last_scan = self.battery_rate_grid_last_scan.get(kind)
         if last_scan is None or (self.now_utc - last_scan) >= timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES):
             self.battery_rate_grid_last_scan[kind] = self.now_utc
             if not self.battery_rate_grid_loaded.get(kind):
+                # Read again just before merging, as the old learners did
                 refit |= load_store()
             stored = self.battery_rate_grid_samples.get(kind, {})
             scanned = inverter.find_rate_grid_samples(discharge)
             if scanned is not None:
                 # None means the settings or history were missing this time: the stored samples are left alone
                 merged = merge_rate_grid_samples(stored, scanned, today, BATTERY_RATE_GRID_MAX_AGE_DAYS, getattr(inverter, "curve_scan_coverage", {}).get("grid_" + kind))
-                save = merged != stored or merged_on_load[0]
+                save = save or merged != stored
                 self.battery_rate_grid_samples[kind] = merged
             refit = True
+        save = save or merged_on_load[0]
+        if self.battery_rate_grid_loaded.get(kind):
+            failures.clear()
+        else:
+            failures.append(self.now_utc)
 
         if refit:
             samples = self.battery_rate_grid_samples.get(kind, {})
             previous = self.battery_rate_grid_learned.get(kind)
-            learned = fit_rate_grid(samples, today, discharge, manual) if samples else None
+            # With no curve set in apps.yaml there is nothing to lean on: gaps are filled from the measured neighbours
+            learned = fit_rate_grid(samples, today, discharge, manual if configured else None) if samples else None
             if (learned or {}).get("rows") != (previous or {}).get("rows"):
                 if learned:
                     if previous is not None or not self.battery_rate_grid_updated.get(kind):
@@ -4255,7 +4265,17 @@ class Fetch:
             self.battery_rate_grid_learned[kind] = learned
             self.battery_rate_grid_fit_key[kind] = manual_key
 
-        if save and storage:
+        # An empty store and a failed read both come back as None, so a store that has never read back is only treated as
+        # empty (a new install) once its reads have failed on BATTERY_RATE_GRID_LOAD_ATTEMPTS cycles spanning at least
+        # BATTERY_RATE_GRID_LOAD_WAIT_MINUTES; until then a save waits, so a storage outage cannot replace a year of evidence
+        # with one scan. The scanned days are kept in memory meanwhile and merged with the store once it reads back.
+        store_ready = self.battery_rate_grid_loaded.get(kind) or (len(failures) >= BATTERY_RATE_GRID_LOAD_ATTEMPTS and (self.now_utc - failures[0]) >= timedelta(minutes=BATTERY_RATE_GRID_LOAD_WAIT_MINUTES))
+        self.battery_rate_grid_pending_save[kind] = bool(save and storage and not store_ready)
+        if save and storage and store_ready:
+            if store_ready and not self.battery_rate_grid_loaded.get(kind):
+                self.log("Info: {}: the stored evidence has not read back for {} cycles, treating the store as empty".format(key, len(failures)))
+                self.battery_rate_grid_loaded[kind] = True
+                failures.clear()
             try:
                 if not run_async(storage.save("predbat", key, {"samples": self.battery_rate_grid_samples.get(kind, {}), "updated": self.battery_rate_grid_updated.get(kind)}, format="json")):
                     self.log("Warn: {}: failed to save the evidence".format(key))

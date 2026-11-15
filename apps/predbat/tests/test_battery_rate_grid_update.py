@@ -17,7 +17,10 @@ from datetime import timedelta
 from tests.test_infra import TestHAInterface, MockStorageComponents, make_test_storage, run_async
 from predbat import PredBat
 from battery_curve import charge_day
+import yaml
+
 from battery_rate_grid import rate_grid_curve
+from utils import rate_curve_function
 from config import APPS_SCHEMA
 from const import BATTERY_RATE_GRID_SCAN_MINUTES
 
@@ -110,6 +113,16 @@ def _update(my_predbat, inv):
     my_predbat.battery_rate_grid_update(inv, True)
 
 
+def _settle(my_predbat, inv, cycles=3, minutes=6):
+    """
+    Run the updates over several cycles a few minutes apart: an empty store reads back as None, like a failed read,
+    so a new install's first save waits until the reads have failed on separate cycles for long enough.
+    """
+    for _ in range(cycles):
+        _update(my_predbat, inv)
+        my_predbat.now_utc += timedelta(minutes=minutes)
+
+
 def run_battery_rate_grid_update_tests(my_predbat_unused=None):
     """Run the rate grid wiring tests."""
     failed = False
@@ -142,7 +155,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         my_predbat.components = MockStorageComponents(storage)
         inv = FakeInverter()
         inv.scan[False] = _samples(my_predbat)
-        _update(my_predbat, inv)
+        _settle(my_predbat, inv)
         failed |= _check("t3 auto on by default", my_predbat.battery_rate_grid_auto is True)
         failed |= _check("t3 source", my_predbat.battery_rate_grid_source.get("charge") == "learned", my_predbat.battery_rate_grid_source)
         row = rate_grid_curve(my_predbat.battery_charge_rate_grid, 15)
@@ -156,6 +169,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
 
         print("Test 4: a second call within the scan interval does not rescan; after a restart the stored evidence is used")
         calls = inv.calls[False]
+        failed |= _check("t4 one scan while settling", calls == 1, inv.calls)
         _update(my_predbat, inv)
         failed |= _check("t4 no rescan", inv.calls[False] == calls, inv.calls)
         my_predbat.now_utc += timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES + 1)
@@ -174,7 +188,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         my_predbat.components = MockStorageComponents(storage)
         inv = FakeInverter()
         inv.scan[False] = _samples(my_predbat)
-        _update(my_predbat, inv)
+        _settle(my_predbat, inv)
         failed |= _check("t5 source", my_predbat.battery_rate_grid_source.get("charge") == "manual", my_predbat.battery_rate_grid_source)
         failed |= _check("t5 grid", rate_grid_curve(my_predbat.battery_charge_rate_grid, 15)[100] == 0.5)
         saved = run_async(storage.load("predbat", "battery_rate_grid_charge"))
@@ -191,6 +205,60 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         _update(my_predbat, inv)
         saved = run_async(storage.load("predbat", "battery_rate_grid_charge"))
         failed |= _check("t6 old day kept", isinstance(saved, dict) and old_day in saved.get("samples", {}), saved and sorted(saved.get("samples", {}).keys()))
+
+
+        print("Test 6b: a storage outage longer than one cycle does not overwrite the stored year")
+        my_predbat = _make()
+        storage = make_test_storage(my_predbat, tmpdir + "/t6b")
+        old_day = charge_day(my_predbat.now_utc, 200 * 24 * 60, my_predbat.local_tz)
+        run_async(storage.save("predbat", "battery_rate_grid_charge", {"samples": {old_day: [[50.0, 12.0, 0.4]]}, "updated": None}, format="json"))
+        my_predbat.components = MockStorageComponents(FlakyStorage(storage, 2))
+        inv = FakeInverter()
+        inv.scan[False] = _samples(my_predbat)
+        my_predbat.battery_rate_grid_update(inv, False)
+        saved = run_async(storage.load("predbat", "battery_rate_grid_charge"))
+        failed |= _check("t6b nothing saved while the store cannot be read", saved == {"samples": {old_day: [[50.0, 12.0, 0.4]]}, "updated": None}, saved and sorted(saved.get("samples", {}).keys()))
+        my_predbat.now_utc += timedelta(minutes=5)
+        my_predbat.battery_rate_grid_update(inv, False)
+        saved = run_async(storage.load("predbat", "battery_rate_grid_charge"))
+        failed |= _check("t6b merged once readable", isinstance(saved, dict) and old_day in saved.get("samples", {}) and len(saved.get("samples", {})) == 5, saved and sorted(saved.get("samples", {}).keys()))
+
+        print("Test 6c: a new install's empty store is saved once the reads have come back empty on separate cycles")
+        my_predbat = _make()
+        storage = make_test_storage(my_predbat, tmpdir + "/t6c")
+        my_predbat.components = MockStorageComponents(storage)
+        inv = FakeInverter()
+        inv.scan[False] = _samples(my_predbat)
+        my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t6c not saved on the first cycle", run_async(storage.load("predbat", "battery_rate_grid_charge")) is None)
+        for _ in range(3):
+            my_predbat.now_utc += timedelta(minutes=6)
+            my_predbat.battery_rate_grid_update(inv, False)
+        saved = run_async(storage.load("predbat", "battery_rate_grid_charge"))
+        failed |= _check("t6c saved later", isinstance(saved, dict) and len(saved.get("samples", {})) == 4, saved)
+
+        print("Test 8: with no manual curves a gap in the evidence is interpolated, not filled to the highest allowed rate")
+        my_predbat = _make()
+        my_predbat.components = MockStorageComponents(make_test_storage(my_predbat, tmpdir + "/t8"))
+        inv = FakeInverter()
+        gap = {}
+        for d in range(4):
+            day = charge_day(my_predbat.now_utc, d * 24 * 60 + 60, my_predbat.local_tz)
+            gap[day] = [[soc + 0.4, temp + 0.3, rate] for temp in range(5, 25) for soc, rate in ((20, 0.9), (60, 0.5))]
+        inv.scan[False] = gap
+        _update(my_predbat, inv)
+        value = rate_grid_curve(my_predbat.battery_charge_rate_grid, 15)[40]
+        failed |= _check("t8 interpolated", my_predbat.battery_rate_grid_source.get("charge") == "learned" and 0.6 < value < 0.8, (my_predbat.battery_rate_grid_source, value))
+
+        print("Test 9: the per-curve lookup caches are bounded")
+        failed |= _check("t9 outer", rate_curve_function.cache_info().maxsize <= 64, rate_curve_function.cache_info())
+        failed |= _check("t9 inner", rate_curve_function((1.0,) * 101 + (1.0, float("inf"))).cache_info().maxsize <= 2048)
+
+        print("Test 10: debug dumps carry the learned grids but not the evidence or derived grids")
+        dump = yaml.unsafe_load(my_predbat.create_debug_yaml(write_file=False))
+        for key in ("battery_rate_grid_samples", "battery_rate_grid_cache", "battery_rate_grid_manual", "battery_charge_rate_grid", "battery_discharge_rate_grid"):
+            failed |= _check("t10 excluded " + key, key not in dump)
+        failed |= _check("t10 learned kept", "battery_rate_grid_learned" in dump)
 
         print("Test 7: the options")
         failed |= _check("t7 new option", "battery_rate_grid_auto" in APPS_SCHEMA)

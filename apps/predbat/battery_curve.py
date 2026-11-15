@@ -309,7 +309,8 @@ class BatteryCurve:
         A minute counts when Predbat was Charging (or, for discharge, in a forced export - status Exporting), the rate
         was written at BATTERY_RATE_GRID_FULL_RATE of the maximum or more, the battery moved at BATTERY_RATE_GRID_MIN_POWER
         of the maximum or more in that direction (less is a charge or export that did not happen, not a limit), the
-        export was not held back by export_limit and - when there is grid_power history - reached the grid, and the
+        export was not held back by export_limit, the export (or charge import) reached the grid - required for discharge,
+        checked for charge when there is grid_power history - and the
         temperature reading is not exactly 0 (a missing reading) on an install that has a temperature sensor.
         Runs of BATTERY_RATE_GRID_RUN_MINUTES or more lose BATTERY_RATE_GRID_EDGE_MINUTES at each end (ramp up and
         down) and the rest is cut into centred BATTERY_RATE_GRID_SEGMENT_MINUTES segments, each averaged into one sample.
@@ -334,12 +335,16 @@ class BatteryCurve:
         min_rate = max_power * BATTERY_RATE_GRID_FULL_RATE
         min_power = max(max_power * BATTERY_RATE_GRID_MIN_POWER, 1.0)
         limited = set()
-        grid_power = None
+        grid_power = self.load_grid_power_minutes()
         if discharge:
             limited = self.find_export_limited_minutes(min_len, min_rate, history.get("export_limit_w"))
             if limited is None:
                 return None
-            grid_power = self.load_grid_power_minutes()
+            if grid_power is None:
+                # A forced export the inverter ignored (the battery only covering the house) looks like a slow battery, and
+                # only the grid export can tell them apart
+                self.log("Info: Inverter {} Cannot gather {} evidence, grid_power has no history to tell a forced export from the battery covering the house".format(self.id, purpose))
+                return None
         battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
         scaling = self.base.battery_rate_max_scaling_discharge if discharge else self.base.battery_rate_max_scaling
         scaling = scaling if scaling > 0 else 1.0
@@ -358,8 +363,12 @@ class BatteryCurve:
             power = history["battery_power"].get(minute, 0)
             if (power <= 0 if discharge else power >= 0) or abs(power) < min_power:
                 return None
-            if grid_power is not None and grid_power.get(minute, 0) < min_power:
-                return None
+            if grid_power is not None:
+                # The export (or, charging, the import) must reach the grid: otherwise the command was ignored and the battery
+                # was covering the house, or charging from PV alone, rather than running at its limit
+                grid = grid_power.get(minute, 0)
+                if (grid < min_power) if discharge else (grid > -min_power):
+                    return None
             soc = history["soc_kwh"].get(minute, None)
             if soc is None:
                 return None
