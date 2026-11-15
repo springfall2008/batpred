@@ -1116,6 +1116,13 @@ class OllamaContextWindowTests(unittest.TestCase):
             env = triage_daemon.claude_env(review_only=True)
         self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000")
 
+    def test_deepseek_flash_gets_its_real_window(self):
+        """deepseek-v4.1-flash:cloud is a 1M-token model the daemon runs under --ollama_review;
+        unlisted, Claude Code warned it did not recognise the model and assumed 200k."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "deepseek-v4.1-flash:cloud"):
+            env = triage_daemon.claude_env(review_only=True)
+        self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000")
+
 
 class ProcessNewIssueTests(unittest.TestCase):
     """The issue-triage orchestrator. Before it existed, triage() sat bare in the main loop
