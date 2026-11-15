@@ -1142,7 +1142,12 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         That reading is frozen, so judging drift from it would re-send the same mode every poll to a unit that is not
         answering. Returning False leaves it alone, and held as it was, until it is read again. Before any poll has
         been tracked every Zappi counts as read.
+
+        A boost is the owner's override of the plan. Leave its mode alone until the charger reports
+        the boost finished or cancelled, then resume normal scheduling, including correcting drift.
         """
+        if device.boost_active:
+            return False
         return self.polled_device_ids is None or device.device_id in self.polled_device_ids
 
     def charger_control_drifted(self, device, charge):
@@ -1263,8 +1268,13 @@ class MyEnergiAPI(ComponentBase, OAuthMixin, CarChargerControl):
         mode = self.control_saved_modes.get(device.device_id)
         if mode not in ZAPPI_MODE_TO_CLOUD:
             mode = ZAPPI_MODE_RELEASE
-        self.log("Info: myenergi: releasing {} back to {}".format(device.name, mode))
-        await self.transport.set_mode(device, mode)
+        if device.boost_active:
+            # The owner has already taken over. Restoring a saved Stopped (or another mode)
+            # here would cancel their boost even though they have switched control off.
+            self.log("Info: myenergi: releasing {} with its boost still active".format(device.name))
+        else:
+            self.log("Info: myenergi: releasing {} back to {}".format(device.name, mode))
+            await self.transport.set_mode(device, mode)
         # Only once it has gone through: a Zappi taken back later must snapshot its mode afresh
         if self.control_saved_modes.pop(device.device_id, None) is not None:
             await self.save_control_modes()
