@@ -159,6 +159,11 @@ def test_combine_and_lookup():
     absolute = rate_grid_curve(engine, 15, rated=0.1)
     failed = check(failed, abs(absolute[30] - 0.1 * learned["rows"][5][30]) < 1e-12, "rated scales the row to kW/minute")
     failed = check(failed, combine_rate_grid(None, manual) is manual, "no learned grid: the manual grid is used")
+    # Warmer than the evidence the warmest learned row is used as it is: a manual grid only caps the cold side, so the
+    # rule (never faster when colder) still holds across the edge
+    above_rated = {"temp_low": 10, "rows": [[0.5] * 101, [1.1] * 101], "zero_row": [1.1] * 101, "cells": 30, "days": 3, "segments": 30, "temp_range": [10, 11]}
+    engine = combine_rate_grid(above_rated, manual_rate_grid({}, {}, 100.0, 0.1))
+    failed = check(failed, rate_grid_curve(engine, 25)[:101] == (1.1,) * 101, "warmer than the evidence: the warmest learned row, got {}".format(rate_grid_curve(engine, 25)[50]))
     failed = check(failed, rate_grid_curve(None, 12, rated=0.2) == (0.2,) * 102, "no grid at all: full rated rate")
     return failed
 

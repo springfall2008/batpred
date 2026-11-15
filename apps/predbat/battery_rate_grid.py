@@ -246,7 +246,9 @@ def combine_rate_grid(learned, manual):
     The engine grid: the learned grid where there is evidence, the manual grid beyond it.
 
     Inside the learned temperature range the learned rows are used as they are. Colder or warmer, the nearest learned row
-    is used (never extrapolated), capped by the manual row at that temperature when there is a manual grid. A learned
+    is used (never extrapolated); colder, it is also capped by the manual row at that temperature when there is a manual
+    grid, so a manual cold curve still applies below the evidence. Warmer is not capped: that would make a warmer row
+    slower than the warmest learned one. A learned
     grid with no temperature (one row) is used for every temperature. An exact 0 reading (missing) uses the learned
     BATTERY_RATE_GRID_UNKNOWN_TEMP row. With nothing learned, the manual grid as it is.
     """
@@ -260,7 +262,7 @@ def combine_rate_grid(learned, manual):
     rows = []
     for degree in range(BATTERY_RATE_GRID_TEMP_MIN, BATTERY_RATE_GRID_TEMP_MAX + 1):
         row = grid_row(learned, degree)
-        if manual is not None and (degree < low or degree > high):
+        if manual is not None and degree < low:
             row = [min(a, b) for a, b in zip(row, grid_row(manual, degree))]
         rows.append(row)
     return {"temp_low": BATTERY_RATE_GRID_TEMP_MIN, "rows": rows, "zero_row": grid_row(learned, BATTERY_RATE_GRID_UNKNOWN_TEMP)}
