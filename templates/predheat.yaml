@@ -140,3 +140,16 @@ predbat:
     #  16: 4.3
     #  18: 4.3
     #  20: 4.3
+
+    # Joint heat/battery planning preview, disabled by default.
+    # Enable only when ALL household load scenarios exclude heating, including
+    # any existing PredHeat extra-load contribution. See docs/predheat.md.
+    #joint_planning: false
+    #joint_load_is_non_heating: true
+    #joint_comfort_margin: 0.5
+    #joint_overheat_margin: 1.5
+    #joint_max_evaluations: 32
+    #joint_max_seconds: 30
+    # Terminal room/water reserves default to their initial temperatures.
+    #joint_terminal_temperature: 20
+    #joint_terminal_water_temperature: 35

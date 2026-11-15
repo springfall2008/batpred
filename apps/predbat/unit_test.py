@@ -48,6 +48,8 @@ from tests.test_predheat import (
     test_predheat_volume_temp_persistence,
     test_predheat_heat_to_temp_off_marker,
 )
+from tests.test_predheat_model import run_predheat_model_tests
+from tests.test_joint_heat import run_joint_heat_tests
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_temperature_units import test_temperature_unit_conversion
 from tests.test_charge_hold import run_charge_hold_tests
@@ -593,6 +595,8 @@ def main():
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),
         ("predheat", test_predheat, "Predheat scheduler and predheat_enable gate tests (#4670)", False),
+        ("predheat_model", run_predheat_model_tests, "Pure PredHeat physics, immutable inputs and output caps", False),
+        ("joint_heat", run_joint_heat_tests, "Joint thermal and battery optimisation with native economics", False),
         ("predheat_smart_thermostat", test_predheat_smart_thermostat, "Predheat smart thermostat pre-heat window tests", False),
         ("predheat_pr5767_regressions", test_predheat_pr5767_regressions, "Predheat fallback, hysteresis and COP regression tests (#5767)", False),
         ("predheat_optional_energy_history", test_predheat_optional_energy_history, "Predheat without optional energy history tests", False),

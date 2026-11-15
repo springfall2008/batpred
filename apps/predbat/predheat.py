@@ -20,10 +20,13 @@ requirements and costs for heat pump systems.
 """
 
 from datetime import datetime, timedelta, timezone
+from functools import wraps
+from threading import RLock
 import pytz
 from utils import str2time, dp2, dp3, convert_temperature, is_entity_id, minute_data, minutes_since_midnight, next_aligned_run, temperature_scale, clock_change_minutes
 
 from const import TIME_FORMAT
+from predheat_model import HeatingConfig, HeatingState, HeatingInput, simulate_heating
 
 MAX_INCREMENT = 100
 PREDICT_STEP = 5
@@ -31,6 +34,24 @@ TEMPERATURE_UNIT = "°C"  # The heat model works in °C: its efficiency tables, 
 TEMPERATURE_LABELS = {"C": "°C", "F": "°F", "K": "K"}  # The unit to publish for each temperature scale
 # Target setpoint (°C) used when no target-temperature history is available.
 DEFAULT_TARGET_TEMPERATURE = 21.5
+
+
+def _serialized_prediction(method):
+    """Keep timer and planning refreshes from mutating the same component concurrently."""
+
+    @wraps(method)
+    def serialized(self, *args, **kwargs):
+        """Hold the component's reentrant lock for one complete refresh."""
+        with self.prediction_lock:
+            previous = self.prediction_started
+            self.prediction_started = True
+            self.update_pending = False
+            try:
+                return method(self, *args, **kwargs)
+            finally:
+                self.prediction_started = previous
+
+    return serialized
 
 
 """
@@ -118,8 +139,8 @@ class PredHeat:
 
     def __init__(self, base):
         self.base = base
+        self.prediction_lock = RLock()
         self.log = base.log
-        self.record_status = base.record_status
         self.get_arg = base.get_arg
         self.set_state = base.set_state_wrapper
         self.get_state = base.get_state_wrapper
@@ -193,6 +214,12 @@ class PredHeat:
         self.days_previous = [7]
         self.days_previous_weight = [1]
         self.octopus_url_cache = {}
+
+    def record_status(self, message, debug="", had_errors=False, notify=False, extra=""):
+        """Retain component input errors while forwarding status to the main application."""
+        if had_errors:
+            self.had_errors = True
+        return self.base.record_status(message, debug=debug, had_errors=had_errors, notify=notify, extra=extra)
 
     def get_weather_data(self, now_utc):
         entity_id = self.get_arg("weather", indirect=False, domain="predheat")
@@ -384,6 +411,7 @@ class PredHeat:
             return total / total_weight
 
     def run_simulation(self, volume_temp, heating_active, save="best", last_predict_minute=None):
+        """Build legacy schedules, run the pure shared physics and publish existing outputs."""
         internal_temp = self.internal_temperature[0]
         external_temp = self.external_temperature[0]
         internal_temp_predict_stamp = {}
@@ -396,10 +424,8 @@ class PredHeat:
         heat_energy_predict_stamp = {}
         heat_to_predict_stamp = {}
         heat_to_predict_temperature = {}
-        heating_on = False
         next_volume_temp = volume_temp
         volume_temp_stamp = {}
-        WATTS_TO_DEGREES = 1.16
         cost = self.import_today_cost
         cost_stamp = {}
         cost_minute = {}
@@ -451,11 +477,15 @@ class PredHeat:
                 last_target_temp = target_temp
             # self.log("Thermostat adjusts {}".format(adjustment_points))
 
+        target_schedule = []
+        comfort_schedule = []
+        outdoor_schedule = []
         for minute in range(0, self.forecast_days * 24 * 60, PREDICT_STEP):
             minute_absolute = minute + self.minutes_now
             external_temp = self.temperatures.get(minute, external_temp)
 
             target_temp = self.get_historical(self.target_temperature, minute, default=DEFAULT_TARGET_TEMPERATURE)
+            comfort_schedule.append(target_temp)
 
             # Find the next temperature adjustment
             next_adjust = None
@@ -475,74 +505,51 @@ class PredHeat:
                     target_temp = max(target_temp, next_adjust["to"])
                     # self.log("Predheat: Adjusted target temperature for smart heating to {} at minute {}".format(target_temp, minute))
 
-            temp_diff_outside = internal_temp - external_temp
-            temp_diff_inside = target_temp - internal_temp
+            target_schedule.append(target_temp)
+            outdoor_schedule.append(external_temp)
 
-            # Thermostat model, override with current state also
-            if minute == 0:
-                heating_on = heating_active
-            elif heating_on and temp_diff_inside <= -self.hysteresis_off:
-                heating_on = False
-            elif not heating_on and temp_diff_inside >= self.hysteresis_on:
-                heating_on = True
-
-            heat_loss_current = self.heat_loss_watts * temp_diff_outside * PREDICT_STEP / 60.0
-            heat_loss_current -= self.heat_gain_static * PREDICT_STEP / 60.0
-
-            flow_temp = 0
-            heat_to = None
-            heat_power_in = 0
-            heat_power_out = 0
-            if heating_on:
-                out_temp = int(external_temp + 0.5)
-                out_temp = min(max(out_temp, -20), 20)
-                heat_to = target_temp
-
-                if self.weather_compensation_enabled:
-                    flow_temp = self.weather_compensation.get(out_temp)
-                else:
-                    flow_temp = self.flow_temp
-
-                if volume_temp < flow_temp:
-                    flow_temp_diff = min(flow_temp - volume_temp, self.flow_difference_target)
-                    power_percent = flow_temp_diff / self.flow_difference_target
-                    heat_power_out = self.heat_max_power * power_percent
-                    heat_power_out = max(self.heat_min_power, heat_power_out)
-                    heat_power_out = min(self.heat_max_power, heat_power_out)
-
-                    # self.log("Minute {} flow {} volume {} diff {} power {} kw".format(minute, flow_temp, volume_temp, flow_temp_diff, heat_power_in / 1000.0))
-
-                if self.mode == "gas":
-                    # Gas boiler flow temperature adjustment in efficiency based on flow temp
-                    inlet_temp = int(volume_temp + 0.5)
-                    inlet_temp = min(max(inlet_temp, 0), 100)
-                    condensing = self.gas_efficiency.get(inlet_temp, 0.80)
-                    heat_power_in = heat_power_out / (condensing * self.heat_cop)
-                else:
-                    # Heat pump efficiency based on outdoor temp
-
-                    cop_adjust = self.heat_pump_efficiency.get(out_temp, self.heat_pump_efficiency_max) / self.heat_pump_efficiency_max
-                    heat_power_in = heat_power_out / (self.heat_cop * cop_adjust)
-
-                energy_now_in = heat_power_in * PREDICT_STEP / 60.0 / 1000.0
-
-                cost += energy_now_in * self.rate_import.get(minute_absolute, 0)
-                heat_energy += energy_now_in
-
-                # 1.16 watts required to raise water by 1 degree in 1 hour
-                volume_temp += (heat_power_out / WATTS_TO_DEGREES / self.heat_volume) * PREDICT_STEP / 60.0
-
-            flow_delta = volume_temp - internal_temp
-            flow_delta_rounded = min(max(int(flow_delta), 0), 75)
-            correction = self.delta_correction.get(flow_delta_rounded, 1.0)
-            heat_output = self.heat_output * correction
-
-            # Cooling of the radiators
-            volume_temp -= (heat_output / WATTS_TO_DEGREES / self.heat_volume) * PREDICT_STEP / 60.0
-
-            heat_loss_current -= heat_output * PREDICT_STEP / 60.0
-
-            internal_temp = internal_temp - heat_loss_current / self.watt_per_degree
+        config = HeatingConfig(
+            # Legacy settings use pump behaviour for every value except exactly gas.
+            mode="gas" if self.mode == "gas" else "pump",
+            flow_temp=self.flow_temp,
+            flow_difference_target=self.flow_difference_target,
+            heat_loss_watts=self.heat_loss_watts,
+            heat_gain_static=self.heat_gain_static,
+            watt_per_degree=self.watt_per_degree,
+            heat_output=self.heat_output,
+            heat_volume=self.heat_volume,
+            heat_max_power=self.heat_max_power,
+            # The legacy simulator clamps minimum output to the configured maximum.
+            heat_min_power=min(self.heat_min_power, self.heat_max_power),
+            heat_cop=self.heat_cop,
+            hysteresis_on=self.hysteresis_on,
+            hysteresis_off=self.hysteresis_off,
+            heat_pump_efficiency_max=self.heat_pump_efficiency_max,
+            heat_pump_efficiency=tuple(self.heat_pump_efficiency.items()),
+            gas_efficiency=tuple(self.gas_efficiency.items()),
+            delta_correction=tuple(self.delta_correction.items()),
+            weather_compensation=tuple(self.weather_compensation.items()),
+            weather_compensation_enabled=self.weather_compensation_enabled,
+        )
+        self.comfort_target_temperature_c = tuple(comfort_schedule)
+        self.model_input = HeatingInput(config, HeatingState(internal_temp, volume_temp, bool(heating_active)), tuple(target_schedule), tuple(outdoor_schedule))
+        # This identifies the model's actual forecast origin, not the caller's
+        # battery planning instant. It does not establish sensor observation age.
+        self.model_input_updated_at = self.midnight_utc + timedelta(minutes=self.minutes_now)
+        if self.model_input_updated_at.tzinfo is None:
+            self.model_input_updated_at = self.model_input_updated_at.replace(tzinfo=timezone.utc)
+        self.model_input_updated_at = self.model_input_updated_at.astimezone(timezone.utc)
+        simulation = simulate_heating(self.model_input)
+        for interval in simulation.intervals:
+            minute = interval.minute
+            minute_absolute = minute + self.minutes_now
+            internal_temp = interval.room_temperature_c
+            external_temp = interval.outdoor_temperature_c
+            target_temp = interval.target_temperature_c
+            volume_temp = interval.water_temperature_c
+            heat_to = interval.heat_to_c
+            heat_energy += interval.input_energy_kwh
+            cost += interval.input_energy_kwh * self.rate_import.get(minute_absolute, 0)
 
             # Store for charts
             if (minute % 10) == 0:
@@ -677,14 +684,17 @@ class PredHeat:
             heating_cop = self.get_arg("heat_cop", 0.9, domain="predheat")
         return heating_cop
 
-    def update_pred(self, scheduled):
+    @_serialized_prediction
+    def update_pred(self, scheduled, plan_at=None):
         """
-        Update the heat prediction
+        Update the heat prediction, optionally aligned to an aware host planning instant.
         """
         self.had_errors = False
 
         local_tz = pytz.timezone(self.get_arg("timezone", "Europe/London"))
-        now_utc = datetime.now(local_tz)
+        if plan_at is not None and (plan_at.tzinfo is None or plan_at.utcoffset() is None):
+            raise ValueError("PredHeat plan_at must be timezone-aware")
+        now_utc = plan_at.astimezone(local_tz) if plan_at is not None else datetime.now(local_tz)
         self.forecast_days = self.get_arg("forecast_days", 2, domain="predheat")
         self.forecast_minutes = self.forecast_days * 60 * 24
         self.midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -815,38 +825,28 @@ class PredHeat:
         """
         Called every 15 seconds
         """
-        if not self.is_enabled():
-            return
-
-        if self.update_pending and not self.prediction_started:
-            self.prediction_started = True
-            self.update_pending = False
-            try:
-                self.update_pred(scheduled=False)
-            except Exception as e:
-                self.log("Error: Exception raised {}".format(e))
-                self.record_status("Error: Exception raised {}".format(e), had_errors=True)
-                raise e
-            finally:
-                self.prediction_started = False
-            self.prediction_started = False
+        with self.prediction_lock:
+            if not self.is_enabled():
+                return
+            if self.update_pending and not self.prediction_started:
+                try:
+                    self.update_pred(scheduled=False)
+                except Exception as e:
+                    self.log("Error: Exception raised {}".format(e))
+                    self.record_status("Error: Exception raised {}".format(e), had_errors=True)
+                    raise e
 
     def run_time_loop(self, cb_args):
         """
         Called every N minutes
         """
-        if not self.is_enabled():
-            return
-
-        if not self.prediction_started:
-            self.prediction_started = True
-            self.update_pending = False
-            try:
-                self.update_pred(scheduled=True)
-            except Exception as e:
-                self.log("Error: Exception raised {}".format(e))
-                self.record_status("Error: Exception raised {}".format(e), had_errors=True)
-                raise e
-            finally:
-                self.prediction_started = False
-            self.prediction_started = False
+        with self.prediction_lock:
+            if not self.is_enabled():
+                return
+            if not self.prediction_started:
+                try:
+                    self.update_pred(scheduled=True)
+                except Exception as e:
+                    self.log("Error: Exception raised {}".format(e))
+                    self.record_status("Error: Exception raised {}".format(e), had_errors=True)
+                    raise e
