@@ -4,6 +4,7 @@ import BatteryChart from '../components/BatteryChart'
 import BatteryDegradationChart from '../components/BatteryDegradationChart'
 import CarbonChart from '../components/CarbonChart'
 import CostChart from '../components/CostChart'
+import CurvesChart from '../components/CurvesChart'
 import InDayChart from '../components/InDayChart'
 import MarginalCostsChart from '../components/MarginalCostsChart'
 import LoadMlChart from '../components/LoadMlChart'
@@ -26,7 +27,7 @@ type ChartsPageProps = {
   onLoadingChange?: (loading: boolean) => void
 }
 
-const chartNames = ['battery', 'power', 'cost', 'rates', 'inday', 'solar', 'savings', 'degradation', 'marginal', 'carbon', 'loadml', 'predheat'] as const
+const chartNames = ['battery', 'power', 'cost', 'rates', 'inday', 'solar', 'savings', 'degradation', 'marginal', 'curves', 'carbon', 'loadml', 'predheat'] as const
 type ChartName = typeof chartNames[number]
 
 const chartLabels: Record<ChartName, string> = {
@@ -39,6 +40,7 @@ const chartLabels: Record<ChartName, string> = {
   savings: 'Savings',
   degradation: 'Degradation',
   marginal: 'Marginal costs',
+  curves: 'Curves',
   carbon: 'CO₂',
   loadml: 'Load ML',
   predheat: 'PredHeat'
@@ -107,7 +109,7 @@ export default function ChartsPage({ plan, loadMlEnabled, predheatEnabled, onLoa
       window.clearTimeout(initialTimer)
       window.clearTimeout(refreshTimer)
     }
-  }, [fetchChart, onLoadingChange])
+  }, [fetchChart, onLoadingChange, selectedChart])
 
   return (
     <div className="charts-page">
@@ -159,6 +161,7 @@ export default function ChartsPage({ plan, loadMlEnabled, predheatEnabled, onLoa
       {data?.ready && data.chart === 'savings' && <SavingsChart data={data} />}
       {data?.ready && data.chart === 'degradation' && <BatteryDegradationChart data={data} />}
       {data?.ready && data.chart === 'marginal' && <MarginalCostsChart data={data} />}
+      {data?.ready && data.chart === 'curves' && <CurvesChart data={data} />}
       {plan.carbon_enable && data?.ready && data.chart === 'carbon' && <CarbonChart data={data} />}
       {loadMlEnabled && data?.ready && data.chart === 'loadml' && <LoadMlChart data={data} />}
       {predheatEnabled && data?.ready && data.chart === 'predheat' && <PredheatChart data={data} />}

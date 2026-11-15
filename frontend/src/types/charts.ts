@@ -211,4 +211,20 @@ export type PredheatChartData = {
   }
 }
 
-export type ChartData = BatteryChartData | PowerChartData | CostChartData | RatesChartData | InDayChartData | SolarChartData | SavingsChartData | BatteryDegradationChartData | MarginalCostsChartData | CarbonChartData | LoadMlChartData | PredheatChartData
+export type CurvesChartData = {
+  chart: 'curves'
+  ready: boolean
+  max_rate: number
+  grids: Array<{
+    kind: string
+    state?: string
+    attributes: Record<string, unknown>
+    soc: number[]
+    temperature: number[]
+    z: number[][]
+    evidence: number[][]
+    table: { soc: number[], temperature: number[] | null, rows: number[][] }
+  }>
+}
+
+export type ChartData = BatteryChartData | PowerChartData | CostChartData | RatesChartData | InDayChartData | SolarChartData | SavingsChartData | BatteryDegradationChartData | MarginalCostsChartData | CarbonChartData | LoadMlChartData | PredheatChartData | CurvesChartData

@@ -4691,6 +4691,9 @@ chart.render();
     async def html_api_chart_data(self, request):
         """Return chart data for the modern interface as JSON."""
         chart = request.query.get("chart", "battery").strip().lower()
+        if chart == "curves":
+            from web_curve_data import curves_chart_data
+            return web.json_response(curves_chart_data(self.base, self.prefix, self.now_utc))
         if chart == "battery":
             return web.json_response(self.get_battery_chart_data())
         if chart == "power":

@@ -89,6 +89,14 @@ test('unready charts retry in five seconds and ready charts refresh after five m
   assert.equal([...page.timers.values()][0].delay, 300_000)
 })
 
+test('curves requests chart data without embedding a second page', () => {
+  const page = chartPage()
+  const nodes = page.select('Curves')
+  assert.equal(nodes.some((node) => node.type === 'iframe'), false)
+  page.tick()
+  assert.equal(page.requests[0].url, '../api/chart_data?chart=curves')
+})
+
 test('returning to a chart renders its cached data immediately while refreshing', async () => {
   const page = chartPage()
   const battery = { chart: 'battery', ready: true }
