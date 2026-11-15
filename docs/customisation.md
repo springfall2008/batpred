@@ -378,7 +378,7 @@ This prevents Predbat from planning unnecessary forced exports during sunny peri
 
 **switch.predbat_set_discharge_during_charge** - When turned On the battery may discharge to cover the house during a charge slot while it is above the slot's target. When turned Off, discharge is disabled during charge slots, which is useful for multi-inverter setups to avoid cross-charging when batteries are out of balance. Default is On.
 
-**switch.predbat_inverter_set_charge_before** - (_expert_mode_) When turned On (the default), charge slots will be programmed before their start time, when Off they will only be configured when the charging time starts.
+**switch.predbat_inverter_set_charge_before** - (_expert_mode_) When turned On (the default), charge slots will be programmed before their start time, when Off they will only be configured when the charging time starts. With **switch.predbat_set_charge_low_power** on, charge slots are only configured when they start, so the low-power rate is worked out first (see Low power charging).
 
 **switch.predbat_calculate_second_pass** (_performance tweaks_) When turned On (the default) causes Predbat to perform a second pass optimisation across all the charge and export windows in time order.
 
@@ -540,8 +540,9 @@ lowest possible rate to meet the charge target. This is only really effective fo
 If this setting is turned on, it is strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#battery-chargedischarge-curves)
 as otherwise the low power charge may not reach the charge target in time.
 The minimum requested charge rate used in this mode is 400 watts (subject to inverter/battery minimum rate limits).
-With low-power charging on, a charge window is not set on the inverter in advance: it is set on Predbat's first run inside the window, the same run that works out the charge rate,
-so charging starts at the low-power rate rather than at full power, a few seconds after the window opens (longer on slow hardware).
+With low-power charging on, a charge window is not set on the inverter in advance, whatever **switch.predbat_inverter_set_charge_before** says: it is set on Predbat's first run inside the window,
+the same run that works out the charge rate, so it does not open at full power. That is typically within seconds of the window opening, longer on slow hardware or cloud-controlled inverters.
+On inverters that enable the window with a switch, the rate is written a few seconds after the window in that first run. A window that low power would charge at full rate anyway, because of its forecast solar (see below), is still set in advance.
 This setting is off by default.
 
 Low-power charging is skipped for any charge window whose forecast solar production averages above **input_number.predbat_low_power_pv_threshold_w**,

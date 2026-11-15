@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 from datetime import timedelta
+from unittest.mock import patch
 
 from tests.test_infra import reset_inverter
 from const import EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, MINUTE_WATT
@@ -4217,6 +4218,52 @@ def run_execute_tests(my_predbat):
         set_charge_low_power=True,
         assert_status="Demand",
     )
+    if failed:
+        return failed
+
+    # A window low power would charge at full rate anyway, for its forecast PV, gains nothing from
+    # waiting, so it is armed ahead of its start as before.
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_later_low_power_pv",
+        charge_window_best=charge_window_best2,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        assert_status="Demand",
+        assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        pv_forecast=1.0,
+    )
+    if failed:
+        return failed
+
+    # The IOG action latency the lead-in branch records is recorded when the low-power window is
+    # armed inside it instead, so the SLO metric does not go flat for low-power IOG users.
+    my_predbat.octopus_intelligent_charging = True
+    my_predbat.iog_last_action_status = None
+    # The latency is measured against the wall clock, so pin the clock to Predbat's own now (the window starts now)
+    with patch("execute.time.time", side_effect=lambda: (my_predbat.midnight_utc + timedelta(minutes=my_predbat.minutes_now)).timestamp() + 20):
+        failed |= run_execute_test(
+            my_predbat,
+            "charge_low_power_iog_latency",
+            charge_window_best=charge_window_best,
+            charge_limit_best=charge_limit_best,
+            assert_charge_time_enable=True,
+            set_charge_window=True,
+            set_export_window=True,
+            set_charge_low_power=True,
+            assert_status="Charging",
+            assert_charge_start_time_minutes=-1,
+            assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+            battery_max_rate=2000,
+        )
+    if my_predbat.iog_last_action_status != "success":
+        print("ERROR: arming a low-power IOG window inside it should record the IOG action latency, status {}".format(my_predbat.iog_last_action_status))
+        failed = True
+    my_predbat.octopus_intelligent_charging = False
     if failed:
         return failed
 

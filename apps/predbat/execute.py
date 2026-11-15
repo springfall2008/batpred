@@ -679,6 +679,38 @@ class Execute:
             if event is not None:
                 self.log(format_failure(event, self.local_tz))
 
+    def low_power_window_at_full_rate(self, window):
+        """Return True when low power would charge this not-yet-started window at full rate anyway, for its PV.
+
+        find_charge_rate() abandons low power for a window whose forecast PV averages above
+        low_power_pv_threshold_w (unless set_charge_low_power_solar_full_rate is off). Such a window
+        has nothing to throttle, so it can be armed early like any other (#6190). The same average,
+        taken over the whole window as the window has not started.
+        """
+        if not self.set_charge_low_power_solar_full_rate:
+            return False
+        window_minutes = window["end"] - window["start"]
+        if window_minutes <= 0:
+            return False
+        pv_window_kwh = 0.0
+        for pv_minute in range(window["start"], window["end"]):
+            pv_window_kwh += self.pv_forecast_minute.get(pv_minute, 0.0)
+        threshold_kwh = (self.low_power_pv_threshold_w / MINUTE_WATT) * window_minutes
+        return pv_window_kwh > 0 and pv_window_kwh >= threshold_kwh
+
+    def record_iog_action_latency(self, charge_start_time):
+        """Record how long after an Intelligent Octopus slot started Predbat acted on it, for the SLO metrics."""
+        if not self.octopus_intelligent_charging:
+            return
+        latency = max(0, time.time() - charge_start_time.timestamp())  # Don't record negative latency
+        # Only record if we're within reasonable window (e.g., within 10 minutes of start)
+        if latency < 600:
+            self.iog_last_action_latency_seconds = latency
+            self.iog_last_action_status = "success"
+            metrics().iog_action_latency_seconds.observe(latency)
+            metrics().iog_actions_total.labels(status="success").inc()
+            self.log("IOG action latency: {:.1f} seconds from slot start".format(latency))
+
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is
         # resolved - see build_status_extra() for why they can't be concatenated inline.
@@ -1003,6 +1035,11 @@ class Execute:
                                 status = RUN_STATE_CHARGING
                                 status_per_inverter[inverter.id] = status
                                 monitor_slots[inverter.id] = (MODE_CHARGING, charge_slot[0], charge_slot[1], inv_target_soc_percent)
+                                if self.set_charge_low_power and not getattr(inverter, "charge_enable_time", False):
+                                    # A low-power window is armed here rather than ahead of its start (#6190),
+                                    # so this is the IOG action the lead-in branch would otherwise record. Measured
+                                    # from the slot's own start, as charge_start_time may have been moved earlier.
+                                    self.record_iog_action_latency(self.midnight_utc + timedelta(minutes=window["start"]))
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
 
                             status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, inv_target_soc_percent)))  # append multi-inverter target SoC's together
@@ -1027,13 +1064,19 @@ class Execute:
                             if not isCharging and self.is_freeze_charge(self.charge_limit_best[0]):
                                 self.log("Charge window will be disabled as freeze charging is planned")
                                 inverter.disable_charge_window()
-                            elif not isCharging and self.set_charge_low_power:
+                            elif not isCharging and self.set_charge_low_power and not self.low_power_window_at_full_rate(window):
                                 # Low power works out its rate only once the window is running, and until then
                                 # the rate sits at the inverter's maximum (nothing claims it outside a window).
                                 # A window armed now would open at full power and charge that way until the
                                 # first cycle inside it wrote the lower rate - about a minute at 10 kW on a
                                 # Hanchu (#6190). Like freeze charging, it is armed on that first cycle instead,
-                                # the one that also works out the rate, so the rate is set before charging is.
+                                # the one that also works out the rate. A component that sends its settings
+                                # after the cycle (Hanchu) then gets the window and the rate in one write; an
+                                # inverter that enables the window with a switch write inside this loop still
+                                # enables it a few seconds before apply_rate_intent() writes the rate, so the
+                                # burst there shrinks to the rest of that cycle rather than going away.
+                                # A window low power would charge at full rate anyway, for its PV, gains
+                                # nothing from waiting and is armed early as before.
                                 self.log("Inverter {} charge window will be armed when it starts, as low power charging works out its rate then".format(inverter.id))
                                 inverter.disable_charge_window()
                             else:
@@ -1042,19 +1085,7 @@ class Execute:
                                 )
 
                                 # Track IOG action latency for SLO metrics (if this is an IOG slot)
-                                if self.octopus_intelligent_charging:
-                                    # Calculate latency from slot start time
-                                    slot_start_timestamp = charge_start_time.timestamp()
-                                    current_timestamp = time.time()
-                                    latency = max(0, current_timestamp - slot_start_timestamp)  # Don't record negative latency
-
-                                    # Only record if we're within reasonable window (e.g., within 10 minutes of start)
-                                    if latency < 600:  # 10 minutes
-                                        self.iog_last_action_latency_seconds = latency
-                                        self.iog_last_action_status = "success"
-                                        metrics().iog_action_latency_seconds.observe(latency)
-                                        metrics().iog_actions_total.labels(status="success").inc()
-                                        self.log("IOG action latency: {:.1f} seconds from slot start".format(latency))
+                                self.record_iog_action_latency(charge_start_time)
 
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
                         else:
