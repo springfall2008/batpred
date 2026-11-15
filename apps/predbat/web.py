@@ -4030,7 +4030,8 @@ chart.render();
         dashboard_values = getattr(self.base, "dashboard_values", {}) or {}
         charge_grid, discharge_grid = self.base.rate_grids()
         cell = "padding:6px 12px;border:1px solid #555;"
-        text = "<div style='max-width:960px;'>\n<br><h2>Battery rate grids</h2>\n"
+        # white-space: the shared header sets p { white-space: nowrap }, which would run the captions off the page
+        text = "<div style='max-width:960px;white-space:normal;'>\n<br><h2>Battery rate grids</h2>\n"
         text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n<tr>"
         for heading in ("Grid", "Learned grid in use", "Source", "Cells", "Evidence days", "Temperatures", "Learned at", "Last scan"):
             text += "<th style='{}text-align:left;'>{}</th>".format(cell, heading)
