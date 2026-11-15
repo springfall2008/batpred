@@ -201,8 +201,9 @@ A manual slot whose entities name a discovered inverter's serial (casefolded, si
 found in any per-inverter entry of that slot, or in `ge_cloud_serial` for slot 0) is the same
 inverter configured twice. Entries are read as Predbat reads them, with `{geserial}`-style templates
 filled in from your other settings, so the template's `sensor.ge_inverter_{geserial}_...` entities name
-the serial you set in `geserial`. A template naming a `re:` pattern that has not matched yet is not
-filled in, and cannot name a serial until it does. Discovery takes the slot over and says so:
+the serial you set in `geserial`. A template naming a `re:` pattern that has not matched yet when
+discovery first runs is not filled in. Your settings are read only that once, so it cannot name a serial
+until Predbat next starts with the pattern already matched. Discovery takes the slot over and says so:
 
 ```text
 Warn: Coordinator: Inverter slot 0: gecloud inverter ce1234g567 is also configured manually in apps.yaml - discovery is taking over this slot
