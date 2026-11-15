@@ -31,6 +31,8 @@ FIELDS = [
     "battery_power_curve_updated",
     "battery_power_curve_samples",
     "battery_temperature_samples",
+    "battery_temperature_discharge_samples",
+    "battery_rate_max_discharge",
     "battery_rate_max_scaling",
     "battery_rate_max_scaling_discharge",
     "soc_max",
@@ -81,6 +83,7 @@ def run_web_curves_chart_tests(my_predbat):
         my_predbat.dashboard_values = {}
         my_predbat.battery_power_curve_samples = {}
         my_predbat.battery_temperature_samples = {}
+        my_predbat.battery_temperature_discharge_samples = {}
         my_predbat.battery_rate_max_scaling = 1.0
         my_predbat.battery_rate_max_scaling_discharge = 1.0
         my_predbat.battery_charge_power_curve = {99: 0.5, 100: 0.2}
@@ -150,6 +153,19 @@ def run_web_curves_chart_tests(my_predbat):
         failed |= _check("t3b temperature recent", sorted(point["y"] for point in series.get("Charge evidence, last 14 days", [])) == [4.0, 4.0], series.get("Charge evidence, last 14 days"))
         failed |= _check("t3b temperature too little", _xy(series.get("Charge evidence, too little to learn")) == [(12, 6.0)], series.get("Charge evidence, too little to learn"))
         failed |= _check("t3b caption", "Each dot is one day" in html)
+
+        print("Test 3c: export evidence is drawn in orange, with no 'too little to learn' group as nothing is learned from it")
+        # 3 degrees has only 3 minutes - charted all the same; a 4 kW discharge maximum differs from the 5 kW charge one, so gets its own line
+        my_predbat.battery_temperature_discharge_samples = {today.strftime("%Y-%m-%d"): {3: [0.13 * 3, 3], 8: [0.3 * 40, 40]}}
+        my_predbat.battery_rate_max_discharge = 4.0 / 60.0
+        html = web.get_chart("Curves")
+        options = _chart_options(html, "chart_temperature_curve")
+        series = {entry["name"]: entry["data"] for entry in options["series"]} if options else {}
+        failed |= _check("t3c discharge dots", sorted(_xy(series.get("Discharge evidence, last 14 days"))) == [(3, 1.3), (8, 3.0)], series.get("Discharge evidence, last 14 days"))
+        failed |= _check("t3c no thin group", "Discharge evidence, too little to learn" not in series, list(series))
+        failed |= _check("t3c discharge maximum", series.get("Maximum discharge rate", [{}])[0].get("y") == 4.0, series.get("Maximum discharge rate"))
+        failed |= _check("t3c caption and status row", "nothing is learned from them" in html and "Temperature discharge" in html)
+        my_predbat.battery_temperature_discharge_samples = {}
         my_predbat.battery_rate_max_scaling = 1.0
 
         print("Test 4: no temperature curve explains how to get one; the menu links to the page")

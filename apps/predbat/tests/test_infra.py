@@ -438,7 +438,7 @@ class TestInverter:
         """Nothing to learn from."""
         return {}
 
-    def find_battery_temperature_samples(self):
+    def find_battery_temperature_samples(self, discharge=False):
         """No temperature history."""
         return None
 

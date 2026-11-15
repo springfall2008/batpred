@@ -4388,6 +4388,70 @@ class Fetch:
         if auto:
             self.battery_temperature_charge_curve = overlay_battery_temperature_curve(self.battery_temperature_charge_curve_configured, self.battery_temperature_curve_learned)
 
+    def battery_temperature_discharge_evidence_update(self, inverter):
+        """
+        Gather how fast the battery exports at each temperature, for the Curves chart: the evidence is kept in storage for
+        a year, like the charge curve's, but nothing is learned from it - battery_temperature_discharge_curve is only ever
+        the one set in apps.yaml. On the fleet a cold battery exports far closer to its full rate than it charges, and
+        cold exports are rare (they mostly run in the evening, when the battery is warm), so there is not yet the evidence
+        to learn a discharge curve safely. Scanned every BATTERY_CURVE_EVIDENCE_SCAN_MINUTES, and skipped quietly
+        without a battery_temperature_history sensor.
+
+        Args:
+            inverter: the Inverter whose history is scanned
+        """
+        if not self.get_arg("battery_temperature_history", indirect=False):
+            return
+        last_scan = self.battery_temperature_discharge_last_scan
+        if last_scan is not None and (self.now_utc - last_scan) < timedelta(minutes=BATTERY_CURVE_EVIDENCE_SCAN_MINUTES):
+            return
+        self.battery_temperature_discharge_last_scan = self.now_utc
+
+        from ha import run_async
+
+        storage = self.components.get_component("storage") if self.components else None
+        today = self.now_utc.date()
+        merged_on_load = [False]
+
+        def load_store():
+            """
+            Read the saved evidence. As for the other learners, the store only counts as loaded once a read returns data
+            (an empty store and a failed read both come back as None), so it is read again right before a save rather
+            than a failed read letting the save replace a year of evidence with one scan.
+            """
+            data = None
+            if storage:
+                try:
+                    data = run_async(storage.load("predbat", "battery_temperature_discharge_curve"))
+                except Exception as e:
+                    self.log("Warn: battery temperature discharge evidence: failed to load the saved samples: {}".format(e))
+            else:
+                self.battery_temperature_discharge_samples_loaded = True
+            if isinstance(data, dict):
+                self.battery_temperature_discharge_samples_loaded = True
+                stored = clean_battery_temperature_samples(data.get("samples"))
+                if self.battery_temperature_discharge_samples:
+                    stored = merge_battery_temperature_samples(stored, self.battery_temperature_discharge_samples, today)
+                    merged_on_load[0] = True
+                self.battery_temperature_discharge_samples = stored
+
+        if not self.battery_temperature_discharge_samples_loaded:
+            load_store()
+        scanned = inverter.find_battery_temperature_samples(discharge=True)
+        if scanned is None:
+            return
+        if not self.battery_temperature_discharge_samples_loaded:
+            load_store()
+        merged = merge_battery_temperature_samples(self.battery_temperature_discharge_samples, scanned, today, covered_from_day=getattr(inverter, "curve_scan_coverage", {}).get("temperature_discharge"))
+        if merged != self.battery_temperature_discharge_samples or merged_on_load[0]:
+            self.battery_temperature_discharge_samples = merged
+            if storage:
+                try:
+                    if not run_async(storage.save("predbat", "battery_temperature_discharge_curve", {"samples": merged}, format="json")):
+                        self.log("Warn: battery temperature discharge evidence: failed to save the samples")
+                except Exception as e:
+                    self.log("Warn: battery temperature discharge evidence: failed to save the samples: {}".format(e))
+
     def publish_battery_curve_sensors(self):
         """
         Publish one binary sensor per battery curve: on while a curve learned from this battery's history, or one set in
@@ -4440,6 +4504,23 @@ class Fetch:
                 "days": len(self.battery_temperature_samples) if auto else 0,
                 "friendly_name": "Battery temperature charge curve learned",
                 "icon": "mdi:thermometer-chevron-up",
+            },
+        )
+
+        # The discharge temperature curve is only ever set in apps.yaml; its evidence is gathered for the Curves chart
+        discharge_curve = self.battery_temperature_discharge_curve or {}
+        self.dashboard_item(
+            "binary_sensor." + self.prefix + "_battery_temperature_discharge_curve",
+            state="on" if discharge_curve else "off",
+            attributes={
+                "curve": curve_text(discharge_curve),
+                "source": "manual" if discharge_curve else "none",
+                "auto": False,
+                "updated": None,
+                "last_scan": time_text(self.battery_temperature_discharge_last_scan),
+                "days": len(self.battery_temperature_discharge_samples),
+                "friendly_name": "Battery temperature discharge curve",
+                "icon": "mdi:thermometer-chevron-down",
             },
         )
 

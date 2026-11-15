@@ -769,6 +769,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_temperature_curve_last_scan = None
         self.battery_temperature_curve_updated = None  # when the learned temperature curve last changed (TIME_FORMAT string), kept in storage
         self.battery_temperature_discharge_curve = {}
+        self.battery_temperature_discharge_samples = {}  # {day: {temperature: [sum_of_c, minutes]}} from full-rate exports, kept in storage for the Curves chart (not learned)
+        self.battery_temperature_discharge_samples_loaded = False
+        self.battery_temperature_discharge_last_scan = None
         self.battery_temperature_history = {}
         self.battery_temperature_prediction = {}
         self.alerts = []

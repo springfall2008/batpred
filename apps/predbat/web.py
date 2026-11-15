@@ -114,6 +114,7 @@ from const import (
     BATTERY_TEMPERATURE_CURVE_MIN_MINUTES,
     BATTERY_TEMPERATURE_CURVE_SOC_MAX,
     BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
+    BATTERY_TEMPERATURE_DISCHARGE_SOC_MIN,
 )
 
 CURVE_EVIDENCE_RECENT_DAYS = 14  # Curves chart: evidence days up to this old are drawn solid, older ones faded
@@ -3993,7 +3994,12 @@ chart.render();
         for heading in ("Curve", "In use", "Source", "Learned at", "Evidence days", "Last scan"):
             text += "<th style='padding:6px 12px;border:1px solid #555;text-align:left;'>{}</th>".format(heading)
         text += "</tr>\n"
-        for title, name in (("Charge power", "battery_charge_power_curve"), ("Discharge power", "battery_discharge_power_curve"), ("Temperature charge", "battery_temperature_charge_curve")):
+        for title, name in (
+            ("Charge power", "battery_charge_power_curve"),
+            ("Discharge power", "battery_discharge_power_curve"),
+            ("Temperature charge", "battery_temperature_charge_curve"),
+            ("Temperature discharge", "battery_temperature_discharge_curve"),
+        ):
             item = dashboard_values.get("binary_sensor.{}_{}".format(self.prefix, name), {})
             attributes = item.get("attributes", {}) or {}
             learned = item.get("state") == "on"
@@ -4024,12 +4030,15 @@ chart.render();
                     continue
             return result
 
-        def evidence_series(label, points, x_key, scale, color, faded):
-            """The evidence as up to three point series: recent days, older days, and points with too little evidence to be learned."""
+        def evidence_series(label, points, x_key, scale, color, faded, learned_from=True):
+            """
+            The evidence as up to three point series: recent days, older days, and points with too little evidence to be
+            learned. learned_from=False (evidence that is only charted) leaves out the last group, as nothing is learned.
+            """
             groups = (
-                ("{} evidence, last {} days".format(label, CURVE_EVIDENCE_RECENT_DAYS), lambda point: point["enough"] and point["age_days"] <= CURVE_EVIDENCE_RECENT_DAYS, color),
-                ("{} evidence, older".format(label), lambda point: point["enough"] and point["age_days"] > CURVE_EVIDENCE_RECENT_DAYS, faded),
-                ("{} evidence, too little to learn".format(label), lambda point: not point["enough"], "rgba(150,150,150,0.5)"),
+                ("{} evidence, last {} days".format(label, CURVE_EVIDENCE_RECENT_DAYS), lambda point: (point["enough"] or not learned_from) and point["age_days"] <= CURVE_EVIDENCE_RECENT_DAYS, color),
+                ("{} evidence, older".format(label), lambda point: (point["enough"] or not learned_from) and point["age_days"] > CURVE_EVIDENCE_RECENT_DAYS, faded),
+                ("{} evidence, too little to learn".format(label), lambda point: learned_from and not point["enough"], "rgba(150,150,150,0.5)"),
             )
             series = []
             for name, keep, group_color in groups:
@@ -4098,14 +4107,31 @@ chart.render();
         temperature_series += temperature_evidence
         if discharge:
             temperature_series.append({"name": "Discharge cap configured", "data": cap_points(discharge, rate_max_discharge), "color": "#f5a442", "stroke_width": 2})
+        # Export evidence is gathered and shown, not learned (see battery_temperature_discharge_evidence_update)
+        discharge_evidence = evidence_series(
+            "Discharge",
+            temperature_curve_evidence(getattr(self.base, "battery_temperature_discharge_samples", {}) or {}, self.now_utc.date(), getattr(self.base, "battery_rate_max_scaling_discharge", 1.0)),
+            "temperature",
+            scale,
+            "#f5a442",
+            "rgba(245,164,66,0.35)",
+            learned_from=False,
+        )
+        temperature_series += discharge_evidence
         if temperature_series and soc_max > 0 and rate_max_charge > 0:
             temperature_series.append({"name": "Maximum charge rate", "data": [{"x": temperatures[0], "y": round(rate_max_charge, 3)}, {"x": temperatures[-1], "y": round(rate_max_charge, 3)}], "color": "#777777", "stroke_width": 2, "dash": 4})
+        if (discharge or discharge_evidence) and soc_max > 0 and rate_max_discharge > 0 and abs(rate_max_discharge - rate_max_charge) > 0.001:
+            temperature_series.append({"name": "Maximum discharge rate", "data": [{"x": temperatures[0], "y": round(rate_max_discharge, 3)}, {"x": temperatures[-1], "y": round(rate_max_discharge, 3)}], "color": "#b0712a", "stroke_width": 2, "dash": 4})
         if temperature_series:
             text += self.render_curve_chart(temperature_series, "Battery temperature (C)", "Rate cap ({})".format(unit), "Battery temperature curves", "chart_temperature_curve", temperatures[0], temperatures[-1], y_min=0)
             text += "<p>The plan charges at the lower of the SoC curve rate and the temperature cap. A degree the curve does not set uses the 20 degree value above zero (then no cap), and below zero the 0 degree value, else the coldest value the curve sets. A reading of exactly 0, which often means the temperature is missing, uses the 0 degree value, else no cap.</p>\n"
             if temperature_evidence:
                 text += "<p>Each dot is one day's average charge rate at that temperature, from full-rate charges below {}% SoC; hover over one for its minutes and age, as a day with more minutes counts for more. Faded dots are over {} days old and count for less (half every {} days); grey ones have too little evidence (under {} minutes, or fewer than {} days) to be learned.</p>\n".format(
                     BATTERY_TEMPERATURE_CURVE_SOC_MAX, CURVE_EVIDENCE_RECENT_DAYS, BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS, BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, BATTERY_TEMPERATURE_CURVE_MIN_DAYS
+                )
+            if discharge_evidence:
+                text += "<p>Orange dots are the same for forced exports at the full discharge rate from {}% SoC up, not held back by the export limit. They are shown so a <code>battery_temperature_discharge_curve</code> can be checked against them; nothing is learned from them.</p>\n".format(
+                    BATTERY_TEMPERATURE_DISCHARGE_SOC_MIN
                 )
         else:
             text += "<p>No battery temperature curve is set or learned - set <code>battery_temperature_charge_curve</code> or turn on <code>battery_temperature_charge_curve_auto</code> in apps.yaml.</p>\n"

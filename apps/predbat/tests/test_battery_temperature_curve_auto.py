@@ -40,6 +40,9 @@ HOUR_PLAN = {
     9: ("Charging", 2600, -1300, 30, 0.4),  # a real reading just above freezing: learned at 1 degree (not the 0 bin), as 0.13 C
     10: ("Charging", 2600, -2600, 50, -0.0),  # still exactly 0, a missing reading
     11: ("Charging", 2600, -2000, 50, 34.0),  # hotter than 30: learned at 30, the warmest degree looked up, as 0.2 C
+    12: ("Exporting", 2600, 2600, 20, 9.0),  # discharge evidence: below 25% SoC is the low-SoC taper, left out
+    13: ("Discharging", 2600, 600, 50, 10.0),  # discharge evidence: follows the house load, not a full-rate export, left out
+    14: ("Exporting", 2600, 1300, 60, 3.0),  # discharge evidence: a cold export held to 1.3 kW, recorded as 0.13 C at 3 degrees
 }
 IDLE = ("Idle", 0, 0, 50, 15.0)
 
@@ -56,7 +59,7 @@ def _install_history(my_predbat, enabled=True):
     """
     Mock the HA history of the five sensors the learner reads, HISTORY_DAYS days of 5-minute samples following HOUR_PLAN.
     """
-    history = {"sensor.soc_percent": [], "number.charge_rate": [], "sensor.battery_power": [], TEMP_SENSOR: [], "predbat.status": []}
+    history = {"sensor.soc_percent": [], "number.charge_rate": [], "number.discharge_rate": [], "sensor.battery_power": [], TEMP_SENSOR: [], "predbat.status": []}
     base_time = my_predbat.midnight_utc - timedelta(days=HISTORY_DAYS)
     for minutes in range(0, HISTORY_DAYS * 24 * 60, 5):
         timestamp = base_time + timedelta(minutes=minutes)
@@ -64,6 +67,7 @@ def _install_history(my_predbat, enabled=True):
         status, rate, power, soc, temp = HOUR_PLAN.get(timestamp.hour, IDLE)
         history["sensor.soc_percent"].append({"state": str(soc), "last_updated": stamp, "attributes": {"unit_of_measurement": "%"}})
         history["number.charge_rate"].append({"state": rate, "last_updated": stamp, "attributes": {"unit_of_measurement": "W"}})
+        history["number.discharge_rate"].append({"state": 2600, "last_updated": stamp, "attributes": {"unit_of_measurement": "W"}})
         history["sensor.battery_power"].append({"state": power, "last_updated": stamp, "attributes": {"unit_of_measurement": "W"}})
         history[TEMP_SENSOR].append({"state": temp, "last_updated": stamp, "attributes": {"unit_of_measurement": "°C"}})
         history["predbat.status"].append({"state": status, "last_updated": stamp, "attributes": {}})
@@ -92,6 +96,7 @@ def _make_predbat():
     my_predbat.max_days_previous = 7
     my_predbat.args["soc_percent"] = ["sensor.soc_percent"]
     my_predbat.args["charge_rate"] = ["number.charge_rate"]
+    my_predbat.args["discharge_rate"] = ["number.discharge_rate"]
     my_predbat.args["battery_power"] = ["sensor.battery_power"]
     my_predbat.args["battery_power_invert"] = [False]
     my_predbat.args["battery_temperature_history"] = TEMP_SENSOR
@@ -246,6 +251,21 @@ def _test_scan(my_predbat):
     failed |= _check("t6 inverted", inv.find_battery_temperature_samples() == {}, "")
     my_predbat.args["battery_power_invert"] = [False]
 
+    print("Test 6b: discharge evidence is full-rate forced exports from 25% SoC up, recorded as delivered")
+    _install_history(my_predbat)
+    my_predbat.battery_loss = 0.9  # a discharge is recorded as delivered, so the loss does not change it
+    samples = inv.find_battery_temperature_samples(discharge=True)
+    my_predbat.battery_loss = 1.0
+    temps = {temp for day_bins in (samples or {}).values() for temp in day_bins}
+    failed |= _check("t6b only full-rate exports", temps == {3, 7}, temps)
+    curve, _ = learn_battery_temperature_curve(samples or {}, my_predbat.now_utc.date())
+    failed |= _check("t6b rates as delivered", curve == {3: 0.13, 7: 0.26}, curve)
+    failed |= _check("t6b coverage recorded", "temperature_discharge" in getattr(inv, "curve_scan_coverage", {}))
+    saved_limit = inv.export_limit
+    inv.export_limit = 1000 / 60000  # 1 kW, below the 2.6 kW rate, with no grid_power history to tell which exports it held
+    failed |= _check("t6b export limit below the rate with no grid history gathers nothing", inv.find_battery_temperature_samples(discharge=True) is None)
+    inv.export_limit = saved_limit
+
     print("Test 7: missing settings or history learn nothing")
     my_predbat.args.pop("battery_temperature_history")
     failed |= _check("t7 no sensor", inv.find_battery_temperature_samples() is None)
@@ -268,10 +288,10 @@ def _test_update(my_predbat):
         scans = []
         real_scan = inv.find_battery_temperature_samples
 
-        def counting_scan():
+        def counting_scan(discharge=False):
             """Count the history scans."""
-            scans.append(1)
-            return real_scan()
+            scans.append("discharge" if discharge else "charge")
+            return real_scan(discharge=discharge)
 
         inv.find_battery_temperature_samples = counting_scan
         my_predbat.battery_temperature_charge_curve_auto = True
@@ -398,6 +418,39 @@ def _test_update(my_predbat):
         my_predbat.battery_temperature_curve_auto_update(inv)
         my_predbat.args["battery_temperature_history"] = saved_sensor
         failed |= _check("t11c no scan", scans == [], scans)
+
+        print("Test 11d: discharge evidence is gathered daily and kept in storage, with a sensor for the apps.yaml curve")
+        my_predbat.args["battery_temperature_history"] = saved_sensor
+        my_predbat.battery_temperature_discharge_samples = {}
+        my_predbat.battery_temperature_discharge_samples_loaded = False
+        my_predbat.battery_temperature_discharge_last_scan = None
+        my_predbat.battery_temperature_discharge_curve = {}
+        scans.clear()
+        my_predbat.battery_temperature_discharge_evidence_update(inv)
+        my_predbat.battery_temperature_discharge_evidence_update(inv)
+        saved = run_async(storage.load("predbat", "battery_temperature_discharge_curve"))
+        failed |= _check("t11d one scan a day", scans == ["discharge"], scans)
+        failed |= _check("t11d saved", my_predbat.battery_temperature_discharge_samples and clean_battery_temperature_samples(saved.get("samples")) == my_predbat.battery_temperature_discharge_samples, saved)
+        failed |= _check("t11d nothing learned or applied", my_predbat.battery_temperature_discharge_curve == {})
+        my_predbat.publish_battery_curve_sensors()
+        sensor = "binary_sensor." + my_predbat.prefix + "_battery_temperature_discharge_curve"
+        failed |= _check("t11d sensor off with no curve", my_predbat.get_state_wrapper(sensor) == "off" and my_predbat.get_state_wrapper(sensor, attribute="days") == len(my_predbat.battery_temperature_discharge_samples))
+        my_predbat.battery_temperature_discharge_curve = {5: 0.3}
+        my_predbat.publish_battery_curve_sensors()
+        failed |= _check("t11d sensor on as manual", my_predbat.get_state_wrapper(sensor) == "on" and my_predbat.get_state_wrapper(sensor, attribute="source") == "manual")
+        my_predbat.battery_temperature_discharge_curve = {}
+        print("Test 11e: a failed first read is tried again rather than the next save replacing the stored evidence")
+        run_async(storage.save("predbat", "battery_temperature_discharge_curve", {"samples": {"2026-01-05": {"5": [1.3, 10]}}}, format="json"))
+        my_predbat.components = MockStorageComponents(FlakyStorage(storage))
+        my_predbat.battery_temperature_discharge_samples = {}
+        my_predbat.battery_temperature_discharge_samples_loaded = False
+        my_predbat.battery_temperature_discharge_last_scan = None
+        my_predbat.battery_temperature_discharge_evidence_update(inv)
+        my_predbat.battery_temperature_discharge_last_scan = my_predbat.now_utc - timedelta(days=2)
+        my_predbat.battery_temperature_discharge_evidence_update(inv)
+        saved = run_async(storage.load("predbat", "battery_temperature_discharge_curve"))
+        failed |= _check("t11e old day kept", "2026-01-05" in saved.get("samples", {}), sorted(saved.get("samples", {})))
+        my_predbat.components = MockStorageComponents(storage)
     finally:
         my_predbat.battery_temperature_charge_curve_auto = False
         my_predbat.components = saved_components

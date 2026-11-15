@@ -1624,6 +1624,7 @@ class Execute:
         # With auto mode off the learners only gather evidence for the Curves chart (and for auto mode later).
         if self.inverters:
             self.battery_temperature_curve_auto_update(self.inverters[0])
+            self.battery_temperature_discharge_evidence_update(self.inverters[0])
             self.battery_power_curve_update(self.inverters[0], discharge=False)
             self.battery_power_curve_update(self.inverters[0], discharge=True)
             self.publish_battery_curve_sensors()

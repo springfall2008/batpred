@@ -38,6 +38,7 @@ from const import (
     BATTERY_TEMPERATURE_CURVE_BINDING_MARGIN,
     BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
     BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
+    BATTERY_TEMPERATURE_DISCHARGE_SOC_MIN,
     EXPORT_LIMIT_DEFAULT_W,
     MINUTE_WATT,
 )
@@ -396,7 +397,7 @@ class BatteryCurve:
         covered completely, so the scan's view of it replaces the stored one.
 
         Args:
-            kind: "charge", "discharge" or "temperature"
+            kind: "charge", "discharge", "temperature" or "temperature_discharge"
             minutes: how many minutes back the scan's history reached
         """
         coverage = self.__dict__.setdefault("curve_scan_coverage", {})
@@ -949,9 +950,15 @@ class BatteryCurve:
             self.log("Inverter {} Leaving {} export-limited minutes out of the battery discharge curve".format(self.id, len(limited)))
         return limited
 
-    def find_battery_temperature_samples(self):
+    def find_battery_temperature_samples(self, discharge=False):
         """
         Scan the recent history for minutes that show how fast the battery accepts charge at each temperature.
+
+        With discharge=True, how fast it gives charge instead: forced exports (status Exporting, as a discharge that
+        follows the house load is not held at the full rate) with the discharge rate written at (nearly) its maximum,
+        the SoC at or above BATTERY_TEMPERATURE_DISCHARGE_SOC_MIN (below it is the low-SoC taper) and the export not held
+        back by export_limit. That evidence is only gathered and charted, not learned: on the fleet a cold battery
+        exports far closer to its full rate than it charges, and there is too little cold export data to learn from.
 
         A minute counts when Predbat was Charging, the charge rate was written at (nearly) its maximum, the battery
         was taking charge and the SoC was below BATTERY_TEMPERATURE_CURVE_SOC_MAX, so the high-SoC taper (which
@@ -968,17 +975,18 @@ class BatteryCurve:
             battery_temperature_index() gives (as find_battery_temperature_cap() looks it up), or None when the
             sensors or their history are missing.
         """
+        purpose = "battery temperature discharge evidence" if discharge else "battery temperature charge curve"
         temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
         if not temperature_sensor or self.soc_max <= 0:
-            self.log("Warn: Inverter {} Cannot learn the battery temperature charge curve, battery_temperature_history must be set in apps.yaml".format(self.id))
+            self.log("Warn: Inverter {} Cannot learn the {}, battery_temperature_history must be set in apps.yaml".format(self.id, purpose))
             return None
-        history = self.load_curve_history(False, "battery temperature charge curve")
+        history = self.load_curve_history(discharge, purpose)
         if history is None:
             return None
         days = self.base.max_days_previous
         temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=days, required=False)
         if not temperature_data:
-            self.log("Warn: Inverter {} Cannot learn the battery temperature charge curve, no history found for temperature ({})".format(self.id, temperature_sensor))
+            self.log("Warn: Inverter {} Cannot learn the {}, no history found for temperature ({})".format(self.id, purpose, temperature_sensor))
             return None
         temperature, _ = minute_data(
             temperature_data[0],
@@ -998,27 +1006,36 @@ class BatteryCurve:
         battery_power = history["battery_power"]
         status = history["status"]
         soc_max = history["soc_max"]
-        self.record_curve_scan_coverage("temperature", min(history["min_len"], len(temperature)))
+        self.record_curve_scan_coverage("temperature_discharge" if discharge else "temperature", min(history["min_len"], len(temperature)))
 
         max_power = history["max_power"]
         min_charge_rate = max_power * 0.95
         min_battery_power = max(max_power * BATTERY_TEMPERATURE_CURVE_MIN_POWER, 1.0)
         battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
         local_tz = getattr(self.base, "local_tz", None)
+        limited = set()
+        if discharge:
+            limited = self.find_export_limited_minutes(history["min_len"], min_charge_rate, history.get("export_limit_w"))
+            if limited is None:
+                return None
         samples = {}
         for minute in range(0, min(history["min_len"], len(temperature))):
-            if status.get(minute, "") != "Charging":
+            if discharge:
+                if not str(status.get(minute, "")).startswith("Exporting") or minute in limited:
+                    continue
+            elif status.get(minute, "") != "Charging":
                 continue
             if charge_rate.get(minute, 0) < min_charge_rate:
                 continue
             power = battery_power.get(minute, 0)
-            if power >= 0 or abs(power) < min_battery_power:
-                # Not charging, or so little that the charge has finished rather than been limited
+            if (power <= 0 if discharge else power >= 0) or abs(power) < min_battery_power:
+                # Not charging (or discharging), or so little that it has finished rather than been limited
                 continue
             soc_value = soc_kwh.get(minute, None)
             if soc_value is None:
                 continue
-            if soc_value / soc_max * 100.0 >= BATTERY_TEMPERATURE_CURVE_SOC_MAX:
+            soc_percent = soc_value / soc_max * 100.0
+            if (soc_percent < BATTERY_TEMPERATURE_DISCHARGE_SOC_MIN) if discharge else (soc_percent >= BATTERY_TEMPERATURE_CURVE_SOC_MAX):
                 continue
             temp = temperature.get(minute, None)
             if temp is None:
@@ -1028,7 +1045,9 @@ class BatteryCurve:
                 # Only an exact 0 reading lands here (battery_temperature_index() moves any other reading between -1 and 1
                 # to 1 or -1): it is how several integrations report a missing reading, so it is never learned
                 continue
-            rate_c = abs(power) / 1000.0 / battery_loss / soc_max
+            # A charge is recorded as stored (after battery_loss), as the charge learners do; a discharge as delivered,
+            # the rate the plan's discharge cap limits
+            rate_c = abs(power) / 1000.0 / soc_max / (1.0 if discharge else battery_loss)
             day = charge_day(self.base.now_utc, minute, local_tz)
             day_bins = samples.setdefault(day, {})
             entry = day_bins.setdefault(temp, [0.0, 0])
@@ -1038,5 +1057,9 @@ class BatteryCurve:
         for day_bins in samples.values():
             for entry in day_bins.values():
                 entry[0] = dp4(entry[0])
-        self.log("Inverter {} Battery temperature curve: found {} charging minutes below {}% SoC in {} days of history".format(self.id, sum(entry[1] for day_bins in samples.values() for entry in day_bins.values()), BATTERY_TEMPERATURE_CURVE_SOC_MAX, days))
+        found = sum(entry[1] for day_bins in samples.values() for entry in day_bins.values())
+        if discharge:
+            self.log("Inverter {} Battery temperature discharge evidence: found {} full-rate export minutes from {}% SoC up in {} days of history".format(self.id, found, BATTERY_TEMPERATURE_DISCHARGE_SOC_MIN, days))
+        else:
+            self.log("Inverter {} Battery temperature curve: found {} charging minutes below {}% SoC in {} days of history".format(self.id, found, BATTERY_TEMPERATURE_CURVE_SOC_MAX, days))
         return samples

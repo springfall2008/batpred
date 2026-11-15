@@ -114,7 +114,7 @@ class ActiveTestInverter:
         """No curve history (the curve learners gather evidence every cycle, auto mode or not)."""
         return None
 
-    def find_battery_temperature_samples(self):
+    def find_battery_temperature_samples(self, discharge=False):
         """No temperature history."""
         return None
 

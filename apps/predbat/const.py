@@ -150,6 +150,7 @@ BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS = (
 BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS = 400  # Samples older than this are dropped, a little over a year so last winter is still known when the next one starts
 BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES = 60  # Minimum gap between history scans, the curve changes over days not minutes
 BATTERY_POWER_CURVE_RESCAN_MINUTES = 24 * 60  # battery_charge/discharge_power_curve: auto - gap between re-scans once a curve is known, so a newer full-rate cycle replaces it
+BATTERY_TEMPERATURE_DISCHARGE_SOC_MIN = 25  # Temperature discharge evidence: forced exports below this SoC are the low-SoC taper (battery_discharge_power_curve), not the temperature
 BATTERY_CURVE_EVIDENCE_SCAN_MINUTES = 24 * 60  # Auto mode off: gap between history scans that only gather evidence for the Curves chart (and for auto mode later)
 BATTERY_POWER_CURVE_RETRY_MINUTES = (
     6 * 60

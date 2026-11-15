@@ -3048,6 +3048,7 @@ Predbat publishes one binary sensor per curve:
 - **binary_sensor.predbat_battery_charge_power_curve**
 - **binary_sensor.predbat_battery_discharge_power_curve**
 - **binary_sensor.predbat_battery_temperature_charge_curve**
+- **binary_sensor.predbat_battery_temperature_discharge_curve** (never learned, so on only when you set `battery_temperature_discharge_curve`)
 
 Each is **on** while a curve is in use that was either learned from your battery's history or set by you in `apps.yaml` (source `manual`), and **off** otherwise (still learning with no curve yet, using a default, or no curve at all).
 The attributes give:
@@ -3149,6 +3150,8 @@ The entity **binary_sensor.predbat_battery_temperature_charge_curve** is on whil
 
 With more than one inverter the combined battery is learned from, as Predbat plans them as one: the batteries' power is added up and divided by their combined size, and a minute only counts when every inverter was set to charge at its maximum rate.
 Only the charge curve is learned; `battery_temperature_discharge_curve` is unchanged.
+Predbat does gather the same evidence for exports - forced exports at the full discharge rate, from 25% SoC up and not held back by your export limit - and shows it on the Curves chart, so you can check a `battery_temperature_discharge_curve` you have set against it.
+It is not learned from: batteries limit exporting in the cold far less than charging, and exports mostly run in the evening when the battery is warm, so there is too little cold evidence to learn a discharge curve safely.
 
 ## Weather Alert System
 
