@@ -1096,7 +1096,7 @@ def test_find_charge_curve_two_inverters(my_predbat):
     """
     print("*** Running test: find_charge_curve_two_inverters ***")
     failed = False
-    saved = {key: my_predbat.args.get(key) for key in ("soc_percent", "charge_rate", "discharge_rate", "battery_power", "battery_power_invert")}
+    saved = {key: my_predbat.args.get(key) for key in ("soc_percent", "charge_rate", "discharge_rate", "battery_power", "battery_power_invert", "inverter_type")}
     saved_inverters, saved_num = getattr(my_predbat, "inverters", []), getattr(my_predbat, "num_inverters", None)
 
     def install(second_power_factor, second_rate, second_power_history=True):
@@ -1122,6 +1122,8 @@ def test_find_charge_curve_two_inverters(my_predbat):
 
     try:
         inv0 = create_curve_test_inverter(my_predbat)
+        # Inverter 1 needs its own inverter_type: a slot without one is an error, not an implied GE
+        my_predbat.args["inverter_type"] = [inv0.inverter_type, inv0.inverter_type]
         inv1 = Inverter(my_predbat, 1)
         inv1.battery_rate_max_charge = 2600 / 60000
         inv1.battery_rate_max_discharge = 2600 / 60000

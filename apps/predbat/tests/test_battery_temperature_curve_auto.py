@@ -99,6 +99,8 @@ def _make_predbat():
     my_predbat.args["discharge_rate"] = ["number.discharge_rate"]
     my_predbat.args["battery_power"] = ["sensor.battery_power"]
     my_predbat.args["battery_power_invert"] = [False]
+    # A slot without an inverter_type is an error, not an implied GE
+    my_predbat.args["inverter_type"] = ["GE"]
     my_predbat.args["battery_temperature_history"] = TEMP_SENSOR
     my_predbat.battery_loss = 1.0
     return my_predbat
