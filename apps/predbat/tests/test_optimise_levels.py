@@ -30,6 +30,7 @@ def run_optimise_levels(
     hybrid=False,
     inverter_loss=1.0,
     best_soc_keep=0.0,
+    grid_charge_cost=0.0,
 ):
     if expect_export_limit is None:
         expect_export_limit = []
@@ -44,6 +45,8 @@ def run_optimise_levels(
     my_predbat.fetch_config_options()
     reset_inverter(my_predbat)
     my_predbat.forecast_minutes = 24 * 60
+    # Set after fetch_config_options, which reads the (zero) configured value back
+    my_predbat.metric_battery_grid_charge_cost = grid_charge_cost
 
     pv_step = {}
     load_step = {}

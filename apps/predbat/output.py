@@ -1853,7 +1853,7 @@ class Output:
                 rate_str_import = "%02.02f" % (rate_value_import)
 
             if plan_debug:
-                rate_str_import += " (%02.02f)" % (rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
+                rate_str_import += " (%02.02f)" % ((rate_value_import + self.metric_battery_grid_charge_cost) / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
 
             if charge_window_n >= 0:
                 rate_str_import = "<b>" + rate_str_import + "</b>"
@@ -2055,7 +2055,7 @@ class Output:
             if export_rate_adjust_type is not None:
                 json_row["export_rate_adjust_type"] = export_rate_adjust_type
             # Add adjusted rates (always included for client-side debug toggle)
-            json_row["import_rate_adjusted"] = dp2(rate_value_import / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
+            json_row["import_rate_adjusted"] = dp2((rate_value_import + self.metric_battery_grid_charge_cost) / self.battery_loss / self.inverter_loss + self.metric_battery_cycle)
             json_row["export_rate_adjusted"] = dp2(rate_value_export * self.battery_loss_discharge * self.inverter_loss - self.metric_battery_cycle)
             json_row["state"] = raw_state
             json_row["state_target"] = raw_state_target
@@ -4746,6 +4746,8 @@ class Output:
         opts += "metric_min_improvement_export({}{}), ".format(self.metric_min_improvement_export, curr)
         opts += "metric_min_improvement_export_freeze({}{}), ".format(self.metric_min_improvement_export_freeze, curr)
         opts += "metric_battery_cycle({}{}/kWh), ".format(self.metric_battery_cycle, curr)
+        if self.metric_battery_grid_charge_cost:
+            opts += "metric_battery_grid_charge_cost({}{}/kWh), ".format(self.metric_battery_grid_charge_cost, curr)
         opts += "metric_battery_value_scaling({} x) ".format(self.metric_battery_value_scaling)
         if self.carbon_enable:
             opts += ", metric_carbon({}{}/kg) ".format(self.carbon_metric, curr)

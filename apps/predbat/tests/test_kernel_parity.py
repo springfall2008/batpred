@@ -154,6 +154,7 @@ SCENARIO_STATE_ATTRS = [
     "rate_gas",
     "iboost_plan",
     "end_record",
+    "metric_battery_grid_charge_cost",
 ]
 
 
@@ -350,6 +351,9 @@ def apply_random_scenario(my_predbat, rng):
             my_predbat.iboost_plan = plan
         else:
             my_predbat.iboost_plan = []
+
+    # Grid charge cost - drawn last so the random sequence of every draw above is unchanged
+    my_predbat.metric_battery_grid_charge_cost = rng.choice([0.0, 0.0, round(rng.uniform(0.5, 10), 2)])
 
 
 def make_step_data(my_predbat, rng=None, pv_kw=0.0, load_kw=0.0):

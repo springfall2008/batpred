@@ -2720,7 +2720,8 @@ class Plan:
         """
         rate_min_raw = self.rate_min_forward.get(minute, self.rate_min)
         rate_max = self.rate_max_base or self.rate_max
-        rate_min = rate_min_raw / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+        # Refilling the battery from the grid also pays metric_battery_grid_charge_cost on every kWh it imports
+        rate_min = (rate_min_raw + self.metric_battery_grid_charge_cost) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_min = max(min(rate_min, rate_max * self.inverter_loss * self.battery_loss - self.metric_battery_cycle), 0)
 
         # Replacement cost assumes the energy can always be redeployed. That holds while surplus can
@@ -3611,8 +3612,8 @@ class Plan:
         if self.calculate_best_charge:
             id = 0
             for window in charge_windows:
-                # Account for losses in average rate as it makes import higher
-                average = window["average"] / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+                # Account for losses in average rate as it makes import higher, and for any grid charge cost on top of it
+                average = (window["average"] + self.metric_battery_grid_charge_cost) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
                 if self.carbon_enable:
                     carbon_intensity = self.carbon_intensity.get(max(window["start"] - self.minutes_now, 0), 0)
                     average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
