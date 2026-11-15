@@ -167,8 +167,9 @@ In that case every kWh charged from the grid loses the subsidy on the energy tha
 e.g. (1 - 0.91) x 45p = 4.05p.
 
 Unlike **metric_battery_cycle** it only applies to grid import that ends up in the battery: charging from solar, discharging, and grid import that supplies the house are not affected.
-It is a real cost, so unlike the cycle cost it is included in Predbat's cost predictions, and it also raises the value of energy left in the battery at the end of the plan,
-as refilling it from the grid would cost the same extra. The default is 0p per kWh, which leaves Predbat's behaviour unchanged.
+It is a real cost, so unlike the cycle cost it is included in Predbat's cost predictions. It also raises the value of energy left in the battery at the end of the plan,
+as refilling it from the grid would cost the same extra, but never above what that energy can save by avoiding imports (the existing cap on the battery value).
+The default is 0p per kWh, which leaves Predbat's behaviour unchanged.
 
 **input_number.predbat_metric_battery_value_scaling** (_expert mode_) A percentage value that can be used to scale the value of the energy in the battery at the end of the plan.
 The battery value is accounted for in the optimisations at the lowest future import rate including charging and inverter losses.

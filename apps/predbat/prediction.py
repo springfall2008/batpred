@@ -191,8 +191,7 @@ class Prediction(PredictionBatch):
             self.battery_rate_max_scaling_discharge = base.battery_rate_max_scaling_discharge
             self.battery_loss = base.battery_loss
             self.battery_loss_discharge = base.battery_loss_discharge
-            # getattr: a replayed debug dump from before this setting existed has no such attribute
-            self.metric_battery_grid_charge_cost = getattr(base, "metric_battery_grid_charge_cost", 0.0)
+            self.metric_battery_grid_charge_cost = base.metric_battery_grid_charge_cost
             self.best_soc_keep = base.best_soc_keep
             self.best_soc_keep_weight = base.best_soc_keep_weight
             self.best_soc_min = base.best_soc_min
