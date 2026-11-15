@@ -131,6 +131,30 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     expected_day = charge_day(my_predbat.now_utc, BLOCK_START_HOURS * 60 - 12, getattr(my_predbat, "local_tz", None))
     failed |= _check("t1 day", list(samples.keys()) == [expected_day], (list(samples.keys()), expected_day))
 
+    print("Test 1b: a scan reads only the days it is asked for")
+    my_predbat, inv = _make()
+    _install(my_predbat, _charge(25))
+    failed |= _check("t1b one day misses a run 26 hours ago", _segments(inv.find_rate_grid_samples(False, days=1)) == [])
+    failed |= _check("t1b two days finds it", len(_segments(inv.find_rate_grid_samples(False, days=2))) == 3)
+
+    print("Test 1c: a window longer than days_previous is read past the history cache (tracked=False), a short one through it")
+    my_predbat, inv = _make()
+    _install(my_predbat, _charge(25))
+    calls = []
+    real = my_predbat.get_history_wrapper
+
+    def recording(entity_id, days=30, required=True, tracked=True):
+        """Record each history read's window and tracked flag."""
+        calls.append((days, tracked))
+        return real(entity_id, days=days, required=required, tracked=tracked)
+
+    my_predbat.get_history_wrapper = recording
+    inv.find_rate_grid_samples(False, days=28)
+    failed |= _check("t1c long read untracked", calls and all(days == 28 and tracked is False for days, tracked in calls), calls)
+    calls.clear()
+    inv.find_rate_grid_samples(False, days=2)
+    failed |= _check("t1c short read tracked", calls and all(days == 2 and tracked is True for days, tracked in calls), calls)
+
     print("Test 2: a 14-minute run is too short")
     _, samples = _scan(_charge(14))
     failed |= _check("t2", _segments(samples) == [], samples)

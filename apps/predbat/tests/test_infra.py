@@ -426,7 +426,7 @@ class TestInverter:
         """
         pass
 
-    def find_rate_grid_samples(self, discharge=False):
+    def find_rate_grid_samples(self, discharge=False, days=None):
         """No rate grid history (the grids gather evidence every cycle, auto mode or not)."""
         return None
 

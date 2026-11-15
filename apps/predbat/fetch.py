@@ -45,9 +45,12 @@ from const import (
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
+    BATTERY_RATE_GRID_DAILY_SCAN_DAYS,
+    BATTERY_RATE_GRID_FIRST_SCAN_DAYS,
     BATTERY_RATE_GRID_LOAD_ATTEMPTS,
     BATTERY_RATE_GRID_LOAD_WAIT_MINUTES,
     BATTERY_RATE_GRID_MAX_AGE_DAYS,
+    BATTERY_RATE_GRID_RETRY_MINUTES,
     BATTERY_RATE_GRID_SCAN_MINUTES,
 )
 from predbat_metrics import metrics
@@ -4230,15 +4233,28 @@ class Fetch:
         if not self.battery_rate_grid_loaded.get(kind):
             refit |= load_store()
         last_scan = self.battery_rate_grid_last_scan.get(kind)
-        if last_scan is None or (self.now_utc - last_scan) >= timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES):
+        last_success = self.battery_rate_grid_last_success.get(kind)
+        # A scan whose history read failed is tried again within the hour; one that succeeded, a day later
+        succeeded = last_success is not None and last_scan is not None and last_success >= last_scan
+        interval = BATTERY_RATE_GRID_SCAN_MINUTES if succeeded else BATTERY_RATE_GRID_RETRY_MINUTES
+        if last_scan is None or (self.now_utc - last_scan) >= timedelta(minutes=interval):
             self.battery_rate_grid_last_scan[kind] = self.now_utc
             if not self.battery_rate_grid_loaded.get(kind):
                 # Read again just before merging, as the old learners did
                 refit |= load_store()
             stored = self.battery_rate_grid_samples.get(kind, {})
-            scanned = inverter.find_rate_grid_samples(discharge)
+            # Until a scan has succeeded, read as far back as battery_rate_grid_history_days; after that only the days since the
+            # last success with a day's overlap (battery_rate_grid_scan_days, more after a gap), as the per-day merge keeps the rest
+            if last_success is None:
+                days = self.battery_rate_grid_history_days
+            else:
+                # The days since the last success, to the nearest day, plus a day's overlap (a scan a few minutes over a day late reads 2)
+                gap_days = int((self.now_utc - last_success).total_seconds() / (24 * 60 * 60) + 0.5) + 1
+                days = min(max(self.battery_rate_grid_scan_days, gap_days), self.battery_rate_grid_history_days)
+            scanned = inverter.find_rate_grid_samples(discharge, days=days)
             if scanned is not None:
                 # None means the settings or history were missing this time: the stored samples are left alone
+                self.battery_rate_grid_last_success[kind] = self.now_utc
                 merged = merge_rate_grid_samples(stored, scanned, today, BATTERY_RATE_GRID_MAX_AGE_DAYS, getattr(inverter, "curve_scan_coverage", {}).get("grid_" + kind))
                 save = save or merged != stored
                 self.battery_rate_grid_samples[kind] = merged
@@ -5025,6 +5041,9 @@ class Fetch:
         self.battery_temperature_charge_curve = self.validate_curve(self.args.get("battery_temperature_charge_curve", {}), "battery_temperature_charge_curve")
         self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
         self.battery_rate_grid_auto = bool(self.get_arg("battery_rate_grid_auto", True))
+        # How much history the rate grid scans read: the first (and any until one succeeds) and the daily ones
+        self.battery_rate_grid_history_days = max(int(self.get_arg("battery_rate_grid_history_days", BATTERY_RATE_GRID_FIRST_SCAN_DAYS)), 1)
+        self.battery_rate_grid_scan_days = max(int(self.get_arg("battery_rate_grid_scan_days", BATTERY_RATE_GRID_DAILY_SCAN_DAYS)), 1)
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_min = self.get_arg("best_soc_min")

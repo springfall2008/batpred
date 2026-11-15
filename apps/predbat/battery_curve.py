@@ -81,7 +81,7 @@ class BatteryCurve:
         coverage = self.__dict__.setdefault("curve_scan_coverage", {})
         coverage[kind] = charge_day(self.base.now_utc, max(minutes - 1, 0), getattr(self.base, "local_tz", None)) if minutes > 0 else None
 
-    def load_curve_history(self, discharge, purpose, fleet=None):
+    def load_curve_history(self, discharge, purpose, fleet=None, days=None):
         """
         Load the SoC, written rate, battery power and Predbat status history the curve learners scan, for the whole fleet.
 
@@ -96,6 +96,7 @@ class BatteryCurve:
             purpose: what is being learned, for the log ("battery charge curve")
             fleet: the inverters to read, curve_fleet() when not given. When another inverter in it lacks a setting or its
                 history, the learners fall back to this inverter alone (as before multi-inverter learning) rather than stop.
+            days: how many days of history to read, max_days_previous when not given
 
         Returns:
             {"soc_kwh", "rate", "battery_power", "status": {minute: value}, "min_len", "soc_max", "max_power" (W),
@@ -103,10 +104,13 @@ class BatteryCurve:
         """
         if fleet is None:
             fleet = self.curve_fleet()
-        days = self.base.max_days_previous
+        days = days or self.base.max_days_previous
+        # A window longer than days_previous is a one-off read: kept out of the history cache, which would otherwise hold
+        # (and refresh every cycle) that much history of each sensor from then on
+        tracked = days <= self.base.max_days_previous
         rate_name = "discharge_rate" if discharge else "charge_rate"
         predbat_status_sensor = self.base.prefix + ".status"
-        predbat_status_data = self.base.get_history_wrapper(entity_id=predbat_status_sensor, days=days, required=False)
+        predbat_status_data = self.base.get_history_wrapper(entity_id=predbat_status_sensor, days=days, required=False, tracked=tracked)
 
         def to_minutes(entries, scale=1.0, required_unit=None):
             """Minute series (minutes before now) from one entity's history."""
@@ -143,20 +147,20 @@ class BatteryCurve:
                 missing_settings = [setting for setting, entity_id in [(soc_label, soc_sensor), (rate_name, rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
                 if inverter is not self:
                     self.log("Info: Inverter {} {} not set in apps.yaml, learning the {} from inverter {} alone".format(inverter.id, ", ".join(missing_settings), purpose, self.id))
-                    return self.load_curve_history(discharge, purpose, fleet=[self])
+                    return self.load_curve_history(discharge, purpose, fleet=[self], days=days)
                 self.log("Warn: Inverter {} Cannot find {} (settings missing), {} not set in apps.yaml".format(inverter.id, purpose, ", ".join(missing_settings)))
                 return None
             battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
             self.log("Inverter {} Looking for {} with sensors {}, {}, {} and {}".format(inverter.id, purpose, soc_sensor, rate_sensor, predbat_status_sensor, battery_power_sensor))
-            soc_data = self.base.get_history_wrapper(entity_id=soc_sensor, days=days, required=False)
-            rate_data = self.base.get_history_wrapper(entity_id=rate_sensor, days=days, required=False)
-            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=days, required=False)
+            soc_data = self.base.get_history_wrapper(entity_id=soc_sensor, days=days, required=False, tracked=tracked)
+            rate_data = self.base.get_history_wrapper(entity_id=rate_sensor, days=days, required=False, tracked=tracked)
+            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=days, required=False, tracked=tracked)
             history_checks = [(soc_label, soc_sensor, soc_data), (rate_name, rate_sensor, rate_data), ("battery_power", battery_power_sensor, battery_power_data), ("predbat.status", predbat_status_sensor, predbat_status_data)]
             if not all(data for _, _, data in history_checks):
                 no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
                 if inverter is not self and predbat_status_data:
                     self.log("Info: Inverter {} has no history for {}, learning the {} from inverter {} alone".format(inverter.id, ", ".join(no_history), purpose, self.id))
-                    return self.load_curve_history(discharge, purpose, fleet=[self])
+                    return self.load_curve_history(discharge, purpose, fleet=[self], days=days)
                 self.log("Warn: Inverter {} Cannot find {} (missing history), no history found for {} - check the entity name in apps.yaml and that Home Assistant is recording its history".format(inverter.id, purpose, ", ".join(no_history)))
                 self.log("Warn: Inverter {} Sensor history record counts: {}".format(inverter.id, ", ".join("{} {}".format(setting, len(data[0]) if data else 0) for setting, entity_id, data in history_checks)))
                 return None
@@ -202,7 +206,7 @@ class BatteryCurve:
             "inverters": len(fleet),
         }
 
-    def find_export_limited_minutes(self, min_len, max_power_scaled, export_limit_w=None):
+    def find_export_limited_minutes(self, min_len, max_power_scaled, export_limit_w=None, days=None):
         """
         Find the minutes of history where the export limit, not the battery, held back a discharge.
 
@@ -226,7 +230,7 @@ class BatteryCurve:
             export_limit_w = self.export_limit * MINUTE_WATT
         if export_limit_w >= EXPORT_LIMIT_DEFAULT_W:
             return set()
-        grid_power = self.load_grid_power_minutes()
+        grid_power = self.load_grid_power_minutes(days)
         if grid_power is None:
             if export_limit_w < max_power_scaled:
                 self.log("Info: Inverter {} Cannot find battery discharge rate grid evidence, export_limit {}W is below the discharge rate and there is no grid_power history to tell which exports it limited".format(self.id, dp0(export_limit_w)))
@@ -244,7 +248,7 @@ class BatteryCurve:
             self.log("Inverter {} Leaving {} export-limited minutes out of the battery discharge curve".format(self.id, len(limited)))
         return limited
 
-    def load_grid_power_minutes(self):
+    def load_grid_power_minutes(self, days=None):
         """
         This inverter's grid_power history by minute before now, in W with export positive (grid_power_invert applied).
 
@@ -253,12 +257,13 @@ class BatteryCurve:
         grid_sensor = self.base.get_arg("grid_power", indirect=False, index=self.id)
         grid_data = None
         if grid_sensor and is_entity_id(grid_sensor):
-            grid_data = self.base.get_history_wrapper(entity_id=grid_sensor, days=self.base.max_days_previous, required=False)
+            days = days or self.base.max_days_previous
+            grid_data = self.base.get_history_wrapper(entity_id=grid_sensor, days=days, required=False, tracked=days <= self.base.max_days_previous)
         if not grid_data:
             return None
         grid_power, _ = minute_data(
             grid_data[0],
-            self.base.max_days_previous,
+            days or self.base.max_days_previous,
             self.base.now_utc,
             "state",
             "last_updated",
@@ -282,7 +287,7 @@ class BatteryCurve:
         temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
         if not temperature_sensor:
             return None
-        temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=days, required=False)
+        temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=days, required=False, tracked=days <= self.base.max_days_previous)
         if not temperature_data:
             return None
         temperature, _ = minute_data(
@@ -302,7 +307,7 @@ class BatteryCurve:
             return None
         return temperature
 
-    def find_rate_grid_samples(self, discharge):
+    def find_rate_grid_samples(self, discharge, days=None):
         """
         Scan the recent history for the rate grid evidence: runs at the full written rate, cut into 5-minute segments.
 
@@ -319,15 +324,20 @@ class BatteryCurve:
         battery_rate_max_scaling (or _discharge) divided out, so it is relative to the rated rate. With more than one
         inverter the combined battery is scanned (load_curve_history()).
 
+        Args:
+            discharge: True for the discharge evidence
+            days: how many days of history to read, max_days_previous when not given
+
         Returns:
             {day: [[soc_percent, temperature or None, rate], ...]} keyed by charge_day(), or None when the history is missing.
         """
         purpose = "battery discharge rate grid" if discharge else "battery charge rate grid"
-        history = self.load_curve_history(discharge, purpose)
+        days = days or self.base.max_days_previous
+        history = self.load_curve_history(discharge, purpose, days=days)
         if history is None:
             return None
         min_len = history["min_len"]
-        temperature = self.load_battery_temperature_minutes(self.base.max_days_previous)
+        temperature = self.load_battery_temperature_minutes(days)
         max_power = history["max_power"]
         soc_max = history["soc_max"]
         if max_power <= 0 or soc_max <= 0:
@@ -335,9 +345,9 @@ class BatteryCurve:
         min_rate = max_power * BATTERY_RATE_GRID_FULL_RATE
         min_power = max(max_power * BATTERY_RATE_GRID_MIN_POWER, 1.0)
         limited = set()
-        grid_power = self.load_grid_power_minutes()
+        grid_power = self.load_grid_power_minutes(days)
         if discharge:
-            limited = self.find_export_limited_minutes(min_len, min_rate, history.get("export_limit_w"))
+            limited = self.find_export_limited_minutes(min_len, min_rate, history.get("export_limit_w"), days=days)
             if limited is None:
                 return None
             if grid_power is None:
@@ -400,7 +410,5 @@ class BatteryCurve:
                     samples.setdefault(day, []).append([dp2(soc), temp, dp4(rate)])
                     found += 1
             run = []
-        self.log(
-            "Inverter {} {}: found {} full-rate {}-minute segments in {} days of history{}".format(self.id, purpose, found, BATTERY_RATE_GRID_SEGMENT_MINUTES, self.base.max_days_previous, "" if temperature is not None else " (no battery temperature)")
-        )
+        self.log("Inverter {} {}: found {} full-rate {}-minute segments in {} days of history{}".format(self.id, purpose, found, BATTERY_RATE_GRID_SEGMENT_MINUTES, days, "" if temperature is not None else " (no battery temperature)"))
         return samples

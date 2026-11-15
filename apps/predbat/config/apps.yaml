@@ -256,6 +256,9 @@ pred_bat:
   # Predbat learns the charge and discharge rate (by SoC and battery temperature) from your history automatically - the rate grids.
   # A curve set here is used where there is not yet enough evidence; set battery_rate_grid_auto to False to plan with your curves only.
   #battery_rate_grid_auto: True
+  # Days of history the first scan reads (as much as Home Assistant keeps), and each daily scan after that
+  #battery_rate_grid_history_days: 28
+  #battery_rate_grid_scan_days: 2
   #battery_charge_power_curve:
   #  91 : 0.91
   #  92 : 0.81

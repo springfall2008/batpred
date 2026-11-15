@@ -32,11 +32,13 @@ class FakeInverter:
         """Nothing scanned yet."""
         self.scan = {False: {}, True: {}}
         self.calls = {False: 0, True: 0}
+        self.days = {}
         self.curve_scan_coverage = {}
 
-    def find_rate_grid_samples(self, discharge):
+    def find_rate_grid_samples(self, discharge, days=None):
         """The samples set for this direction."""
         self.calls[discharge] += 1
+        self.days.setdefault(discharge, []).append(days)
         value = self.scan[discharge]
         return None if value is None else {day: [list(entry) for entry in entries] for day, entries in value.items()}
 
@@ -175,6 +177,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         my_predbat.now_utc += timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES + 1)
         _update(my_predbat, inv)
         failed |= _check("t4 rescan when due", inv.calls[False] == calls + 1, inv.calls)
+        failed |= _check("t4 first scan reads up to 28 days, daily scans 2", inv.days[False] == [28, 2], inv.days)
         restarted = _make({"battery_charge_power_curve": {100: 0.5}})
         restarted.components = MockStorageComponents(storage)
         inv2 = FakeInverter()
@@ -259,8 +262,34 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
             failed |= _check("t10 excluded " + key, key not in dump)
         failed |= _check("t10 learned kept", "battery_rate_grid_learned" in dump)
 
+        print("Test 11: the scan windows come from apps.yaml, a failed scan is retried hourly, and a gap widens the next window")
+        my_predbat = _make({"battery_rate_grid_history_days": 14, "battery_rate_grid_scan_days": 3})
+        my_predbat.components = MockStorageComponents(make_test_storage(my_predbat, tmpdir + "/t11"))
+        inv = FakeInverter()
+        inv.scan[False] = None  # the history fetch fails
+        my_predbat.battery_rate_grid_update(inv, False)
+        my_predbat.now_utc += timedelta(minutes=30)
+        my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t11 no retry within the hour", inv.days[False] == [14], inv.days)
+        my_predbat.now_utc += timedelta(minutes=31)
+        inv.scan[False] = _samples(my_predbat)
+        my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t11 retried with the full window, as nothing has been read yet", inv.days[False] == [14, 14], inv.days)
+        my_predbat.now_utc += timedelta(minutes=61)
+        my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t11 no hourly scan once one has succeeded", inv.days[False] == [14, 14], inv.days)
+        my_predbat.now_utc += timedelta(days=1)
+        my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t11 daily window from apps.yaml", inv.days[False] == [14, 14, 3], inv.days)
+        my_predbat.now_utc += timedelta(days=4)
+        my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t11 a four-day gap widens the window", inv.days[False] == [14, 14, 3, 5], inv.days)
+        my_predbat.now_utc += timedelta(days=40)
+        my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t11 the window never exceeds the history setting", inv.days[False][-1] == 14, inv.days)
+
         print("Test 7: the options")
-        failed |= _check("t7 new option", "battery_rate_grid_auto" in APPS_SCHEMA)
+        failed |= _check("t7 new option", "battery_rate_grid_auto" in APPS_SCHEMA and "battery_rate_grid_history_days" in APPS_SCHEMA and "battery_rate_grid_scan_days" in APPS_SCHEMA)
         failed |= _check("t7 removed option", "battery_temperature_charge_curve_auto" not in APPS_SCHEMA)
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

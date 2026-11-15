@@ -2877,10 +2877,12 @@ The grids only affect the accuracy of the plan - Predbat still instructs the inv
 Predbat learns both grids from your battery's own history, automatically, and falls back to the curves you set in `apps.yaml` (below) where it has no evidence. Learning is on by default:
 
 - **battery_rate_grid_auto** - set to `False` to plan with your `apps.yaml` curves only. The evidence is still gathered, so you can compare your curves with it on the Curves page.
+- **battery_rate_grid_history_days** - how many days of history the first scan reads (default 28). A long first read bypasses Predbat's history cache, so it does not keep that much history in memory afterwards.
+- **battery_rate_grid_scan_days** - how many days each daily scan reads (default 2).
 
 How the grids are learned:
 
-- Once a day Predbat scans your history (as far as `days_previous` goes) for runs of 15 minutes or more where it was **Charging** (or, for the discharge grid, in a forced **Export**) with the rate set to its maximum.
+- When Predbat starts it scans up to **battery_rate_grid_history_days** (default 28) days of your history - as much as Home Assistant has kept, as its recorder keeps 10 days unless you change `purge_keep_days` - then once a day the last **battery_rate_grid_scan_days** (default 2) days, more if it has not scanned for longer. A scan whose history read fails is tried again an hour later. Each scan looks for runs of 15 minutes or more where it was **Charging** (or, for the discharge grid, in a forced **Export**) with the rate set to its maximum.
   The first and last 5 minutes of each run are dropped (ramping up and down) and the rest is cut into 5-minute segments, each giving one point: SoC, battery temperature and the rate the battery reached.
 - A minute where the battery did not actually charge (or discharge), or a forced export that did not reach the grid (from **grid_power**, when it has history), breaks the run: that is a control failure or the house using the power, not a battery limit.
   Exports held back by **export_limit** are left out too. If your export limit is below your maximum discharge rate and **grid_power** has no history, no discharge evidence is gathered.
