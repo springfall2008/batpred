@@ -335,6 +335,7 @@ houseb
 htmlcov
 hultenvp
 husforbrukning
+hvac
 hypervolt
 iboost
 idag

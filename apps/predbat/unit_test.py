@@ -48,6 +48,7 @@ from tests.test_predheat import (
     test_predheat_volume_temp_persistence,
     test_predheat_heat_to_temp_off_marker,
 )
+from tests.test_predheat_climate_scheduler import test_predheat_climate_scheduler
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_temperature_units import test_temperature_unit_conversion
 from tests.test_charge_hold import run_charge_hold_tests
@@ -58,6 +59,7 @@ from tests.test_car_max_rate import run_car_max_rate_tests
 from tests.test_fetch_config_options import test_fetch_config_options, test_save_restore_options_are_per_engine
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_heterogeneous_fleet import test_heterogeneous_fleet
+from tests.test_balance_sim import run_balance_sim_matrix, run_balance_sim_tests
 from tests.test_window2minutes import test_window2minutes
 from tests.test_car_plan_windows import test_car_plan_windows
 from tests.test_hass_watcher import test_hass_watcher
@@ -74,6 +76,8 @@ from tests.test_car_charging_sentence import test_car_charging_sentence
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
+from tests.test_battery_temperature_curve_auto import run_battery_temperature_curve_auto_tests
+from tests.test_battery_power_curve_auto import run_battery_power_curve_auto_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
 from tests.test_optimise_solar import run_optimise_solar_tests
@@ -159,6 +163,7 @@ from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
+from tests.test_web_curves_chart import run_web_curves_chart_tests
 from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol, test_pv_chart_forecast_history_is_uncalibrated
 from tests.test_currency_scale import run_currency_scale_tests
 from tests.test_web_debug_history_routes import test_web_debug_history_routes
@@ -390,7 +395,7 @@ from tests.test_ml_memory import run_ml_memory_tests
 from tests.test_ml_training_perf import run_ml_training_perf_tests
 from tests.test_temperature import test_temperature
 from tests.test_http_sync import run_http_sync_tests
-from tests.test_battery_temperature_fetch import test_battery_temperature_fetch
+from tests.test_battery_temperature_fetch import test_battery_temperature_fetch, test_battery_temperature_history_stuck_warning, test_battery_temperature_history_stuck_warning_fetch, test_battery_temperature_history_stuck_warning_once
 from tests.test_oauth_mixin import run_oauth_mixin_tests
 from tests.test_fox_oauth import run_fox_oauth_tests
 from tests.test_band_rate_text import test_band_rate_text
@@ -605,6 +610,7 @@ def main():
         ("temperature_units", test_temperature_unit_conversion, "Shared unit conversion handles temperatures, other units unchanged (#5153)", False),
         ("predheat_volume_temp_persistence", test_predheat_volume_temp_persistence, "Predheat persisted volume temperature range tests", False),
         ("predheat_heat_to_temp_off", test_predheat_heat_to_temp_off_marker, "Predheat heat_to_temp off-marker tests (#6078)", False),
+        ("predheat_climate_scheduler", test_predheat_climate_scheduler, "Predheat Climate Scheduler regression tests", False),
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
@@ -712,6 +718,7 @@ def main():
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("web_apps_edit", run_web_apps_edit_tests, "Apps.yaml editor add/delete tests (issue #4714)", False),
         ("web_apps_filter", run_web_apps_filter_tests, "Apps.yaml page filter box tests (issue #5210)", False),
+        ("web_curves_chart", run_web_curves_chart_tests, "Curves chart page: curve sensor status, SoC and temperature curve charts", False),
         ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
         ("currency_scale", run_currency_scale_tests, "apps.yaml currency_scale widens money setting ranges tests (#6155)", False),
         ("web_chart_pv_forecast", test_pv_chart_forecast_history_is_uncalibrated, "PV chart plots the uncalibrated forecast history tests", False),
@@ -782,6 +789,8 @@ def main():
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
+        ("battery_temperature_curve_auto", run_battery_temperature_curve_auto_tests, "Learn the battery temperature charge curve from history", False),
+        ("battery_power_curve_auto", run_battery_power_curve_auto_tests, "Auto SoC power curve kept in storage, replaced only when a scan finds data", False),
         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
@@ -867,6 +876,8 @@ def main():
         ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
         ("heterogeneous_fleet", test_heterogeneous_fleet, "Heterogeneous multi-inverter fleet tests (#4856)", False),
         ("balance_pure", run_balance_pure_tests, "Pure balance_inverters function tests", False),
+        ("balance_sim", run_balance_sim_tests, "Closed-loop balancing harness: misbehaving, derated and CT-driven inverters", False),
+        ("balance_sim_matrix", run_balance_sim_matrix, "Full CT balancing matrix report: every mode, loop type, fleet size and cloud profile", True),
         ("allocate_export", run_allocate_export_tests, "Export rate allocator tests", False),
         # GE Cloud unit tests
         ("ge_cloud", test_ge_cloud, "GE Cloud comprehensive tests (API, devices, EVC, inverter ops, events, publishing, config, downloads, cache)", False),
@@ -954,6 +965,9 @@ def main():
         # External Temperature API tests
         ("http_sync", run_http_sync_tests, "Synchronous aiohttp HTTP helper (replaces requests) and no-requests guard", False),
         ("battery_temperature_fetch", test_battery_temperature_fetch, "Battery temperature history fetched for the prediction window only", False),
+        ("battery_temperature_stuck_warning", test_battery_temperature_history_stuck_warning, "Battery temperature history stuck at 0 warns, naming the GivTCP rename (#6193)", False),
+        ("battery_temperature_stuck_warning_fetch", test_battery_temperature_history_stuck_warning_fetch, "Battery temperature stuck warning through the real fetch path (#6193)", False),
+        ("battery_temperature_stuck_warning_once", test_battery_temperature_history_stuck_warning_once, "Battery temperature stuck warning reported once, curve-aware wording (#6193)", False),
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
         ("rate_text_scan", test_rate_text_scan, "Rate text scan tests (multi-band min/max range grouping)", False),

@@ -145,6 +145,12 @@ There is no predicted SoC per battery, as Predbat plans all your batteries as on
     - A status table showing whether the current marginal rate for each load level is **cheap** or **moderate** based on today's import rate range
     - A compact **Grid Rates** heatmap showing the actual import and export rate at each time window
     - A full **Marginal Energy Cost** heatmap matrix coloured green (cheap) to red (expensive) on a shared scale
+- **Curves** - Shows the battery curves the plan uses. The page contains:
+    - A status table for the charge power, discharge power and temperature charge curves: whether a learned or manual curve is in use, where the curve came from, when it was learned, the days of evidence behind it and when the history was last scanned
+    - A chart of the charge and discharge power curves against SoC, as a fraction of the maximum rate (1.0 where the curve does not reduce it)
+    - A chart of the temperature curves: the charge rate cap in use at each temperature (in kW, from the battery size, and never above the maximum charge rate, as the plan never charges faster), your configured curve where it differs, the degrees learned, any configured discharge curve, and the maximum charge rate for comparison
+    - On both charts, the evidence gathered from your history as dots, one per day (recent days solid, older ones faded, grey where there is too little evidence to learn from), whether the curve is learned or set by you. The temperature chart also shows export evidence in orange, which is only charted, never learned
+    See [Checking the curves](apps-yaml.md#checking-the-curves)
 
 Example PV chart:
 

@@ -656,6 +656,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.balance_inverters_crosscharge = True
         self.balance_inverters_threshold_charge = 1.0
         self.balance_inverters_threshold_discharge = 1.0
+        # Balancing's own record for sensor.<prefix>_balance_inverters: what it held last pass, which learned
+        # ceilings existed, its last decisions, and [epoch, time, action, inverter, direction, detail] events
+        self.balance_held_previous = {}
+        self.balance_ceilings_previous = []
+        self.balance_last_decisions = None
+        self.balance_events = []
+        # Hour start (epoch) -> [holds, releases, cross-chargers caught, ceilings learned]; restored from the sensor once
+        self.balance_counts = {}
+        self.balance_restored = False
         self.load_inday_adjustment = 1.0
         self.holiday_load_scaling = 0.7
         self.set_read_only = True
@@ -674,6 +683,12 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_discharge_power_curve_auto = False
         self.computed_charge_curve = False
         self.computed_discharge_curve = False
+        self.battery_power_curve_loaded = {}  # "charge"/"discharge" -> True once the saved auto curve has been read from storage
+        self.battery_power_curve_last_scan = {}  # "charge"/"discharge" -> time of the last auto curve history scan
+        self.battery_power_curve_samples = {}  # "charge"/"discharge" -> {day: {soc_percent: [sum, steps, minutes]}} kept in storage with the auto curve
+        self.battery_power_curve_source = {}  # "charge"/"discharge" -> where the curve in use came from: learned, configured or default
+        self.battery_power_curve_stored = {}  # "charge"/"discharge" -> {"curve", "updated"} as last read from or written to storage, written back unchanged while auto mode is off
+        self.battery_power_curve_updated = {}  # "charge"/"discharge" -> when the learned curve last changed (TIME_FORMAT string), kept in storage
         self.isCharging = False
         self.isCharging_Target = 0
         self.isExporting = False
@@ -759,9 +774,21 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_minutes_age = 0
         self.load_minutes_source = None
         self.battery_temperature_charge_curve = {}
+        self.battery_temperature_charge_curve_auto = False
+        self.battery_temperature_charge_curve_configured = {}  # battery_temperature_charge_curve as set in apps.yaml, before the auto overlay
+        self.battery_temperature_samples = {}  # battery_temperature_charge_curve_auto: {day: {temperature: [sum_of_c, minutes]}}, kept in storage
+        self.battery_temperature_samples_loaded = False
+        self.battery_temperature_curve_learned = {}
+        self.battery_temperature_curve_minutes = {}
+        self.battery_temperature_curve_last_scan = None
+        self.battery_temperature_curve_updated = None  # when the learned temperature curve last changed (TIME_FORMAT string), kept in storage
         self.battery_temperature_discharge_curve = {}
+        self.battery_temperature_discharge_samples = {}  # {day: {temperature: [sum_of_c, minutes]}} from full-rate exports, kept in storage for the Curves chart (not learned)
+        self.battery_temperature_discharge_samples_loaded = False
+        self.battery_temperature_discharge_last_scan = None
         self.battery_temperature_history = {}
         self.battery_temperature_prediction = {}
+        self.battery_temperature_stuck_warned = None  # history sensor already warned as stuck at 0, so it is reported once
         self.alerts = []
         self.alert_active_keep = {}
         self.manual_soc_keep = {}
