@@ -48,6 +48,7 @@ from tests.test_predheat import (
     test_predheat_volume_temp_persistence,
     test_predheat_heat_to_temp_off_marker,
 )
+from tests.test_predheat_climate_scheduler import test_predheat_climate_scheduler
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_temperature_units import test_temperature_unit_conversion
 from tests.test_charge_hold import run_charge_hold_tests
@@ -74,7 +75,9 @@ from tests.test_clock_change_day import test_clock_change_day
 from tests.test_car_charging_sentence import test_car_charging_sentence
 from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward_calc
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
-from tests.test_find_charge_curve import run_find_charge_curve_tests
+from tests.test_battery_rate_grid import run_battery_rate_grid_tests
+from tests.test_battery_rate_grid_scan import run_battery_rate_grid_scan_tests
+from tests.test_battery_rate_grid_update import run_battery_rate_grid_update_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
 from tests.test_optimise_solar import run_optimise_solar_tests
@@ -160,6 +163,7 @@ from tests.test_hainterface_websocket import run_hainterface_websocket_tests
 from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
+from tests.test_web_curves_chart import run_web_curves_chart_tests
 from tests.test_web_chart_currency import test_rates_chart_series_names_use_currency_symbol, test_pv_chart_forecast_history_is_uncalibrated
 from tests.test_currency_scale import run_currency_scale_tests
 from tests.test_web_debug_history_routes import test_web_debug_history_routes
@@ -212,7 +216,7 @@ from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_export_encoding import run_export_encoding_tests
 from tests.test_export_more_solar_warning import run_export_more_solar_warning_tests
-from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
+from tests.test_find_charge_rate import test_rate_grid_ceiling, test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_soc_max import run_test_manual_soc_max
@@ -391,7 +395,7 @@ from tests.test_ml_memory import run_ml_memory_tests
 from tests.test_ml_training_perf import run_ml_training_perf_tests
 from tests.test_temperature import test_temperature
 from tests.test_http_sync import run_http_sync_tests
-from tests.test_battery_temperature_fetch import test_battery_temperature_fetch
+from tests.test_battery_temperature_fetch import test_battery_temperature_fetch, test_battery_temperature_history_stuck_warning, test_battery_temperature_history_stuck_warning_fetch, test_battery_temperature_history_stuck_warning_once
 from tests.test_oauth_mixin import run_oauth_mixin_tests
 from tests.test_fox_oauth import run_fox_oauth_tests
 from tests.test_band_rate_text import test_band_rate_text
@@ -406,6 +410,7 @@ from tests.test_prune_dead_slots import run_prune_dead_slots_tests
 from tests.test_export_floor import run_export_floor_tests
 from tests.test_plan_pv10_hedge import run_plan_pv10_hedge_tests
 from tests.test_plan_freeze_export_fallback import run_plan_freeze_export_fallback_tests
+from tests.test_plan_dark_freeze import run_plan_dark_freeze_tests
 from tests.test_clip_charge_slots import run_clip_charge_slots_tests
 from tests.test_discard_unused_charge_slots import run_discard_unused_charge_slots_tests
 from tests.test_discard_unused_export_slots import run_discard_unused_export_slots_tests
@@ -604,6 +609,7 @@ def main():
         ("temperature_units", test_temperature_unit_conversion, "Shared unit conversion handles temperatures, other units unchanged (#5153)", False),
         ("predheat_volume_temp_persistence", test_predheat_volume_temp_persistence, "Predheat persisted volume temperature range tests", False),
         ("predheat_heat_to_temp_off", test_predheat_heat_to_temp_off_marker, "Predheat heat_to_temp off-marker tests (#6078)", False),
+        ("predheat_climate_scheduler", test_predheat_climate_scheduler, "Predheat Climate Scheduler regression tests", False),
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
@@ -711,6 +717,7 @@ def main():
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("web_apps_edit", run_web_apps_edit_tests, "Apps.yaml editor add/delete tests (issue #4714)", False),
         ("web_apps_filter", run_web_apps_filter_tests, "Apps.yaml page filter box tests (issue #5210)", False),
+        ("web_curves_chart", run_web_curves_chart_tests, "Curves chart page: curve sensor status, SoC and temperature curve charts", False),
         ("web_chart_currency", test_rates_chart_series_names_use_currency_symbol, "Rates chart series names follow currency_symbols tests", False),
         ("currency_scale", run_currency_scale_tests, "apps.yaml currency_scale widens money setting ranges tests (#6155)", False),
         ("web_chart_pv_forecast", test_pv_chart_forecast_history_is_uncalibrated, "PV chart plots the uncalibrated forecast history tests", False),
@@ -782,7 +789,10 @@ def main():
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
-        ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
+        ("rate_grid_ceiling", test_rate_grid_ceiling, "Rate grid ceiling is absolute on every path", False),
+        ("battery_rate_grid", run_battery_rate_grid_tests, "Battery rate grids: manual grid, isotonic fit, lookup", False),
+        ("battery_rate_grid_scan", run_battery_rate_grid_scan_tests, "Battery rate grids: full-rate runs scanned into segments", False),
+        ("battery_rate_grid_update", run_battery_rate_grid_update_tests, "Battery rate grids: storage, fallback to manual curves, sensors", False),
         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
@@ -955,6 +965,9 @@ def main():
         # External Temperature API tests
         ("http_sync", run_http_sync_tests, "Synchronous aiohttp HTTP helper (replaces requests) and no-requests guard", False),
         ("battery_temperature_fetch", test_battery_temperature_fetch, "Battery temperature history fetched for the prediction window only", False),
+        ("battery_temperature_stuck_warning", test_battery_temperature_history_stuck_warning, "Battery temperature history stuck at 0 warns, naming the GivTCP rename (#6193)", False),
+        ("battery_temperature_stuck_warning_fetch", test_battery_temperature_history_stuck_warning_fetch, "Battery temperature stuck warning through the real fetch path (#6193)", False),
+        ("battery_temperature_stuck_warning_once", test_battery_temperature_history_stuck_warning_once, "Battery temperature stuck warning reported once, curve-aware wording (#6193)", False),
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
         ("rate_text_scan", test_rate_text_scan, "Rate text scan tests (multi-band min/max range grouping)", False),
@@ -972,6 +985,7 @@ def main():
         ("export_floor", run_export_floor_tests, "Realistic pv10 export floor, pinning and staircase merge tests", False),
         ("plan_pv10_hedge", run_plan_pv10_hedge_tests, "End to end: a bad PV10 forecast makes the overnight charge bigger", False),
         ("plan_freeze_export_fallback", run_plan_freeze_export_fallback_tests, "End to end: without Freeze Export a target export stands in for it", False),
+        ("plan_dark_freeze", run_plan_dark_freeze_tests, "End to end: a Freeze Export with no solar is pruned to Demand", False),
         ("clip_charge_slots", run_clip_charge_slots_tests, "Clip charge slots tests", False),
         ("discard_unused_charge_slots", run_discard_unused_charge_slots_tests, "Discard unused charge slots tests", False),
         ("discard_unused_export_slots", run_discard_unused_export_slots_tests, "Discard unused export slots tests", False),

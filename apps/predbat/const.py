@@ -133,6 +133,34 @@ INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
 INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
 INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
 BATTERY_SIZE_RETRY_MINUTES = 60  # Gap between retries of a battery size estimate that found nothing today, so an overnight charge is used the same morning
+
+# battery_temperature_charge_curve / battery_temperature_discharge_curve - how a manual temperature curve is looked up
+BATTERY_TEMPERATURE_CURVE_TEMP_MAX = 30  # Warmest degree battery_temperature_*_curve is looked up (and learned) at; a warmer reading uses this degree. Fox fleet BMS limits still rise up to ~25-30 degrees
+BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK = 20  # A positive degree the curve does not set falls back to this entry (then to uncapped), as it did when 20 was the warmest degree looked up
+BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN = 0.95  # A discharge minute whose grid export is at or above this fraction of export_limit was held back by the export limit, not the battery
+# Battery rate grids (battery_rate_grid.py): achievable charge/discharge rate as a fraction of the rated rate, by SoC % and battery temperature
+BATTERY_RATE_GRID_MAX = 1.2  # Highest grid value: some systems run a little above their rated rate, a reading above this is noise
+BATTERY_RATE_GRID_HALF_LIFE_DAYS = 90  # A segment counts half as much every this many days, so last winter still shapes the cold rows
+BATTERY_RATE_GRID_MAX_AGE_DAYS = 365  # Stored segments older than this are dropped
+BATTERY_RATE_GRID_MIN_CELLS = 20  # A learned grid needs this many measured SoC x temperature cells ...
+BATTERY_RATE_GRID_MIN_DAYS = 3  # ... from at least this many different days, before it replaces the manual curves
+BATTERY_RATE_GRID_RUN_MINUTES = 15  # Evidence comes from runs of at least this many consecutive minutes at the full written rate
+BATTERY_RATE_GRID_EDGE_MINUTES = 5  # Minutes dropped at each end of a run (ramp up and down)
+BATTERY_RATE_GRID_SEGMENT_MINUTES = 5  # The rest of a run is cut into segments of this many minutes, each averaged into one sample
+BATTERY_RATE_GRID_FULL_RATE = 0.95  # A minute is at the full written rate when the rate written is at least this fraction of the maximum
+BATTERY_RATE_GRID_MIN_POWER = 0.02  # Below this fraction of the maximum the battery did not charge/discharge (or the export did not reach the grid): a failure, not a limit
+BATTERY_RATE_GRID_EMPTY_WEIGHT = 1e-3  # Weight of an empty cell's prior in the fit, small enough not to pull on measured cells
+BATTERY_RATE_GRID_MAX_ITER = 300  # Fit iteration cap (the same holdout error as running to convergence on the fleet data)
+BATTERY_RATE_GRID_TOLERANCE = 1e-4  # Fit stops once no cell moves by more than this
+BATTERY_RATE_GRID_TEMP_MIN = -20  # Coldest grid row
+BATTERY_RATE_GRID_TEMP_MAX = 40  # Warmest grid row
+BATTERY_RATE_GRID_UNKNOWN_TEMP = 20  # An exact 0 reading is treated as missing and uses this row of a learned grid
+BATTERY_RATE_GRID_SCAN_MINUTES = 24 * 60  # Gap between history scans for grid evidence
+BATTERY_RATE_GRID_FIRST_SCAN_DAYS = 28  # battery_rate_grid_history_days default: until a scan has succeeded, read this many days of history (or as many as there are)
+BATTERY_RATE_GRID_DAILY_SCAN_DAYS = 2  # battery_rate_grid_scan_days default: later scans read this many - a day since the last plus a day's overlap - widened to cover a longer gap
+BATTERY_RATE_GRID_RETRY_MINUTES = 60  # A scan whose history read failed is tried again after this long, rather than a day later
+BATTERY_RATE_GRID_LOAD_ATTEMPTS = 3  # A store that never reads back is treated as empty (a new install) after this many cycles of failed reads ...
+BATTERY_RATE_GRID_LOAD_WAIT_MINUTES = 10  # ... spanning at least this long, so a storage outage cannot let one scan replace a year of evidence
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
 BALANCE_CEILING_SHORTFALL_W = 100  # Grid shortfall (W) during a balancing hold that shows the peers are already giving all they can
