@@ -333,6 +333,11 @@ discovery writes, it says so once:
 Warn: Coordinator: Inverter slot 0: grid_power_invert is True in apps.yaml but gecloud inverter gecloud:ce1234g567 needs False - discovery sets it; remove it from apps.yaml
 ```
 
+If you also have a manual inverter and gave a single value, that value is your manual inverter's
+too, so removing it would flip that inverter's sign. The warning then tells you to give the setting as a
+list with one entry per inverter instead, such as `grid_power_invert: [true, false]`, keeping your
+manual inverter's value at its slot.
+
 Manual slots keep what `apps.yaml` gives them. A single value (not a list), as some templates write
 it, still applies to every manual inverter. An invert setting also follows the setting it describes:
 where `battery_power`, `grid_power` or `load_power` is skipped, or kept with your own `apps.yaml` value

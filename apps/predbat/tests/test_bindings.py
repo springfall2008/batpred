@@ -1218,6 +1218,13 @@ def test_build_invert_user_value_warns():
     apps = dict(_manual_apps("number.givtcp_sa9999s999_charge_rate"), grid_power_invert=[True, True])
     _, warnings = build_bindings(apps, copy.deepcopy(apps), [_src([record])], None)
     assert warnings == [_invert_warning(1, "grid_power_invert", True, "gecloud:a11111", False)], warnings
+    # A single value beside a manual slot is that inverter's too: removing it would flip its sign, so the advice is a per-inverter list
+    apps = dict(_manual_apps("number.givtcp_sa9999s999_charge_rate"), grid_power_invert=True)
+    results, args = _passes(apps, [_src([record])])
+    mixed = "Inverter slot 1: grid_power_invert is True in apps.yaml but gecloud inverter gecloud:a11111 needs False - discovery sets it; give grid_power_invert as a list with one entry per inverter to keep it for your other inverters"
+    for _, warnings, _ in results:
+        assert warnings == [mixed], warnings
+    assert args["grid_power_invert"] == [True, False], args["grid_power_invert"]
     # grid_power skipped or kept with the user's entity: grid_power_invert is the user's, so no warning
     apps = {"grid_power": ["sensor.user_grid_power"], "grid_power_invert": True}
     for options in ({"skip_settings": {"grid_power"}}, {"keep_user_settings": {"grid_power"}}):

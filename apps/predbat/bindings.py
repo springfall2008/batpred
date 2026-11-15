@@ -437,9 +437,11 @@ def _invert_warnings(slots, apps_yaml, args):
     The user's value is read as Predbat reads a flag: a scalar is every slot's, a list entry its own slot's. Discovery owns the
     invert settings on its slots - the record says whether each sensor needs inverting - so the value is replaced; the warning says
     so, and to remove it. None where the snapshot gives none, nor where the invert is the user's (it, or the setting it describes,
-    is skipped or kept at the slot: _discovered_value() then keeps the live entry).
+    is skipped or kept at the slot: _discovered_value() then keeps the live entry). A single value with a manual slot beside it is
+    that inverter's too, and removing it would flip its sign, so the advice is then to give it as a list, one entry per inverter.
     """
     warnings = []
+    has_manual = any(entry["origin"] == "manual" for entry in slots)
     for entry in slots:
         if entry["origin"] != "discovered":
             continue
@@ -449,7 +451,9 @@ def _invert_warnings(slots, apps_yaml, args):
                 continue
             value = _discovered_value(entry, setting, apps_yaml, args)
             if user != value:
-                warnings.append("Inverter slot {}: {} is {} in apps.yaml but {} inverter {} needs {} - discovery sets it; remove it from apps.yaml".format(entry["slot"], setting, user, entry["source"], entry["device_id"], value))
+                single = has_manual and not isinstance(apps_yaml.get(setting), (list, tuple))
+                advice = "give {} as a list with one entry per inverter to keep it for your other inverters".format(setting) if single else "remove it from apps.yaml"
+                warnings.append("Inverter slot {}: {} is {} in apps.yaml but {} inverter {} needs {} - discovery sets it; {}".format(entry["slot"], setting, user, entry["source"], entry["device_id"], value, advice))
     return warnings
 
 
