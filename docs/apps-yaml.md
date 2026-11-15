@@ -3044,15 +3044,14 @@ Your battery's maximum charge and discharge rate can be impacted by cold weather
 
 - You must make sure battery_temperature is defined (one per inverter).
 - Set **battery_temperature_history** to a sensor with history, this will be used to predict future temperatures based on past changes
-
-**GivTCP users:** GivTCP 3.6.13 renamed the battery stack temperature sensor from `sensor.givtcp_battery_stack_1_bms_temperature`
-to `sensor.givtcp_battery_stack_1_battery_temperature`, because the old sensor was not reading the BMS temperature.
-On GivTCP 3.6.13 or later the old sensor reads 0, so if your `apps.yaml` still uses it, Predbat predicts your battery at 0 °C
-and plans every charge at the coldest rate in your **battery_temperature_charge_curve**. Check the sensor in Home Assistant
-and update **battery_temperature** and **battery_temperature_history** to the new name.
-
 - Set **battery_temperature_charge_curve** to define the maximum charge rate in C which is a percentage of your battery capacity.
 - Set **battery_temperature_discharge_curve** to define the maximum discharge rate in C which is a percentage of your battery capacity.
+
+**GivTCP users:** GivTCP 3.6.13 renamed the battery stack temperature sensor from `sensor.givtcp_battery_stack_1_bms_temperature`
+to `sensor.givtcp_battery_stack_1_battery_temperature`, and the old sensor now reads 0. If your `apps.yaml` still uses the old name,
+Predbat predicts your battery at 0 °C and plans charging and discharging at the 0 °C rates in your temperature curves.
+Check the sensor in Home Assistant and update **battery_temperature** and **battery_temperature_history** to the new name.
+Predbat logs a warning when the temperature history has read 0 for the last 24 hours.
 
 An example for GivEnergy Gen2 battery is below.
 

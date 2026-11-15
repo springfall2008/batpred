@@ -114,6 +114,8 @@ def test_battery_temperature_history_stuck_warning(my_predbat):
         ("old GivTCP sensor reading real temperatures", old_sensor, {minute: 18.5 for minute in range(0, 2 * day)}, False, False),
         ("a single non-zero reading", old_sensor, {**zero_two_days, 600: 0.5}, False, False),
         ("under a day of history", old_sensor, {minute: 0 for minute in range(0, day - 1)}, False, False),
+        ("died a day ago, real readings before", old_sensor, {minute: (0 if minute < day else 18.0) for minute in range(0, 2 * day)}, True, True),
+        ("died under a day ago", old_sensor, {minute: (0 if minute < day - 60 else 18.0) for minute in range(0, 2 * day)}, False, False),
         ("no history", old_sensor, {}, False, False),
     ]
 
@@ -146,4 +148,55 @@ def test_battery_temperature_history_stuck_warning(my_predbat):
 
     if not failed:
         print("✓ stuck-at-0 warning fires only on a dead sensor, with the GivTCP rename hint on the old name")
+    return failed
+
+
+def test_battery_temperature_history_stuck_warning_fetch(my_predbat):
+    """
+    Through the real fetch path: HA history that read 18 °C until 25 hours ago and 0 since (one state
+    change, as the recorder stores it) warns with the GivTCP rename hint; one reading 18 throughout does not.
+    """
+    print("\n*** Test: battery temperature stuck warning through fetch_battery_temperature() ***")
+    failed = False
+    old_sensor = "sensor.givtcp_battery_stack_1_bms_temperature"
+
+    def history_with_change(change_minutes_ago, new_value):
+        """HA history: 18 °C from 2 days ago, then new_value from change_minutes_ago."""
+        now = my_predbat.now_utc
+        start = now - timedelta(days=BATTERY_TEMPERATURE_HISTORY_DAYS)
+        change = now - timedelta(minutes=change_minutes_ago)
+        return [
+            [
+                {"state": "18.0", "last_updated": start.strftime(TIME_FORMAT), "attributes": {}},
+                {"state": str(new_value), "last_updated": change.strftime(TIME_FORMAT), "attributes": {}},
+            ]
+        ]
+
+    saved_history = my_predbat.get_history_wrapper
+    saved_log = my_predbat.log
+    saved_arg = my_predbat.args.get("battery_temperature_history", None)
+    try:
+        my_predbat.args["battery_temperature_history"] = old_sensor
+        for description, new_value, expect_warning in [("dead for 25 hours", 0, True), ("live at 18 °C", 18.0, False)]:
+            messages = []
+            my_predbat.log = messages.append
+            my_predbat.get_history_wrapper = lambda entity_id, days=30, required=True, tracked=True, value=new_value: history_with_change(25 * 60, value) if entity_id == old_sensor else None
+            my_predbat.fetch_battery_temperature()
+            warnings = [message for message in messages if message.startswith("Warn:") and "battery_temperature_history" in message]
+            if bool(warnings) != expect_warning:
+                print("ERROR: {}: expected warning {}, got {}".format(description, expect_warning, messages))
+                failed = True
+            elif warnings and "sensor.givtcp_battery_stack_1_battery_temperature" not in warnings[0]:
+                print("ERROR: {}: warning lacks the rename hint: {}".format(description, warnings[0]))
+                failed = True
+    finally:
+        my_predbat.get_history_wrapper = saved_history
+        my_predbat.log = saved_log
+        if saved_arg is None:
+            my_predbat.args.pop("battery_temperature_history", None)
+        else:
+            my_predbat.args["battery_temperature_history"] = saved_arg
+
+    if not failed:
+        print("✓ fetch path warns on a sensor dead for over a day and not on a live one")
     return failed

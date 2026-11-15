@@ -2850,21 +2850,24 @@ class Fetch:
 
     def check_battery_temperature_history_stuck(self, battery_temperature_history):
         """
-        Warn when the battery temperature history has read exactly 0 for its whole window.
+        Warn when the battery temperature history has read exactly 0 for the last day.
 
         A battery really at 0 °C for a whole day is rare; a sensor that never reports is not. Predbat
-        predicts forward from this history, so a dead sensor plans every charge at the coldest rate in
-        battery_temperature_charge_curve (GH#6193). GivTCP 3.6.13 renamed the battery stack sensor
-        from ..._bms_temperature to ..._battery_temperature, leaving the old name reading 0, so name it.
+        predicts forward from this history, so a dead sensor plans at the 0 °C rates of the battery
+        temperature curves (GH#6193). GivTCP 3.6.13 renamed the battery stack sensor from
+        ..._bms_temperature to ..._battery_temperature, leaving the old name reading 0, so name it.
         Only the symptom triggers the warning: on older GivTCP the old name is still the right one.
+
+        Only the most recent BATTERY_TEMPERATURE_STUCK_MINUTES are checked, so the warning starts a day
+        after a sensor dies rather than once the whole fetch window has rolled over. minute_data pads the
+        oldest sample back across the window, so a sensor with a single 0 reading also counts as stuck.
         """
-        if not battery_temperature_history or max(battery_temperature_history) < BATTERY_TEMPERATURE_STUCK_MINUTES:
-            return
-        if any(value != 0 for value in battery_temperature_history.values()):
+        recent = [battery_temperature_history.get(minute) for minute in range(BATTERY_TEMPERATURE_STUCK_MINUTES)]
+        if any(value is None or value != 0 for value in recent):
             return
         entity_id = self.get_arg("battery_temperature_history", "", indirect=False)
-        message = "Warn: battery_temperature_history sensor {} has read 0 for the last {} hours, so Predbat is planning every charge at your coldest battery_temperature_charge_curve rate - check the sensor in Home Assistant".format(
-            entity_id, int(max(battery_temperature_history) / 60)
+        message = "Warn: battery_temperature_history sensor {} has read 0 for the last {} hours, so Predbat is planning at the 0 °C rates of your battery temperature curves - check the sensor in Home Assistant".format(
+            entity_id, int(BATTERY_TEMPERATURE_STUCK_MINUTES / 60)
         )
         if isinstance(entity_id, str) and re.search(r"_battery_stack_\d+_bms_temperature$", entity_id):
             message += ". GivTCP 3.6.13 renamed this sensor, use {} instead".format(re.sub(r"_bms_temperature$", "_battery_temperature", entity_id))
