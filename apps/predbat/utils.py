@@ -953,14 +953,6 @@ def parse_log_timestamp(line):
     return None
 
 
-# Helper to make dict hashable for caching
-def charge_curve_to_tuple(d):
-    """Convert dict to tuple for use as cache key"""
-    if not d:
-        return ()
-    return tuple(sorted(d.items()))
-
-
 def get_now_from_cumulative(data, minutes_now, backwards):
     """
     Get current value from cumulative data

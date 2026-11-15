@@ -86,7 +86,10 @@ def run_web_curves_chart_tests(my_predbat):
         old = charge_day(my_predbat.now_utc, 120 * 24 * 60, my_predbat.local_tz)
         my_predbat.battery_rate_grid_samples = {"charge": {today: [[40.0, 12.0, 0.95], [80.0, 18.5, 0.31]], old: [[50.0, 5.0, 0.2]]}, "discharge": {}}
         my_predbat.dashboard_values = {
-            "binary_sensor.{}_battery_charge_rate_grid".format(my_predbat.prefix): {"state": "on", "attributes": {"source": "learned", "cells": 40, "days": 2, "temperature_range": [10, 20], "updated": "2026-11-01T03:00:00+0000", "last_scan": "2026-11-15T03:00:00+0000"}},
+            "binary_sensor.{}_battery_charge_rate_grid".format(my_predbat.prefix): {
+                "state": "on",
+                "attributes": {"source": "learned", "cells": 40, "days": 2, "temperature_range": [10, 20], "updated": "2026-11-01T03:00:00+0000", "last_scan": "2026-11-15T03:00:00+0000"},
+            },
             "binary_sensor.{}_battery_discharge_rate_grid".format(my_predbat.prefix): {"state": "off", "attributes": {"source": "default", "cells": 0, "days": 0}},
         }
         web = _make_web(my_predbat)

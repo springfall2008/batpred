@@ -111,17 +111,6 @@ class ActiveTestInverter:
     def update_status(self, minutes_now, quiet=False):
         pass
 
-    def find_charge_curve(self, discharge=False):
-        return None
-
-    def find_charge_curve_samples(self, discharge=False):
-        """No curve history (the curve learners gather evidence every cycle, auto mode or not)."""
-        return None
-
-    def find_battery_temperature_samples(self, discharge=False):
-        """No temperature history."""
-        return None
-
     def find_rate_grid_samples(self, discharge=False):
         """No rate grid history (the grids gather evidence every cycle, auto mode or not)."""
         return None
