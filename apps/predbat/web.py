@@ -3993,7 +3993,7 @@ chart.render();
         dashboard_values = getattr(self.base, "dashboard_values", {}) or {}
         charge_grid, discharge_grid = self.base.rate_grids()
         cell = "padding:6px 12px;border:1px solid #555;"
-        text = "<br><h2>Battery rate grids</h2>\n"
+        text = "<div style='max-width:960px;'>\n<br><h2>Battery rate grids</h2>\n"
         text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n<tr>"
         for heading in ("Grid", "Learned grid in use", "Source", "Cells", "Evidence days", "Temperatures", "Learned at", "Last scan"):
             text += "<th style='{}text-align:left;'>{}</th>".format(cell, heading)
@@ -4055,21 +4055,21 @@ chart.render();
                 "ez": [entry[2] for entry in evidence],
             }
             text += "<h3>{} rate grid</h3>\n".format(title)
-            text += "<div id='curve_grid_{}' style='width:100%;max-width:900px;height:520px;'></div>\n".format(kind)
+            text += "<div id='curve_grid_{}' style='width:100%;height:560px;'></div>\n".format(kind)
             text += "<script>\nvar curve_grid_{}_data = {};\n".format(kind, json.dumps(data))
             text += """(function() {{
   var d = curve_grid_{kind}_data;
   var fg = getComputedStyle(document.body).color || '#888';
   var axis = function(t) {{ return {{title: {{text: t, font: {{color: fg}}}}, tickfont: {{color: fg}}, gridcolor: 'rgba(128,128,128,0.3)', backgroundcolor: 'rgba(0,0,0,0)'}}; }};
   var traces = [{{type: 'surface', x: d.soc, y: d.temperature, z: d.z, cmin: 0, cmax: {cmax}, colorscale: 'Viridis', opacity: 0.85, name: '{title} grid', showlegend: true,
-    colorbar: {{title: {{text: 'rate', font: {{color: fg}}}}, tickfont: {{color: fg}}}}, hovertemplate: 'SoC %{{x}}%<br>%{{y}} C<br>rate %{{z:.2f}}<extra></extra>'}}];
+    colorbar: {{title: {{text: 'rate', font: {{color: fg}}}}, tickfont: {{color: fg}}, thickness: 14, len: 0.6, x: 0.98}}, hovertemplate: 'SoC %{{x}}%<br>%{{y}} C<br>rate %{{z:.2f}}<extra></extra>'}}];
   if (d.ex.length) {{
     traces.push({{type: 'scatter3d', mode: 'markers', x: d.ex, y: d.ey, z: d.ez, name: 'evidence (last {days} days)', marker: {{size: 3, color: '#e4572e', opacity: 0.85}},
       hovertemplate: 'SoC %{{x:.0f}}%<br>%{{y:.1f}} C<br>rate %{{z:.2f}}<extra>evidence</extra>'}});
   }}
   if (typeof Plotly === 'undefined') {{ document.getElementById('curve_grid_{kind}').innerText = 'The 3D chart library could not be loaded.'; return; }}
-  Plotly.newPlot('curve_grid_{kind}', traces, {{paper_bgcolor: 'rgba(0,0,0,0)', margin: {{l: 0, r: 0, t: 0, b: 0}}, legend: {{font: {{color: fg}}}},
-    scene: {{xaxis: axis('SoC %'), yaxis: axis('Battery temperature C'), zaxis: Object.assign(axis('Rate / rated'), {{range: [0, {cmax}]}}), camera: {{eye: {{x: 1.6, y: -1.6, z: 0.9}}}}}}}}, {{responsive: true}});
+  Plotly.newPlot('curve_grid_{kind}', traces, {{paper_bgcolor: 'rgba(0,0,0,0)', margin: {{l: 0, r: 0, t: 0, b: 0}}, legend: {{font: {{color: fg}}, orientation: 'h', x: 0, y: 0}},
+    scene: {{xaxis: axis('SoC %'), yaxis: axis('Battery temperature C'), zaxis: Object.assign(axis('Rate / rated'), {{range: [0, {cmax}]}}), aspectmode: 'manual', aspectratio: {{x: 1.3, y: 1.3, z: 0.8}}, camera: {{eye: {{x: 1.45, y: -1.45, z: 0.85}}}}}}}}, {{responsive: true}});
 }})();
 </script>
 """.format(kind=kind, title=title, cmax=BATTERY_RATE_GRID_MAX, days=CURVE_EVIDENCE_DAYS)
@@ -4092,6 +4092,7 @@ chart.render();
             for label, row in zip(labels, rows):
                 text += "<tr><td style='{}'>{}</td>".format(small, label) + "".join("<td style='{}'>{:.2f}</td>".format(small, value) for value in row) + "</tr>\n"
             text += "</table>\n"
+        text += "</div>\n"
         return text
 
     def is_editable_value(self, value):
