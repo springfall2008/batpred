@@ -39,7 +39,13 @@ repos:
     name: triage daemon unit tests
     language: python
     entry: python tools/test_triage_daemon.py
-    files: ^tools/(triage_daemon\.py|test_triage_daemon\.py)$
+    files: ^tools/(triage_daemon\.py|test_triage_daemon\.py|issue_attachment_nudge\.py)$
+    pass_filenames: false
+  - id: triage-replay-tests
+    name: triage replay wrapper unit tests
+    language: python
+    entry: python tools/test_triage_replay.py
+    files: ^tools/(triage_replay\.py|test_triage_replay\.py)$
     pass_filenames: false
   - id: owner-gate-tests
     name: owner gate workflow tests
@@ -47,6 +53,12 @@ repos:
     additional_dependencies: [pyyaml]
     entry: python tools/test_owner_gate.py
     files: ^(\.github/workflows/owner-gate\.yml|tools/test_owner_gate\.py)$
+    pass_filenames: false
+  - id: issue-attachment-nudge-tests
+    name: issue attachment nudge tests
+    language: python
+    entry: python tools/test_issue_attachment_nudge.py
+    files: ^(\.github/workflows/issue-attachment-nudge\.yml|\.github/ISSUE_TEMPLATE/.*|tools/(test_)?issue_attachment_nudge\.py)$
     pass_filenames: false
 - repo: https://gitlab.com/bmares/check-json5
   rev: v1.0.0

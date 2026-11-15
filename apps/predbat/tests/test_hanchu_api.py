@@ -32,6 +32,7 @@ class MockHanchu(HanchuAPI):
         """Set up a minimal HanchuAPI instance for tests, bypassing ComponentBase.__init__."""
         self.prefix = "predbat"
         self.log_messages = []
+        self.component_loop = None  # set by ComponentBase.__init__, which this skips
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-hanchu-1"}

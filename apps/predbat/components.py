@@ -101,7 +101,11 @@ COMPONENT_LIST = {
         "class": "web.WebInterface",
         "name": "Web Interface",
         "args": {
+            # On unless apps.yaml sets web_enable: false, which leaves the web server out entirely (no port is opened)
+            "web_enable": {"required_true": True, "config": "web_enable", "default": True},
             "web_port": {"required": False, "config": "web_port", "default": 5052},
+            "web_username": {"required": False, "config": "web_username"},
+            "web_password": {"required": False, "secret": True, "config": "web_password"},
         },
         "phase": 0,
     },
@@ -389,6 +393,11 @@ COMPONENT_LIST = {
                 "secret": True,
                 "config": "fox_token_hash",
             },
+            "poll_seconds": {
+                "required": False,
+                "default": 300,
+                "config": "fox_poll_seconds",
+            },
         },
         "phase": 1,
     },
@@ -579,8 +588,9 @@ COMPONENT_LIST = {
             "base_url": {"required": False, "default": "https://opencloud.growatt.com/prod-api", "config": "growatt_base_url"},
             "battery_rate_max": {"required": False, "config": "growatt_battery_rate_max"},
             "api_delay": {"required": False, "default": 0.2, "config": "growatt_api_delay"},
-            # Growatt documents one deviceDispatch call per five seconds per device.
-            "min_write_interval": {"required": False, "default": 5, "config": "growatt_min_write_interval"},
+            # Growatt documents one deviceDispatch call per five seconds per device; 6 leaves a
+            # second of margin for clock and network jitter.
+            "min_write_interval": {"required": False, "default": 6, "config": "growatt_min_write_interval"},
         },
         # token_hash alone is enough for OAuthMixin to obtain the current token from the
         # SaaS refresh endpoint after a restart whose embedded access token has expired.
@@ -941,6 +951,19 @@ class Components:
         self.log = base.log
         self.coordinator = Coordinator(base)
 
+    def required_true_enabled(self, arg_info):
+        """Return whether a "required_true" arg is switched on: it must be true in apps.yaml, unless its registry "default" is True, which leaves it on until set false.
+
+        An empty key (a bare "web_enable:") reads as a YAML null and falls back to the registry default, as for any other arg (GH#5186).
+        """
+        default = arg_info.get("default", None)
+        if default is None:
+            default = False
+        value = self.base.get_arg(arg_info["config"], default, indirect=False)
+        if value is None:
+            value = default
+        return bool(value)
+
     def initialize(self, only=None, phase=0):
         """Initialise components without starting them"""
         for component_name, component_info in COMPONENT_LIST.items():
@@ -952,6 +975,7 @@ class Components:
             have_all_args = True
             missing_config = []
             required_or_config = []
+            switched_off = []
             self.components[component_name] = None
             self.component_tasks[component_name] = None
             self.component_errors.pop(component_name, None)
@@ -968,9 +992,13 @@ class Components:
                     # Defer resolution of config value until later
                     arg_dict[arg] = arg_info["config"]
                     continue
-                elif required_true and not self.base.get_arg(arg_info["config"], False, indirect=False):
+                elif required_true and not self.required_true_enabled(arg_info):
                     have_all_args = False
-                    missing_config.append(f"{arg_info['config']} (must be true)")
+                    if default is True:
+                        # An on-by-default switch set false is a deliberate opt-out, not missing configuration
+                        switched_off.append(arg_info["config"])
+                    else:
+                        missing_config.append(f"{arg_info['config']} (must be true)")
                 elif required and self.base.get_arg(arg_info["config"], None, indirect=False) is None:
                     have_all_args = False
                     missing_config.append(arg_info["config"])
@@ -1009,6 +1037,8 @@ class Components:
                         self.log("Error: " + traceback.format_exc())
                     self.component_errors[component_name] = str(e)
                     self.components[component_name] = None
+            elif switched_off:
+                self.log(f"Info: {component_info['name']} interface disabled by {', '.join(name + ': false' for name in switched_off)} in apps.yaml")
             else:
                 configured_args = getattr(self.base, "args_from_apps_yaml", None)
                 if configured_args is None:

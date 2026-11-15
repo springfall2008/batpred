@@ -49,7 +49,7 @@ def test_github(my_predbat):
     cached_data = [{"tag_name": "v1.0"}]
     my_predbat.github_url_cache[test_url] = {"stamp": datetime.now(), "data": cached_data}
 
-    with patch("requests.get") as mock_get:
+    with patch("github.http_get") as mock_get:
         result = my_predbat.download_predbat_releases_url(test_url)
         if mock_get.called:
             print("  FAILED: HTTP request should not be made on cache hit")
@@ -67,7 +67,7 @@ def test_github(my_predbat):
 
     mock_resp = MagicMock()
     mock_resp.json.return_value = fresh_data
-    with patch("requests.get", return_value=mock_resp):
+    with patch("github.http_get", return_value=mock_resp):
         result = my_predbat.download_predbat_releases_url(test_url)
     if result != fresh_data:
         print("  FAILED: stale cache should fetch fresh data, got {}".format(result))
@@ -85,7 +85,7 @@ def test_github(my_predbat):
     my_predbat.github_url_cache[test_url] = {"stamp": old_stamp, "data": old_data}
     mock_resp = MagicMock()
     mock_resp.json.return_value = fresh_data2
-    with patch("requests.get", return_value=mock_resp):
+    with patch("github.http_get", return_value=mock_resp):
         result = my_predbat.download_predbat_releases_url(test_url)
     if result != fresh_data2:
         print("  FAILED: 25h-old cache entry should be treated as stale, got {}".format(result))
@@ -97,7 +97,7 @@ def test_github(my_predbat):
     fetched = [{"tag_name": "v1.3"}]
     mock_resp = MagicMock()
     mock_resp.json.return_value = fetched
-    with patch("requests.get", return_value=mock_resp):
+    with patch("github.http_get", return_value=mock_resp):
         result = my_predbat.download_predbat_releases_url(test_url)
     if result != fetched:
         print("  FAILED: corrupted cache entry should fall through to HTTP fetch, got {}".format(result))
@@ -105,7 +105,7 @@ def test_github(my_predbat):
 
     print("  Test 3: HTTP exception returns empty list and does not populate cache")
     _setup(my_predbat)
-    with patch("requests.get", side_effect=Exception("network error")):
+    with patch("github.http_get", side_effect=Exception("network error")):
         result = my_predbat.download_predbat_releases_url(test_url)
     if result != []:
         print("  FAILED: HTTP exception should return [], got {}".format(result))
@@ -117,9 +117,9 @@ def test_github(my_predbat):
     print("  Test 4: JSON decode error returns empty list and does not populate cache")
     _setup(my_predbat)
     mock_resp = MagicMock()
-    import requests as _requests
-    mock_resp.json.side_effect = _requests.exceptions.JSONDecodeError("bad json", "", 0)
-    with patch("requests.get", return_value=mock_resp):
+    from http_sync import HttpJSONDecodeError
+    mock_resp.json.side_effect = HttpJSONDecodeError("bad json")
+    with patch("github.http_get", return_value=mock_resp):
         result = my_predbat.download_predbat_releases_url(test_url)
     if result != []:
         print("  FAILED: JSON error should return [], got {}".format(result))
@@ -133,7 +133,7 @@ def test_github(my_predbat):
     mock_resp = MagicMock()
     mock_resp.ok = False
     mock_resp.status_code = 403
-    with patch("requests.get", return_value=mock_resp):
+    with patch("github.http_get", return_value=mock_resp):
         result = my_predbat.download_predbat_releases_url(test_url)
     if result != []:
         print("  FAILED: non-2xx status with no prior cache should return [], got {}".format(result))
@@ -150,7 +150,7 @@ def test_github(my_predbat):
     mock_resp = MagicMock()
     mock_resp.ok = False
     mock_resp.status_code = 403
-    with patch("requests.get", return_value=mock_resp):
+    with patch("github.http_get", return_value=mock_resp):
         result = my_predbat.download_predbat_releases_url(test_url)
     if result != stale_data2:
         print("  FAILED: non-2xx status should fall back to stale cached data, got {}".format(result))
@@ -165,7 +165,7 @@ def test_github(my_predbat):
     fetched_data = [{"tag_name": "v2.0"}]
     mock_resp = MagicMock()
     mock_resp.json.return_value = fetched_data
-    with patch("requests.get", return_value=mock_resp):
+    with patch("github.http_get", return_value=mock_resp):
         result = my_predbat.download_predbat_releases_url(test_url)
     if result != fetched_data:
         print("  FAILED: cache miss should return fetched data, got {}".format(result))

@@ -20,8 +20,10 @@ endpoints. Includes 50+ HTTP routes for monitoring and control.
 
 from aiohttp import web
 import asyncio
+import base64
 import os
 import os.path
+import secrets
 import sys
 import re
 from datetime import datetime, timedelta, timezone
@@ -97,10 +99,31 @@ from utils import (
     is_secret_key,
 )
 from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
-from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
+from const import (
+    TIME_FORMAT,
+    TIME_FORMAT_DAILY,
+    TIME_FORMAT_HA,
+    MANUAL_RATE_MAX_MINUTES,
+    MANUAL_TIME_MAX_MINUTES,
+    BATTERY_RATE_GRID_HALF_LIFE_DAYS,
+    BATTERY_RATE_GRID_MAX,
+    BATTERY_RATE_GRID_MIN_CELLS,
+    BATTERY_RATE_GRID_MIN_DAYS,
+    BATTERY_RATE_GRID_RUN_MINUTES,
+    BATTERY_RATE_GRID_SEGMENT_MINUTES,
+    BATTERY_RATE_GRID_TEMP_MAX,
+    BATTERY_RATE_GRID_TEMP_MIN,
+    BATTERY_RATE_GRID_UNKNOWN_TEMP,
+)
+
+CURVE_EVIDENCE_DAYS = 90  # Curves page: evidence segments up to this old are drawn on the grids
+CURVE_TEMPERATURE_MARGIN = 5  # Curves page: the grids are drawn this many degrees either side of the evidence
+PLOTLY_GL3D_URL = "https://cdn.jsdelivr.net/npm/plotly.js-gl3d-dist-min@2.35.2/plotly-gl3d.min.js"  # loaded on the Curves page only
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from battery_curve import charge_day
+from battery_rate_grid import rate_grid_curve, rate_grid_table
 from compare import check_compare_list
 import debug_history
 from web_annual import AnnualPage
@@ -459,6 +482,27 @@ def subtract_series(base, subtract, max_gap_seconds=300):
     return result
 
 
+# Pages that can change settings or expose configuration, which ask for the web login when web_username and
+# web_password are set (GH#6103): the WhatIf, Chat, Settings and Advanced menus plus their data/download endpoints.
+# Every write (POST etc.) is protected as well, whatever its path, so the data-viewing pages stay open.
+WEB_AUTH_PROTECTED_PREFIXES = (
+    "/annual",
+    "/chat",
+    "/apps",
+    "/config",
+    "/component",
+    "/discovery",
+    "/browse",
+    "/internals",
+    "/api/internals",
+    "/kraken_key",
+    "/download",
+    "/debug_",
+)
+# POST /api/login only hands a token to a reverse proxy as a cookie and checks nothing, so it needs no login
+WEB_AUTH_EXEMPT_PATHS = ("/api/login",)
+
+
 class WebInterface(ComponentBase):
     """Built-in web dashboard server using aiohttp.
 
@@ -467,16 +511,58 @@ class WebInterface(ComponentBase):
     endpoints. Supports plugin endpoint registration.
     """
 
-    def initialize(self, web_port):
+    def initialize(self, web_port, web_username=None, web_password=None, web_enable=True):
         self.default_page = "./dash"
         self.web_port = web_port
         self.default_log = "warnings"
+
+        # Optional HTTP Basic login for the pages that change settings (GH#6103). YAML can hand us an int
+        # for an all-digit password, so both are stringified; an empty value counts as not set.
+        self.web_username = str(web_username) if web_username not in (None, "") else ""
+        self.web_password = str(web_password) if web_password not in (None, "") else ""
 
         # Plugin registration system
         self.registered_endpoints = []
 
         self.annual_page = AnnualPage(self)
         self.chat_page = WebChat(self)
+
+    def web_auth_enabled(self):
+        """Return True when a web username or password is configured, so the login gate is active."""
+        return bool(self.web_username or self.web_password)
+
+    def web_auth_required(self, request):
+        """Return True if this request must carry the web login: any write, or a read of a settings/advanced page."""
+        if request.path in WEB_AUTH_EXEMPT_PATHS:
+            return False
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            return True
+        return request.path.startswith(WEB_AUTH_PROTECTED_PREFIXES)
+
+    def web_auth_valid(self, request):
+        """Check the request's HTTP Basic credentials against web_username and web_password in constant time."""
+        if not (self.web_username and self.web_password):
+            # Half configured: fail closed rather than quietly leaving the pages open
+            return False
+        header = request.headers.get("Authorization", "")
+        scheme, _, encoded = header.partition(" ")
+        if scheme.lower() != "basic":
+            return False
+        try:
+            username, _, password = base64.b64decode(encoded.strip(), validate=True).decode("utf-8").partition(":")
+        except (ValueError, UnicodeDecodeError):
+            return False
+        # Evaluate both comparisons so a wrong username takes as long to reject as a wrong password
+        username_ok = secrets.compare_digest(username.encode(), self.web_username.encode())
+        password_ok = secrets.compare_digest(password.encode(), self.web_password.encode())
+        return username_ok and password_ok
+
+    @web.middleware
+    async def auth_middleware(self, request, handler):
+        """Ask for the web login on protected requests, and pass everything else straight through."""
+        if self.web_auth_enabled() and self.web_auth_required(request) and not self.web_auth_valid(request):
+            return web.Response(status=401, text="Login required", headers={"WWW-Authenticate": 'Basic realm="Predbat", charset="UTF-8"'})
+        return await handler(request)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -640,7 +726,12 @@ class WebInterface(ComponentBase):
 
     async def start(self):
         # Start the web server
-        app = web.Application()
+        if self.web_auth_enabled():
+            app = web.Application(middlewares=[self.auth_middleware])
+            if not (self.web_username and self.web_password):
+                self.log("Warn: web_username and web_password must both be set, until then the Web Interface refuses every protected request")
+        else:
+            app = web.Application()
         app.router.add_get("/", self.html_default)
         app.router.add_get("/plan", self.html_plan)
         app.router.add_get("/log", self.html_log)
@@ -3403,6 +3494,9 @@ chart.render();
         """
         Return the HTML for a chart
         """
+        if chart == "Curves":
+            # Needs no plan or history, so it is shown before the first plan too
+            return self.get_curves_chart()
         now_str = self.now_utc.strftime(TIME_FORMAT)
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
@@ -3915,17 +4009,129 @@ chart.render();
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
+        text += f'<a href="./charts?chart=Curves" class="{"active" if chart == "Curves" else ""}">Curves</a>'
         # Only show LoadML chart if ML is enabled
         if self.base.get_arg("load_ml_enable", False):
             text += f'<a href="./charts?chart=LoadML" class="{"active" if chart == "LoadML" else ""}">LoadML</a>'
             text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
-        if chart != "MarginalCosts":
+        if chart not in ("MarginalCosts", "Curves"):
             text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    def get_curves_chart(self):
+        """
+        The Curves page: a status table for the charge and discharge rate grids, then each grid drawn in 3D (SoC x battery
+        temperature x rate as a fraction of the rated rate) with its recent evidence as dots, and a short table of it.
+        """
+        dashboard_values = getattr(self.base, "dashboard_values", {}) or {}
+        charge_grid, discharge_grid = self.base.rate_grids()
+        cell = "padding:6px 12px;border:1px solid #555;"
+        # white-space: the shared header sets p { white-space: nowrap }, which would run the captions off the page
+        text = "<div style='max-width:960px;white-space:normal;'>\n<br><h2>Battery rate grids</h2>\n"
+        text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n<tr>"
+        for heading in ("Grid", "Learned grid in use", "Source", "Cells", "Evidence days", "Temperatures", "Learned at", "Last scan"):
+            text += "<th style='{}text-align:left;'>{}</th>".format(cell, heading)
+        text += "</tr>\n"
+        for title, kind in (("Charge", "charge"), ("Discharge", "discharge")):
+            item = dashboard_values.get("binary_sensor.{}_battery_{}_rate_grid".format(self.prefix, kind), {})
+            attributes = item.get("attributes", {}) or {}
+            learned = item.get("state") == "on"
+            temperature_range = attributes.get("temperature_range")
+            cells = [
+                title,
+                "Yes" if learned else ("No" if item else "Not yet run"),
+                attributes.get("source", ""),
+                attributes.get("cells", ""),
+                attributes.get("days", ""),
+                "{} to {} C".format(temperature_range[0], temperature_range[1]) if isinstance(temperature_range, list) and len(temperature_range) == 2 else "",
+                attributes.get("updated") or "",
+                attributes.get("last_scan") or "",
+            ]
+            text += "<tr>"
+            for index, value in enumerate(cells):
+                style = cell + ("background:#00B050;color:#fff;" if index == 1 and learned else "")
+                text += "<td style='{}'>{}</td>".format(style, html_module.escape(str(value)))
+            text += "</tr>\n"
+        text += "</table>\n"
+        text += "<p>Each grid is the rate the battery reaches, as a fraction of its rated rate, at each SoC and battery temperature. It is learned from runs of {} minutes or more at the full rate (cut into {}-minute segments), and the plan uses it once it has {} cells from {} days; until then, and wherever the evidence does not reach, the curves set in <code>apps.yaml</code> are used. The rate never rises with SoC (charge) or as SoC falls (discharge), or as the temperature falls. Older evidence counts for less, half every {} days.</p>\n".format(
+            BATTERY_RATE_GRID_RUN_MINUTES, BATTERY_RATE_GRID_SEGMENT_MINUTES, BATTERY_RATE_GRID_MIN_CELLS, BATTERY_RATE_GRID_MIN_DAYS, BATTERY_RATE_GRID_HALF_LIFE_DAYS
+        )
+        text += '<script src="{}"></script>\n'.format(PLOTLY_GL3D_URL)
+        today = datetime.strptime(charge_day(self.now_utc, 0, getattr(self.base, "local_tz", None)), "%Y-%m-%d").date()
+        samples_by_kind = getattr(self.base, "battery_rate_grid_samples", {}) or {}
+        learned_by_kind = getattr(self.base, "battery_rate_grid_learned", {}) or {}
+        for title, kind, grid in (("Charge", "charge", charge_grid), ("Discharge", "discharge", discharge_grid)):
+            evidence = []
+            for day, entries in (samples_by_kind.get(kind) or {}).items():
+                try:
+                    age = (today - datetime.strptime(day, "%Y-%m-%d").date()).days
+                except (TypeError, ValueError):
+                    continue
+                if age <= CURVE_EVIDENCE_DAYS:
+                    evidence.extend(entries)
+            temperatures = [entry[1] for entry in evidence if entry[1] is not None]
+            learned = learned_by_kind.get(kind)
+            if learned and learned.get("temp_range"):
+                temperatures += learned["temp_range"]
+            if temperatures:
+                low = max(int(min(temperatures)) - CURVE_TEMPERATURE_MARGIN, BATTERY_RATE_GRID_TEMP_MIN)
+                high = min(int(max(temperatures)) + CURVE_TEMPERATURE_MARGIN, BATTERY_RATE_GRID_TEMP_MAX)
+            else:
+                low, high = -10, 30
+            degrees = list(range(low, high + 1))
+            # An exact 0 reading means a missing one, so the 0 row is drawn as a real reading just above freezing
+            data = {
+                "soc": list(range(101)),
+                "temperature": degrees,
+                "z": [[round(value, 3) for value in rate_grid_curve(grid, degree if degree != 0 else 0.5)[:101]] for degree in degrees],
+                "ex": [entry[0] for entry in evidence],
+                "ey": [entry[1] if entry[1] is not None else BATTERY_RATE_GRID_UNKNOWN_TEMP for entry in evidence],
+                "ez": [entry[2] for entry in evidence],
+            }
+            text += "<h3>{} rate grid</h3>\n".format(title)
+            text += "<div id='curve_grid_{}' style='width:100%;height:560px;'></div>\n".format(kind)
+            text += "<script>\nvar curve_grid_{}_data = {};\n".format(kind, json.dumps(data))
+            text += """(function() {{
+  var d = curve_grid_{kind}_data;
+  var fg = getComputedStyle(document.body).color || '#888';
+  var axis = function(t) {{ return {{title: {{text: t, font: {{color: fg}}}}, tickfont: {{color: fg}}, gridcolor: 'rgba(128,128,128,0.3)', backgroundcolor: 'rgba(0,0,0,0)'}}; }};
+  var traces = [{{type: 'surface', x: d.soc, y: d.temperature, z: d.z, cmin: 0, cmax: {cmax}, colorscale: 'Viridis', opacity: 0.85, name: '{title} grid', showlegend: true,
+    colorbar: {{title: {{text: 'rate', font: {{color: fg}}}}, tickfont: {{color: fg}}, thickness: 14, len: 0.6, x: 0.98}}, hovertemplate: 'SoC %{{x}}%<br>%{{y}} C<br>rate %{{z:.2f}}<extra></extra>'}}];
+  if (d.ex.length) {{
+    traces.push({{type: 'scatter3d', mode: 'markers', x: d.ex, y: d.ey, z: d.ez, name: 'evidence (last {days} days)', marker: {{size: 3, color: '#e4572e', opacity: 0.85}},
+      hovertemplate: 'SoC %{{x:.0f}}%<br>%{{y:.1f}} C<br>rate %{{z:.2f}}<extra>evidence</extra>'}});
+  }}
+  if (typeof Plotly === 'undefined') {{ document.getElementById('curve_grid_{kind}').innerText = 'The 3D chart library could not be loaded.'; return; }}
+  Plotly.newPlot('curve_grid_{kind}', traces, {{paper_bgcolor: 'rgba(0,0,0,0)', margin: {{l: 0, r: 0, t: 0, b: 0}}, legend: {{font: {{color: fg}}, orientation: 'h', x: 0, y: 0}},
+    scene: {{xaxis: axis('SoC %'), yaxis: axis('Battery temperature C'), zaxis: Object.assign(axis('Rate / rated'), {{range: [0, {cmax}]}}), aspectmode: 'manual', aspectratio: {{x: 1.3, y: 1.3, z: 0.8}}, camera: {{eye: {{x: 1.45, y: -1.45, z: 0.85}}}}}}}}, {{responsive: true}});
+}})();
+</script>
+""".format(kind=kind, title=title, cmax=BATTERY_RATE_GRID_MAX, days=CURVE_EVIDENCE_DAYS)
+            if not evidence:
+                text += "<p>No {} evidence yet: the grid shown is from the curves in <code>apps.yaml</code> (or the full rated rate where none is set).</p>\n".format(kind)
+            table = rate_grid_table(grid)
+            small = "padding:4px 8px;border:1px solid #555;"
+            text += "<table style='border-collapse:collapse;margin:8px 0 20px 0;font-size:0.9em;'>\n<tr><th style='{}'>C \\ SoC %</th>".format(small)
+            for soc in table["soc"]:
+                text += "<th style='{}'>{}</th>".format(small, soc)
+            text += "</tr>\n"
+            if table["temperature"] is None:
+                labels, rows = ["All"], table["rows"]
+            else:
+                labels, rows = [], []
+                for degree, row in zip(table["temperature"], table["rows"]):
+                    if low <= degree <= high:
+                        labels.append(degree)
+                        rows.append(row)
+            for label, row in zip(labels, rows):
+                text += "<tr><td style='{}'>{}</td>".format(small, label) + "".join("<td style='{}'>{:.2f}</td>".format(small, value) for value in row) + "</tr>\n"
+            text += "</table>\n"
+        text += "</div>\n"
+        return text
 
     def is_editable_value(self, value):
         """

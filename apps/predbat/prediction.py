@@ -18,23 +18,22 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
-from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
+from const import KEEP_TARGET_MIN_RATE, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
 from utils import (
     remove_intersecting_windows,
-    get_charge_rate_curve_cached,
-    get_discharge_rate_curve_cached,
+    rate_curve_function,
     find_charge_rate,
     calc_percent_limit,
     in_iboost_slot,
     in_car_slot,
-    charge_curve_to_tuple,
     export_mode_of,
     export_power_of,
     export_target_of,
     pack_export_limit,
 )
 from prediction_batch import EXPORT_FLOOR_SCENARIOS, PredictionBatch, export_end_soc_from_series, floor_export_limits, prediction_cache_key
+from battery_rate_grid import rate_grid_curve
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
 
 # The limit an inactive export window reads as. Built once at import rather than per minute:
@@ -178,11 +177,8 @@ class Prediction(PredictionBatch):
             self.battery_rate_max_charge_dc = base.battery_rate_max_charge_dc
             self.battery_rate_max_discharge = base.battery_rate_max_discharge
             self.battery_rate_max_export = base.battery_rate_max_export
-            self.battery_charge_power_curve = base.battery_charge_power_curve
-            self.battery_discharge_power_curve = base.battery_discharge_power_curve
+            self.battery_charge_rate_grid, self.battery_discharge_rate_grid = base.rate_grids()
             self.battery_temperature = base.battery_temperature
-            self.battery_temperature_charge_curve = base.battery_temperature_charge_curve
-            self.battery_temperature_discharge_curve = base.battery_temperature_discharge_curve
             self.battery_temperature_prediction = base.battery_temperature_prediction
             self.battery_rate_max_scaling = base.battery_rate_max_scaling
             self.battery_rate_max_scaling_discharge = base.battery_rate_max_scaling_discharge
@@ -529,6 +525,22 @@ class Prediction(PredictionBatch):
             self.prediction_cache_export_end[key] = end_socs
         return end_socs
 
+    def rate_curves(self, temperature):
+        """
+        (charge, discharge) battery ceiling curves for one battery temperature: 101 entries by SoC percent in kW per
+        minute, read from the rate grids (rated x grid value). Memoised per temperature, as a forecast holds one value
+        for hours at a time.
+        """
+        memo = self.__dict__.setdefault("rate_curve_memo", {})
+        curves = memo.get(temperature)
+        if curves is None:
+            curves = (
+                rate_grid_curve(self.battery_charge_rate_grid, temperature, rated=self.battery_rate_max_charge),
+                rate_grid_curve(self.battery_discharge_rate_grid, temperature, rated=self.battery_rate_max_discharge),
+            )
+            memo[temperature] = curves
+        return curves
+
     def run_prediction(self, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, step=PREDICT_STEP, cache=False, export_floor=True, series=True):
         """
         Run a prediction scenario given a charge limit, return the results
@@ -738,10 +750,9 @@ class Prediction(PredictionBatch):
         inverter_freeze_export_discharge_rate = self.inverter_freeze_export_discharge_rate
         carbon_intensity = self.carbon_intensity
         set_discharge_during_charge = self.set_discharge_during_charge
-        battery_charge_power_curve_tuple = charge_curve_to_tuple(self.battery_charge_power_curve)
-        battery_discharge_power_curve_tuple = charge_curve_to_tuple(self.battery_discharge_power_curve)
-        battery_temperature_charge_curve_tuple = charge_curve_to_tuple(self.battery_temperature_charge_curve)
-        battery_temperature_discharge_curve_tuple = charge_curve_to_tuple(self.battery_temperature_discharge_curve)
+        rate_curves = self.rate_curves
+        curve_temperature = None
+        charge_rate_curve = discharge_rate_curve = charge_rate_lookup = discharge_rate_lookup = None
         calculate_export_on_pv = self.calculate_export_on_pv
 
         # For the PV10 case we apply some de-rating to the battery charge rate to be more pessimistic.
@@ -806,6 +817,12 @@ class Prediction(PredictionBatch):
 
             # Project battery temperature
             battery_temperature = battery_temperature_prediction.get(minute, self.battery_temperature)
+            if battery_temperature != curve_temperature:
+                # A forecast holds one temperature for hours, so the curves are only looked up when it changes
+                charge_rate_curve, discharge_rate_curve = rate_curves(battery_temperature)
+                charge_rate_lookup = rate_curve_function(charge_rate_curve)
+                discharge_rate_lookup = rate_curve_function(discharge_rate_curve)
+                curve_temperature = battery_temperature
 
             # Once a force discharge is set the four hour rule is disabled
             if four_hour_rule:
@@ -1028,14 +1045,9 @@ class Prediction(PredictionBatch):
                     discharge_rate_now = battery_rate_min
 
             # Current real charge rate
-            charge_rate_now_curve = (
-                get_charge_rate_curve_cached(round(soc, 1), charge_rate_now, soc_max, battery_rate_max_charge, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple) * battery_rate_max_scaling
-            )
+            charge_rate_now_curve = charge_rate_lookup(round(soc, 1), charge_rate_now, soc_max, battery_rate_max_charge, battery_rate_min) * battery_rate_max_scaling
             charge_rate_now_curve_step = charge_rate_now_curve * step
-            discharge_rate_now_curve = (
-                get_discharge_rate_curve_cached(round(soc, 1), discharge_rate_now, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
-                * self.battery_rate_max_scaling_discharge
-            )
+            discharge_rate_now_curve = discharge_rate_lookup(round(soc, 1), discharge_rate_now, soc_max, battery_rate_max_discharge, battery_rate_min) * self.battery_rate_max_scaling_discharge
             discharge_rate_now_curve_step = discharge_rate_now_curve * step
 
             battery_to_min = max(soc - reserve_expected, 0) * battery_loss_discharge
@@ -1052,10 +1064,7 @@ class Prediction(PredictionBatch):
                 else:
                     export_rate_adjust = 1.0
                 discharge_rate_now = battery_rate_max_export * export_rate_adjust
-                discharge_rate_now_curve = (
-                    get_discharge_rate_curve_cached(round(soc, 1), discharge_rate_now, soc_max, battery_rate_max_export, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_discharge_curve_tuple)
-                    * self.battery_rate_max_scaling_discharge
-                )
+                discharge_rate_now_curve = discharge_rate_lookup(round(soc, 1), discharge_rate_now, soc_max, battery_rate_max_export, battery_rate_min) * self.battery_rate_max_scaling_discharge
                 discharge_rate_now_curve_step = discharge_rate_now_curve * step
 
                 battery_draw = min(discharge_rate_now_curve_step, battery_to_min)
@@ -1080,10 +1089,7 @@ class Prediction(PredictionBatch):
                             reduce_by = reduce_by - battery_draw * inverter_loss
 
                             if inverter_hybrid:
-                                charge_rate_now_curve_dc = (
-                                    get_charge_rate_curve_cached(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
-                                    * battery_rate_max_scaling
-                                )
+                                charge_rate_now_curve_dc = charge_rate_lookup(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
                                 charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
                                 # Hybrid charges from PV on the DC side (see pv_dc below), so the AC surplus maps
                                 # back to DC through the loss reciprocal. Clamp by battery_to_max (remaining charge
@@ -1117,10 +1123,7 @@ class Prediction(PredictionBatch):
                             reduce_by = reduce_by - battery_draw
                             battery_draw = 0
                             if self.inverter_can_charge_during_export:
-                                charge_rate_now_curve_dc = (
-                                    get_charge_rate_curve_cached(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
-                                    * battery_rate_max_scaling
-                                )
+                                charge_rate_now_curve_dc = charge_rate_lookup(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
                                 charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
                                 # reduce_by here is in the same DC-equivalent throughput units as total_inverted
                                 # (get_total_inverted counts the battery and the PV diverted to DC 1:1), so the
@@ -1176,15 +1179,13 @@ class Prediction(PredictionBatch):
                     charge_limit_n,
                     battery_rate_max_charge_combined,
                     soc_max,
-                    self.battery_charge_power_curve,
+                    charge_rate_curve,
                     set_charge_low_power,
                     self.charge_low_power_margin,
                     battery_rate_min,
                     battery_rate_max_scaling,
                     battery_loss,
                     None,
-                    battery_temperature,
-                    self.battery_temperature_charge_curve,
                     pv_window_kwh=pv_window_kwh,
                     low_power_pv_threshold_w=self.low_power_pv_threshold_w,
                     solar_full_rate=self.set_charge_low_power_solar_full_rate,
@@ -1248,10 +1249,7 @@ class Prediction(PredictionBatch):
                     if inverter_hybrid:
                         charge_rate_now_dc = battery_rate_max_charge_dc
 
-                        charge_rate_now_curve_dc = (
-                            get_charge_rate_curve_cached(soc, charge_rate_now_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
-                            * battery_rate_max_scaling
-                        )
+                        charge_rate_now_curve_dc = charge_rate_lookup(soc, charge_rate_now_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
                         charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step * charge_rate_scale
 
                         virtual_inverter_limit = inverter_limit + pv_now
@@ -1283,10 +1281,7 @@ class Prediction(PredictionBatch):
                     if diff < 0 and abs(diff) > export_limit and self.inverter_can_charge_during_export and self.inverter_support_feedin_first:
                         over_limit = abs(diff) - export_limit
                         if inverter_hybrid:
-                            charge_rate_now_curve_dc = (
-                                get_charge_rate_curve_cached(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_charge_curve_tuple)
-                                * battery_rate_max_scaling
-                            )
+                            charge_rate_now_curve_dc = charge_rate_lookup(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
                             charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
                             battery_draw = max(-over_limit * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step)
                         else:
@@ -1427,11 +1422,14 @@ class Prediction(PredictionBatch):
 
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
-                metric_keep += (best_soc_keep - soc) * import_rate * keep_minute_scaling * step / 60.0
+                # A manual or alert floor still costs something to miss at a free or negative rate (#5162)
+                keep_rate = max(import_rate, KEEP_TARGET_MIN_RATE) if alert_keep > 0 else import_rate
+                metric_keep += (best_soc_keep - soc) * keep_rate * keep_minute_scaling * step / 60.0
 
             # Metric keep max - pretend the excess above the ceiling should have been exported instead of held
             if best_soc_max >= 0 and soc >= best_soc_max:
-                metric_keep += (soc - best_soc_max) * export_rate * keep_minute_scaling * step / 60.0
+                # Likewise a ceiling still costs something to break at a free or negative export rate (#5162)
+                metric_keep += (soc - best_soc_max) * max(export_rate, KEEP_TARGET_MIN_RATE) * keep_minute_scaling * step / 60.0
 
             if diff > 0:
                 # Import

@@ -65,6 +65,7 @@ jobs:
     # Not "owner-approval": this job's own check must not be the one the ruleset requires
     name: owner gate evaluator
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Check the owner approved this PR or enabled auto-merge on it
         run: |

@@ -26,7 +26,7 @@ from aiohttp import web
 import hmac
 import secrets
 from urllib.parse import urlencode
-import jwt as pyjwt
+import jwt_hs256
 from component_base import ComponentBase
 from const import MCP_DEFAULT_SECRET
 from agent_tools import (  # noqa: F401
@@ -92,7 +92,6 @@ class PredbatMCPServer(ComponentBase):
         # A random signing key, replaced by the saved one when the server starts (load_signing_key). It used to be
         # derived from mcp_secret, which let anyone who knew the secret forge tokens offline (#5847).
         self.jwt_secret = secrets.token_hex(MCP_SIGNING_KEY_BYTES)
-        self.jwt_algorithm = "HS256"
         self.access_token_lifetime = timedelta(days=30)
         self.authorization_code_lifetime = timedelta(minutes=10)
 
@@ -292,9 +291,6 @@ class PredbatMCPServer(ComponentBase):
         Returns:
             JWT access token string
         """
-        if not pyjwt:
-            raise RuntimeError("PyJWT is not installed. Install with: pip install PyJWT")
-
         # Default scopes if not specified
         if scopes is None:
             scopes = list(MCP_ALL_SCOPES)
@@ -312,7 +308,7 @@ class PredbatMCPServer(ComponentBase):
             "iat": datetime.now(timezone.utc),
             "exp": datetime.now(timezone.utc) + self.access_token_lifetime,
         }
-        return pyjwt.encode(payload, self.jwt_secret, algorithm=self.jwt_algorithm)
+        return jwt_hs256.encode(payload, self.jwt_secret)
 
     def verify_access_token(self, token: str, expected_audience: str = None) -> Dict[str, Any]:
         """
@@ -345,7 +341,7 @@ class PredbatMCPServer(ComponentBase):
 
             for aud in acceptable_audiences:
                 try:
-                    payload = pyjwt.decode(token, self.jwt_secret, algorithms=[self.jwt_algorithm], audience=aud)
+                    payload = jwt_hs256.decode(token, self.jwt_secret, audience=aud)
                     break  # Success!
                 except Exception as e:
                     last_error = e
@@ -355,12 +351,12 @@ class PredbatMCPServer(ComponentBase):
                 # None of the audiences worked
                 # Try to decode without verification to see what's in the token (for debugging)
                 try:
-                    unverified = pyjwt.decode(token, options={"verify_signature": False})
+                    unverified = jwt_hs256.decode_unverified(token)
                     self.log(f"MCP: Token claims (unverified): {unverified}")
                 except Exception as e2:
                     self.log(f"MCP: Could not even decode without verification: {e2}")
 
-                if last_error and "audience" in str(last_error).lower():
+                if isinstance(last_error, jwt_hs256.InvalidAudienceError):
                     self.log(f"MCP: Invalid token audience: {last_error}")
                 else:
                     self.log(f"MCP: Token verification failed: {last_error}")

@@ -9,6 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 import asyncio
+import copy
 import threading
 import time
 import solis as solis_module
@@ -89,6 +90,7 @@ class MockSolisAPI(SolisAPI):
         self.slot_probe_failures = {}
         self.slot_probe_retry_at = {}
         self.mode_asserted_for = {}
+        self.slot_direction_deferred = {}
         self.control_enable = True
         self.parallel_slaves = {}
         self.parallel_slot_current_max = None
@@ -2368,6 +2370,15 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_write_time_windows_v2_no_changes())
         failed |= asyncio.run(test_write_time_windows_v2_stale_slot_clearing())
         failed |= asyncio.run(test_write_time_windows_v2_no_active_slot())
+        for held in ("discharge", "charge"):
+            failed |= asyncio.run(test_write_time_windows_v2_held_window_waits(held))
+            failed |= asyncio.run(test_write_time_windows_v2_held_window_takes_slot_when_running_ends(held))
+            failed |= asyncio.run(test_write_time_windows_v2_held_window_waits_after_restart(held))
+            failed |= asyncio.run(test_write_time_windows_v2_held_window_moves_later(held))
+            failed |= asyncio.run(test_write_time_windows_v2_held_window_moves_to_now(held))
+            failed |= asyncio.run(test_write_time_windows_v2_held_window_removed(held))
+            failed |= asyncio.run(test_run_v2_hold_back_through_re_reads(held))
+        failed |= asyncio.run(test_write_time_windows_v2_sooner_window_takes_slot())
         failed |= asyncio.run(test_discharge_soc_clamped_to_recovery_soc())
         failed |= asyncio.run(test_recovery_soc_lowered_when_above_minimum())
         failed |= asyncio.run(test_recovery_soc_lowered_to_target_when_reachable())
@@ -4163,6 +4174,494 @@ async def test_write_time_windows_v2_no_active_slot():
     assert storage_mode_calls[0]["mode"] == "Self-Use - No Timed Charge/Discharge", f"Storage mode should be 'Self-Use - No Timed Charge/Discharge' when no slot is active, got '{storage_mode_calls[0]['mode']}'"
 
     print("PASSED: V2 mode uses 'No Timed Charge/Discharge' variant when no slot is active")
+    return False
+
+
+SLOT1_CIDS = {
+    "charge": (SOLIS_CID_CHARGE_ENABLE_BASE, SOLIS_CID_CHARGE_TIME[0], SOLIS_CID_CHARGE_SOC_BASE, SOLIS_CID_CHARGE_CURRENT[0]),
+    "discharge": (SOLIS_CID_DISCHARGE_ENABLE_BASE, SOLIS_CID_DISCHARGE_TIME[0], SOLIS_CID_DISCHARGE_SOC[0], SOLIS_CID_DISCHARGE_CURRENT[0]),
+}
+SLOT1_ENABLE_CID = {"charge": SOLIS_CID_CHARGE_ENABLE_BASE, "discharge": SOLIS_CID_DISCHARGE_ENABLE_BASE}
+SLOT1_TIME_CID = {"charge": SOLIS_CID_CHARGE_TIME[0], "discharge": SOLIS_CID_DISCHARGE_TIME[0]}
+
+
+def make_slot1_collision_api(charge_window, discharge_window, inverter_registers):
+    """A V2 MockSolisAPI whose slot 1 has both a charge and a discharge window enabled (issue #6210).
+
+    Args:
+        charge_window: (start, end) of the charge window Predbat asked for, as "HH:MM"
+        discharge_window: (start, end) of the discharge window Predbat asked for, as "HH:MM"
+        inverter_registers: The register cache, i.e. what the inverter last reported
+
+    Returns: The mock API
+    """
+    api = MockSolisAPI()
+    api._test_v2_mode = True
+    api._mock_storage_mode = True
+    api.inverter_sn = ["TEST123"]
+    api.charge_discharge_time_windows["TEST123"] = {
+        1: {
+            "charge_enable": 1,
+            "charge_start_time": charge_window[0],
+            "charge_end_time": charge_window[1],
+            "charge_soc": 100,
+            "charge_current": 50,
+            "discharge_enable": 1,
+            "discharge_start_time": discharge_window[0],
+            "discharge_end_time": discharge_window[1],
+            "discharge_soc": 10,
+            "discharge_current": 30,
+        }
+    }
+    api.cached_values["TEST123"] = dict(inverter_registers)
+    return api
+
+
+def slot1_registers(charge_enable, charge_time, discharge_enable, discharge_time):
+    """The slot 1 registers as the inverter reports them, with SOC and currents already matching the request.
+
+    Args:
+        charge_enable: CID 5916 value, "0" or "1"
+        charge_time: CID 5946 value, "HH:MM-HH:MM"
+        discharge_enable: CID 5922 value, "0" or "1"
+        discharge_time: CID 5964 value, "HH:MM-HH:MM"
+
+    Returns: A register cache dict
+    """
+    return {
+        SOLIS_CID_CHARGE_ENABLE_BASE: charge_enable,
+        SOLIS_CID_CHARGE_TIME[0]: charge_time,
+        SOLIS_CID_CHARGE_SOC_BASE: "100",
+        SOLIS_CID_CHARGE_CURRENT[0]: "50",
+        SOLIS_CID_DISCHARGE_ENABLE_BASE: discharge_enable,
+        SOLIS_CID_DISCHARGE_TIME[0]: discharge_time,
+        SOLIS_CID_DISCHARGE_SOC[0]: "10",
+        SOLIS_CID_DISCHARGE_CURRENT[0]: "30",
+    }
+
+
+def written_cids(api):
+    """The CIDs write_time_windows_if_changed wrote, in order.
+
+    Args:
+        api: The mock API
+
+    Returns: A list of CIDs
+    """
+    return [call["cid"] for call in api.read_and_write_cid_calls]
+
+
+def written_values(api, cid):
+    """The values written to one CID, in order.
+
+    Args:
+        api: The mock API
+        cid: The CID
+
+    Returns: A list of value strings
+    """
+    return [call["value"] for call in api.read_and_write_cid_calls if call["cid"] == cid]
+
+
+def held_back_scenario(held):
+    """A slot 1 with one window running and the other, the held-back one, armed to start when it ends (issue #6210).
+
+    held "discharge": a charge runs 09:00-10:00 and an export is armed for 10:00-11:00 (the reported case).
+    held "charge": an export runs 16:00-19:00 and a charge is armed for 19:00-21:00 (the reverse).
+
+    Args:
+        held: The direction held back, "charge" or "discharge"
+
+    Returns: A dict of running (direction), windows ({direction: (start, end)}), registers (the inverter
+        before the held-back window was armed), held_start (datetime of its start) and moved_later (a later window)
+    """
+    if held == "discharge":
+        return {
+            "running": "charge",
+            "windows": {"charge": ("09:00", "10:00"), "discharge": ("10:00", "11:00")},
+            "registers": slot1_registers("1", "09:00-10:00", "0", "00:00-00:00"),
+            "held_start": datetime(2026, 11, 15, 10, 0),
+            "moved_later": ("10:30", "11:30"),
+        }
+    return {
+        "running": "discharge",
+        "windows": {"charge": ("19:00", "21:00"), "discharge": ("16:00", "19:00")},
+        "registers": slot1_registers("0", "00:00-00:00", "1", "16:00-19:00"),
+        "held_start": datetime(2026, 11, 15, 19, 0),
+        "moved_later": ("19:30", "21:30"),
+    }
+
+
+def held_back_api(scenario):
+    """The mock API for a held_back_scenario(), with both windows asked for.
+
+    Args:
+        scenario: From held_back_scenario()
+
+    Returns: The mock API
+    """
+    return make_slot1_collision_api(scenario["windows"]["charge"], scenario["windows"]["discharge"], scenario["registers"])
+
+
+def at(scenario, minutes):
+    """A time relative to the held-back window's start.
+
+    Args:
+        scenario: From held_back_scenario()
+        minutes: Minutes after the held-back window's start, negative for before
+
+    Returns: A datetime
+    """
+    return scenario["held_start"] + timedelta(minutes=minutes)
+
+
+async def test_write_time_windows_v2_held_window_waits(held):
+    """Issue #6210: a window armed early must not cut off the other direction's window running in slot 1.
+
+    On TOU V2 the inverter keeps only one of slot 1's two enables on, so writing one turns the other off. Predbat
+    arms its next window set_window_minutes before it starts, so slot 1 must stay with the running window until it
+    ends - and the 5-minute in-window re-read must not then flip the two enables back and forth. Predbat's own view
+    of both windows must be unchanged, so it does not try to re-arm the held-back one every cycle.
+
+    Args:
+        held: The direction held back, "charge" or "discharge"
+    """
+    print(f"\n=== Test: V2 the {held} window waits for the one running in slot 1 (issue #6210) ===")
+    scenario = held_back_scenario(held)
+    running = scenario["running"]
+    api = held_back_api(scenario)
+
+    # 29 minutes before it starts, the held-back window has just been armed
+    api._test_now_utc_exact = at(scenario, -29)
+    assert await api.write_time_windows_if_changed("TEST123") is True
+    written = written_cids(api)
+    assert not any(cid in SLOT1_CIDS[held] for cid in written), f"No {held} slot 1 write while {running} slot 1 runs, wrote {written}"
+    assert SLOT1_ENABLE_CID[running] not in written, f"{running} slot 1 is already enabled, wrote {written}"
+
+    # 7 minutes later, the in-window re-read finds the inverter as it was left: still no write in either direction
+    api.read_and_write_cid_calls.clear()
+    api._test_now_utc_exact = at(scenario, -22)
+    assert await api.write_time_windows_if_changed("TEST123") is True
+    assert written_cids(api) == [], f"A second cycle must write nothing, wrote {written_cids(api)}"
+    held_logs = [m for m in api.log_messages if f"Holding back {held} slot 1" in m]
+    assert len(held_logs) == 1, f"The hold-back is logged once, not every cycle: {held_logs}"
+
+    # Predbat's view of both windows is what it asked for, not what was written
+    slot1 = api.charge_discharge_time_windows["TEST123"][1]
+    api.publish_slot_entities("TEST123")
+    for direction, (start, end) in scenario["windows"].items():
+        assert slot1[f"{direction}_enable"] == 1 and slot1[f"{direction}_start_time"] == start and slot1[f"{direction}_end_time"] == end, f"The {direction} request is kept: {slot1}"
+        assert api.dashboard_items[f"switch.predbat_solis_test123_{direction}_slot1_enable"]["state"] == "on"
+        assert api.dashboard_items[f"select.predbat_solis_test123_{direction}_slot1_start_time"]["state"] == f"{start}:00"
+        assert api.dashboard_items[f"select.predbat_solis_test123_{direction}_slot1_end_time"]["state"] == f"{end}:00"
+
+    print(f"PASSED: the {held} window waits and Predbat's view of both windows is unchanged")
+    return False
+
+
+async def test_write_time_windows_v2_held_window_takes_slot_when_running_ends(held):
+    """Issue #6210: at the running window's end minute slot 1 passes to the held-back window, and the ended one is not written back.
+
+    The plan normally turns the running window off by then, but if it is still enabled the held-back window must win
+    from that end minute (time_in_window() counts it as inside), and the enable the inverter dropped must stay dropped.
+
+    Args:
+        held: The direction held back, "charge" or "discharge"
+    """
+    print(f"\n=== Test: V2 the {held} window takes slot 1 when the running one ends (issue #6210) ===")
+    scenario = held_back_scenario(held)
+    running = scenario["running"]
+
+    # The hand-over minute: the held-back enable is written, the ended window left alone
+    api = held_back_api(scenario)
+    api._test_now_utc_exact = at(scenario, 0)
+    assert await api.write_time_windows_if_changed("TEST123") is True
+    written = written_cids(api)
+    assert SLOT1_ENABLE_CID[held] in written, f"The {held} enable is written once the {running} has ended, wrote {written}"
+    assert not any(cid in SLOT1_CIDS[running] for cid in written), f"No {running} slot 1 write once its window has ended, wrote {written}"
+
+    # 2 minutes on, the inverter has dropped the ended window's enable: it must not be rewritten
+    api.read_and_write_cid_calls.clear()
+    api.cached_values["TEST123"][SLOT1_ENABLE_CID[running]] = "0"
+    api._test_now_utc_exact = at(scenario, 2)
+    assert await api.write_time_windows_if_changed("TEST123") is True
+    written = written_cids(api)
+    assert not any(cid in SLOT1_CIDS[running] for cid in written), f"The ended {running} must not be written back, wrote {written}"
+
+    print(f"PASSED: slot 1 passes to the {held} window when the {running} ends")
+    return False
+
+
+async def test_write_time_windows_v2_held_window_waits_after_restart(held):
+    """Issue #6210: a restart while a window is held back must not let it cut off the running one.
+
+    The hold-back keeps no state: after a restart the schedule is decoded from the registers, which show the held-back
+    window off, Predbat re-arms it through the slot controls, and it is held back again.
+
+    Args:
+        held: The direction held back, "charge" or "discharge"
+    """
+    print(f"\n=== Test: V2 the {held} window still waits after a restart (issue #6210) ===")
+    scenario = held_back_scenario(held)
+    running = scenario["running"]
+
+    api = MockSolisAPI()
+    api._test_v2_mode = True
+    api._mock_storage_mode = True
+    api.inverter_sn = ["TEST123"]
+    api.cached_values["TEST123"] = dict(scenario["registers"])
+    api._test_now_utc_exact = at(scenario, -19)
+
+    # First cycle after the restart: the schedule comes from the inverter, so the held-back window shows as off
+    await api.decode_time_windows_v2("TEST123")
+    slot1 = api.charge_discharge_time_windows["TEST123"][1]
+    assert slot1[f"{running}_enable"] == 1 and slot1[f"{held}_enable"] == 0, f"Decoded from the registers: {slot1}"
+
+    # Predbat's execute re-arms it through the slot controls, as adjust_force_export() / adjust_charge_window() do
+    start, end = scenario["windows"][held]
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_start_time", start)
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_end_time", end)
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_enable", 1)
+
+    assert await api.write_time_windows_if_changed("TEST123") is True
+    written = written_cids(api)
+    assert not any(cid in SLOT1_CIDS[held] for cid in written), f"The re-armed {held} still waits, wrote {written}"
+    assert SLOT1_ENABLE_CID[running] not in written, f"{running} slot 1 is already enabled, wrote {written}"
+    assert any(f"Holding back {held} slot 1" in m for m in api.log_messages), "The hold-back is logged again after the restart"
+
+    print(f"PASSED: the {held} window still waits after a restart")
+    return False
+
+
+async def test_write_time_windows_v2_held_window_moves_later(held):
+    """Issue #6210: a held-back window moved later keeps waiting, is logged at its new times, and its new times are written once it takes the slot.
+
+    Args:
+        held: The direction held back, "charge" or "discharge"
+    """
+    print(f"\n=== Test: V2 a held-back {held} window moved later (issue #6210) ===")
+    scenario = held_back_scenario(held)
+    running = scenario["running"]
+    new_start, new_end = scenario["moved_later"]
+
+    api = held_back_api(scenario)
+    api._test_now_utc_exact = at(scenario, -29)
+    await api.write_time_windows_if_changed("TEST123")
+
+    # The plan moves it 30 minutes later while it is held back
+    api.read_and_write_cid_calls.clear()
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_start_time", new_start)
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_end_time", new_end)
+    api._test_now_utc_exact = at(scenario, -19)
+    await api.write_time_windows_if_changed("TEST123")
+    written = written_cids(api)
+    assert not any(cid in SLOT1_CIDS[held] for cid in written), f"The moved {held} still waits, wrote {written}"
+    assert any(f"Holding back {held} slot 1 ({new_start}-{new_end})" in m for m in api.log_messages), "The hold-back is logged again at the new times"
+
+    # The plan has ended the running window: the held-back one is written at its new times
+    api.read_and_write_cid_calls.clear()
+    api.set_slot_schedule_field("TEST123", 1, f"{running}_enable", 0)
+    api._test_now_utc_exact = at(scenario, 31)
+    await api.write_time_windows_if_changed("TEST123")
+    assert written_values(api, SLOT1_TIME_CID[held]) == [f"{new_start}-{new_end}"], f"Written at its new times, wrote {written_values(api, SLOT1_TIME_CID[held])}"
+    assert written_values(api, SLOT1_ENABLE_CID[held]) == ["1"], f"The {held} enable is written, wrote {written_cids(api)}"
+
+    print(f"PASSED: a held-back {held} window moved later is written at its new times")
+    return False
+
+
+async def test_write_time_windows_v2_held_window_moves_to_now(held):
+    """Issue #6210: a held-back window moved earlier, to start now, takes the slot at once at its new times.
+
+    The running window is left enabled to pin the both-running rule: the moved one started later, so it wins. execute.py
+    reaches that state only for a charge moved to now, between arming it and withdrawing the export in the same execute
+    (see slot_direction_to_defer()); an export moved to now has had the charge withdrawn first.
+
+    Args:
+        held: The direction held back, "charge" or "discharge"
+    """
+    print(f"\n=== Test: V2 a held-back {held} window moved to start now (issue #6210) ===")
+    scenario = held_back_scenario(held)
+    running = scenario["running"]
+    end = scenario["windows"][held][1]
+
+    api = held_back_api(scenario)
+    api._test_now_utc_exact = at(scenario, -29)
+    await api.write_time_windows_if_changed("TEST123")
+    assert not any(cid in SLOT1_CIDS[held] for cid in written_cids(api)), f"Held back first, wrote {written_cids(api)}"
+
+    # The plan moves it to start now
+    now = at(scenario, -19)
+    api.read_and_write_cid_calls.clear()
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_start_time", now.strftime("%H:%M"))
+    api._test_now_utc_exact = now
+    await api.write_time_windows_if_changed("TEST123")
+    written = written_cids(api)
+    assert written_values(api, SLOT1_ENABLE_CID[held]) == ["1"], f"The {held} enable is written now, wrote {written}"
+    assert written_values(api, SLOT1_TIME_CID[held]) == [f"{now.strftime('%H:%M')}-{end}"], f"Written at its new times, wrote {written_values(api, SLOT1_TIME_CID[held])}"
+    assert not any(cid in SLOT1_CIDS[running] for cid in written), f"The older {running} is left alone, wrote {written}"
+
+    # The in-window re-read finds the older window's enable dropped by the inverter: it is not written back
+    api.read_and_write_cid_calls.clear()
+    api.cached_values["TEST123"][SLOT1_ENABLE_CID[running]] = "0"
+    api._test_now_utc_exact = at(scenario, -14)
+    await api.write_time_windows_if_changed("TEST123")
+    assert written_cids(api) == [], f"Nothing flips back, wrote {written_cids(api)}"
+
+    print(f"PASSED: a held-back {held} window moved to now takes the slot at its new times")
+    return False
+
+
+async def test_write_time_windows_v2_held_window_removed(held):
+    """Issue #6210: a held-back window the plan removes leaves the running one untouched and nothing behind.
+
+    Re-armed later, it is held back - and logged - again, so the hold-back keeps nothing over from the first time.
+
+    Args:
+        held: The direction held back, "charge" or "discharge"
+    """
+    print(f"\n=== Test: V2 a held-back {held} window that is removed (issue #6210) ===")
+    scenario = held_back_scenario(held)
+    start, end = scenario["windows"][held]
+
+    api = held_back_api(scenario)
+    api._test_now_utc_exact = at(scenario, -29)
+    await api.write_time_windows_if_changed("TEST123")
+
+    # The plan drops it, as adjust_force_export(False) / a disabled charge window does
+    api.read_and_write_cid_calls.clear()
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_enable", 0)
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_start_time", "00:00")
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_end_time", "00:00")
+    api._test_now_utc_exact = at(scenario, -24)
+    await api.write_time_windows_if_changed("TEST123")
+    written = written_cids(api)
+    assert written == [], f"Nothing to write: it never reached the inverter and the running window is unchanged, wrote {written}"
+    assert ("TEST123", 1) not in api.slot_direction_deferred, "No hold-back is left behind"
+
+    # The plan re-arms it: it is held back again, and logged again
+    api.log_messages.clear()
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_start_time", start)
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_end_time", end)
+    api.set_slot_schedule_field("TEST123", 1, f"{held}_enable", 1)
+    api._test_now_utc_exact = at(scenario, -19)
+    await api.write_time_windows_if_changed("TEST123")
+    assert not any(cid in SLOT1_CIDS[held] for cid in written_cids(api)), f"The re-armed {held} waits again, wrote {written_cids(api)}"
+    assert any(f"Holding back {held} slot 1 ({start}-{end})" in m for m in api.log_messages), "The second hold-back is logged"
+
+    print(f"PASSED: a held-back {held} window that is removed leaves nothing behind")
+    return False
+
+
+async def test_run_v2_hold_back_through_re_reads(held):
+    """Issue #6210 end to end: run() every minute from the held-back window being armed until after the hand-over.
+
+    The inverter is simulated with the exclusion the issue reports - writing one of slot 1's enables turns the other
+    off - and the slot register polls (the 5-minute in-window re-read and the hourly poll) read from it, so the
+    real write path sees what a real inverter would show. Before the fix this reproduced the flip-flop. Every minute:
+    the running window stays on at the inverter, and Predbat's view of both windows - the published slot entities
+    it reads its windows back from - is exactly what it asked for.
+
+    Args:
+        held: The direction held back, "charge" or "discharge"
+    """
+    print(f"\n=== Test: run() holds the {held} window back through the slot re-reads (issue #6210) ===")
+    scenario = held_back_scenario(held)
+    running = scenario["running"]
+    sn = "TEST123"
+
+    api = _make_run_api(configured_sns=[sn])
+    api.inverter_sn = [sn]
+    api._test_v2_mode = True
+    api._mock_storage_mode = True
+    held_start = scenario["held_start"].replace(tzinfo=api.local_tz)
+    api.tou_v2_mode_saved = {sn: {"value": "43605", "read_at": (held_start - timedelta(minutes=40)).isoformat()}}  # The TOU mode is not due a re-read
+    api.write_time_windows_if_changed = SolisAPI.write_time_windows_if_changed.__get__(api)  # The real write path
+
+    # The inverter: the running window is programmed, the held-back one is not
+    inverter = dict(scenario["registers"])
+    api.cached_values[sn] = dict(inverter)
+    api.charge_discharge_time_windows[sn] = copy.deepcopy(held_back_api(scenario).charge_discharge_time_windows["TEST123"])
+
+    async def inverter_write(inverter_sn, cid, value, field_description=None):
+        """Write a CID to the simulated inverter, which keeps only one of a slot's two enables on, and read back just that CID."""
+        api.read_and_write_cid_calls.append({"inverter_sn": inverter_sn, "cid": cid, "value": str(value), "field_description": field_description})
+        inverter[cid] = str(value)
+        if str(value) == "1" and cid == SOLIS_CID_CHARGE_ENABLE_BASE:
+            inverter[SOLIS_CID_DISCHARGE_ENABLE_BASE] = "0"
+        elif str(value) == "1" and cid == SOLIS_CID_DISCHARGE_ENABLE_BASE:
+            inverter[SOLIS_CID_CHARGE_ENABLE_BASE] = "0"
+        api.cached_values[inverter_sn][cid] = str(value)
+        return True
+
+    async def inverter_poll(inverter_sn, cids, batch=True):
+        """A slot register poll refreshes the register cache from the simulated inverter."""
+        api.poll_inverter_data_calls.append((inverter_sn, cids))
+        if cids == SOLIS_CID_LIST_TOU_V2:
+            api.cached_values[inverter_sn].update(inverter)
+        return True
+
+    api.read_and_write_cid = inverter_write
+    api.poll_inverter_data = inverter_poll
+
+    def assert_predbat_view(label):
+        """Predbat reads its windows back from the published slot entities: they must be what it asked for."""
+        api.publish_slot_entities(sn)
+        for direction, (start, end) in scenario["windows"].items():
+            if direction == running and not api.charge_discharge_time_windows[sn][1][f"{running}_enable"]:
+                continue  # Ended by Predbat at the hand-over
+            assert api.dashboard_items[f"switch.predbat_solis_test123_{direction}_slot1_enable"]["state"] == "on", f"{label}: {direction} enable changed"
+            assert api.dashboard_items[f"select.predbat_solis_test123_{direction}_slot1_start_time"]["state"] == f"{start}:00", f"{label}: {direction} start changed"
+            assert api.dashboard_items[f"select.predbat_solis_test123_{direction}_slot1_end_time"]["state"] == f"{end}:00", f"{label}: {direction} end changed"
+
+    # The cycle counter puts the hourly poll 9 minutes before the hand-over: armed at -29, hour at -9
+    for minute in range(-29, 4):
+        seconds = 3600 + (minute + 9) * 60
+        now = held_start + timedelta(minutes=minute)
+        api._test_now_utc_exact = now
+        if minute == 0:
+            # Predbat's execute ends the running window at the hand-over, as adjust_charge_window() / adjust_force_export(False) do
+            api.set_slot_schedule_field(sn, 1, f"{running}_enable", 0)
+        await api.run(seconds, False)
+        label = f"{now.strftime('%H:%M')} (seconds {seconds})"
+        if minute < 0:
+            assert inverter[SLOT1_ENABLE_CID[running]] == "1", f"{label}: the running {running} was cut off at the inverter"
+            assert inverter[SLOT1_ENABLE_CID[held]] == "0", f"{label}: the held-back {held} reached the inverter early"
+        else:
+            assert inverter[SLOT1_ENABLE_CID[held]] == "1", f"{label}: the {held} did not take the slot at the hand-over"
+            assert inverter[SLOT1_TIME_CID[held]] == "{}-{}".format(*scenario["windows"][held]), f"{label}: the {held} times written are {inverter[SLOT1_TIME_CID[held]]}"
+        assert_predbat_view(label)
+
+    slot_polls = [call for call in api.poll_inverter_data_calls if call[1] == SOLIS_CID_LIST_TOU_V2]
+    assert len(slot_polls) >= 6, f"The hold spanned the in-window re-reads and the hourly poll, got {len(slot_polls)} slot polls"
+    assert written_values(api, SLOT1_ENABLE_CID[running]) == ["0"], f"The running {running} enable is only cleared at the hand-over, wrote {written_values(api, SLOT1_ENABLE_CID[running])}"
+    assert written_values(api, SLOT1_ENABLE_CID[held]) == ["1"], f"The {held} enable is written once, at the hand-over, wrote {written_values(api, SLOT1_ENABLE_CID[held])}"
+
+    print(f"PASSED: run() held the {held} window back through {len(slot_polls)} slot polls and Predbat's view never changed")
+    return False
+
+
+async def test_write_time_windows_v2_sooner_window_takes_slot():
+    """Issue #6210: with neither window running, slot 1 goes to the one that starts first, counting across midnight."""
+    print("\n=== Test: V2 the sooner window takes slot 1 (issue #6210) ===")
+
+    # 23:50: the export at 23:55 starts before the charge at 00:30 tomorrow
+    api = make_slot1_collision_api(("00:30", "02:00"), ("23:55", "23:59"), {})
+    api._test_now_utc_exact = datetime(2026, 11, 15, 23, 50)
+    assert await api.write_time_windows_if_changed("TEST123") is True
+    written = written_cids(api)
+    assert SOLIS_CID_DISCHARGE_ENABLE_BASE in written, f"The sooner export is written, wrote {written}"
+    assert not any(cid in SLOT1_CIDS["charge"] for cid in written), f"The later charge waits, wrote {written}"
+
+    # 08:45: the charge at 09:00 starts before the export at 10:00
+    api = make_slot1_collision_api(("09:00", "10:00"), ("10:00", "11:00"), {})
+    api._test_now_utc_exact = datetime(2026, 11, 15, 8, 45)
+    assert await api.write_time_windows_if_changed("TEST123") is True
+    written = written_cids(api)
+    assert SOLIS_CID_CHARGE_ENABLE_BASE in written, f"The sooner charge is written, wrote {written}"
+    assert not any(cid in SLOT1_CIDS["discharge"] for cid in written), f"The later export waits, wrote {written}"
+
+    print("PASSED: the sooner window takes slot 1")
     return False
 
 

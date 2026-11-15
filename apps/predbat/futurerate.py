@@ -7,7 +7,7 @@ Octopus tariff period.
 
 from datetime import datetime, timedelta
 import hashlib
-import requests
+from http_sync import http_get
 import json
 import copy
 
@@ -513,7 +513,7 @@ class FutureRate:
         the plan falls back to copying the previous day's rates.
         """
         try:
-            r = requests.get(url, timeout=60)
+            r = http_get(url, timeout=60)
         except Exception as e:  # pylint: disable=broad-except
             self.log("Warn: Error downloading AgilePredict data from URL {}, request exception {}".format(url, e))
             return None
@@ -608,7 +608,7 @@ class FutureRate:
 
     def download_futurerate_data_func(self, url):
         try:
-            r = requests.get(url, timeout=120)
+            r = http_get(url, timeout=120)
         except Exception as e:
             self.log("Warn: Error downloading futurerate data from URL {}, request exception {}".format(url, e))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
@@ -624,7 +624,7 @@ class FutureRate:
 
         try:
             struct = json.loads(r.text)
-        except requests.exceptions.JSONDecodeError:
+        except ValueError:
             self.log("Warn: Error downloading futurerate data from URL {}".format(url))
             self.record_status("Warn: Error downloading futurerate data from cloud", debug=url, had_errors=True)
             return {}

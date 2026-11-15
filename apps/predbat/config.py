@@ -1799,7 +1799,7 @@ CONFIG_ITEMS = [
         "friendly_name": "Volume Temperature Next",
         "type": "input_number",
         "min": -20,
-        "max": 40,
+        "max": 100,
         "step": 0.1,
         "unit": "°C",
         "default": 20,
@@ -2221,6 +2221,7 @@ INVERTER_DEF = {
         "can_span_midnight": True,
         "charge_discharge_with_rate": False,
         "target_soc_used_for_discharge": True,
+        "reserve_via_discharge_rate": True,
     },
     "FoxESS": {
         "name": "FoxESS",
@@ -2443,7 +2444,8 @@ INVERTER_DEF = {
         # slot to 0% power (a hold) when telemetry reaches the target.
         "has_target_soc": True,
         # No reserve is claimed. Outside a slot the inverter runs its own self-consumption down
-        # to its local dischargeCutOffSOC, so a reserve Predbat raised to hold the battery
+        # to its local minimum, which the OpenAPI does not report (dischargeCutOffSOC is the
+        # floor for forced export, not for self-consumption), so a reserve Predbat raised to hold the battery
         # (set_reserve_enable / set_reserve_hold) would never be honoured. Without it Predbat
         # turns those functions off and plans against the battery's real behaviour.
         "has_reserve_soc": False,
@@ -2456,8 +2458,9 @@ INVERTER_DEF = {
         "has_ge_eco_toggle": False,
         "time_button_press": True,
         "clock_time_format": "%Y-%m-%d %H:%M:%S",
-        # The dispatch endpoint is limited to one request per five seconds per device.
-        "write_and_poll_sleep": 5,
+        # The dispatch endpoint is limited to one request per five seconds per device; 6 leaves a
+        # second of margin (GROWATT_DISPATCH_INTERVAL).
+        "write_and_poll_sleep": 6,
         "has_time_window": False,
         # A zero percentage applies only inside a time slot and cannot hold the battery in
         # ordinary self-consumption, so neither generic freeze capability is claimed.
@@ -2742,9 +2745,15 @@ SOLAX_SOLIS_MODES_FB00 = {
     "Feed-in priority": 96,
 }
 
+# Units of the CONFIG_ITEMS input_numbers that hold an amount of money in the minor currency unit.
+# Their min/max are multiplied by apps.yaml currency_scale so a currency with a much smaller minor
+# unit than the penny (e.g. CZK haléř, ~29 to 1p) can still set a meaningful threshold (#6155, #3683).
+CURRENCY_UNITS = ("p", "p/kWh", "p/kg")
+
 # Apps.yaml validation schema
 APPS_SCHEMA = {
     "currency_symbols": {"type": "string|string_list"},
+    "currency_scale": {"type": "float"},
     "db_enable": {"type": "boolean"},
     "db_days": {"type": "integer"},
     "db_mirror_ha": {"type": "boolean"},
@@ -2755,7 +2764,11 @@ APPS_SCHEMA = {
     "ha_url": {"type": "string", "empty": False},
     "ha_key": {"type": "string", "empty": False},
     "load_filter_threshold": {"type": "integer"},
+    "web_enable": {"type": "boolean"},
     "web_port": {"type": "integer"},
+    # WebInterface stringifies these, so an unquoted all-digit login (an int in YAML) is valid
+    "web_username": {"type": "string|integer"},
+    "web_password": {"type": "string|integer"},
     # The chat agent's LLM endpoint. Named chat_api_* rather than openrouter_* because the
     # endpoint no longer has to be OpenRouter: any OpenAI-compatible API works, including a local
     # Ollama. The openrouter_* names are still accepted so an existing apps.yaml keeps working.
@@ -2857,13 +2870,16 @@ APPS_SCHEMA = {
     "inverter_limit_override": {"type": "sensor_list", "sensor_type": "integer", "modify": False, "zero": False, "entries": "num_inverters"},
     "battery_rate_max": {"type": "sensor_list", "sensor_type": "float", "modify": False, "zero": False, "entries": "num_inverters"},
     "export_limit": {"type": "sensor_list", "sensor_type": "float", "entries": "num_inverters"},
+    "inverter_battery_rate_min": {"type": "integer", "zero": False, "entries": "num_inverters", "single_value_ok": True},
+    "inverter_reserve_max": {"type": "integer", "zero": False, "entries": "num_inverters", "single_value_ok": True},
     "battery_export_permitted": {"type": "sensor_list", "sensor_type": "boolean", "entries": "num_inverters"},
-    "inverter_battery_rate_min": {"type": "integer", "zero": False, "entries": "num_inverters"},
-    "inverter_reserve_max": {"type": "integer", "zero": False, "entries": "num_inverters"},
     "battery_charge_power_curve": {"type": "int_float_dict", "or_auto": True},
     "battery_discharge_power_curve": {"type": "int_float_dict", "or_auto": True},
     "battery_charge_power_curve_default": {"type": "int_float_dict"},
     "battery_discharge_power_curve_default": {"type": "int_float_dict"},
+    "battery_rate_grid_auto": {"type": "boolean"},
+    "battery_rate_grid_history_days": {"type": "integer", "zero": False},
+    "battery_rate_grid_scan_days": {"type": "integer", "zero": False},
     "clock_skew": {"type": "integer"},
     "predbat_repository": {"type": "string", "empty": True},
     "predbat_branch": {"type": "string|string_list", "empty": False},
@@ -2955,6 +2971,7 @@ APPS_SCHEMA = {
     "fox_auth_method": {"type": "string", "empty": False},
     "fox_token_expires_at": {"type": "string", "empty": False},
     "fox_token_hash": {"type": "string", "empty": False},
+    "fox_poll_seconds": {"type": "integer", "zero": False},
     "deye_key": {"type": "string", "empty": False},
     "deye_app_id": {"type": "string", "empty": False},
     "deye_app_secret": {"type": "string", "empty": False},
