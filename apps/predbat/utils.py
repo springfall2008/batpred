@@ -2690,15 +2690,15 @@ def get_curve_value(curve, index, default=1.0):
     return curve.get(index, default)
 
 
-def battery_temperature_index(battery_temperature):
+def battery_temperature_index(battery_temperature, temp_max=BATTERY_TEMPERATURE_CURVE_TEMP_MAX):
     """
     The whole degree a battery temperature reading is looked up (and learned) at.
 
-    The reading is clamped to -20..BATTERY_TEMPERATURE_CURVE_TEMP_MAX and truncated, except that a reading between -1 and
-    1 that is not exactly 0 goes to 1 (or -1): an exact 0 is how several integrations report a missing reading, so only
-    it keeps the 0 entry, and a real reading just either side of freezing is capped like its neighbours.
+    The reading is clamped to -20..temp_max (BATTERY_TEMPERATURE_CURVE_TEMP_MAX unless given) and truncated, except that a
+    reading between -1 and 1 that is not exactly 0 goes to 1 (or -1): an exact 0 is how several integrations report a
+    missing reading, so only it keeps the 0 entry, and a real reading just either side of freezing is capped like its neighbours.
     """
-    temperature = max(min(battery_temperature, BATTERY_TEMPERATURE_CURVE_TEMP_MAX), -20)
+    temperature = max(min(battery_temperature, temp_max), -20)
     index = int(temperature)
     if index == 0 and temperature != 0:
         index = 1 if temperature > 0 else -1

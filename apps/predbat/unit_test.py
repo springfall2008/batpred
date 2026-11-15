@@ -77,6 +77,7 @@ from tests.test_rate_export_max_forward_calc import test_rate_export_max_forward
 from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_find_charge_curve import run_find_charge_curve_tests
 from tests.test_battery_temperature_curve_auto import run_battery_temperature_curve_auto_tests
+from tests.test_battery_rate_grid import run_battery_rate_grid_tests
 from tests.test_battery_power_curve_auto import run_battery_power_curve_auto_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
@@ -784,6 +785,7 @@ def main():
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
         ("battery_temperature_curve_auto", run_battery_temperature_curve_auto_tests, "Learn the battery temperature charge curve from history", False),
+        ("battery_rate_grid", run_battery_rate_grid_tests, "Battery rate grids: manual grid, isotonic fit, lookup", False),
         ("battery_power_curve_auto", run_battery_power_curve_auto_tests, "Auto SoC power curve kept in storage, replaced only when a scan finds data", False),
         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),
