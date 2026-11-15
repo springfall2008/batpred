@@ -1347,9 +1347,13 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     return override_time
 
 
-def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None):
+def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None, pad=True):
     """
     Get historical data for state (e.g. predbat status)
+
+    Every minute from the oldest record to now is filled with the state in force then. With pad (the default) the minutes
+    of the window older than the oldest record are filled too, with the newest state; pad=False leaves them out, so the
+    result only covers the history that exists.
     """
     mdata = {}
     last_state = "unknown"
@@ -1400,8 +1404,10 @@ def minute_data_state(history, days, now, state_key, last_updated_key, prev_last
             newest_state = state
 
     state = newest_state
-    for minute in range(0, 60 * 24 * days):
-        rindex = 60 * 24 * days - minute - 1
+    oldest = 60 * 24 * days - 1
+    if not pad:
+        oldest = min(max(mdata), oldest) if mdata else -1
+    for rindex in range(oldest, -1, -1):
         state = mdata.get(rindex, state)
         mdata[rindex] = state
 
@@ -1508,10 +1514,15 @@ def minute_data(
     interpolate=False,
     debug=False,
     can_modify_history=False,
+    pad=True,
 ):
     """
     Turns data from HA into a hash of data indexed by minute with the data being the value
     Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
+
+    Backwards history is filled minute by minute between records. With pad (the default) the minutes of the window older
+    than the oldest record are filled too, with that record's value; pad=False leaves them out, so the result only covers
+    the history that exists.
     """
     if accumulate is None:
         accumulate = []
@@ -1804,6 +1815,7 @@ def minute_data(
 
         # Find the first value
         state = 0
+        first_index = None
         for minute in range(60 * 24 * days):
             if backwards:
                 rindex = 60 * 24 * days - minute - 1
@@ -1811,12 +1823,16 @@ def minute_data(
                 rindex = minute
             if rindex in mdata:
                 state = mdata[rindex]
+                first_index = rindex
                 break
 
         # Fill gaps in the middle
         for minute in range(60 * 24 * days):
             if backwards:
                 rindex = 60 * 24 * days - minute - 1
+                if not pad and (first_index is None or rindex > first_index):
+                    # Older than the oldest record: not padded, the history does not reach that far
+                    continue
             else:
                 rindex = minute
             state = mdata.get(rindex, state)

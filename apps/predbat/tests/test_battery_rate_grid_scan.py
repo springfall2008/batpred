@@ -30,7 +30,7 @@ def _check(name, condition, detail=""):
     return False
 
 
-def _install(my_predbat, block, temperature_default=15.0):
+def _install(my_predbat, block, temperature_default=15.0, block_start_hours=BLOCK_START_HOURS):
     """
     One-minute history for two days: idle, except `block`, a list of per-minute
     (status, rate W, battery power W, soc %, temperature, grid W) starting BLOCK_START_HOURS before now.
@@ -38,7 +38,7 @@ def _install(my_predbat, block, temperature_default=15.0):
     sensors = ["sensor.soc_percent", "number.charge_rate", "number.discharge_rate", "sensor.battery_power", TEMP_SENSOR, "predbat.status", "sensor.grid_power"]
     history = {name: [] for name in sensors}
     start = my_predbat.now_utc - timedelta(hours=48)
-    block_start = my_predbat.now_utc - timedelta(hours=BLOCK_START_HOURS)
+    block_start = my_predbat.now_utc - timedelta(hours=block_start_hours)
     minutes = 48 * 60
     for minute in range(minutes):
         stamp_time = start + timedelta(minutes=minute)
@@ -154,6 +154,30 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     calls.clear()
     inv.find_rate_grid_samples(False, days=2)
     failed |= _check("t1c short read tracked", calls and all(days == 2 and tracked is True for days, tracked in calls), calls)
+
+    print("Test 1d: asking for more days than the history holds - the padded days are neither evidence nor coverage")
+    my_predbat, inv = _make()
+    # Only 48 hours of history, and it starts in the middle of a full-rate charge: padding the 26 days before it with
+    # that first reading must not become one long fake run
+    _install(my_predbat, _charge(25), block_start_hours=48)
+    segments = _segments(inv.find_rate_grid_samples(False, days=28))
+    failed |= _check("t1d no fake run from padding", 0 < len(segments) <= 3, len(segments))
+    covered = inv.curve_scan_coverage.get("grid_charge")
+    failed |= _check("t1d coverage is the real history", covered is not None and covered >= charge_day(my_predbat.now_utc, 49 * 60, getattr(my_predbat, "local_tz", None)), covered)
+
+    print("Test 1e: minute_data and minute_data_state with pad=False stop at the oldest record")
+    from utils import minute_data, minute_data_state
+
+    now = my_predbat.now_utc
+    records = [{"state": "5", "last_updated": (now - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S%z")} for minutes in (2000, 1000, 10)]
+    padded, _ = minute_data(records, 5, now, "state", "last_updated", backwards=True)
+    unpadded, _ = minute_data(records, 5, now, "state", "last_updated", backwards=True, pad=False)
+    failed |= _check("t1e minute_data padded to the window", max(padded) == 5 * 24 * 60 - 1, max(padded))
+    failed |= _check("t1e minute_data unpadded stops at the oldest record", max(unpadded) == 2000 and len(unpadded) == 2001, (max(unpadded), len(unpadded)))
+    states = [{"state": "Charging", "last_updated": (now - timedelta(minutes=minutes)).strftime("%Y-%m-%dT%H:%M:%S%z")} for minutes in (2000, 10)]
+    failed |= _check("t1e minute_data_state padded to the window", max(minute_data_state(states, 5, now, "state", "last_updated")) == 5 * 24 * 60 - 1)
+    unpadded_state = minute_data_state(states, 5, now, "state", "last_updated", pad=False)
+    failed |= _check("t1e minute_data_state unpadded stops at the oldest record", max(unpadded_state) == 2000 and len(unpadded_state) == 2001, (max(unpadded_state), len(unpadded_state)))
 
     print("Test 2: a 14-minute run is too short")
     _, samples = _scan(_charge(14))

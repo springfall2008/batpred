@@ -127,6 +127,7 @@ class BatteryCurve:
                 scale=scale,
                 required_unit=required_unit,
                 can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
+                pad=False,  # only the history that exists: padding the window before it would count as evidence and as coverage
             )
             return values
 
@@ -175,7 +176,10 @@ class BatteryCurve:
             max_power = (inverter.battery_rate_max_discharge if discharge else inverter.battery_rate_max_charge) * MINUTE_WATT
             per_inverter.append({"soc_kwh": soc_kwh, "rate": to_minutes(rate_data[0], required_unit="W"), "battery_power": battery_power, "max_power": max_power})
 
-        status = minute_data_state(predbat_status_data[0], days, self.base.now_utc, "state", "last_updated")
+        # Not padded (nor the series above): a window longer than the history (28 days asked, Home Assistant keeping 10) must
+        # stop where the history does, or the padding would count as evidence and as coverage, and the per-day merge would
+        # remove stored days the scan never saw. min_len below is then the shortest real history.
+        status = minute_data_state(predbat_status_data[0], days, self.base.now_utc, "state", "last_updated", pad=False)
         for minute in status:
             if "," in status[minute]:
                 # If there are multiple statuses take the first one
@@ -274,6 +278,7 @@ class BatteryCurve:
             scale=1.0,
             required_unit="W",
             can_modify_history=True,  # history is not accessed after this point
+            pad=False,  # only the history that exists, so the scan stops where it does
         )
         if self.base.get_arg("grid_power_invert", False, index=self.id):
             grid_power = {minute: -power for minute, power in grid_power.items()}
@@ -302,6 +307,7 @@ class BatteryCurve:
             divide_by=1.0,
             scale=1.0,
             can_modify_history=True,  # history is not accessed after this point
+            pad=False,  # only the history that exists, so the scan stops where it does
         )
         if not any(value != 0 for value in temperature.values()):
             return None
@@ -338,6 +344,8 @@ class BatteryCurve:
             return None
         min_len = history["min_len"]
         temperature = self.load_battery_temperature_minutes(days)
+        if temperature is not None:
+            min_len = min(min_len, len(temperature))
         max_power = history["max_power"]
         soc_max = history["soc_max"]
         if max_power <= 0 or soc_max <= 0:
@@ -346,6 +354,8 @@ class BatteryCurve:
         min_power = max(max_power * BATTERY_RATE_GRID_MIN_POWER, 1.0)
         limited = set()
         grid_power = self.load_grid_power_minutes(days)
+        if grid_power is not None:
+            min_len = min(min_len, len(grid_power))
         if discharge:
             limited = self.find_export_limited_minutes(min_len, min_rate, history.get("export_limit_w"), days=days)
             if limited is None:
