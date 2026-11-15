@@ -51,10 +51,13 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 import ast
 import copy
 import math
+import re
 
 # Days of battery temperature history to fetch: predict_battery_temperature() looks back at most
 # 24 hours plus one step, so a longer window is only held in memory (about 3 MB at 22 days)
 BATTERY_TEMPERATURE_HISTORY_DAYS = 2
+# A battery temperature history reading exactly 0 for this long is taken as a dead sensor (GH#6193)
+BATTERY_TEMPERATURE_STUCK_MINUTES = 24 * 60
 
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
@@ -2843,6 +2846,43 @@ class Fetch:
         self.battery_temperature_history = self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
         self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
         self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
+        self.check_battery_temperature_history_stuck(self.battery_temperature_history)
+
+    def check_battery_temperature_history_stuck(self, battery_temperature_history):
+        """
+        Warn when the battery temperature history has read exactly 0 for the last day.
+
+        A battery really at 0 °C for a whole day is rare; a sensor that never reports is not. Predbat
+        predicts forward from this history, so a dead sensor plans at the 0 °C rates of the battery
+        temperature curves (GH#6193). GivTCP 3.6.13 renamed the battery stack sensor from
+        ..._bms_temperature to ..._battery_temperature, leaving the old name reading 0, so name it.
+        Only the symptom triggers the warning: on older GivTCP the old name is still the right one.
+
+        Only the most recent BATTERY_TEMPERATURE_STUCK_MINUTES are checked, so a sensor that read a real
+        temperature within the last day is not reported. minute_data pads the oldest sample back across the
+        whole window, so a sensor whose only history is 0 - however short - is reported at once: one that
+        has never reported a temperature is as dead as one that stopped.
+
+        The plan effect is only claimed when a temperature curve is set: without one a 0 °C reading changes
+        nothing. Reported once per sensor through record_status, so it reaches the status sensor without
+        repeating every cycle, and re-armed when the sensor reads a real temperature again.
+        """
+        recent = [battery_temperature_history.get(minute) for minute in range(BATTERY_TEMPERATURE_STUCK_MINUTES)]
+        if any(value is None or value != 0 for value in recent):
+            self.battery_temperature_stuck_warned = None
+            return
+        entity_id = self.get_arg("battery_temperature_history", "", indirect=False)
+        if self.battery_temperature_stuck_warned == str(entity_id):
+            return
+        self.battery_temperature_stuck_warned = str(entity_id)
+        if self.battery_temperature_charge_curve or self.battery_temperature_discharge_curve:
+            effect = "so Predbat is planning at the 0 °C rates of your battery temperature curves"
+        else:
+            effect = "which will cap charging and discharging if you set a battery temperature curve"
+        message = "Warn: battery_temperature_history sensor {} has read 0 for the last {} hours, {} - check the sensor in Home Assistant".format(entity_id, int(BATTERY_TEMPERATURE_STUCK_MINUTES / 60), effect)
+        if isinstance(entity_id, str) and re.search(r"_battery_stack_\d+_bms_temperature$", entity_id):
+            message += ". GivTCP 3.6.13 renamed this sensor, use {} instead".format(re.sub(r"_bms_temperature$", "_battery_temperature", entity_id))
+        self.record_status(message, had_errors=True)
 
     def predict_battery_temperature(self, battery_temperature_history, step):
         """

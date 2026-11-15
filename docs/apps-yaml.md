@@ -113,10 +113,10 @@ sets the configuration item **template** to the value `true` and **load_filter_t
 - Entries where the Predbat configuration item is set to point to a Home Assistant sensor name, e.g.:
 
 ```yaml
-  battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+  battery_temperature_history: sensor.givtcp_battery_stack_1_battery_temperature
 ```
 
-sets the configuration item **battery_temperature_history** to the Home Assistant sensor name `sensor.givtcp_battery_stack_1_bms_temperature`.  You should verify that the sensor name is correct and matches your HA setup.
+sets the configuration item **battery_temperature_history** to the Home Assistant sensor name `sensor.givtcp_battery_stack_1_battery_temperature`.  You should verify that the sensor name is correct and matches your HA setup.
 
 - Entries where the Predbat configuration item is a list of values, e.g.:
 
@@ -3054,6 +3054,12 @@ Your battery's maximum charge and discharge rate can be impacted by cold weather
 - Set **battery_temperature_charge_curve** to define the maximum charge rate in C which is a percentage of your battery capacity.
 - Set **battery_temperature_discharge_curve** to define the maximum discharge rate in C which is a percentage of your battery capacity.
 
+**GivTCP users:** GivTCP 3.6.13 renamed the battery stack temperature sensor from `sensor.givtcp_battery_stack_1_bms_temperature`
+to `sensor.givtcp_battery_stack_1_battery_temperature`, and the old sensor now reads 0. If your `apps.yaml` still uses the old name,
+Predbat predicts your battery at 0 °C and plans charging and discharging at the 0 °C rates in your temperature curves.
+Check the sensor in Home Assistant and update **battery_temperature** and **battery_temperature_history** to the new name.
+Predbat warns once (in the log and on its status) when the temperature history has read 0 for the last 24 hours.
+
 An example for GivEnergy Gen2 battery is below.
 
 *Note* You must adjust the curve for your system.
@@ -3064,7 +3070,7 @@ gaps in the curve above 20 will use 20 degrees, and gaps below 0 will use 0 degr
   # Specific in C which is a multiple of the battery capacity
   # e.g. 0.33 C is 33% of the battery capacity
   # values unspecified will be assumed to be 1.0 hence rate is capped by the max charge rate
-  battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+  battery_temperature_history: sensor.givtcp_battery_stack_1_battery_temperature
   battery_temperature_charge_curve:
     20: 0.50
     19: 0.33
