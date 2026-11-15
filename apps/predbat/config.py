@@ -508,6 +508,18 @@ CONFIG_ITEMS = [
         "default": 0,
     },
     {
+        "name": "metric_battery_grid_charge_cost",
+        "friendly_name": "Metric Battery Grid Charge Cost",
+        "type": "input_number",
+        "min": 0,
+        "max": 50.0,
+        "step": 0.1,
+        "unit": "p/kWh",
+        "icon": "mdi:currency-usd",
+        "enable": "expert_mode",
+        "default": 0,
+    },
+    {
         "name": "metric_battery_value_scaling",
         "friendly_name": "Metric Battery Value Scaling",
         "type": "input_number",

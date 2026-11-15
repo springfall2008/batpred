@@ -191,6 +191,8 @@ class Prediction(PredictionBatch):
             self.battery_rate_max_scaling_discharge = base.battery_rate_max_scaling_discharge
             self.battery_loss = base.battery_loss
             self.battery_loss_discharge = base.battery_loss_discharge
+            # getattr: a replayed debug dump from before this setting existed has no such attribute
+            self.metric_battery_grid_charge_cost = getattr(base, "metric_battery_grid_charge_cost", 0.0)
             self.best_soc_keep = base.best_soc_keep
             self.best_soc_keep_weight = base.best_soc_keep_weight
             self.best_soc_min = base.best_soc_min
@@ -748,6 +750,7 @@ class Prediction(PredictionBatch):
         reserve_percent = calc_percent_limit(reserve, soc_max)
         battery_loss = self.battery_loss
         battery_loss_discharge = self.battery_loss_discharge
+        battery_grid_charge_cost = self.metric_battery_grid_charge_cost
         battery_temperature_prediction = self.battery_temperature_prediction
         all_active_keep = self.all_active_keep
         all_active_keep_max = self.all_active_keep_max
@@ -1492,6 +1495,13 @@ class Prediction(PredictionBatch):
                 if car_gone_kwh:
                     # The car's share of the import is paid at its own rate, not the worst-case rate
                     metric -= min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh)
+                if battery_grid_charge_cost:
+                    # Extra cost on grid energy that ends up in the battery, e.g. generation subsidy lost when a
+                    # generation meter counts grid charging as negative generation. Only the import that covers
+                    # the battery's AC charge demand counts: PV serves the house first, a gone car is met by the grid.
+                    grid_to_battery = min(diff - car_gone_kwh, -(battery_draw + pv_dc) * inverter_loss_recp)
+                    if grid_to_battery > 0:
+                        metric += battery_grid_charge_cost * grid_to_battery
                 grid_state = "<"
             else:
                 # Export
