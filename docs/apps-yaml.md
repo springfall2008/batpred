@@ -2890,6 +2890,7 @@ How the grids are learned:
   Values are capped at 1.2, as some systems run a little above their rated rate.
 - A learned grid is used once it has at least 20 SoC x temperature cells from at least 3 different days. Until then the curves from `apps.yaml` are used, as they are wherever the evidence does not reach.
   Colder than any evidence, the coldest learned row is used, capped by your `battery_temperature_charge_curve` (or discharge curve) if you set one; Predbat never guesses a slower rate than it has seen.
+  A grid learned without temperature (no **battery_temperature_history**) is capped by your temperature curve at every temperature.
 - With more than one inverter the combined battery is learned from, as Predbat plans them as one.
 - If you have set **input_number.battery_rate_max_scaling** (or **_discharge**), it is divided out of the evidence, as Predbat applies it on top of the grid.
 
@@ -2897,7 +2898,7 @@ How the plan uses them:
 
 - For each step of the plan the grid row for that step's forecast battery temperature gives the battery's ceiling at each SoC, in kW (the grid value times your rated rate). A forecast temperature of exactly 0 is treated as missing and uses the 20 degree row of a learned grid.
 - On a path whose maximum is at or below your rated rate (AC charging, forced export) the ceiling is the same number of kW whichever path is used, so a cold battery limited to 1 kW is planned at 1 kW whether charging or exporting.
-  On a path above your rated rate (a hybrid inverter's DC charging from PV) the grid scales with that path instead, as Predbat only ever sees the battery up to its rated rate.
+  On a path above your rated rate (a hybrid inverter's DC charging from PV) a learned grid scales with that path instead, as Predbat only ever sees the battery up to its rated rate; a temperature curve you set in `apps.yaml` stays an absolute limit there too.
   Before the rate grids, a `battery_charge_power_curve` or `battery_discharge_power_curve` was always a fraction of whichever maximum the path used, so on a path whose maximum differs from the rated rate the planned rate can now differ slightly.
 - A rate below the ceiling is never scaled down.
 

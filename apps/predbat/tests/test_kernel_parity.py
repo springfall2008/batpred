@@ -558,6 +558,18 @@ def run_edge_case_tests(my_predbat):
         ),
         ("charge_freeze", {"soc_kw": 50.0, "reserve": 4.0, "set_charge_freeze": True}, [4.0], full_window, [], [], 1.0, 0.5, forecast_minutes),
         ("charge_hybrid_pv", {"inverter_hybrid": True, "battery_rate_max_charge_dc": 2 / 60.0}, [100.0], full_window, [], [], 3.0, 0.5, forecast_minutes),
+        # A manual cold cap stays absolute on a hybrid's DC path above the rated rate (entry 102 of the curve row)
+        (
+            "rate_grid_hybrid_dc_cold_cap",
+            {"inverter_hybrid": True, "battery_rate_max_charge_dc": 6 / 60.0, "battery_temperature_charge_curve": {5: 0.02, 20: 1.0}, "battery_temperature": 5, "battery_temperature_prediction": {}},
+            [100.0],
+            full_window,
+            [],
+            [],
+            5.0,
+            0.5,
+            forecast_minutes,
+        ),
         ("export_full", {"soc_kw": 100.0}, [], [], half_window, [0.0], 0, 0.5, forecast_minutes),
         ("export_freeze", {"soc_kw": 100.0, "set_export_freeze": True}, [], [], half_window, [99.0], 1.0, 0.5, forecast_minutes),
         ("export_low_power", {"soc_kw": 100.0, "set_export_low_power": True}, [], [], half_window, [49.5], 0, 0.5, forecast_minutes),

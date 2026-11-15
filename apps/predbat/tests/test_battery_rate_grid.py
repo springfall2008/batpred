@@ -159,12 +159,30 @@ def test_combine_and_lookup():
     absolute = rate_grid_curve(engine, 15, rated=0.1)
     failed = check(failed, abs(absolute[30] - 0.1 * learned["rows"][5][30]) < 1e-12, "rated scales the row to kW/minute")
     failed = check(failed, combine_rate_grid(None, manual) is manual, "no learned grid: the manual grid is used")
+    # A learned grid with no temperature (no battery_temperature_history) is still capped by a manual temperature curve
+    flat = fit_rate_grid({day: [[row[0], None, row[2]] for row in rows] for day, rows in taper_samples([20]).items()}, TODAY, False, None)
+    engine = combine_rate_grid(flat, manual)
+    failed = check(
+        failed,
+        abs(rate_grid_curve(engine, 5)[30] - 0.06) < 1e-9 and rate_grid_curve(engine, 25)[30] == flat["rows"][0][30],
+        "no-temperature grid: the manual cold cap applies, got {} / {}".format(rate_grid_curve(engine, 5)[30], rate_grid_curve(engine, 25)[30]),
+    )
+    # Below the evidence only the manual temperature cap applies, not the manual SoC curve
+    soc_manual = manual_rate_grid({50: 0.2}, {5: 0.06, 20: 1.0}, 10.0, 1.0 / 6)
+    engine = combine_rate_grid(learned, soc_manual)
+    failed = check(failed, rate_grid_curve(engine, 8)[50] == learned["rows"][0][50], "below the evidence the manual SoC curve does not apply, got {}".format(rate_grid_curve(engine, 8)[50]))
+    # An exact 0 with a learned grid also takes the manual exact-0 cap
+    zero_manual = manual_rate_grid({}, {0: 0.0, 20: 1.0}, 10.0, 1.0 / 6)
+    failed = check(failed, rate_grid_curve(combine_rate_grid(learned, zero_manual), 0)[30] == 0.0, "exact 0: the manual 0 entry caps a learned grid")
+    # The absolute cap rides at entry 102 (kW per minute): set below the evidence, none inside it
+    engine = combine_rate_grid(learned, manual)
+    failed = check(failed, abs(rate_grid_curve(engine, 5, rated=1.0 / 6)[102] - 0.01) < 1e-9 and rate_grid_curve(engine, 15, rated=1.0 / 6)[102] == float("inf"), "absolute cap entry")
     # Warmer than the evidence the warmest learned row is used as it is: a manual grid only caps the cold side, so the
     # rule (never faster when colder) still holds across the edge
     above_rated = {"temp_low": 10, "rows": [[0.5] * 101, [1.1] * 101], "zero_row": [1.1] * 101, "cells": 30, "days": 3, "segments": 30, "temp_range": [10, 11]}
     engine = combine_rate_grid(above_rated, manual_rate_grid({}, {}, 100.0, 0.1))
     failed = check(failed, rate_grid_curve(engine, 25)[:101] == (1.1,) * 101, "warmer than the evidence: the warmest learned row, got {}".format(rate_grid_curve(engine, 25)[50]))
-    failed = check(failed, rate_grid_curve(None, 12, rated=0.2) == (0.2,) * 102, "no grid at all: full rated rate")
+    failed = check(failed, rate_grid_curve(None, 12, rated=0.2)[:102] == (0.2,) * 102, "no grid at all: full rated rate")
     return failed
 
 

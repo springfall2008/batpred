@@ -63,7 +63,7 @@
 // rounded to 4dp (round4_fast), and Python no longer rounds them. The layout is unchanged, but a binary
 // from before this returns them unrounded, so it must be refused rather than read.
 #define PK_ABI_VERSION 12
-#define PK_CURVE_WIDTH 102 // a rate grid curve row: 101 SoC percents, then the rated rate
+#define PK_CURVE_WIDTH 103 // a rate grid curve row: 101 SoC percents, the rated rate, then the absolute temperature cap
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -81,7 +81,7 @@
 // Parity 20: below a manual_soc or alert floor the keep penalty's import rate, and above a manual_soc_max
 // ceiling its export rate, is at least PK_KEEP_TARGET_MIN_RATE, so a target in a free or negative-price
 // slot still costs something to miss (#5162).
-#define PK_PARITY_REVISION 22
+#define PK_PARITY_REVISION 23
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_KEEP_TARGET_MIN_RATE 1.0 // const.py KEEP_TARGET_MIN_RATE
@@ -224,8 +224,8 @@ struct PkContext {
     const int32_t *discharge_curve_row; // per step, the row of discharge_curves
     const int32_t *io_flag;           // io_adjusted flag per step
     const double *io_credit;          // bird-in-hand credit, pence per kWh stored, per step
-    const double *charge_curves;      // rows x 102: battery charge ceiling (kW/min) by SoC percent then the rated rate, one row per distinct temperature (rate grid)
-    const double *discharge_curves;   // rows x 102: battery discharge ceiling by SoC percent then the rated rate
+    const double *charge_curves;      // rows x 103: battery charge ceiling (kW/min) by SoC percent, the rated rate and the absolute cap, one row per distinct temperature (rate grid)
+    const double *discharge_curves;   // rows x 103: battery discharge ceiling by SoC percent, the rated rate and the absolute cap
     const double *carbon;             // carbon intensity per step
     const double *gas_rate;           // gas rate per step, pre-scaled by iboost_gas_scale
     const double *iboost_plan_load;   // iBoost plan load kW per step (in_iboost_slot)
@@ -482,12 +482,13 @@ inline double get_total_inverted(double battery_draw, double pv_dc, double pv_ac
 // curve_row is the step's battery ceiling by SoC percent in kW/min (an absolute rate grid row); the path's own maximum
 // is a separate limit.
 // Entry 101 of a row is the rated rate the row was scaled from: at or below it the ceiling is absolute, above it (a
-// hybrid's DC charge) the row scales with the path - mirrors utils.py rate_curve_ceiling().
+// hybrid's DC charge) the row scales with the path under the absolute temperature cap in entry 102 - mirrors utils.py
+// rate_curve_ceiling().
 inline double rate_curve_pct(int32_t soc_percent, double rate_setting, double rate_max, const double *curve_row, double rate_min)
 {
     soc_percent = std::max(std::min(soc_percent, int32_t(100)), int32_t(0));
     const double rated = curve_row[101];
-    const double max_rate = (rate_max <= rated || rated <= 0.0) ? std::min(rate_max, curve_row[soc_percent]) : curve_row[soc_percent] * (rate_max / rated);
+    const double max_rate = (rate_max <= rated || rated <= 0.0) ? std::min(rate_max, curve_row[soc_percent]) : std::min(curve_row[soc_percent] * (rate_max / rated), curve_row[102]);
     return std::max(std::min(rate_setting, max_rate), rate_min);
 }
 

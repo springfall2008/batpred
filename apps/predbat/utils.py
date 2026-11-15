@@ -2635,9 +2635,10 @@ def rate_curve_ceiling(soc, soc_max, rate_max, rate_curve):
     The highest rate at this SoC on a path whose own maximum is rate_max.
 
     rate_curve is battery_rate_grid.rate_grid_curve(): the battery's ceiling by SoC percent in kW per minute (101
-    entries), then the rated rate it was scaled from. On a path at or below the rated rate (AC charge, export) the
-    ceiling is absolute - a cold battery's limit is the same kW whichever path asks. History only measures the battery
-    up to its rated rate, so on a path above it (a hybrid's DC charge from PV) the curve scales with the path instead.
+    entries), then the rated rate it was scaled from, then the absolute temperature cap. On a path at or below the rated
+    rate (AC charge, export) the ceiling is absolute - a cold battery's limit is the same kW whichever path asks. History
+    only measures the battery up to its rated rate, so on a path above it (a hybrid's DC charge from PV) the curve scales
+    with the path instead, under the absolute temperature cap (a manual cold curve stays in kW).
     """
     if not rate_curve:
         return rate_max
@@ -2645,7 +2646,7 @@ def rate_curve_ceiling(soc, soc_max, rate_max, rate_curve):
     rated = rate_curve[101]
     if rate_max <= rated or rated <= 0:
         return min(rate_max, rate_curve[soc_percent])
-    return rate_curve[soc_percent] * (rate_max / rated)
+    return min(rate_curve[soc_percent] * (rate_max / rated), rate_curve[102])
 
 
 @lru_cache(maxsize=64)

@@ -55,9 +55,22 @@ def grid_row(grid, degree):
     return rows[min(max(degree - grid["temp_low"], 0), len(rows) - 1)]
 
 
+def grid_cap(grid, degree):
+    """The absolute temperature cap a grid carries for a whole degree (fraction of rated), or None when it has none."""
+    caps = grid.get("caps") if grid else None
+    if not caps:
+        return None
+    if grid["temp_low"] is None:
+        return caps[0]
+    return caps[min(max(degree - grid["temp_low"], 0), len(caps) - 1)]
+
+
 def manual_rate_grid(soc_curve, temperature_curve, soc_max, max_rate):
     """
     The grid that reproduces the manual curves: min(SoC curve, temperature cap / max_rate) for every cell.
+
+    The temperature caps are also kept on their own ("caps" per row, "zero_cap" for an exact 0 reading), as fractions of
+    max_rate: they cap a learned grid where it has no evidence, and give the absolute cap on a path above the rated rate.
 
     The temperature cap is utils.find_battery_temperature_cap, so its rules carry over unchanged (including its 1C cap
     when no temperature curve is set). With no temperature curve the grid has a single row.
@@ -70,17 +83,22 @@ def manual_rate_grid(soc_curve, temperature_curve, soc_max, max_rate):
     """
     column = [get_curve_value(soc_curve or {}, percent, 1.0) for percent in range(COLUMNS)]
 
-    def row_at(temperature):
-        """Row for one temperature."""
+    def cap_at(temperature):
+        """The temperature cap at one temperature, as a fraction of max_rate."""
         cap = find_battery_temperature_cap(temperature, temperature_curve or {}, soc_max, float("inf"))
-        fraction = cap / max_rate if max_rate > 0 else 1.0
-        return [min(value, fraction) for value in column]
+        return cap / max_rate if max_rate > 0 else 1.0
+
+    def row_at(cap):
+        """Row under one temperature cap."""
+        return [min(value, cap) for value in column]
 
     if not temperature_curve:
-        row = row_at(BATTERY_RATE_GRID_UNKNOWN_TEMP)
-        return {"temp_low": None, "rows": [row], "zero_row": row}
-    rows = [row_at(degree) for degree in range(BATTERY_RATE_GRID_TEMP_MIN, BATTERY_RATE_GRID_TEMP_MAX + 1)]
-    return {"temp_low": BATTERY_RATE_GRID_TEMP_MIN, "rows": rows, "zero_row": row_at(0)}
+        cap = cap_at(BATTERY_RATE_GRID_UNKNOWN_TEMP)
+        row = row_at(cap)
+        return {"temp_low": None, "rows": [row], "zero_row": row, "caps": [cap], "zero_cap": cap}
+    caps = [cap_at(degree) for degree in range(BATTERY_RATE_GRID_TEMP_MIN, BATTERY_RATE_GRID_TEMP_MAX + 1)]
+    zero_cap = cap_at(0)
+    return {"temp_low": BATTERY_RATE_GRID_TEMP_MIN, "rows": [row_at(cap) for cap in caps], "zero_row": row_at(zero_cap), "caps": caps, "zero_cap": zero_cap}
 
 
 def pava_non_increasing(values, weights):
@@ -243,48 +261,64 @@ def fit_rate_grid(samples, today, discharge, prior):
 
 def combine_rate_grid(learned, manual):
     """
-    The engine grid: the learned grid where there is evidence, the manual grid beyond it.
+    The engine grid: the learned grid where there is evidence, the manual temperature cap beyond it.
 
-    Inside the learned temperature range the learned rows are used as they are. Colder or warmer, the nearest learned row
-    is used (never extrapolated); colder, it is also capped by the manual row at that temperature when there is a manual
-    grid, so a manual cold curve still applies below the evidence. Warmer is not capped: that would make a warmer row
-    slower than the warmest learned one. A learned
-    grid with no temperature (one row) is used for every temperature. An exact 0 reading (missing) uses the learned
-    BATTERY_RATE_GRID_UNKNOWN_TEMP row. With nothing learned, the manual grid as it is.
+    Inside the learned temperature range the learned rows are used as they are. Colder, the coldest learned row is used
+    (never extrapolated), capped by the manual temperature cap at that degree, so a manual cold curve still applies below
+    the evidence (the manual SoC curve does not: the learned rows already carry the SoC taper). Warmer, the warmest
+    learned row is used as it is: capping it would make a warmer row slower than the warmest learned one. A learned grid
+    with no temperature (one row) is capped by the manual temperature cap at every degree. An exact 0 reading (missing)
+    uses the learned BATTERY_RATE_GRID_UNKNOWN_TEMP row under the manual exact-0 cap. With nothing learned, the manual
+    grid as it is. The caps applied are kept ("caps", "zero_cap") for paths above the rated rate (rate_grid_curve).
     """
     if learned is None:
         return manual
+    has_manual_temperature = manual is not None and manual.get("temp_low") is not None
+    zero_cap = manual.get("zero_cap") if manual else None
+
+    def capped(row, cap):
+        """A row under a cap (None: no cap)."""
+        return row if cap is None else [min(value, cap) for value in row]
+
     if learned["temp_low"] is None:
         row = learned["rows"][0]
-        return {"temp_low": None, "rows": [row], "zero_row": row}
+        if not has_manual_temperature:
+            cap = grid_cap(manual, BATTERY_RATE_GRID_UNKNOWN_TEMP)
+            return {"temp_low": None, "rows": [capped(row, cap)], "zero_row": capped(row, cap), "caps": [cap], "zero_cap": cap}
+        caps = [grid_cap(manual, degree) for degree in range(BATTERY_RATE_GRID_TEMP_MIN, BATTERY_RATE_GRID_TEMP_MAX + 1)]
+        return {"temp_low": BATTERY_RATE_GRID_TEMP_MIN, "rows": [capped(row, cap) for cap in caps], "zero_row": capped(row, zero_cap), "caps": caps, "zero_cap": zero_cap}
     low = learned["temp_low"]
-    high = low + len(learned["rows"]) - 1
-    rows = []
+    rows, caps = [], []
     for degree in range(BATTERY_RATE_GRID_TEMP_MIN, BATTERY_RATE_GRID_TEMP_MAX + 1):
-        row = grid_row(learned, degree)
-        if manual is not None and degree < low:
-            row = [min(a, b) for a, b in zip(row, grid_row(manual, degree))]
-        rows.append(row)
-    return {"temp_low": BATTERY_RATE_GRID_TEMP_MIN, "rows": rows, "zero_row": grid_row(learned, BATTERY_RATE_GRID_UNKNOWN_TEMP)}
+        cap = grid_cap(manual, degree) if degree < low else None
+        rows.append(capped(grid_row(learned, degree), cap))
+        caps.append(cap)
+    return {"temp_low": BATTERY_RATE_GRID_TEMP_MIN, "rows": rows, "zero_row": capped(grid_row(learned, BATTERY_RATE_GRID_UNKNOWN_TEMP), zero_cap), "caps": caps, "zero_cap": zero_cap}
 
 
 def rate_grid_curve(grid, temperature, rated=1.0):
     """
-    The SoC curve for one temperature: 101 values, rated x the grid value, then rated itself as entry 101.
+    The SoC curve for one temperature: 101 values (rated x the grid value), then rated itself (entry 101), then the
+    absolute temperature cap rated x the grid's cap at that temperature (entry 102, infinite when it has none).
 
-    With rated as the battery's rated rate (kW per minute) the values are the battery's ceiling in kW per minute, and the
-    last entry lets utils.rate_curve_ceiling() scale it for a path whose maximum is above the rated rate. With no grid it
-    is the rated rate everywhere. An exact 0 reading uses the grid's zero_row.
+    With rated as the battery's rated rate (kW per minute) the values are the battery's ceiling in kW per minute, and
+    entries 101 and 102 let utils.rate_curve_ceiling() scale it for a path whose maximum is above the rated rate while
+    a manual temperature cap stays absolute. With no grid it is the rated rate everywhere. An exact 0 reading uses the
+    grid's zero_row.
     """
     if grid is None:
-        return (rated,) * COLUMNS + (rated,)
+        return (rated,) * COLUMNS + (rated, float("inf"))
     if grid["temp_low"] is None:
         row = grid["rows"][0]
+        cap = grid_cap(grid, 0)
     elif temperature == 0:
         row = grid["zero_row"]
+        cap = grid.get("zero_cap")
     else:
-        row = grid_row(grid, grid_temperature_index(temperature))
-    return tuple(value * rated for value in row) + (rated,)
+        degree = grid_temperature_index(temperature)
+        row = grid_row(grid, degree)
+        cap = grid_cap(grid, degree)
+    return tuple(value * rated for value in row) + (rated, float("inf") if cap is None else cap * rated)
 
 
 def rate_grid_table(grid, soc_step=10, temp_step=5):

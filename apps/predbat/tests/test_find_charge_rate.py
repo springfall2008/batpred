@@ -279,8 +279,8 @@ def test_rate_grid_ceiling(my_predbat):
     rated = 5000 / MINUTE_WATT
     cold = manual_rate_grid({}, {5: 0.1, 20: 1.0}, 10.0, rated)  # 0.1C of 10 kWh = 1 kW at 5 degrees
     curve = rate_grid_curve(cold, 5, rated=rated)
-    # At or below the rated rate the ceiling is absolute; a DC path above it scales (history only measures up to the rated rate)
-    for name, rate_max, expect in (("AC", rated, 1000), ("DC 4kW", 4000 / MINUTE_WATT, 1000), ("DC 7kW", 7000 / MINUTE_WATT, 1400)):
+    # A manual cold cap is absolute on every path; a learned grid on a DC path above the rated rate scales instead (history only measures up to the rated rate)
+    for name, rate_max, expect in (("AC", rated, 1000), ("DC 4kW", 4000 / MINUTE_WATT, 1000), ("DC 7kW", 7000 / MINUTE_WATT, 1000)):
         value = get_charge_rate_curve(5.0, rate_max, 10.0, rate_max, curve, 0) * MINUTE_WATT
         if abs(value - expect) > 1e-6:
             print("**** ERROR: {} charge ceiling should be {}W, got {} ****".format(name, expect, value))
@@ -292,6 +292,11 @@ def test_rate_grid_ceiling(my_predbat):
     small = get_charge_rate_curve(5.0, 200 / MINUTE_WATT, 10.0, rated, curve, 0) * MINUTE_WATT
     if abs(small - 200) > 1e-6:
         print("**** ERROR: a 200W request should stay 200W, got {} ****".format(small))
+        failed = 1
+    learned = {"temp_low": 5, "rows": [[0.2] * 101], "zero_row": [0.2] * 101}
+    scaled = get_charge_rate_curve(5.0, 7000 / MINUTE_WATT, 10.0, 7000 / MINUTE_WATT, rate_grid_curve(learned, 5, rated=rated), 0) * MINUTE_WATT
+    if abs(scaled - 1400) > 1e-6:
+        print("**** ERROR: a learned 0.2 row on a 7000W DC path above the 5000W rated rate scales to 1400W, got {} ****".format(scaled))
         failed = 1
     warm = get_charge_rate_curve(5.0, 7000 / MINUTE_WATT, 10.0, 7000 / MINUTE_WATT, rate_grid_curve(cold, 25, rated=rated), 0) * MINUTE_WATT
     if abs(warm - 7000) > 1e-6:
