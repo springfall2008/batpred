@@ -100,10 +100,27 @@ from utils import (
     find_battery_temperature_cap,
 )
 from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
-from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES, BATTERY_TEMPERATURE_CURVE_TEMP_MAX
+from const import (
+    TIME_FORMAT,
+    TIME_FORMAT_DAILY,
+    TIME_FORMAT_HA,
+    MANUAL_RATE_MAX_MINUTES,
+    MANUAL_TIME_MAX_MINUTES,
+    BATTERY_POWER_CURVE_HALF_LIFE_DAYS,
+    BATTERY_POWER_CURVE_MIN_DAYS,
+    BATTERY_POWER_CURVE_MIN_MINUTES,
+    BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS,
+    BATTERY_TEMPERATURE_CURVE_MIN_DAYS,
+    BATTERY_TEMPERATURE_CURVE_MIN_MINUTES,
+    BATTERY_TEMPERATURE_CURVE_SOC_MAX,
+    BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
+)
+
+CURVE_EVIDENCE_RECENT_DAYS = 14  # Curves chart: evidence days up to this old are drawn solid, older ones faded
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from battery_curve import charge_day, power_curve_evidence, temperature_curve_evidence
 from compare import check_compare_list
 import debug_history
 from web_annual import AnnualPage
@@ -4007,12 +4024,37 @@ chart.render();
                     continue
             return result
 
+        def evidence_series(label, points, x_key, scale, color, faded):
+            """The evidence as up to three point series: recent days, older days, and points with too little evidence to be learned."""
+            groups = (
+                ("{} evidence, last {} days".format(label, CURVE_EVIDENCE_RECENT_DAYS), lambda point: point["enough"] and point["age_days"] <= CURVE_EVIDENCE_RECENT_DAYS, color),
+                ("{} evidence, older".format(label), lambda point: point["enough"] and point["age_days"] > CURVE_EVIDENCE_RECENT_DAYS, faded),
+                ("{} evidence, too little to learn".format(label), lambda point: not point["enough"], "rgba(150,150,150,0.5)"),
+            )
+            series = []
+            for name, keep, group_color in groups:
+                data = [{"x": point[x_key], "y": round(point["value"] * scale, 3)} for point in points if keep(point)]
+                if data:
+                    series.append({"name": name, "data": data, "color": group_color, "type": "scatter", "stroke_width": 0, "markers": 4})
+            return series
+
         # SoC curves: the plan reads the value for the whole SoC percent, 1.0 where the curve does not set one
         power_series = []
-        for label, curve, color in (("Charge", self.base.battery_charge_power_curve, "#3291a8"), ("Discharge", self.base.battery_discharge_power_curve, "#f5a442")):
+        evidence = []
+        power_today = datetime.strptime(charge_day(self.now_utc, 0, getattr(self.base, "local_tz", None)), "%Y-%m-%d").date()
+        power_samples = getattr(self.base, "battery_power_curve_samples", {}) or {}
+        for label, kind, curve, color, faded, scaling in (
+            ("Charge", "charge", self.base.battery_charge_power_curve, "#3291a8", "rgba(50,145,168,0.35)", getattr(self.base, "battery_rate_max_scaling", 1.0)),
+            ("Discharge", "discharge", self.base.battery_discharge_power_curve, "#f5a442", "rgba(245,164,66,0.35)", getattr(self.base, "battery_rate_max_scaling_discharge", 1.0)),
+        ):
             curve = int_keys(curve)
             power_series.append({"name": "{} curve".format(label), "data": [{"x": soc, "y": curve.get(soc, 1.0)} for soc in range(0, 101)], "color": color, "stroke_width": 3})
-        text += self.render_curve_chart(power_series, "State of charge (%)", "Fraction of the maximum rate", "Battery charge and discharge power curves", "chart_power_curve", 0, 100, y_min=0)
+            evidence += evidence_series(label, power_curve_evidence(power_samples.get(kind, {}), power_today, scaling), "soc", 1.0, color, faded)
+        text += self.render_curve_chart(power_series + evidence, "State of charge (%)", "Fraction of the maximum rate", "Battery charge and discharge power curves", "chart_power_curve", 0, 100, y_min=0)
+        if evidence:
+            text += "<p>Each dot is one day's average rate at that SoC, from full-rate charges (or exports), on the curve's scale. Faded dots are over {} days old and count for less (half every {} days); grey ones have too little evidence (under {} days or {} minutes) to be learned.</p>\n".format(
+                CURVE_EVIDENCE_RECENT_DAYS, BATTERY_POWER_CURVE_HALF_LIFE_DAYS, BATTERY_POWER_CURVE_MIN_DAYS, BATTERY_POWER_CURVE_MIN_MINUTES
+            )
 
         # Temperature curves: the curve values are a rate cap as a fraction of the battery capacity per hour (C), shown in kW
         # when the capacity is known; find_battery_temperature_cap with a capacity of 60 and no rate limit returns the curve value itself
@@ -4031,6 +4073,15 @@ chart.render();
             temperature_series.append({"name": "Charge cap configured", "data": [{"x": t, "y": round(find_battery_temperature_cap(t, configured, 60.0, 1e9) * scale, 3)} for t in temperatures], "color": "#9b59b6", "stroke_width": 2, "dash": 6})
         if learned:
             temperature_series.append({"name": "Learned", "data": [{"x": t, "y": round(learned[t] * scale, 3)} for t in sorted(learned)], "color": "#eb2323", "stroke_width": 0, "markers": 5})
+        temperature_evidence = evidence_series(
+            "Charge",
+            temperature_curve_evidence(getattr(self.base, "battery_temperature_samples", {}) or {}, self.now_utc.date(), getattr(self.base, "battery_rate_max_scaling", 1.0)),
+            "temperature",
+            scale,
+            "#15eb8b",
+            "rgba(21,235,139,0.35)",
+        )
+        temperature_series += temperature_evidence
         if discharge:
             temperature_series.append({"name": "Discharge cap configured", "data": [{"x": t, "y": round(find_battery_temperature_cap(t, discharge, 60.0, 1e9) * scale, 3)} for t in temperatures], "color": "#f5a442", "stroke_width": 2})
         rate_max_charge = float(getattr(self.base, "battery_rate_max_charge", 0) or 0) * 60.0
@@ -4039,6 +4090,10 @@ chart.render();
         if temperature_series:
             text += self.render_curve_chart(temperature_series, "Battery temperature (C)", "Rate cap ({})".format(unit), "Battery temperature curves", "chart_temperature_curve", temperatures[0], temperatures[-1], y_min=0)
             text += "<p>The plan charges at the lower of the SoC curve rate and the temperature cap. A degree the curve does not set uses the 20 degree value above zero (then no cap) and the 0 degree value below.</p>\n"
+            if temperature_evidence:
+                text += "<p>Each dot is one day's average charge rate at that temperature, from full-rate charges below {}% SoC. Faded dots are over {} days old and count for less (half every {} days); grey ones have too little evidence (under {} minutes, or fewer than {} days) to be learned.</p>\n".format(
+                    BATTERY_TEMPERATURE_CURVE_SOC_MAX, CURVE_EVIDENCE_RECENT_DAYS, BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS, BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, BATTERY_TEMPERATURE_CURVE_MIN_DAYS
+                )
         else:
             text += "<p>No battery temperature curve is set or learned - set <code>battery_temperature_charge_curve</code> or turn on <code>battery_temperature_charge_curve_auto</code> in apps.yaml.</p>\n"
         return text
@@ -4047,10 +4102,10 @@ chart.render();
         """
         Render a line chart over a numeric x axis (SoC or temperature rather than time).
 
-        series_data is a list of dicts: {"name", "data": [{"x": number, "y": number}, ...], "color", "stroke_width", "dash", "markers"}.
-        A series with stroke_width 0 and markers is drawn as points only.
+        series_data is a list of dicts: {"name", "data": [{"x": number, "y": number}, ...], "color", "type", "stroke_width", "dash", "markers"}.
+        type is "line" (the default) or "scatter"; a series with stroke_width 0 and markers is drawn as points only.
         """
-        series = [{"name": entry["name"], "data": entry["data"], "color": entry.get("color", "#3291a8")} for entry in series_data]
+        series = [{"name": entry["name"], "type": entry.get("type", "line"), "data": entry["data"], "color": entry.get("color", "#3291a8")} for entry in series_data]
         widths = [entry.get("stroke_width", 2) for entry in series_data]
         dashes = [entry.get("dash", 0) for entry in series_data]
         markers = [entry.get("markers", 0) for entry in series_data]

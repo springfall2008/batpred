@@ -110,6 +110,14 @@ class ActiveTestInverter:
     def find_charge_curve(self, discharge=False):
         return None
 
+    def find_charge_curve_samples(self, discharge=False):
+        """No curve history (the curve learners gather evidence every cycle, auto mode or not)."""
+        return None
+
+    def find_battery_temperature_samples(self):
+        """No temperature history."""
+        return None
+
     def get_current_charge_rate(self):
         return self.charge_rate
 

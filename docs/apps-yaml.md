@@ -3062,6 +3062,12 @@ The attributes give:
 The temperature sensor also has **learned** (the degrees learned), **learned_minutes** (the minutes behind each) and **configured** (your `battery_temperature_charge_curve`).
 
 The **Curves** chart in the web interface (Charts, then Curves) shows the same status, the charge and discharge power curves against SoC on one chart, and the temperature curves on a second.
+Behind each curve it plots the evidence Predbat has gathered from your history as dots, one per day: the average rate seen at that SoC (or temperature) on full-rate charges and exports, on the same scale as the curve.
+Faded dots are older and count for less; grey dots have too little evidence behind them to be learned.
+
+The evidence is gathered even when the curve is not learned automatically (once a day, rather than every few hours), so you can check a curve you have set in `apps.yaml` against how your battery really behaves,
+and turning auto mode on later starts from weeks of evidence. With auto mode off the evidence is never used by the plan, and a curve learned earlier is kept in storage unchanged.
+Temperature evidence needs **battery_temperature_history** set.
 
 ## Battery temperature curves
 
@@ -3124,7 +3130,7 @@ When **battery_temperature_charge_curve_auto** is True, Predbat looks back over 
 - the battery was below 80% SoC, so the normal tail-off near full (see `battery_charge_power_curve`) is not mistaken for a cold battery.
 
 The rate the battery actually took in those minutes is recorded against the battery temperature (to the whole degree) and turned into a rate in C, exactly as `battery_temperature_charge_curve` is written.
-If you have set **input_number.battery_rate_max_scaling**, the rate is divided by it, as Predbat applies that scaling on top of the curve.
+If you have set **input_number.battery_rate_max_scaling**, the rate is divided by it when the curve is learned, as Predbat applies that scaling on top of the curve - so a scaling you change later applies to all the stored evidence.
 
 - A degree is only used once it has at least 30 minutes of charging behind it, seen on at least two different days.
 - Recent charges count for more than old ones, so the curve follows a battery as it ages.

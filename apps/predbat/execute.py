@@ -1621,9 +1621,9 @@ class Execute:
         # The curve learners read the whole fleet's history (the plan models it as one battery), so they run once every
         # inverter exists and is refreshed - on a fresh start the others are only created after inverter 0. Temperature
         # first, so the SoC curve learner can leave out the charges the temperature curve says were limited.
+        # With auto mode off the learners only gather evidence for the Curves chart (and for auto mode later).
         if self.inverters:
-            if self.battery_temperature_charge_curve_auto:
-                self.battery_temperature_curve_auto_update(self.inverters[0])
+            self.battery_temperature_curve_auto_update(self.inverters[0])
             self.battery_power_curve_update(self.inverters[0], discharge=False)
             self.battery_power_curve_update(self.inverters[0], discharge=True)
             self.publish_battery_curve_sensors()

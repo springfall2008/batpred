@@ -210,11 +210,13 @@ def _test_scan(my_predbat):
     failed |= _check("t5 rates", curve == {5: 0.13, 12: 0.26, 21: 0.26, 30: 0.2}, curve)
     failed |= _check("t5 minutes", minutes.get(5, 0) >= (HISTORY_DAYS - 1) * 60, minutes)
 
-    print("Test 5b: the learned rate is divided by battery_rate_max_scaling, which the plan multiplies the cap by")
+    print("Test 5b: the learned rate is divided by battery_rate_max_scaling (which the plan multiplies the cap by) when learning, not when recording")
     saved_scaling = my_predbat.battery_rate_max_scaling
     my_predbat.battery_rate_max_scaling = 0.5
-    curve, _ = learn_battery_temperature_curve(inv.find_battery_temperature_samples(), my_predbat.now_utc.date())
+    scaled_samples = inv.find_battery_temperature_samples()
     my_predbat.battery_rate_max_scaling = saved_scaling
+    failed |= _check("t5b samples as seen", scaled_samples == samples, "samples changed with the scaling")
+    curve, _ = learn_battery_temperature_curve(samples, my_predbat.now_utc.date(), rate_scaling=0.5)
     failed |= _check("t5b scaled", curve.get(5) == 0.26 and curve.get(30) == 0.4, curve)
 
     print("Test 6a: a percent SoC is not rescaled by battery_scaling (#6183), so the taper above 80% stays out")
@@ -257,6 +259,7 @@ def _test_update(my_predbat):
             return real_scan()
 
         inv.find_battery_temperature_samples = counting_scan
+        my_predbat.battery_temperature_charge_curve_auto = True
 
         print("Test 8: the learned curve is laid over the configured one and published")
         my_predbat.battery_temperature_charge_curve_configured = {15: 0.2, 3: 0.04}
@@ -347,7 +350,41 @@ def _test_update(my_predbat):
         _install_history(my_predbat)
         my_predbat.battery_temperature_curve_auto_update(inv)
         failed |= _check("t11 learned", my_predbat.battery_temperature_charge_curve.get(12) == 0.26, my_predbat.battery_temperature_charge_curve)
+
+        print("Test 11b: with auto off the samples are gathered daily and saved, but nothing is learned or laid over the configured curve")
+        my_predbat.components = MockStorageComponents(storage)
+        run_async(storage.save("predbat", "battery_temperature_curve", {"samples": {}, "updated": "2026-11-01T03:00:00+0000"}, format="json"))
+        my_predbat.battery_temperature_charge_curve_auto = False
+        my_predbat.battery_temperature_samples = {}
+        my_predbat.battery_temperature_samples_loaded = False
+        my_predbat.battery_temperature_curve_learned = {}
+        my_predbat.battery_temperature_curve_last_scan = None
+        my_predbat.battery_temperature_curve_updated = None
+        my_predbat.battery_temperature_charge_curve_configured = {10: 0.2}
+        my_predbat.battery_temperature_charge_curve = {10: 0.2}
+        scans.clear()
+        my_predbat.battery_temperature_curve_auto_update(inv)
+        saved = run_async(storage.load("predbat", "battery_temperature_curve"))
+        failed |= _check("t11b curve untouched", my_predbat.battery_temperature_charge_curve == {10: 0.2} and my_predbat.battery_temperature_curve_learned == {}, my_predbat.battery_temperature_charge_curve)
+        failed |= _check("t11b samples saved", my_predbat.battery_temperature_samples and clean_battery_temperature_samples(saved.get("samples")) == my_predbat.battery_temperature_samples, saved)
+        failed |= _check("t11b learned date kept", saved.get("updated") == "2026-11-01T03:00:00+0000", saved.get("updated"))
+        my_predbat.battery_temperature_curve_last_scan = my_predbat.now_utc - timedelta(minutes=61)
+        my_predbat.battery_temperature_curve_auto_update(inv)
+        failed |= _check("t11b daily, not hourly", len(scans) == 1, scans)
+        my_predbat.battery_temperature_charge_curve_auto = True
+        my_predbat.battery_temperature_curve_auto_update(inv)
+        failed |= _check("t11b auto on learns from the evidence at once", my_predbat.battery_temperature_charge_curve.get(12) == 0.26 and len(scans) == 2, (my_predbat.battery_temperature_charge_curve, scans))
+
+        print("Test 11c: with auto off and no temperature sensor nothing is scanned or logged")
+        my_predbat.battery_temperature_charge_curve_auto = False
+        my_predbat.battery_temperature_curve_last_scan = None
+        saved_sensor = my_predbat.args.pop("battery_temperature_history")
+        scans.clear()
+        my_predbat.battery_temperature_curve_auto_update(inv)
+        my_predbat.args["battery_temperature_history"] = saved_sensor
+        failed |= _check("t11c no scan", scans == [], scans)
     finally:
+        my_predbat.battery_temperature_charge_curve_auto = False
         my_predbat.components = saved_components
         shutil.rmtree(tmpdir, ignore_errors=True)
     return failed

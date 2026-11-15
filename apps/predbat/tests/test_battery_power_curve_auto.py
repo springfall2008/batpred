@@ -15,7 +15,7 @@ import tempfile
 from datetime import timedelta
 
 from tests.test_infra import MockStorageComponents, make_test_storage, run_async
-from const import BATTERY_POWER_CURVE_RESCAN_MINUTES, BATTERY_POWER_CURVE_RETRY_MINUTES, TIME_FORMAT
+from const import BATTERY_CURVE_EVIDENCE_SCAN_MINUTES, BATTERY_POWER_CURVE_RESCAN_MINUTES, BATTERY_POWER_CURVE_RETRY_MINUTES, TIME_FORMAT
 
 from battery_curve import charge_day
 
@@ -32,6 +32,7 @@ FIELDS = [
     "battery_power_curve_last_scan",
     "battery_power_curve_samples",
     "battery_power_curve_source",
+    "battery_power_curve_stored",
     "battery_power_curve_updated",
     "now_utc",
     "components",
@@ -60,11 +61,13 @@ class FakeInverter:
         self.scan = {False: {}, True: {}}
         self.result = {False: {}, True: {}}
         self.calls = {False: 0, True: 0}
+        self.computes = {False: 0, True: 0}
         self.learned_from = {False: None, True: None}
 
     def find_charge_curve(self, discharge):
         """Non-auto mode: the curve set for this direction."""
         self.calls[discharge] += 1
+        self.computes[discharge] += 1
         return dict(self.result[discharge])
 
     def find_charge_curve_samples(self, discharge):
@@ -127,6 +130,7 @@ def _restart(my_predbat, auto=True, default=None, discharge_default=None):
     my_predbat.battery_power_curve_samples = {}
     my_predbat.battery_power_curve_source = {}
     my_predbat.battery_power_curve_updated = {}
+    my_predbat.battery_power_curve_stored = {}
 
 
 def _sensor(my_predbat, kind, attribute=None):
@@ -162,17 +166,43 @@ def _run(my_predbat, storage):
     my_predbat.battery_power_curve_update(inv, discharge=False)
     my_predbat.battery_power_curve_update(inv, discharge=False)
     failed |= _check("t1 curve", my_predbat.battery_charge_power_curve == {100: 0.5, 99: 0.6}, my_predbat.battery_charge_power_curve)
-    failed |= _check("t1 one scan", inv.calls[False] == 1, inv.calls)
+    failed |= _check("t1 computed once", inv.computes[False] == 1, inv.computes)
     failed |= _check("t1 not saved", _stored(storage, "battery_charge_power_curve")[0] is None)
 
     print("Test 2: not auto - nothing found uses the default and stops retrying")
     _restart(my_predbat, auto=False, default=DEFAULT)
-    inv.calls[False] = 0
+    inv.computes[False] = 0
     inv.result[False] = {}
     my_predbat.battery_power_curve_update(inv, discharge=False)
     my_predbat.battery_power_curve_update(inv, discharge=False)
     failed |= _check("t2 default", my_predbat.battery_charge_power_curve == DEFAULT and my_predbat.computed_charge_curve, my_predbat.battery_charge_power_curve)
-    failed |= _check("t2 one scan", inv.calls[False] == 1, inv.calls)
+    failed |= _check("t2 computed once", inv.computes[False] == 1, inv.computes)
+
+    print("Test 2b: not auto - evidence is still gathered daily and saved, never used, and a learned curve in storage is kept")
+    run_async(storage.save("predbat", "battery_charge_power_curve", {"curve": {"99": 0.4}, "updated": "2026-11-01T03:00:00+0000", "samples": {}}, format="json"))
+    _restart(my_predbat, auto=False)
+    my_predbat.battery_charge_power_curve = {100: 0.3}  # a curve set in apps.yaml
+    inv.calls[False] = 0
+    inv.scan[False] = _samples(day1, {99: 0.5, 98: 0.6})
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    data = run_async(storage.load("predbat", "battery_charge_power_curve"))
+    failed |= _check("t2b manual curve in use", my_predbat.battery_charge_power_curve == {100: 0.3}, my_predbat.battery_charge_power_curve)
+    failed |= _check("t2b evidence saved", my_predbat.battery_power_curve_samples.get("charge") == {day1: {99: [0.5, 1, 5.0], 98: [0.6, 1, 5.0]}} and set(data.get("samples", {})) == {day1}, data)
+    failed |= _check("t2b learned curve kept", data.get("curve") == {"99": 0.4} and data.get("updated") == "2026-11-01T03:00:00+0000", data)
+    failed |= _check("t2b one scan a day", inv.calls[False] == 1, inv.calls)
+    _rescan_due(my_predbat, "charge", BATTERY_CURVE_EVIDENCE_SCAN_MINUTES + 1)
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    failed |= _check("t2b daily rescan", inv.calls[False] == 2, inv.calls)
+    print("Test 2c: turning auto on uses the evidence gathered and the stored curve straight away")
+    my_predbat.battery_charge_power_curve = {}
+    my_predbat.battery_charge_power_curve_auto = True
+    my_predbat.battery_power_curve_loaded = {}
+    my_predbat.battery_power_curve_last_scan = {}
+    my_predbat.battery_power_curve_update(inv, discharge=False)
+    failed |= _check("t2c learned from the evidence", my_predbat.battery_charge_power_curve == {99: 0.5, 98: 0.6}, my_predbat.battery_charge_power_curve)
+    run_async(storage.save("predbat", "battery_charge_power_curve", {"curve": {}, "samples": {}}, format="json"))
+    inv.scan[False] = {}
 
     print("Test 3: auto - nothing found retries hourly, using the default meanwhile, which is never saved as the curve")
     _restart(my_predbat, default=DEFAULT)

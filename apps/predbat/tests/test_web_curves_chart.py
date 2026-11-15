@@ -12,7 +12,9 @@
 
 import json
 import re
+from datetime import timedelta
 
+from battery_curve import charge_day
 from web import WebInterface
 
 FIELDS = [
@@ -27,6 +29,10 @@ FIELDS = [
     "battery_temperature_discharge_curve",
     "battery_power_curve_source",
     "battery_power_curve_updated",
+    "battery_power_curve_samples",
+    "battery_temperature_samples",
+    "battery_rate_max_scaling",
+    "battery_rate_max_scaling_discharge",
     "soc_max",
     "battery_rate_max_charge",
     "dashboard_values",
@@ -68,6 +74,10 @@ def run_web_curves_chart_tests(my_predbat):
     saved = {field: getattr(my_predbat, field, None) for field in FIELDS}
     try:
         my_predbat.dashboard_values = {}
+        my_predbat.battery_power_curve_samples = {}
+        my_predbat.battery_temperature_samples = {}
+        my_predbat.battery_rate_max_scaling = 1.0
+        my_predbat.battery_rate_max_scaling_discharge = 1.0
         my_predbat.battery_charge_power_curve = {99: 0.5, 100: 0.2}
         my_predbat.battery_charge_power_curve_auto = True
         my_predbat.battery_discharge_power_curve = {}
@@ -112,11 +122,35 @@ def run_web_curves_chart_tests(my_predbat):
             failed |= _check("t3 max rate", series.get("Maximum charge rate", [{}])[0].get("y") == 5.0, series.get("Maximum charge rate"))
             failed |= _check("t3 kW axis", options["yaxis"]["title"]["text"] == "Rate cap (kW)")
 
+        print("Test 3b: the stored evidence is drawn as dots on the curve's scale, split into recent, older and too little to learn")
+        recent, old = charge_day(my_predbat.now_utc, 0, my_predbat.local_tz), charge_day(my_predbat.now_utc, 40 * 24 * 60, my_predbat.local_tz)
+        # 99% has two days and 15 minutes, so is learned; 50% has one day, so is not. Values are divided by the scaling
+        my_predbat.battery_power_curve_samples = {"charge": {recent: {99: [1.0, 2, 10.0], 50: [0.9, 1, 3.0]}, old: {99: [0.4, 1, 5.0]}}}
+        my_predbat.battery_rate_max_scaling = 0.5
+        today = my_predbat.now_utc.date()
+        # 5 degrees has 50 minutes over two days of 5+ minutes, so is learned; 12 has 3 minutes, so is not. Shown in kW of the 10 kWh battery
+        my_predbat.battery_temperature_samples = {today.strftime("%Y-%m-%d"): {5: [0.2 * 40, 40]}, (today - timedelta(days=1)).strftime("%Y-%m-%d"): {5: [0.2 * 10, 10]}, (today - timedelta(days=20)).strftime("%Y-%m-%d"): {12: [0.3 * 3, 3]}}
+        html = web.get_chart("Curves")
+        options = _chart_options(html, "chart_power_curve")
+        series = {entry["name"]: entry for entry in options["series"]} if options else {}
+        failed |= _check("t3b recent", series.get("Charge evidence, last 14 days", {}).get("data") == [{"x": 99, "y": 1.0}], series.get("Charge evidence, last 14 days"))
+        failed |= _check("t3b older", series.get("Charge evidence, older", {}).get("data") == [{"x": 99, "y": 0.8}], series.get("Charge evidence, older"))
+        failed |= _check("t3b too little", series.get("Charge evidence, too little to learn", {}).get("data") == [{"x": 50, "y": 1.8}], series.get("Charge evidence, too little to learn"))
+        failed |= _check("t3b scatter", series.get("Charge evidence, older", {}).get("type") == "scatter" and series.get("Charge curve", {}).get("type") == "line")
+        failed |= _check("t3b no discharge evidence", not any(name.startswith("Discharge evidence") for name in series), list(series))
+        options = _chart_options(html, "chart_temperature_curve")
+        series = {entry["name"]: entry["data"] for entry in options["series"]} if options else {}
+        failed |= _check("t3b temperature recent", sorted(point["y"] for point in series.get("Charge evidence, last 14 days", [])) == [4.0, 4.0], series.get("Charge evidence, last 14 days"))
+        failed |= _check("t3b temperature too little", series.get("Charge evidence, too little to learn") == [{"x": 12, "y": 6.0}], series.get("Charge evidence, too little to learn"))
+        failed |= _check("t3b caption", "Each dot is one day" in html)
+        my_predbat.battery_rate_max_scaling = 1.0
+
         print("Test 4: no temperature curve explains how to get one; the menu links to the page")
         my_predbat.battery_temperature_charge_curve_auto = False
         my_predbat.battery_temperature_curve_learned = {}
         my_predbat.battery_temperature_charge_curve_configured = {}
         my_predbat.battery_temperature_charge_curve = {}
+        my_predbat.battery_temperature_samples = {}
         html = web.get_chart("Curves")
         failed |= _check("t4 no temperature chart", _chart_options(html, "chart_temperature_curve") is None and "battery_temperature_charge_curve_auto" in html)
         failed |= _check("t4 power chart still shown", _chart_options(html, "chart_power_curve") is not None)

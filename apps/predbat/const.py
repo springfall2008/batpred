@@ -148,6 +148,7 @@ BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS = 30  # Weight of a day's samples halve
 BATTERY_TEMPERATURE_CURVE_MAX_AGE_DAYS = 400  # Samples older than this are dropped, a little over a year so last winter is still known when the next one starts
 BATTERY_TEMPERATURE_CURVE_SCAN_MINUTES = 60  # Minimum gap between history scans, the curve changes over days not minutes
 BATTERY_POWER_CURVE_RESCAN_MINUTES = 24 * 60  # battery_charge/discharge_power_curve: auto - gap between re-scans once a curve is known, so a newer full-rate cycle replaces it
+BATTERY_CURVE_EVIDENCE_SCAN_MINUTES = 24 * 60  # Auto mode off: gap between history scans that only gather evidence for the Curves chart (and for auto mode later)
 BATTERY_POWER_CURVE_RETRY_MINUTES = (
     6 * 60
 )  # battery_charge/discharge_power_curve: auto - gap between re-scans while no curve has been found, so installs that never charge to 100% at full rate do not re-read the history every hour (it runs on the main loop)

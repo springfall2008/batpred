@@ -193,7 +193,7 @@ def merge_battery_temperature_samples(stored, scanned, today, max_age_days=BATTE
     return merge_daily_samples(stored, scanned, today, max_age_days, covered_from_day)
 
 
-def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, half_life_days=BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS, min_days=BATTERY_TEMPERATURE_CURVE_MIN_DAYS):
+def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, half_life_days=BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS, min_days=BATTERY_TEMPERATURE_CURVE_MIN_DAYS, rate_scaling=1.0):
     """
     Work out a battery_temperature_charge_curve from stored samples.
 
@@ -203,13 +203,19 @@ def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERAT
     or more), so one charge cannot set the rate for a whole winter - including a night whose recorded charge rate
     did not match what the inverter was really doing.
 
+    The rates are divided by rate_scaling (battery_rate_max_scaling) here rather than when the samples are recorded:
+    the plan multiplies the temperature cap by that scaling, so the cap is the rate seen divided by the scaling in use
+    now, and a scaling changed later applies to every stored day alike.
+
     Args:
         samples: {day: {temperature: [sum_of_c, minutes]}}
         today: datetime.date the ages are measured from
+        rate_scaling: battery_rate_max_scaling
 
     Returns:
         ({temperature: rate in C}, {temperature: minutes}) for the learned degrees only
     """
+    rate_scaling = rate_scaling if rate_scaling and rate_scaling > 0 else 1.0
     weighted_sum = {}
     weighted_minutes = {}
     minutes = {}
@@ -227,9 +233,74 @@ def learn_battery_temperature_curve(samples, today, min_minutes=BATTERY_TEMPERAT
     curve_minutes = {}
     for temp in sorted(minutes):
         if minutes[temp] >= min_minutes and days.get(temp, 0) >= min_days and weighted_minutes[temp] > 0:
-            curve[temp] = round(weighted_sum[temp] / weighted_minutes[temp], 2)
+            curve[temp] = round(weighted_sum[temp] / weighted_minutes[temp] / rate_scaling, 2)
             curve_minutes[temp] = minutes[temp]
     return curve, curve_minutes
+
+
+def power_curve_evidence(samples, today, rate_scaling=1.0):
+    """
+    The stored SoC curve samples as chart points, one per day and SoC percent, on the curve's own scale.
+
+    A point's value is that day's mean step fraction divided by rate_scaling, as learn_charge_curve() does in auto mode
+    (and as the plan reads a curve set in apps.yaml). enough is False for an SoC percent learn_charge_curve() drops for
+    too little evidence: data from fewer than BATTERY_POWER_CURVE_MIN_DAYS days or under BATTERY_POWER_CURVE_MIN_MINUTES.
+
+    Args:
+        samples: {day: {soc_percent: [sum of the step fractions, steps, minutes]}}
+        today: datetime.date the ages are measured from
+        rate_scaling: battery_rate_max_scaling (or _discharge)
+
+    Returns:
+        [{"soc": int, "value": float, "age_days": int, "enough": bool}] sorted by SoC
+    """
+    rate_scaling = rate_scaling if rate_scaling and rate_scaling > 0 else 1.0
+    days, minutes = {}, {}
+    for day_points in (samples or {}).values():
+        for point, entry in day_points.items():
+            days[point] = days.get(point, 0) + 1
+            minutes[point] = minutes.get(point, 0) + entry[2]
+    points = []
+    for day, day_points in (samples or {}).items():
+        age = max((today - datetime.strptime(day, "%Y-%m-%d").date()).days, 0)
+        for point, (value_sum, steps, _minutes) in day_points.items():
+            if steps > 0:
+                enough = days[point] >= BATTERY_POWER_CURVE_MIN_DAYS and minutes[point] >= BATTERY_POWER_CURVE_MIN_MINUTES
+                points.append({"soc": int(point), "value": round(value_sum / steps / rate_scaling, 3), "age_days": age, "enough": enough})
+    return sorted(points, key=lambda item: (item["soc"], item["age_days"]))
+
+
+def temperature_curve_evidence(samples, today, rate_scaling=1.0):
+    """
+    The stored temperature curve samples as chart points, one per day and degree, in C on the curve's own scale.
+
+    A point's value is that day's mean rate divided by rate_scaling, as learn_battery_temperature_curve() does. enough is
+    False for a degree it does not learn: under BATTERY_TEMPERATURE_CURVE_MIN_MINUTES in all, or fewer than
+    BATTERY_TEMPERATURE_CURVE_MIN_DAYS days with BATTERY_TEMPERATURE_CURVE_MIN_DAY_MINUTES or more.
+
+    Args:
+        samples: {day: {temperature: [sum_of_c, minutes]}}
+        today: datetime.date the ages are measured from
+        rate_scaling: battery_rate_max_scaling
+
+    Returns:
+        [{"temperature": int, "value": float, "age_days": int, "enough": bool}] sorted by temperature
+    """
+    rate_scaling = rate_scaling if rate_scaling and rate_scaling > 0 else 1.0
+    days, minutes = {}, {}
+    for day_bins in (samples or {}).values():
+        for temp, (_rate_sum, count) in day_bins.items():
+            minutes[temp] = minutes.get(temp, 0) + count
+            if count >= BATTERY_TEMPERATURE_CURVE_MIN_DAY_MINUTES:
+                days[temp] = days.get(temp, 0) + 1
+    points = []
+    for day, day_bins in (samples or {}).items():
+        age = max((today - datetime.strptime(day, "%Y-%m-%d").date()).days, 0)
+        for temp, (rate_sum, count) in day_bins.items():
+            if count > 0:
+                enough = minutes[temp] >= BATTERY_TEMPERATURE_CURVE_MIN_MINUTES and days.get(temp, 0) >= BATTERY_TEMPERATURE_CURVE_MIN_DAYS
+                points.append({"temperature": int(temp), "value": round(rate_sum / count / rate_scaling, 4), "age_days": age, "enough": enough})
+    return sorted(points, key=lambda item: (item["temperature"], item["age_days"]))
 
 
 def overlay_battery_temperature_curve(configured, learned):
@@ -882,9 +953,9 @@ class BatteryCurve:
         A minute counts when Predbat was Charging, the charge rate was written at (nearly) its maximum, the battery
         was taking charge and the SoC was below BATTERY_TEMPERATURE_CURVE_SOC_MAX, so the high-SoC taper (which
         battery_charge_power_curve models) cannot be mistaken for a cold battery. The rate the battery actually
-        took is recorded in C (kW per kWh of soc_max), the unit battery_temperature_charge_curve uses, divided by
-        battery_rate_max_scaling: the plan multiplies the temperature cap by that scaling, so without the division a
-        battery with a scaling below 1.0 would be planned at the learned rate times the scaling, not the learned rate.
+        took is recorded in C (kW per kWh of soc_max), the unit battery_temperature_charge_curve uses, as seen:
+        battery_rate_max_scaling is divided out when the curve is learned (learn_battery_temperature_curve()), so a
+        scaling changed later applies to the stored days too.
         Degrees up to BATTERY_TEMPERATURE_CURVE_TEMP_MAX are learned, a warmer reading counting as that degree, as the
         cap looks it up. With more than one inverter the combined battery is scanned (load_curve_history()), as the plan
         applies the cap to it.
@@ -930,7 +1001,6 @@ class BatteryCurve:
         min_charge_rate = max_power * 0.95
         min_battery_power = max(max_power * BATTERY_TEMPERATURE_CURVE_MIN_POWER, 1.0)
         battery_loss = self.base.battery_loss if self.base.battery_loss > 0 else 1.0
-        rate_scaling = self.base.battery_rate_max_scaling if self.base.battery_rate_max_scaling > 0 else 1.0
         local_tz = getattr(self.base, "local_tz", None)
         samples = {}
         for minute in range(0, min(history["min_len"], len(temperature))):
@@ -955,7 +1025,7 @@ class BatteryCurve:
                 # The 0 entry is the fallback for every reading at or below 0, including the exact 0 several integrations
                 # report for a missing reading, so it is never learned (anything between -1 and 1 truncates to it)
                 continue
-            rate_c = abs(power) / 1000.0 / battery_loss / soc_max / rate_scaling
+            rate_c = abs(power) / 1000.0 / battery_loss / soc_max
             day = charge_day(self.base.now_utc, minute, local_tz)
             day_bins = samples.setdefault(day, {})
             entry = day_bins.setdefault(temp, [0.0, 0])
