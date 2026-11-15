@@ -315,7 +315,7 @@ def _run(my_predbat, storage):
     failed |= _check("t12c learned from both", my_predbat.battery_charge_power_curve == {99: 0.4}, my_predbat.battery_charge_power_curve)
     my_predbat.components = MockStorageComponents(storage)
 
-    print("Test 13: the curve sensors say whether a learned curve is in use, where it came from and when it was learned")
+    print("Test 13: the curve sensors say whether a learned or manual curve is in use, where it came from and when it was learned")
     run_async(storage.save("predbat", "battery_charge_power_curve", {"curve": {}, "samples": {}}, format="json"))
     run_async(storage.save("predbat", "battery_discharge_power_curve", {"curve": {}, "samples": {}}, format="json"))
     _restart(my_predbat, default=DEFAULT)
@@ -344,7 +344,15 @@ def _run(my_predbat, storage):
     try:
         my_predbat.args["battery_charge_power_curve"] = {"100": 0.3}
         my_predbat.fetch_config_options()
-        failed |= _check("t13 apps.yaml curve is off", _sensor(my_predbat, "charge") == "off" and _sensor(my_predbat, "charge", "source") == "configured" and _sensor(my_predbat, "charge", "auto") is False, _sensor(my_predbat, "charge", "source"))
+        failed |= _check(
+            "t13 apps.yaml curve is on as manual",
+            _sensor(my_predbat, "charge") == "on"
+            and _sensor(my_predbat, "charge", "source") == "manual"
+            and _sensor(my_predbat, "charge", "curve") == {"100": 0.3}
+            and _sensor(my_predbat, "charge", "updated") is None
+            and _sensor(my_predbat, "charge", "auto") is False,
+            _sensor(my_predbat, "charge", "source"),
+        )
     finally:
         for key, value in saved_args.items():
             if value is None:

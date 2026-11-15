@@ -3973,7 +3973,7 @@ chart.render();
         dashboard_values = getattr(self.base, "dashboard_values", {}) or {}
         text = "<br><h2>Battery Curves</h2>\n"
         text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n<tr>"
-        for heading in ("Curve", "Learned", "Source", "Learned at", "Evidence days", "Last scan"):
+        for heading in ("Curve", "In use", "Source", "Learned at", "Evidence days", "Last scan"):
             text += "<th style='padding:6px 12px;border:1px solid #555;text-align:left;'>{}</th>".format(heading)
         text += "</tr>\n"
         for title, name in (("Charge power", "battery_charge_power_curve"), ("Discharge power", "battery_discharge_power_curve"), ("Temperature charge", "battery_temperature_charge_curve")):

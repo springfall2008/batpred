@@ -4351,9 +4351,9 @@ class Fetch:
 
     def publish_battery_curve_sensors(self):
         """
-        Publish one binary sensor per battery curve: on while a curve learned from this battery's history is in use, with
-        the curve in use, where it came from and when it was learned in the attributes. Called every cycle, after the
-        learners, so a curve set in apps.yaml (or none at all) shows too.
+        Publish one binary sensor per battery curve: on while a curve learned from this battery's history, or one set in
+        apps.yaml (source manual), is in use, with the curve in use, where it came from and when it was learned in the
+        attributes. A default curve or no curve is off. Called every cycle, after the learners.
         """
 
         def curve_text(curve):
@@ -4370,7 +4370,7 @@ class Fetch:
             source = self.battery_power_curve_source.get(kind, "") if curve else ""
             self.dashboard_item(
                 "binary_sensor." + self.prefix + "_" + name,
-                state="on" if source == "learned" else "off",
+                state="on" if source in ("learned", "manual") else "off",
                 attributes={
                     "curve": curve_text(curve),
                     "source": source or "none",
@@ -4385,15 +4385,16 @@ class Fetch:
 
         auto = bool(self.battery_temperature_charge_curve_auto)
         learned = self.battery_temperature_curve_learned if auto else {}
+        source = "learned" if learned else ("manual" if self.battery_temperature_charge_curve else "none")
         self.dashboard_item(
             "binary_sensor." + self.prefix + "_battery_temperature_charge_curve",
-            state="on" if learned else "off",
+            state="on" if source != "none" else "off",
             attributes={
                 "curve": curve_text(self.battery_temperature_charge_curve),
                 "learned": curve_text(learned),
                 "learned_minutes": curve_text(self.battery_temperature_curve_minutes) if auto else {},
                 "configured": curve_text(self.battery_temperature_charge_curve_configured),
-                "source": "learned" if learned else ("configured" if self.battery_temperature_charge_curve else "none"),
+                "source": source,
                 "auto": auto,
                 "updated": self.battery_temperature_curve_updated if learned else None,
                 "last_scan": time_text(self.battery_temperature_curve_last_scan) if auto else None,
@@ -5051,7 +5052,7 @@ class Fetch:
             # it is only computed once, so resetting it here every cycle threw it away after the first plan
             if configured_curve or not self.computed_charge_curve:
                 self.battery_charge_power_curve = configured_curve
-                self.battery_power_curve_source["charge"] = "configured" if configured_curve else ""
+                self.battery_power_curve_source["charge"] = "manual" if configured_curve else ""
         self.battery_charge_power_curve_default = self.validate_curve(self.args.get("battery_charge_power_curve_default", {}), "battery_charge_power_curve_default")
 
         # Discharge curve
@@ -5062,7 +5063,7 @@ class Fetch:
             configured_curve = self.validate_curve(self.args.get("battery_discharge_power_curve", {}), "battery_discharge_power_curve")
             if configured_curve or not self.computed_discharge_curve:
                 self.battery_discharge_power_curve = configured_curve
-                self.battery_power_curve_source["discharge"] = "configured" if configured_curve else ""
+                self.battery_power_curve_source["discharge"] = "manual" if configured_curve else ""
         self.battery_discharge_power_curve_default = self.validate_curve(self.args.get("battery_discharge_power_curve_default", {}), "battery_discharge_power_curve_default")
 
         # Temperature curve charge/discharge

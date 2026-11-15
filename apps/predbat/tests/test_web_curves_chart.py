@@ -120,6 +120,17 @@ def run_web_curves_chart_tests(my_predbat):
         html = web.get_chart("Curves")
         failed |= _check("t4 no temperature chart", _chart_options(html, "chart_temperature_curve") is None and "battery_temperature_charge_curve_auto" in html)
         failed |= _check("t4 power chart still shown", _chart_options(html, "chart_power_curve") is not None)
+        my_predbat.publish_battery_curve_sensors()
+        sensor = "binary_sensor." + my_predbat.prefix + "_battery_temperature_charge_curve"
+        failed |= _check("t4 no temperature curve is off", my_predbat.get_state_wrapper(sensor) == "off" and my_predbat.get_state_wrapper(sensor, attribute="source") == "none")
+
+        print("Test 4b: a temperature curve set in apps.yaml (auto off) is on, as manual, and charted")
+        my_predbat.battery_temperature_charge_curve_configured = {0: 0.05, 10: 0.2}
+        my_predbat.battery_temperature_charge_curve = {0: 0.05, 10: 0.2}
+        my_predbat.publish_battery_curve_sensors()
+        failed |= _check("t4b manual is on", my_predbat.get_state_wrapper(sensor) == "on" and my_predbat.get_state_wrapper(sensor, attribute="source") == "manual" and my_predbat.get_state_wrapper(sensor, attribute="updated") is None)
+        options = _chart_options(web.get_chart("Curves"), "chart_temperature_curve")
+        failed |= _check("t4b charted", options is not None and [entry["name"] for entry in options["series"]] == ["Charge cap in use", "Maximum charge rate"], options and [entry["name"] for entry in options["series"]])
 
         print("Test 5: a name with markup cannot close the script tag")
         text = web.render_curve_chart([{"name": "</script><b>", "data": [{"x": 0, "y": 1}]}], "x", "y", "Title</script>", "chart_test", 0, 1)
