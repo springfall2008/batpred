@@ -23,7 +23,7 @@ import aiohttp
 import argparse
 import json
 import os
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -34,6 +34,8 @@ from deye_const import (
     DEYE_TIMEOUT,
     DEYE_RETRIES,
     DEYE_TELEMETRY_KEYS,
+    DEYE_TELEMETRY_FALLBACK_KEYS,
+    DEYE_PV_STRING_KEY_PREFIX,
     DEYE_LATEST_BODY_KEY,
     DEYE_WORKMODE,
     FREEZE_EXPORT_SOC,
@@ -41,6 +43,8 @@ from deye_const import (
     TOU_SLOT_COUNT,
     DEYE_TOU_DAYS,
     DEYE_ORDER_MAX_POLLS,
+    DEYE_ORDER_FAILED_STATUSES,
+    DEYE_ORDER_NO_ERROR_VALUES,
     DEYE_BUSY_CODES,
     DEYE_BUSY_MARKERS,
     CONFIG_BATTERY_KEYS,
@@ -59,11 +63,13 @@ from deye_const import (
     DEYE_TTL_CONFIG,
     DEYE_TTL_LIVE,
     DEYE_RESTORE_MAX_CONTROL,
+    DEYE_RESTORE_MAX_CONTROL_ACTIVE,
     DEYE_CACHE_STATIC,
     DEYE_CACHE_CONFIG,
     DEYE_CACHE_TOU,
     DEYE_CACHE_RATINGS,
     DEYE_CACHE_CONTROL,
+    DEYE_CACHE_APPLIED_PAYLOAD,
 )
 
 # How every DeyeCloud inverter behaves, as the INVERTER_DEF keys a discovery record may override
@@ -247,7 +253,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
         self.debug_api("POST", url, body)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(url, json=body) as resp:
                     resp.raise_for_status()
                     data = await resp.json()
@@ -296,7 +302,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         for attempt in range(DEYE_RETRIES):
             try:
                 self.debug_api("POST", url, body)
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.post(url, headers=self._auth_headers(), json=body) as resp:
                         if resp.status in (401, 403):
                             self.log(f"Warn: DEYE 401/403 on {endpoint_key}, attempt {attempt + 1}")
@@ -376,6 +382,26 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         except (TypeError, ValueError):
             return default
 
+    def _telemetry_value(self, name, flat):
+        """Read one telemetry metric from a flattened dataList.
+
+        Returns (value, found). Tries the primary key, then any model-specific fallbacks,
+        and for pv_power finally the sum of the per-string DCPowerPV<n> readings. A key only
+        counts when its value is numeric: "0.00" at night is a real reading, while an empty
+        or null value falls through to the next source. found is False when nothing usable
+        is there, so the caller can warn instead of publishing a silent 0.
+        """
+        for key in (DEYE_TELEMETRY_KEYS[name],) + DEYE_TELEMETRY_FALLBACK_KEYS.get(name, ()):
+            value = self._as_float(flat.get(key), None)
+            if value is not None:
+                return value, True
+        if name == "pv_power":
+            strings = [self._as_float(flat.get(key), None) for key in flat if key.startswith(DEYE_PV_STRING_KEY_PREFIX) and key[len(DEYE_PV_STRING_KEY_PREFIX) :].isdigit()]
+            strings = [value for value in strings if value is not None]
+            if strings:
+                return sum(strings), True
+        return 0.0, False
+
     async def fetch_device_data(self, sn):
         """Fetch and normalise the latest telemetry for one inverter."""
         data = await self._post("device_latest", {DEYE_LATEST_BODY_KEY: [sn]})
@@ -387,8 +413,11 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             return {}
         flat = self._datalist_to_dict(rows[0].get("dataList"))
         result = {}
-        for name, key in DEYE_TELEMETRY_KEYS.items():
-            value = self._as_float(flat.get(key))
+        found = set()
+        for name in DEYE_TELEMETRY_KEYS:
+            value, present = self._telemetry_value(name, flat)
+            if present:
+                found.add(name)
             # DEYE's grid sign is the opposite of Predbat's (see DEYE_TELEMETRY_NEGATE).
             result[name] = -value if name in DEYE_TELEMETRY_NEGATE else value
         self.device_energy[sn] = {name: self._as_float(flat.get(key)) for name, key in DEYE_ENERGY_KEYS.items() if key in flat}
@@ -400,7 +429,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         if DEYE_RATED_POWER_KEY in flat:
             self.device_rated_power[sn] = self._as_float(flat[DEYE_RATED_POWER_KEY])
         self.derive_battery_capacity(sn, flat)
-        missing = [DEYE_TELEMETRY_KEYS[name] for name in DEYE_TELEMETRY_REQUIRED if DEYE_TELEMETRY_KEYS[name] not in flat]
+        missing = [DEYE_TELEMETRY_KEYS[name] for name in DEYE_TELEMETRY_REQUIRED if name not in found]
         if missing:
             # A missing key silently reads 0.0, which previously hid a wholly wrong key
             # map, so say so loudly and name what the device did return.
@@ -836,7 +865,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         url = f"{self.base_url}{path}"
         timeout = aiohttp.ClientTimeout(total=DEYE_TIMEOUT)
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 # Two passes at most: the original call, then one retry after a refresh.
                 for attempt in range(2):
                     self.debug_api("GET", url)
@@ -875,6 +904,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         msg = str(data.get("msg", "")).lower()
         return any(marker in msg for marker in DEYE_BUSY_MARKERS)
 
+    @writes
     async def apply_dynamic_control(self, sn, schedule, current_soc, force=False):
         """Write the combined control payload, suppressing no-op writes via the applied-payload cache. Returns True if written."""
         desired = self.build_dynamic_payload(sn, schedule, current_soc)
@@ -925,6 +955,14 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         if not resp.get("success", False):
             return "pending"
         self.pending_orders.pop(sn, None)
+        # The outer success flag only means the poll worked; the order's own status and error
+        # say whether the device executed it. A failed order was never applied, so the caller
+        # must not keep treating its payload as the inverter's current state.
+        order_error = resp.get("error")
+        error_set = order_error is not None and str(order_error).strip() not in DEYE_ORDER_NO_ERROR_VALUES
+        if str(resp.get("status")) in DEYE_ORDER_FAILED_STATUSES or error_set:
+            self.log(f"Warn: DEYE {sn} control order {order_id} failed on the device (status {resp.get('status')}, error {order_error})")
+            return "failed"
         return "success"
 
     def _is_read_only(self):
@@ -943,10 +981,16 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Publish monitoring sensors for each inverter."""
         for sn in self.device_list:
             values = self.device_values.get(sn, {})
-            units = {"soc": "%", "battery_power": "W", "grid_power": "W", "pv_power": "W", "load_power": "W", "temperature": "°C"}
-            for leaf, unit in units.items():
+            # (unit, HA device_class) per telemetry leaf; all are instantaneous readings, so state_class measurement.
+            telemetry = {"soc": ("%", "battery"), "battery_power": ("W", "power"), "grid_power": ("W", "power"), "pv_power": ("W", "power"), "load_power": ("W", "power"), "temperature": ("°C", "temperature")}
+            for leaf, (unit, device_class) in telemetry.items():
                 if leaf in values:
-                    self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"}, app="deye")
+                    self.dashboard_item(
+                        self._sensor_name(sn, leaf),
+                        state=values[leaf],
+                        attributes={"unit_of_measurement": unit, "device_class": device_class, "state_class": "measurement", "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"},
+                        app="deye",
+                    )
 
             # Capacity is published whenever ANY source has it — config/battery when the
             # model serves it, otherwise the value derived from device/latest. Without
@@ -967,11 +1011,14 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             # Daily energy counters feed Predbat's load/import/export history learning. They
             # reset at midnight; minute_data/clean_incrementing_reverse absorb that (see
             # DEYE_ENERGY_KEYS for why the Daily registers are used over the Total* ones).
+            # total_increasing, not total: HA reads a total_increasing drop as a new meter cycle,
+            # whereas a plain total (no last_reset) would record the midnight reset as negative
+            # energy. measurement is rejected by the Energy dashboard.
             for leaf, value in self.device_energy.get(sn, {}).items():
                 self.dashboard_item(
                     self._sensor_name(sn, leaf),
                     state=value,
-                    attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "measurement", "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"},
+                    attributes={"unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total_increasing", "friendly_name": f"DEYE {sn} {leaf.replace('_', ' ').title()}"},
                     app="deye",
                 )
 
@@ -1059,6 +1106,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 return sn
         return None
 
+    @writes
     async def apply_reserve_live(self, sn, reserve):
         """Write the reserve immediately via a forced control apply (freeze-charge relies on this taking effect at once)."""
         schedule = self.local_schedule.get(sn, {})
@@ -1068,6 +1116,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.control_active.add(sn)  # Predbat is now actively controlling this inverter
         return await self.apply_dynamic_control(sn, schedule, current_soc, force=True)
 
+    @writes
     async def apply_schedule(self, sn, force=False):
         """Recompute the schedule from HA control entities and push it for one inverter.
 
@@ -1075,8 +1124,8 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         "apply the schedule" action, so forcing here re-sent a byte-identical payload every
         few minutes — 36 orders in two hours on a live site with nothing actually changing.
         The applied-payload cache is the single source of truth for whether a write is
-        needed; when it must be distrusted (an order left unconfirmed after
-        DEYE_ORDER_MAX_POLLS) that path already pops the entry, which makes the next apply
+        needed; when it must be distrusted (an order the device reported as failed, or one
+        left unconfirmed after DEYE_ORDER_MAX_POLLS) run() already pops the entry, which makes the next apply
         write naturally.
         """
         schedule = await self.get_schedule_settings_ha(sn)
@@ -1142,6 +1191,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Handle a select (time) change from Home Assistant."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a number change from Home Assistant; the reserve is additionally written live."""
         sn = self._sn_from_entity(entity_id)
@@ -1156,6 +1206,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             return
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a switch change from Home Assistant: the write button applies the schedule."""
         sn = self._sn_from_entity(entity_id)
@@ -1442,17 +1493,14 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         return False
 
     async def save_control(self):
-        """Cache control state: what was last written, any order still in flight, and control_active.
+        """Cache control state: the payload itself, any pending order, and ownership.
 
-        Believed to be the same bug as batpred#5138 (Sunsynk), found by reading this file
-        alongside the Sunsynk fix rather than from a reported deye.py incident: without
-        control_active surviving a restart, _reconcile_control() stays gated off
-        for every inverter until a fresh write-button event happens to arrive - silently
-        skipping every automatic re-apply, including one meant to stop an export already in
-        progress, until something unrelated re-arms it. Fixed the same way as sunsynk.py and
-        alphaess.py, which already persist control_active for exactly this reason.
+        The payload is kept in a short-lived change-detection cache, while control_active is
+        stored separately so ownership survives longer for reconciliation after a restart.
         """
-        return await self.save_cache(DEYE_CACHE_CONTROL, {"applied_payload": self.applied_payload, "pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count, "control_active": sorted(self.control_active)})
+        await self.save_cache(DEYE_CACHE_APPLIED_PAYLOAD, {"applied_payload": self.applied_payload})
+        await self.save_cache(DEYE_CACHE_CONTROL, {"pending_orders": self.pending_orders, "order_poll_count": self.order_poll_count, "control_active": sorted(self.control_active)})
+        return True
 
     async def restore_state(self):
         """Restore cached state at startup and seed each tier's refresh clock.
@@ -1504,20 +1552,33 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         # from caching it 1440 times a day. The live clock therefore starts unset and the
         # first tick polls immediately.
 
+        await self._restore_control_state()
+
+    async def _restore_control_state(self):
+        """Restore cached control orders, applied payload and ownership."""
         control, age = await self.load_cache(DEYE_CACHE_CONTROL)
         if isinstance(control, dict):
-            orders = control.get("pending_orders")
-            counts = control.get("order_poll_count")
-            # Orders restore unconditionally: an unpolled order is orphaned, and
-            # DEYE_ORDER_MAX_POLLS still bounds how long it can stay unconfirmed.
-            if isinstance(orders, dict):
-                self.pending_orders = orders
-                if orders:
-                    self.log(f"Info: DEYE resuming {len(orders)} pending control order(s) from cache")
-            if isinstance(counts, dict):
-                self.order_poll_count = counts
-            applied = control.get("applied_payload")
+            self._restore_pending_orders(control)
+
+            applied = None
             active = control.get("control_active")
+            if isinstance(control, dict) and "applied_payload" in control:
+                # legacy applied_payload was stored in the control cache, so if the payload cache is
+                # missing but the control cache has it, restore it from there.
+                legacy_applied = control.get("applied_payload")
+                if isinstance(legacy_applied, dict):
+                    applied = legacy_applied
+                    self.applied_payload = legacy_applied
+                active = control.get("control_active")
+
+            payload, payload_age = await self.load_cache(DEYE_CACHE_APPLIED_PAYLOAD)
+            if isinstance(payload, dict):
+                payload_applied = payload.get("applied_payload")
+                if isinstance(payload_applied, dict):
+                    applied = payload_applied
+            if isinstance(control, dict) and "applied_payload" in control and payload_age is None:
+                payload_age = age
+
             # Either half is enough to be worth restoring, and neither gates the other. An
             # emptied applied_payload is a normal state, not an absent cache: run() pops a
             # serial whose order stayed unconfirmed past DEYE_ORDER_MAX_POLLS and then calls
@@ -1526,35 +1587,44 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             # _reconcile_control gated off after a restart - the exact failure this fix is for,
             # on the one inverter that had just been told to re-write.
             if (isinstance(applied, dict) and applied) or (isinstance(active, list) and active):
-                if age is not None and age < DEYE_RESTORE_MAX_CONTROL:
+                if isinstance(active, list):
+                    self.control_active = set(active)
+
+                ownership_valid = age is None or age <= DEYE_RESTORE_MAX_CONTROL_ACTIVE
+                if payload_age is not None and payload_age < DEYE_RESTORE_MAX_CONTROL:
                     if isinstance(applied, dict):
                         self.applied_payload = applied
-                    # Restored alongside applied_payload, not just it: control_active is what
-                    # actually lets _reconcile_control() write at all, so restoring
-                    # applied_payload without it would still leave every inverter silently
-                    # unmanaged after a restart. Past the age bound both are dropped together,
-                    # so a stale cache still forces a fresh write-button press to recommit,
-                    # rather than trusting old control state indefinitely.
-                    if isinstance(active, list):
-                        self.control_active = set(active)
-                    elif isinstance(applied, dict):
-                        # A cache written before this key existed carries applied_payload alone.
-                        # Restoring that half on its own would preserve the very bug this fix is
-                        # for through the one restart that installs the fix, so infer the missing
-                        # half from applied_payload. Its keys are a safe lower bound and cannot arm
-                        # an inverter Predbat never drove: apply_dynamic_control is only reached
-                        # through apply_schedule()/apply_reserve_live(), which add to
-                        # control_active first, or through _reconcile_control(), which is
-                        # already gated on it. The reverse is not true - an apply that wrote
-                        # nothing leaves control_active set with no applied_payload entry - so this
-                        # restores a subset, never a superset.
-                        self.control_active = set(applied.keys())
+                    elif not isinstance(active, list):
+                        self.control_active = set()
                 else:
-                    # Deliberately discarded. This cache asserts the inverter still holds
-                    # what Predbat last wrote; after a long gap that may be false, and a
-                    # wrongly SKIPPED write leaves the battery diverging from the plan. A
-                    # redundant write is the cheaper mistake.
-                    self.log(f"Info: DEYE applied-payload cache is stale (age {self._age_text(age)}), the next apply will re-write to the inverter")
+                    # The last payload is unsafe to trust after a long gap, but the
+                    # ownership flag must survive so _reconcile_control() can immediately
+                    # re-apply the current schedule. Clearing only applied_payload makes the
+                    # next apply a real write instead of waiting for an unrelated button event.
+                    self.applied_payload = {}
+                    self.log(f"Info: DEYE applied-payload cache is stale (age {self._age_text(payload_age)}), retaining control ownership so the next cycle re-writes the inverter")
+
+                if ownership_valid and not isinstance(active, list) and isinstance(applied, dict):
+                    # A cache written before control_active existed carries applied_payload
+                    # alone. Its keys are a safe lower bound because every applied payload was
+                    # produced after the control path had marked that inverter active.
+                    self.control_active = set(applied.keys())
+                elif not ownership_valid:
+                    self.control_active = set()
+                    self.log(f"Info: DEYE control ownership cache is stale (age {self._age_text(age)}), requiring a fresh write")
+
+    def _restore_pending_orders(self, control):
+        """Restore pending control orders and their poll counts."""
+        orders = control.get("pending_orders")
+        counts = control.get("order_poll_count")
+        # Orders restore unconditionally: an unpolled order is orphaned, and
+        # DEYE_ORDER_MAX_POLLS still bounds how long it can stay unconfirmed.
+        if isinstance(orders, dict):
+            self.pending_orders = orders
+            if orders:
+                self.log(f"Info: DEYE resuming {len(orders)} pending control order(s) from cache")
+        if isinstance(counts, dict):
+            self.order_poll_count = counts
 
     async def refresh_static(self):
         """Re-run discovery and the per-model capability reads, then cache them."""
@@ -1691,6 +1761,11 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 status = "pending"
             if status == "success":
                 self.order_poll_count.pop(sn, None)
+            elif status == "failed":
+                # poll_order has already dropped the order. Its payload never reached the
+                # inverter, so invalidate the cache and the reconcile below re-writes it.
+                self.order_poll_count.pop(sn, None)
+                self.applied_payload.pop(sn, None)
             else:
                 self.order_poll_count[sn] = self.order_poll_count.get(sn, 0) + 1
                 if self.order_poll_count[sn] >= DEYE_ORDER_MAX_POLLS:
@@ -1724,6 +1799,7 @@ class DeyeAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.update_success_timestamp()
         return True
 
+    @writes
     async def _reconcile_control(self):
         """Re-apply the schedule of each inverter Predbat is already controlling.
 

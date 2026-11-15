@@ -21,9 +21,13 @@ import array
 import ctypes
 import os
 from datetime import datetime, timedelta, timezone, time
+from email.utils import parsedate_to_datetime
 from io import StringIO
 from functools import lru_cache
 from const import (
+    BALANCE_CEILING_EXPIRY_SECONDS,
+    BALANCE_CEILING_SHORTFALL_W,
+    TEMPERATURE_SCALES,
     MINUTE_WATT,
     PREDICT_STEP,
     TIME_FORMAT,
@@ -37,9 +41,14 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
+    BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
 )
 import copy
+import pytz
+import hashlib
 import json
+import time as time_module
 
 DAY_OF_WEEK_MAP = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -175,6 +184,50 @@ SECRET_MASK = "xxx"
 STR2TIME_USE_FROMISOFORMAT = True
 
 
+class RepeatLogGate:
+    """Decide whether a text that tends to repeat (an API response, a slot list) should be logged in full again.
+
+    A text is logged in full the first time it is seen for a key, and again once interval_seconds have passed, so
+    the full text is never only in a rotated-out log file; in between, the caller logs one short line instead.
+    Only a hash of each text is kept, per key, so several texts can alternate under one key (one request context
+    serving several devices, or tariff comparison runs) without each one forcing the others out, and entries older
+    than the interval are dropped so the memory used stays bounded. Expiry runs on a monotonic clock, so a clock
+    change cannot stretch or shorten it; the time reported is local wall-clock time, matching the log's own stamps.
+    """
+
+    def __init__(self, interval_seconds):
+        """Create an empty gate that logs each text in full again at most every interval_seconds."""
+        self.interval_seconds = interval_seconds
+        self.logged = {}
+
+    def last_full(self, key, text, always_full=False):
+        """Return when text was last logged in full for key, or None when it should be logged in full now (recorded as such).
+
+        always_full forces a full log, e.g. for an error response. text may be any value; it is compared as str().
+        """
+        now = time_module.monotonic()
+        for entry in [entry for entry, (logged_at, _wall) in self.logged.items() if now - logged_at >= self.interval_seconds]:
+            del self.logged[entry]
+        entry = (key, hashlib.sha1(str(text).encode("utf-8", "replace")).hexdigest())
+        previous = self.logged.get(entry)
+        if previous is not None and not always_full:
+            return previous[1]
+        self.logged[entry] = (now, datetime.now())
+        return None
+
+    def log(self, log, key, text, full_lines, brief_line, always_full=False):
+        """Log full_lines through log when text is new for key or due again, else the one line brief_line(time of the
+        last full log) returns, or nothing when brief_line is None. Returns True when logged in full."""
+        last = self.last_full(key, text, always_full=always_full)
+        if last is None:
+            for line in full_lines:
+                log(line)
+            return True
+        if brief_line is not None:
+            log(brief_line(last.strftime("%H:%M:%S")))
+        return False
+
+
 class MinuteArray:
     """Dense array-backed replacement for dict[int, float] keyed by contiguous minute indices.
 
@@ -231,7 +284,10 @@ class MinuteArray:
 
 
 # Predbat member variables never included in a debug dump or served over MCP - live object
-# graphs, the HA interface, loaded secrets and the URL caches. Shared with is_debug_excluded_key().
+# graphs, the HA interface, loaded secrets, the URL caches, locks (which can't be serialised) and
+# log-repeat bookkeeping. Shared with is_debug_excluded_key(). io_slot_log_gate keys its history by
+# tuples, which a dump writes as YAML sequences that cannot be loaded back as dict keys, so a dump
+# carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -252,6 +308,8 @@ DEBUG_EXCLUDE_LIST = [
     "github_url_cache",
     "octopus_url_cache",
     "secrets",
+    "status_lock",
+    "io_slot_log_gate",
 ]
 
 
@@ -336,20 +394,25 @@ def _mask_secrets_in_place(value):
             _mask_secrets_in_place(entry)
 
 
-def load_secrets(log=None):
+def load_secrets(log=None, secrets_file=None):
     """
     Load secrets from secrets.yaml file
-    Priority: PREDBAT_SECRETS_FILE env var, ./secrets.yaml, /config/secrets.yaml
+    Priority: secrets_file argument (else PREDBAT_SECRETS_FILE env var), ./secrets.yaml, /config/secrets.yaml
+
+    A caller that passes secrets_file has already resolved it (Hass.__init__ reads
+    PREDBAT_SECRETS_FILE once per instance), so the environment is only consulted here
+    when no path is given.
     """
     import yaml
 
     log = log or (lambda message, **kwargs: print(message))
     secrets = {}
+    preferred_location = secrets_file if secrets_file is not None else os.getenv("PREDBAT_SECRETS_FILE")
     secrets_file = None
 
     # Try loading from different locations in priority order
     possible_locations = [
-        os.getenv("PREDBAT_SECRETS_FILE"),
+        preferred_location,
         "secrets.yaml",
         "/homeassistant/secrets.yaml",
         "/conf/secrets.yaml",
@@ -391,7 +454,7 @@ def load_secrets(log=None):
     return secrets
 
 
-def load_apps_yaml(apps_file=None, log=None):
+def load_apps_yaml(apps_file=None, log=None, secrets_file=None):
     """
     Load an apps.yaml-format file and return its pred_bat section, with !secret references resolved
 
@@ -400,28 +463,81 @@ def load_apps_yaml(apps_file=None, log=None):
     for a malformed file and KeyError when the pred_bat section is missing, leaving the caller to
     decide whether that is fatal.
 
+    apps_file and secrets_file default to $PREDBAT_APPS_FILE / $PREDBAT_SECRETS_FILE when not given.
+
     Returns (args, secrets).
     """
     import yaml
 
     log = log or (lambda message, **kwargs: print(message))
-    secrets = load_secrets(log=log)
+    secrets = load_secrets(log=log, secrets_file=secrets_file)
+
+    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+    log(f"Loading {apps_file}", quiet=False)
+    with open(apps_file, "r") as stream:
+        config = yaml.load(stream, Loader=secret_yaml_loader(secrets, log))  # nosec B506 - a SafeLoader subclass
+    return config["pred_bat"], secrets
+
+
+def secret_yaml_loader(secrets, log):
+    """
+    Return a yaml.SafeLoader subclass that resolves !secret against the given secrets dict
+
+    A new class per call, so the !secret constructor is never registered on the process-wide
+    yaml.SafeLoader that every other yaml.safe_load() uses. A missing secret logs a warning and
+    resolves to None. Use as yaml.load(stream, Loader=secret_yaml_loader(secrets, log)).
+    """
+    import yaml
 
     def secret_constructor(loader, node):
-        """YAML constructor for the !secret tag, resolving against the secrets just loaded."""
+        """YAML constructor for the !secret tag, resolving against the given secrets."""
         secret_key = loader.construct_scalar(node)
         if secret_key in secrets:
             return secrets[secret_key]
         log(f"Warn: Secret '{secret_key}' not found in secrets.yaml")
         return None
 
-    yaml.add_constructor("!secret", secret_constructor, Loader=yaml.SafeLoader)
+    class SecretYamlLoader(yaml.SafeLoader):
+        pass
 
+    SecretYamlLoader.add_constructor("!secret", secret_constructor)
+    return SecretYamlLoader
+
+
+def describe_apps_yaml_error(exc, apps_file=None, secret_names=()):
+    """
+    Turn an exception raised by load_apps_yaml() into a one-line, actionable log message
+
+    The common case is a mistyped secret reference - 'api_key: !openrouter_api_key' or
+    'api_key: !secrets openrouter_api_key' - which PyYAML reports as an unknown tag, because only
+    !secret has a constructor registered. Startup cannot continue without apps.yaml, so the best
+    Predbat can do is say where the problem is and what was probably meant (GH#5530).
+
+    The tag is only repeated when it names a key in secrets.yaml (secret_names): a raw credential
+    pasted after a '!' is an unknown tag too, and redaction cannot catch it in predbat.log because
+    it was never loaded as a secret.
+    """
     apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
-    log(f"Loading {apps_file}", quiet=False)
-    with open(apps_file, "r") as stream:
-        config = yaml.safe_load(stream)
-    return config["pred_bat"], secrets
+
+    if isinstance(exc, KeyError):
+        return "Error: Unable to load {} - it has no pred_bat section; Predbat's settings must be nested under a top-level 'pred_bat:' key".format(apps_file)
+    if isinstance(exc, OSError):
+        return "Error: Unable to load {} - {}".format(apps_file, exc)
+
+    match = re.match(r"could not determine a constructor for the tag '!([^']*)'", str(getattr(exc, "problem", "") or ""))
+    if match:
+        tag = match.group(1)
+        mark = getattr(exc, "problem_mark", None)
+        where = " at line {} column {}".format(mark.line + 1, mark.column + 1) if mark is not None else ""
+        if tag in secret_names:
+            return "Error: Unable to load {} - unknown tag '!{}'{}; only !secret is supported, did you mean '!secret {}'?".format(apps_file, tag, where, tag)
+        if tag.lower() in ("secret", "secrets"):
+            return "Error: Unable to load {} - unknown tag '!{}'{}; only !secret is supported, did you mean '!secret <name>'?".format(apps_file, tag, where)
+        return "Error: Unable to load {} - unknown tag{} (not shown in case it is a credential); only !secret is supported, did you mean '!secret <name>'?".format(apps_file, where)
+
+    # PyYAML's own text already names the file, line and column, just across several lines
+    detail = " ".join(str(exc).split())
+    return "Error: Unable to load {} - it is not valid YAML: {}".format(apps_file, detail)
 
 
 def mask_secret_args(args):
@@ -866,6 +982,10 @@ def get_now_from_cumulative(data, minutes_now, backwards):
 def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=False, prune_future_days=0, prune_past_days=0, intermediate=False, offset_minutes=0):
     """
     Remove data from before today
+
+    offset_minutes shifts each point forward (a prediction recorded at 10:00 about 11:00 is plotted at
+    11:00), and pruning judges a point by that shifted time, so a prediction made yesterday that lands
+    today is kept.
     """
     results = {}
     last_time = None
@@ -881,10 +1001,10 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             for i in range(1, seconds_gap // int(group * 60)):
                 new_time = last_time + timedelta(seconds=i * group * 60) + timedelta(minutes=offset_minutes)
                 results[new_time.isoformat()] = prev_value
-        if not prune or (timekey > (midnight_utc - timedelta(days=prune_past_days))):
+        new_time = timekey + timedelta(minutes=offset_minutes)
+        if not prune or (new_time > (midnight_utc - timedelta(days=prune_past_days))):
             if prune_future and (timekey > (now_utc + timedelta(days=prune_future_days))):
                 continue
-            new_time = timekey + timedelta(minutes=offset_minutes)
             results[new_time.isoformat()] = data[key]
             last_time = timekey
             prev_value = data[key]
@@ -1312,13 +1432,17 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
 
 def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
     """
-    Keep one payment method variant when Octopus returns overlapping rows for the same window.
+    Keep one payment method variant when an Octopus or Kraken REST endpoint returns overlapping rows for the same window.
 
     The REST tariff endpoints return a DIRECT_DEBIT row and a NON_DIRECT_DEBIT row covering the
     same validity window. minute_data() writes each row over its range, so whichever row comes last
     in the response wins, and that order is not stable across periods. Rows with no payment_method
     (Agile, day/night) are left untouched, and so is a response that never mentions the preferred
     method, which keeps single-variant tariffs behaving exactly as before.
+
+    The Kraken component (EDF, E.ON) also relies on this when it picks its standing charge: the
+    DIRECT_DEBIT and NON_DIRECT_DEBIT rows of a period tie on valid_from, the first one listed wins
+    a tie, and EDF lists the NON_DIRECT_DEBIT row first (GH#5502).
     """
     if not rates:
         return rates
@@ -1326,6 +1450,40 @@ def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
     if preferred not in methods:
         return rates
     return [rate for rate in rates if not isinstance(rate, dict) or rate.get("payment_method") in (preferred, None)]
+
+
+def temperature_scale(unit):
+    """
+    Return which temperature scale a unit names ("C", "F" or "K"), or None if it isn't a temperature unit.
+
+    Hand-written template sensors spell these many ways (c, °c, ºC, degC, Celsius), so marks and case are ignored.
+    """
+    if not unit:
+        return None
+    name = str(unit).strip().lower().replace("℃", "c").replace("℉", "f")
+    for mark in ("degrees", "degree", "deg", "°", "º", "˚", " "):
+        name = name.replace(mark, "")
+    return TEMPERATURE_SCALES.get(name)
+
+
+def convert_temperature(value, unit, required_unit):
+    """Return a temperature converted between °C, °F and K, or None when either unit isn't a temperature unit."""
+    scale_from = temperature_scale(unit)
+    scale_to = temperature_scale(required_unit)
+    if not scale_from or not scale_to:
+        return None
+    if scale_from == scale_to:
+        return value
+    celsius = value
+    if scale_from == "F":
+        celsius = (value - 32) * 5 / 9
+    elif scale_from == "K":
+        celsius = value - 273.15
+    if scale_to == "F":
+        return celsius * 9 / 5 + 32
+    if scale_to == "K":
+        return celsius + 273.15
+    return celsius
 
 
 def minute_data(
@@ -1435,7 +1593,8 @@ def minute_data(
 
         # Get the numerical key and the timestamp and ignore if in error
         try:
-            state = float(state) * scale
+            raw_state = float(state)
+            state = raw_state * scale
             last_updated_time = str2time(item[last_updated_key])
             # Truncate sub-minute precision: a timestamp of 23:30:04 should land on the 23:30 minute boundary,
             # not be floored to 23:31 due to int() truncation of the elapsed seconds.
@@ -1463,8 +1622,12 @@ def minute_data(
                     elif required_unit in ["kW", "kWh"] and unit in ["MW", "MWh"]:
                         state = state * 1000.0
                     else:
-                        # Ignore data in wrong units if we can't converter
-                        continue
+                        converted = convert_temperature(raw_state, unit, required_unit)
+                        if converted is None:
+                            # Ignore data in wrong units if we can't converter
+                            continue
+                        # Scaled after converting: a temperature's unit has an offset, so the order matters
+                        state = converted * scale
 
         # Divide down the state if required
         if divide_by:
@@ -1513,7 +1676,10 @@ def minute_data(
             minutes_to = int(timed_to.total_seconds() / 60)
             minutes_delta = (timed_to.total_seconds() - timed.total_seconds()) / 60.0
 
-        if minutes < newest_age:
+        # Backwards history is oldest first, so on a tie (several changes in the same minute) the later item is the
+        # newest and wins. Forward data is left alone: with smoothing the first two items always share a minute
+        # (each item's start is the previous item's time), and a tie there must not change the tail fill.
+        if minutes < newest_age or (backwards and minutes == newest_age):
             newest_age = minutes
             newest_state = state
 
@@ -1767,8 +1933,8 @@ CAR_PLAN_YEAR_MARGIN = timedelta(days=180)
 def parse_car_plan_windows(planned, now, local_tz):
     """Turn one car's published charging plan into a list of localised (start, end) pairs.
 
-    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC)
-    so the awkward parts stay in one place: the plan carries no year, so each window is
+    Shared by the components that drive a charger from the plan (myenergi, GivEnergy EVC,
+    Ohme, Wallbox, the gateway EVC) so the awkward parts stay in one place: the plan carries no year, so each window is
     rebuilt around now - without that, a plan read either side of New Year lands eleven
     months out - and a malformed entry is skipped rather than costing the rest of the plan.
 
@@ -1787,20 +1953,23 @@ def parse_car_plan_windows(planned, now, local_tz):
     parsed = []
     for window in planned or []:
         try:
-            start = local_tz.localize(datetime.strptime(window["start"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
-            end = local_tz.localize(datetime.strptime(window["end"], CAR_PLAN_TIME_FORMAT).replace(year=now.year))
+            # Parsed with now's year in the string, not stamped on afterwards: strptime without a
+            # year assumes 1900, which has no 29 February, so a leap-day window was dropped
+            start = local_tz.localize(datetime.strptime("{}-{}".format(now.year, window["start"]), "%Y-" + CAR_PLAN_TIME_FORMAT))
+            end = local_tz.localize(datetime.strptime("{}-{}".format(now.year, window["end"]), "%Y-" + CAR_PLAN_TIME_FORMAT))
+            # Shift both ends together so their spacing survives, then close a window whose
+            # end is in January while its start is still in December. Inside the try, as a stale
+            # 29 February entry has no counterpart in the neighbouring year.
+            if start > now + CAR_PLAN_YEAR_MARGIN:
+                start = start.replace(year=start.year - 1)
+                end = end.replace(year=end.year - 1)
+            elif start < now - CAR_PLAN_YEAR_MARGIN:
+                start = start.replace(year=start.year + 1)
+                end = end.replace(year=end.year + 1)
+            if end < start:
+                end = end.replace(year=end.year + 1)
         except (KeyError, TypeError, ValueError):
             continue
-        # Shift both ends together so their spacing survives, then close a window whose
-        # end is in January while its start is still in December
-        if start > now + CAR_PLAN_YEAR_MARGIN:
-            start = start.replace(year=start.year - 1)
-            end = end.replace(year=end.year - 1)
-        elif start < now - CAR_PLAN_YEAR_MARGIN:
-            start = start.replace(year=start.year + 1)
-            end = end.replace(year=end.year + 1)
-        if end < start:
-            end = end.replace(year=end.year + 1)
         parsed.append((start, end))
     return parsed
 
@@ -1933,6 +2102,54 @@ def window2minutes(start, end, minutes_now):
     return compute_window_minutes(start, end, minutes_now)
 
 
+def start_of_local_day(day, local_tz):
+    """
+    The first instant of local date day in local_tz, as an aware datetime
+
+    Usually 00:00. Where the clocks go back across midnight, so 00:00 happens twice, it is the first 00:00; where they go
+    forward at midnight, so 00:00 never happens, it is the instant the day really starts (pytz's standard-time reading of
+    00:00 is that instant). zoneinfo's default fold=0 gives the same answers.
+    """
+    naive = datetime(day.year, day.month, day.day)
+    if not hasattr(local_tz, "localize"):
+        return naive.replace(tzinfo=local_tz)
+    try:
+        return local_tz.localize(naive, is_dst=None)
+    except pytz.exceptions.AmbiguousTimeError:
+        return local_tz.localize(naive, is_dst=True)
+    except pytz.exceptions.NonExistentTimeError:
+        return local_tz.localize(naive, is_dst=False)
+
+
+def clock_change_minutes(now, local_tz):
+    """
+    How far the clocks have moved since the start of today in local_tz: 60 after a spring change, -60 after an autumn one,
+    otherwise 0
+
+    Predbat's midnight_utc is now with the clock set to 00:00, so it carries now's UTC offset; on a clock-change day that
+    instant is this many minutes away from the real start of the day, and minutes_now (minutes since midnight_utc) is this
+    many minutes more than the real time elapsed since the day began. History from minute_data(backwards=True) is keyed by
+    real minutes back from now, so "since local midnight" reads of it use minutes_now - clock_change_minutes(...) (GH#5760).
+    """
+    now_local = now.astimezone(local_tz)
+    day_start = start_of_local_day(now_local.date(), local_tz)
+    return int((now_local.utcoffset() - day_start.utcoffset()).total_seconds() // 60)
+
+
+def local_day_end_minute(now, local_tz):
+    """
+    Where the end of today in local_tz falls, in minutes from Predbat's midnight_utc (now with the clock set to 00:00)
+
+    1440 on most days. On a clock-change day it is the real length of the day measured from midnight_utc: before an
+    autumn change (midnight_utc still on summer time) the day has an extra hour to run, so 1500; before a spring change,
+    1380; once the change has happened midnight_utc moves with it and it is 1440 again (GH#5760).
+    """
+    now_local = now.astimezone(local_tz)
+    midnight = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = start_of_local_day(now_local.date() + timedelta(days=1), local_tz)
+    return int((day_end - midnight).total_seconds() // 60)
+
+
 def minutes_since_midnight(now, midnight):
     """
     Compute minutes from midnight to now, floored to a PREDICT_STEP boundary
@@ -1941,6 +2158,20 @@ def minutes_since_midnight(now, midnight):
     so they carry the same tzinfo and this stays a wall-clock difference across a DST change.
     """
     return int((now - midnight).total_seconds() / 60 / PREDICT_STEP) * PREDICT_STEP
+
+
+def next_aligned_run(run_every, now=None):
+    """
+    The first moment after now on a run_every-second boundary of the host's local wall clock, timezone-aware
+
+    Aware, so the scheduler can keep it in UTC: a naive "02:00" worked out at 01:55 BST on the night the clocks
+    go back would mean 02:00 GMT, an hour and five minutes later (#5770). now defaults to the host clock.
+    """
+    if now is None:
+        now = datetime.now().astimezone()
+    midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    seconds_now = (now - midnight).seconds
+    return midnight + timedelta(seconds=seconds_now + run_every - seconds_now % run_every)
 
 
 def minutes_since_yesterday(now):
@@ -2001,16 +2232,31 @@ def minutes_to_time(updated, now):
     return minutes
 
 
+def strptime_aware(time_str, time_format):
+    """
+    Parse a time string with a format that ends in a UTC offset (%z), raising ValueError when the
+    string has no offset.
+
+    Up to Python 3.14 strptime raises for a missing %z offset; from 3.15 it returns a naive
+    datetime instead, which then fails later when compared with an aware one. Checking the result
+    keeps the same behaviour on every version.
+    """
+    tdata = datetime.strptime(time_str, time_format)
+    if tdata.tzinfo is None:
+        raise ValueError("time data {!r} has no UTC offset for format {!r}".format(time_str, time_format))
+    return tdata
+
+
 def str2time_strptime(time_str):
     """
     Parse a timezone-aware time string into a datetime using strptime (legacy implementation)
     """
     if "." in time_str:
-        tdata = datetime.strptime(time_str, TIME_FORMAT_SECONDS)
+        tdata = strptime_aware(time_str, TIME_FORMAT_SECONDS)
     elif "T" in time_str:
-        tdata = datetime.strptime(time_str, TIME_FORMAT)
+        tdata = strptime_aware(time_str, TIME_FORMAT)
     else:
-        tdata = datetime.strptime(time_str, TIME_FORMAT_OCTOPUS)
+        tdata = strptime_aware(time_str, TIME_FORMAT_OCTOPUS)
     return tdata
 
 
@@ -2444,21 +2690,54 @@ def get_curve_value(curve, index, default=1.0):
     return curve.get(index, default)
 
 
+def battery_temperature_index(battery_temperature):
+    """
+    The whole degree a battery temperature reading is looked up (and learned) at.
+
+    The reading is clamped to -20..BATTERY_TEMPERATURE_CURVE_TEMP_MAX and truncated, except that a reading between -1 and
+    1 that is not exactly 0 goes to 1 (or -1): an exact 0 is how several integrations report a missing reading, so only
+    it keeps the 0 entry, and a real reading just either side of freezing is capped like its neighbours.
+    """
+    temperature = max(min(battery_temperature, BATTERY_TEMPERATURE_CURVE_TEMP_MAX), -20)
+    index = int(temperature)
+    if index == 0 and temperature != 0:
+        index = 1 if temperature > 0 else -1
+    return index
+
+
 def find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, max_rate):
     """
     Find the battery temperature cap
+
+    The reading is looked up by whole degree (battery_temperature_index()) between -20 and
+    BATTERY_TEMPERATURE_CURVE_TEMP_MAX (30); a warmer reading uses the warmest degree. A positive degree the curve does
+    not set falls back to the 20 entry (then to uncapped), as it did when 20 was the warmest degree looked up, so a curve
+    that sets 20 still caps every warmer reading it does not set and a curve without one leaves them uncapped.
+
+    A reading of exactly 0 (often a missing reading) uses the 0 entry, else is uncapped. Any other reading below 1 degree
+    whose degree the curve does not set uses the 0 entry, else the coldest degree the curve sets: a battery below
+    freezing is never expected to charge faster than the coldest rate given, and was planned uncapped when the curve had
+    no 0 entry.
     """
-    battery_temperature_idx = min(battery_temperature, 20)
-    battery_temperature_idx = max(battery_temperature_idx, -20)
-    battery_temperature_idx = int(battery_temperature_idx)  # Convert to int for proper key matching
-    # Try to get the temperature adjustment from the curve (handles both int and string keys)
+    battery_temperature_idx = battery_temperature_index(battery_temperature)
     battery_temperature_adjust = get_curve_value(battery_temperature_curve, battery_temperature_idx, None)
     if battery_temperature_adjust is None:
         # If not found, try fallback values
-        if battery_temperature_idx > 0:
-            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 20, 1.0)
-        else:
+        if battery_temperature_idx == 0:
             battery_temperature_adjust = get_curve_value(battery_temperature_curve, 0, 1.0)
+        elif battery_temperature >= 1:
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK, 1.0)
+        else:
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 0, None)
+            if battery_temperature_adjust is None:
+                coldest = None
+                for key, value in (battery_temperature_curve or {}).items():
+                    try:
+                        if coldest is None or int(key) < coldest[0]:
+                            coldest = (int(key), value)
+                    except (TypeError, ValueError):
+                        continue
+                battery_temperature_adjust = coldest[1] if coldest else 1.0
     battery_temperature_rate_cap = soc_max * battery_temperature_adjust / 60.0
 
     return min(battery_temperature_rate_cap, max_rate)
@@ -2631,29 +2910,162 @@ HTML_DOCUMENT_PREFIXES = ("<!doctype", "<html")
 # still picked up within the hour.
 TOKEN_MINT_BACKOFF_BASE_SECONDS = 300
 TOKEN_MINT_BACKOFF_MAX_SECONDS = 3600
-# Bound the exponent so a long block cannot grow 2 ** block_count without limit; the delay
+# A mint refused with KT-CT-1199 ("Too many requests") is a per-key limit on obtainKrakenToken,
+# and an hourly retry has been seen to keep it tripped for days (4 Nov 2026 onwards). Keep
+# doubling past the hour for that refusal, up to this cap, so the key gets a real rest.
+TOKEN_MINT_RATE_LIMIT_BACKOFF_MAX_SECONDS = 4 * 3600
+# After a rate limit (KT-CT-1199, HTTP 429 or an edge/WAF block) the Kraken-based components pause
+# their GraphQL queries rather than sending the rest of the poll into the same limit. The pause
+# doubles per consecutive rate limit, capped so a limit that lifts is picked up within the half
+# hour. The base matches the two minute dispatch poll, so the first rate limit skips one poll.
+GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS = 120
+GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS = 1800
+# Bound the exponent so a long run of refusals cannot grow 2 ** count without limit; the delay
 # is capped well before this, so the clamp only stops the arithmetic running away.
-TOKEN_MINT_BACKOFF_MAX_DOUBLINGS = 16
-# While suppressed the mint makes no request and so logs nothing, which leaves a reader of a
-# short log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason
-# at most this often.
-TOKEN_MINT_BACKOFF_LOG_INTERVAL_SECONDS = 600
+BACKOFF_MAX_DOUBLINGS = 16
+# While backing off nothing is sent and so nothing is logged, which leaves a reader of a short
+# log window unable to tell a deliberate cooldown from a bad API key. Repeat the reason at most
+# this often.
+BACKOFF_LOG_INTERVAL_SECONDS = 600
+# Kraken's GraphQL error code for "Too many requests"
+KRAKEN_RATE_LIMIT_ERROR_CODE = "KT-CT-1199"
 
 
-def token_mint_backoff_seconds(block_count):
-    """Backoff delay in seconds after this many consecutive CDN blocks on a token mint.
+def exponential_backoff_seconds(count, base_seconds, max_seconds):
+    """Backoff delay in seconds after this many consecutive failures.
 
-    Doubles per consecutive block from TOKEN_MINT_BACKOFF_BASE_SECONDS, capped at
-    TOKEN_MINT_BACKOFF_MAX_SECONDS so a block that lifts is still picked up within the hour.
+    Doubles per consecutive failure from base_seconds, capped at max_seconds.
 
     Args:
-        block_count: Number of consecutive blocks so far, 1 for the first.
+        count: Number of consecutive failures so far, 1 for the first.
+        base_seconds: Delay after the first failure.
+        max_seconds: Longest delay returned.
 
     Returns:
         int: Delay in seconds.
     """
-    exponent = min(max(block_count - 1, 0), TOKEN_MINT_BACKOFF_MAX_DOUBLINGS)
-    return min(TOKEN_MINT_BACKOFF_BASE_SECONDS * (2**exponent), TOKEN_MINT_BACKOFF_MAX_SECONDS)
+    exponent = min(max(count - 1, 0), BACKOFF_MAX_DOUBLINGS)
+    return min(base_seconds * (2**exponent), max_seconds)
+
+
+class Backoff:
+    """Exponential backoff after consecutive refusals - a rate limit or a CDN/WAF block.
+
+    Shared by every Kraken-based token mint and GraphQL cooldown so the schedule, the cap and
+    the clock live in one place. Each consecutive refusal doubles the wait from base_seconds,
+    capped at max_seconds; a Retry-After from the server lengthens it within the same cap.
+    Times are aware UTC, so a clock change cannot stretch or shorten a wait. Logging is left to
+    the caller, whose wording and prefix differ: start() returns the delay, due_reminder() says
+    when to repeat the reason, and clear() returns how many refusals it cleared.
+
+    Attributes:
+        count: Consecutive refusals so far, 0 when not backing off.
+        until: Aware UTC time the backoff ends, or None.
+        reason: How the last request was refused, for the log.
+        started_at: Aware UTC time of the first refusal in this run, or None.
+    """
+
+    def __init__(self, base_seconds, max_seconds):
+        """Create an inactive backoff with the given schedule."""
+        self.base_seconds = base_seconds
+        self.max_seconds = max_seconds
+        self.count = 0
+        self.until = None
+        self.logged_at = None
+        self.reason = None
+        self.started_at = None
+
+    def start(self, reason, retry_after=None, max_seconds=None):
+        """Record another refusal and start (or extend) the backoff.
+
+        Args:
+            reason: How the request was refused, e.g. "rate limited" or "edge/WAF blocked".
+            retry_after: Seconds the server asked us to wait, or None.
+            max_seconds: A cap for this refusal in place of the schedule's own, or None.
+
+        Returns:
+            int: The delay in seconds.
+        """
+        cap = max_seconds if max_seconds is not None else self.max_seconds
+        self.count += 1
+        delay = exponential_backoff_seconds(self.count, self.base_seconds, cap)
+        if retry_after:
+            delay = min(max(delay, retry_after), cap)
+        now = datetime.now(timezone.utc)
+        if self.started_at is None:
+            self.started_at = now
+        self.until = now + timedelta(seconds=delay)
+        self.logged_at = now
+        self.reason = reason
+        return delay
+
+    def active(self):
+        """Return True while the backoff is running."""
+        return self.until is not None and datetime.now(timezone.utc) < self.until
+
+    def due_reminder(self):
+        """Return True, at most every BACKOFF_LOG_INTERVAL_SECONDS, when the caller should repeat why it is backing off."""
+        now = datetime.now(timezone.utc)
+        if self.logged_at and (now - self.logged_at).total_seconds() < BACKOFF_LOG_INTERVAL_SECONDS:
+            return False
+        self.logged_at = now
+        return True
+
+    def clear(self):
+        """End the backoff after a success.
+
+        Returns:
+            int: How many consecutive refusals were cleared, 0 if it was not backing off.
+        """
+        count = self.count
+        self.count = 0
+        self.until = None
+        self.logged_at = None
+        self.reason = None
+        self.started_at = None
+        return count
+
+
+def is_kraken_rate_limit_error(errors):
+    """Return True if a GraphQL errors list carries Kraken's rate limit code (KT-CT-1199).
+
+    Args:
+        errors: The "errors" list from a GraphQL response body, or anything else.
+
+    Returns:
+        bool: True if any error is a rate limit.
+    """
+    if not isinstance(errors, list):
+        return False
+    return any(isinstance(error, dict) and isinstance(error.get("extensions"), dict) and error["extensions"].get("errorCode") == KRAKEN_RATE_LIMIT_ERROR_CODE for error in errors)
+
+
+def parse_retry_after(value, now=None):
+    """Parse an HTTP Retry-After header into seconds to wait.
+
+    The header is either a whole number of seconds or an HTTP date. Anything else - a missing
+    header, a negative number, garbage - returns None so the caller falls back to its own schedule.
+
+    Args:
+        value: The header value, or None when the header is absent.
+        now: The current time as an aware datetime, defaulting to now in UTC. Only used for the date form.
+
+    Returns:
+        int or None: Seconds to wait, 0 for a date already passed, None if the header is unusable.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if value.isdigit():
+        return int(value)
+    try:
+        when = parsedate_to_datetime(value)
+    except (TypeError, ValueError, IndexError):
+        return None
+    if when is None or when.tzinfo is None:
+        return None
+    now = now or datetime.now(timezone.utc)
+    return max(int((when - now).total_seconds()), 0)
 
 
 def is_edge_block_body(text):
@@ -2755,6 +3167,12 @@ def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
 # Matches the +-50W floor already used to decide whether an inverter is doing anything at all.
 PV_SURPLUS_THRESHOLD = 50.0
 
+# A discharge hold latched while the fleet soaks up PV surplus is kept only while that surplus is at least this
+# large (W). Under broken cloud a smaller surplus turns into a deficit long before the next pass, and a battery
+# still held from discharging then leaves it to the grid: in the CT simulator, latching on any surplus added
+# about 0.1 kWh/h of import with PV close to the house load, more than the cross-charging it saved.
+BALANCE_LATCH_SURPLUS_W = 1000.0
+
 
 def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None):
     """
@@ -2771,10 +3189,20 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     ANY other inverter qualifies, and the rate guards consult no partner at all - SoC is never used
     as a proxy for rate capability, because a fleet's fullest battery may be its weakest inverter.
 
-    A pass only ever holds in ONE direction. The inverters share an AC bus, so holding a charger
-    and a discharger together leaves the remaining units absorbing or supplying the difference,
-    against guards that were each evaluated as though its own hold were the only change. Holds
-    within the chosen direction are therefore applied cumulatively as well.
+    SoC holds are only ever taken in the fleet's own direction, and applied cumulatively: the inverters
+    share an AC bus, so each guard has to account for the holds already taken this pass. The one hold
+    taken against that direction is the cross-charge correction, which only ever stops an inverter
+    working AGAINST the fleet - removing draw while the fleet discharges, or supply while it charges -
+    so it can only make the SoC guards' job easier, and the two are applied together.
+
+    A cross-charge hold is latched: an inverter held from charging while the fleet should discharge
+    reads back a charge rate of 0, and keeps that hold for as long as the fleet is still visibly
+    discharging. Without the latch the hold went with the next pass - the held battery reads 0W, so it no
+    longer looks like a cross-charger - and inverters whose loops disagree about the shared CT wound
+    straight back into charging from their neighbours until caught again, a write every minute or two.
+    The mirror, a discharge hold while the fleet soaks up PV, is latched only while the surplus is at
+    least BALANCE_LATCH_SURPLUS_W, because a passing cloud turns a small surplus into a deficit that a
+    battery held from discharging cannot help cover until the next pass.
 
     Args:
         intent (dict): inverter id -> rate intent, mutated in place
@@ -2785,15 +3213,25 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
         threshold_charge (float): minimum SoC% divergence to act on during charge
         threshold_discharge (float): minimum SoC% divergence to act on during discharge
         log_to (callable): optional logger, called with a single string
+
+    Returns:
+    - dict: what this pass decided, for the balance sensor. "status" is "single" or "calibrating" when nothing was
+      considered, else "considered"; "direction" is "discharge" or "charge" (the way the fleet should be going);
+      "spare_pv_w" and "spread_percent" are what that was judged on; "holds" maps each inverter id to
+      {"charge": reason, "discharge": reason}, a reason being None (not held by balancing), "soc",
+      "cross_charge" (caught working against the fleet this pass) or "cross_charge_latched" (kept from before).
     """
     num_inverters = len(snapshot)
+    decisions = {"status": "considered", "direction": None, "spare_pv_w": None, "spread_percent": None, "holds": {id: {"charge": None, "discharge": None} for id in range(num_inverters)}}
     if num_inverters < 2:
-        return
+        decisions["status"] = "single"
+        return decisions
     for entry in snapshot:
         if entry["in_calibration"]:
             if log_to:
                 log_to("BALANCE: an inverter is in calibration, not balancing")
-            return
+            decisions["status"] = "calibrating"
+            return decisions
 
     socs = [entry["soc_percent"] for entry in snapshot]
     reserves = [entry["reserve_percent"] for entry in snapshot]
@@ -2812,8 +3250,12 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
         if id in intent:
             claimed_charge = intent[id].get("charge_rate", None)
             claimed_discharge = intent[id].get("discharge_rate", None)
-            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else claimed_charge)
-            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else claimed_discharge)
+            # A claimed rate is what will be written, but the inverter can still deliver no more than the
+            # snapshot's ceiling - which carries any rate learn_rate_ceilings() has seen it really manage. A charge
+            # or export window claims every inverter's rate, so without the min() a derated peer would be counted
+            # on for its claim and the guard would let a hold leave the house short.
+            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else min(claimed_charge, snapshot[id]["battery_rate_max_charge"]))
+            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else min(claimed_discharge, snapshot[id]["battery_rate_max_discharge"]))
         else:
             # Not being written this pass (read-only, or skipped for calibration), so whatever it
             # reads now is what it will keep
@@ -2891,32 +3333,56 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     else:
         fleet_should_discharge = during_discharge and spare_pv <= PV_SURPLUS_THRESHOLD
 
+    # Inverters already held against the fleet direction read that rate back as 0 (the snapshot keeps a
+    # true zero through the prediction rate floor). Such a hold is kept while the fleet's direction is
+    # unchanged - a held battery reads 0W, so on power alone it would be released every other pass and
+    # wind straight back into cross-charging. It ends when the direction flips, as the rate the latch
+    # reads is then the other one, or when the fleet stops visibly moving power that way. A latched
+    # discharge hold also needs a comfortable PV surplus - see BALANCE_LATCH_SURPLUS_W.
     if fleet_should_discharge:
-        against_fleet = [id for id in range(num_inverters) if power_enough_charge[id] and id in intent]
+        # The charge latch also needs the fleet to be visibly discharging. A fleet sitting idle - every battery
+        # at 0W, nothing on the meter because grid_power is not configured or the site curtails PV to zero export
+        # - would otherwise keep a charge rate of 0 (left by a freeze-export slot, say) all day and take no PV.
+        fleet_discharging = total_battery_power >= 50.0
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_charge[id] or (charge_rates[id] == 0 and fleet_discharging))]
     else:
-        against_fleet = [id for id in range(num_inverters) if power_enough_discharge[id] and id in intent]
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_discharge[id] or (discharge_rates[id] == 0 and spare_pv >= BALANCE_LATCH_SURPLUS_W))]
 
-    if against_fleet and balance_crosscharge:
+    decisions["direction"] = "discharge" if fleet_should_discharge else "charge"
+    decisions["spare_pv_w"] = spare_pv
+    decisions["spread_percent"] = soc_max - soc_min
+
+    if balance_crosscharge:
         for id in against_fleet:
-            if log_to:
+            caught = power_enough_charge[id] if fleet_should_discharge else power_enough_discharge[id]
+            if log_to and caught:
                 log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
             if fleet_should_discharge:
                 intent[id]["charge_rate"] = 0
             else:
                 intent[id]["discharge_rate"] = 0
-        # This pass is done: SoC balancing on top would be the second direction of hold that the
-        # coupling between inverters rules out. When the correction is switched OFF we hold nothing
-        # here, so a same-direction SoC hold below is still a single-direction pass and is allowed.
-        return
+            decisions["holds"][id]["charge" if fleet_should_discharge else "discharge"] = "cross_charge" if caught else "cross_charge_latched"
+        # SoC balancing still runs. An inverter held here can no longer help in the direction it was held in,
+        # so the SoC guard below that needs that direction leaves it out of the capacity it counts on: one held
+        # from discharging into a surplus cannot take over the house, and one held from charging while the fleet
+        # discharges cannot soak up surplus.
+
+    cross_held_discharge = set(against_fleet) if (balance_crosscharge and not fleet_should_discharge) else set()
+    cross_held_charge = set(against_fleet) if (balance_crosscharge and fleet_should_discharge) else set()
 
     if not out_of_balance:
-        return
+        return decisions
 
     # SoC balancing, in the fleet's own direction only. Holds are applied cumulatively - the rate
     # guard asks "if I stop this one, can the rest cover?", so each hold has to account for the
     # ones already taken this pass or two holds each pass a check computed for one.
     if during_discharge and balance_discharge and total_discharge_rates > 0:
         held = set()
+        # Charging the cross-charge holds above have just stopped was being supplied by the rest of the
+        # fleet, so it no longer nets off against the house: the batteries left discharging must now cover
+        # the measured net power plus that charging. Counting only the net would let a hold pass a check
+        # that the very next second fails.
+        stopped_charging = sum(-battery_powers[other] for other in against_fleet if battery_powers[other] < 0) if (balance_crosscharge and fleet_should_discharge) else 0.0
         for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: socs[id]):
             if not soc_low[id]:
                 continue
@@ -2929,12 +3395,13 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # headroom" separately lets two different inverters answer them - a peer with energy
             # but no rate, and a peer with rate but sitting on its reserve - and holding this one
             # then leaves only unusable capacity behind, with the shortfall coming off the grid.
-            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held)
-            if (usable - 200) < total_battery_power:
+            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held and other not in cross_held_discharge)
+            if (usable - 200) < total_battery_power + stopped_charging:
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is low at {}% against {}%, holding its discharge".format(id, socs[id], soc_max))
             intent[id]["discharge_rate"] = 0
+            decisions["holds"][id]["discharge"] = "soc"
             held.add(id)
     elif during_charge and balance_charge and total_charge_rates > 0:
         held = set()
@@ -2950,13 +3417,66 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # of the fleet it is implied, so it is not restated.
             # Same on the charge side: a battery already at 100% absorbs nothing, so its rate must
             # not be counted towards what is left to soak up the surplus.
-            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held)
+            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held and other not in cross_held_charge)
             if spare_pv > usable:
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
             intent[id]["charge_rate"] = 0
+            decisions["holds"][id]["charge"] = "soc"
             held.add(id)
+    return decisions
+
+
+def learn_rate_ceilings(snapshot, now):
+    """
+    Learn the rate each inverter can really deliver from the grid meter, and cap its rate in the snapshot at it.
+
+    balance_inverters() decides whether the rest of the fleet can carry a held inverter's share from the peers'
+    CONFIGURED rates. A peer that delivers less - a cold battery, a BMS derate, an AC limit lower than Predbat
+    was told, none of which Predbat necessarily knows about - passes that check, and the house sits on the grid
+    for as long as the hold lasts. With a badly derated peer that is until SoC converges, which can be hours.
+
+    The grid meter shows it. If the site is short in a direction - importing while the batteries discharge,
+    exporting surplus while they charge - by more than BALANCE_CEILING_SHORTFALL_W while an inverter reads a
+    rate of 0 that way, every peer still moving power that way is already giving all it can, or the shortfall
+    would not be there. Each such peer's measured power becomes its learned ceiling, recorded only where it is
+    clearly below the configured rate, and caps that rate in the snapshot. The capacity guard then sees the
+    shortfall itself and lets the hold go, and does not take it again while the peer cannot cover it.
+
+    A ceiling is forgotten as soon as the peer delivers more than it, or after BALANCE_CEILING_EXPIRY_SECONDS, so
+    a battery that has warmed up is trusted with its full rate again. Learning from a moment when a peer was
+    still ramping up only records a ceiling that is too low, which makes balancing hold less, never puts more
+    on the grid, and is corrected the next time that peer is seen delivering more.
+
+    Each snapshot entry carries learned_charge_ceiling and learned_discharge_ceiling, None or [watts, seen_at],
+    as stored after the previous pass. They are updated in place, along with battery_rate_max_charge and
+    battery_rate_max_discharge.
+
+    Args:
+        snapshot (list): per-inverter readings from Execute.build_inverter_snapshot()
+        now (float): the current time in seconds, on the same clock as the stored seen_at
+    """
+    total_grid = sum(entry.get("grid_power", 0.0) for entry in snapshot)
+    # Predbat's grid convention is +ve export and battery_power is +ve discharging, so the shortfall while
+    # discharging is import (-grid) and while charging it is export (+grid); sign turns battery power into
+    # power moved in that direction.
+    for kind, sign, shortfall in (("discharge", 1.0, -total_grid), ("charge", -1.0, total_grid)):
+        rate_key = kind + "_rate_now"
+        max_key = "battery_rate_max_" + kind
+        learned_key = "learned_" + kind + "_ceiling"
+        held = {index for index, entry in enumerate(snapshot) if entry[rate_key] == 0}
+        short = bool(held) and shortfall > BALANCE_CEILING_SHORTFALL_W
+        for index, entry in enumerate(snapshot):
+            power = sign * entry["battery_power"]
+            learned = entry.get(learned_key)
+            if learned is not None and (power > learned[0] + BALANCE_CEILING_SHORTFALL_W or now - learned[1] > BALANCE_CEILING_EXPIRY_SECONDS):
+                learned = None
+            if short and index not in held and 0.0 < power < entry[max_key] * 0.95:
+                learned = [power, now]
+            entry[learned_key] = learned
+            if learned is not None:
+                entry[max_key] = min(entry[max_key], learned[0])
 
 
 def allocate_export_rates(needs, max_rates, p_fleet):
@@ -3025,3 +3545,43 @@ def allocate_export_rates(needs, max_rates, p_fleet):
             remaining = 0.0
 
     return alloc
+
+
+# What the Octopus Energy integration's device_type attribute names a charger and a car as (BottlecapDave #1917)
+INTELLIGENT_DEVICE_TYPE_CHARGER = "ELECTRIC_VEHICLE_CHARGERS"
+INTELLIGENT_DEVICE_TYPE_CAR = "ELECTRIC_VEHICLES"
+
+
+def intelligent_device_is_charger(dispatch_attribute, target_attribute=None):
+    """Is a car's Octopus Intelligent device its charger (True), the car itself (False), or can that not be told (None)?
+
+    dispatch_attribute(name) reads an attribute of the car's dispatch sensor, target_attribute(name) one of its
+    Intelligent charge target entity, when there is one. Checked in order:
+
+    - is_charger on the dispatch sensor, published by Predbat's own Octopus and Kraken components.
+    - device_type, which the Octopus Energy integration puts on the charge target entity (and is read from the
+      dispatch sensor too).
+    - Failing both, which size the integration's dispatch sensor fills in: only the charge point's power for a
+      charger, only the battery size for a car.
+    """
+    is_charger = dispatch_attribute("is_charger")
+    if isinstance(is_charger, (bool, int, float)):
+        return bool(is_charger)
+    if isinstance(is_charger, str) and is_charger.strip().lower() not in ("", "unknown", "unavailable", "none"):
+        # The strings get_arg() and the charger control read as true
+        return is_charger.strip().lower() in ("on", "true", "yes", "enabled", "enable", "connected")
+    for read in (target_attribute, dispatch_attribute):
+        if read is None:
+            continue
+        device_type = read("device_type")
+        if device_type == INTELLIGENT_DEVICE_TYPE_CHARGER:
+            return True
+        if device_type == INTELLIGENT_DEVICE_TYPE_CAR:
+            return False
+    size = dispatch_attribute("vehicle_battery_size_in_kwh")
+    rate = dispatch_attribute("charge_point_power_in_kw")
+    if rate is not None and size is None:
+        return True
+    if size is not None and rate is None:
+        return False
+    return None

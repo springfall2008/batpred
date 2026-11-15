@@ -106,7 +106,7 @@ The main loop (`update_pred()`) runs every 5 minutes: fetch data → run optimiz
 
 ### Component/Plugin System
 
-`components.py` defines a registry of 18 pluggable components (DB, HA, Web, MCP, GECloud, Octopus, Fox, Solax, Solis, Axle, Ohme, Kraken, etc.). Each component:
+`components.py` defines a registry of 33 pluggable components (DB, HA, Web, MCP, GECloud, Octopus, Fox, Solax, Solis, Axle, Ohme, Wallbox, Hypervolt, Kraken, etc.). Each component:
 
 - Inherits from `ComponentBase`
 - Has `api_start()` / `api_stop()` lifecycle methods

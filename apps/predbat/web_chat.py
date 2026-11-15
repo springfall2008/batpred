@@ -2153,9 +2153,7 @@ def get_chat_body():
         </div>
     </div>
 </div>
-""".format(
-        autofill_off=AUTOFILL_OFF
-    )
+""".format(autofill_off=AUTOFILL_OFF)
 
 
 def get_chat_script():

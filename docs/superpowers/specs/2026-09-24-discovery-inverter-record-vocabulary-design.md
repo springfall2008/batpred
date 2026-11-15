@@ -70,6 +70,7 @@ is the first to change behaviour.
 | D13 | GEC and GEE `soc_units` become `"%"`: GE Cloud binds `soc_percent`, and `inv_soc_units` is never read, so this changes no behaviour. `clock_time_format` stays as it is on GE, GEC and GEE, because those rows also serve installs that do not use the components (the GivTCP add-on and GE Cloud templates) and the row's format is their last-resort parse; GivTCP and GE Cloud records describe the ISO format their sensors really publish, and their completeness tests carry that one named exception. |
 | D14 | A rating is a figure the device reports. A value Predbat derives or the user overrides (AlphaESS's and Solis's `battery_rate_max`) is bound as an entity but not given as a rating. The same applies to `soc_max` on the vendors that report amp-hours (Sunsynk, Deye, Solis): their kWh is the Ah times a pack voltage Predbat infers or the user sets, so they report `battery_capacity_ah` as the rating and bind `soc_max` as an entity only. |
 | D15 | A site-wide setting bound once from the first driven inverter (`battery_temperature_history`) goes on that inverter's record only. |
+| D16 | (1 Nov 2026, piece 2) Rows gained three fields after this spec. `reserve_above_soc_charges_from_grid` is an optional capability: a record may state it, and leaving it out is not a gap (it takes base's value, else `False`, `inverter.py`'s default). `write_max_retry` and `write_backoff` come from the component, like `write_and_poll_sleep` (`ComponentBase.WRITE_MAX_RETRY` / `WRITE_BACKOFF`). The SolaxCloud and SIGCLOUD rows' `soc_units` become `"kWh"`: both components bind `soc_kw`, and `inv_soc_units` is never read, so, as with D13, this changes no behaviour. |
 
 ## 1. The inverter record
 
@@ -92,7 +93,11 @@ entity:
 `support_charge_freeze`, `support_discharge_freeze`, `support_feedin_first`, `can_span_midnight`,
 `charge_discharge_with_rate`, `charge_control_immediate`, `target_soc_used_for_discharge`.
 
-Values are `True` or `False`. An unknown key, or a non-bool value, is dropped by the validator. While
+Values are `True` or `False`. An unknown key, or a non-bool value, is dropped by the validator.
+
+One further key is optional (D16): `reserve_above_soc_charges_from_grid`. A record may state it; when it
+is left out the definition takes `False` and it is not a gap, so only the types whose rows set it
+(EnphaseCloud, TESLA) need to. While
 reporters migrate, a key left out keeps the row's value; a converted reporter states all seven (section 2's
 completeness test enforces it).
 
@@ -224,7 +229,9 @@ The definition is built from four sources:
    | `time_button_press` | whether a `schedule_write_button` entity is present |
    | `num_load_entities` | 1 plus the number of consecutive `load_power_1`, `load_power_2`, ... entities bound (`inverter.py:1523` adds them into the load reading) |
 
-4. **The component** - `write_and_poll_sleep`, a constant on the component class (`ComponentBase.WRITE_AND_POLL_SLEEP`).
+4. **The component** - `write_and_poll_sleep`, a constant on the component class (`ComponentBase.WRITE_AND_POLL_SLEEP`),
+   and, only where the component sets them (D16), `write_max_retry` and `write_backoff` (`ComponentBase.WRITE_MAX_RETRY` /
+   `WRITE_BACKOFF`).
    It is 2 for the cloud types and 10 for the GivEnergy types (GE, GEC, GEE), which GivTCP and GE Cloud override.
 
 `has_mqtt_api` (Sofar's MQTT path) defaults to `False`, its value for every component-driven type.

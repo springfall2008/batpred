@@ -28,7 +28,7 @@ from aiohttp import web
 from annual import INCLUDED_STATUSES, SOLAR_KWP_SOFT_LIMIT, AnnualConfigError, config_warnings, validate_config
 from annual_costs import DEFAULT_COSTS, build_costs, resolve_costs
 from annual_job import AnnualJob
-from annual_store import backfill_summaries, delete_run, list_runs, load_plan, load_run, save_run
+from annual_store import backfill_summaries, delete_run, list_runs, load_plan, load_run, save_run, solar_array_kwp
 from tariff_catalogue import (
     BASELINE_DEFAULT_EXPORT_ID,
     BASELINE_DEFAULT_IMPORT_ID,
@@ -41,6 +41,7 @@ from tariff_catalogue import (
     merged_export_catalogue,
     merged_import_catalogue,
 )
+from utils import secret_yaml_loader
 from web_helper import get_plan_css, get_plan_renderer_js
 
 # Validated with the dataviz palette checker in BOTH light and dark mode, all pairs.
@@ -308,10 +309,12 @@ class AnnualPage:
     def load_config(self):
         """Return the saved configuration, or a fresh prefill when none exists."""
         path = self._config_path()
+        # annual.yaml may use !secret (e.g. load.octopus.api_key), resolved against this instance's secrets.yaml
+        loader = secret_yaml_loader(self.base.secrets, self.log)
         try:
             if os.path.exists(path):
                 with open(path, "r", encoding="utf-8") as handle:
-                    saved = yaml.safe_load(handle)
+                    saved = yaml.load(handle, Loader=loader)  # nosec B506 - a SafeLoader subclass
                 if isinstance(saved, dict) and saved:
                     return saved.get("annual", saved)
         except (OSError, yaml.YAMLError) as error:
@@ -1223,7 +1226,7 @@ class AnnualPage:
         if isinstance(solar, dict):
             solar = [solar]
         if isinstance(solar, list) and solar:
-            total_kwp = sum(float(array.get("kwp", 0) or 0) for array in solar if isinstance(array, dict))
+            total_kwp = sum(solar_array_kwp(array) for array in solar)
             panels = [int(array.get("panels", 0) or 0) for array in solar if isinstance(array, dict)]
             # Only show a panel count when EVERY array was given as panels; a partial
             # count would read as the whole system's.

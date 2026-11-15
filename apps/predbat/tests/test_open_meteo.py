@@ -17,7 +17,6 @@ from solcast import pvwatts_cell_temperature
 from tests.test_solcast import create_test_solar_api
 from tests.test_infra import run_async
 
-
 # ============================================================================
 # Helper: build a minimal Open-Meteo hourly forecast response
 # ============================================================================
