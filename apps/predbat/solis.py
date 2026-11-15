@@ -361,8 +361,15 @@ def slot_direction_to_defer(current_time, slot_data):
     A TOU V2 inverter keeps only one of a slot's charge and discharge enables on: writing one turns the other
     off (issue #6210). Predbat arms its next window up to set_window_minutes before it starts, so slot 1 can be
     asked for a charge and an export at once. The slot goes to the window that is running, or else to the one
-    that starts first. When both are running the one that started later wins, as the plan moved a window onto
-    the other and the other is what it left behind; the charge wins a tie.
+    that starts first. When both are running the one that started later wins; the charge wins a tie.
+
+    Both running is not a state the plan asks for - it gives each slot of time a single action - and this branch
+    relies on that rather than checking it. It is only ever seen part-way through one execute: execute.py sets
+    each inverter's charge window before its export, so a charge the plan moves to start now is armed moments
+    before the same execute withdraws the export it replaces, and a 60s write tick can land in between. The
+    later start is that new window, and handing it the slot cuts off only a window about to be withdrawn. (An
+    export moved to now never meets a running charge: the charge is withdrawn first.) Should both ever be
+    asked for in earnest, the earlier window would be cut off, as before this check existed.
 
     Args:
         current_time: Time now, as "HH:MM"

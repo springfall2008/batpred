@@ -4473,7 +4473,9 @@ async def test_write_time_windows_v2_held_window_moves_later(held):
 async def test_write_time_windows_v2_held_window_moves_to_now(held):
     """Issue #6210: a held-back window moved earlier, to start now, takes the slot at once at its new times.
 
-    The running window is left enabled, as it is until Predbat's next execute ends it: the moved one started later, so it wins.
+    The running window is left enabled to pin the both-running rule: the moved one started later, so it wins. execute.py
+    reaches that state only for a charge moved to now, between arming it and withdrawing the export in the same execute
+    (see slot_direction_to_defer()); an export moved to now has had the charge withdrawn first.
 
     Args:
         held: The direction held back, "charge" or "discharge"
