@@ -408,6 +408,54 @@ def test_hanchu_discovery_record_names_a_known_model():
     assert not failed, "test_hanchu_discovery_record_names_a_known_model"
 
 
+def test_hanchu_discovery_record_reports_hybrid_from_the_ac_coupled_field():
+    """hybrid is False when bypMeterSwitch says AC coupled (1), True when it is present with any other value, absent when not sent.
+
+    The value is kept from the status poll, so a later poll that leaves the field out does not take the verdict back.
+    Hanchu never writes inverter_hybrid itself: discovery sets it from the record.
+    """
+    failed = False
+    cases = [
+        ("AC-coupled", 1, False),
+        ("AC-coupled as a string", "1", False),
+        ("AC-coupled as a float", 1.0, False),
+        ("present but empty", "", True),
+        ("DC-coupled", 0, True),
+        ("DC-coupled as a string", "0", True),
+        ("not sent", None, "absent"),
+    ]
+    for label, value, expected in cases:
+        client = MockHanchu(automatic=True)
+        client.device_list = [SN]
+        payload = dict(STATUS_SAMPLE)
+        if value is not None:
+            payload["bypMeterSwitch"] = value
+        client._apply_status_payload(SN, payload)
+        record = validated_inverters(client.build_discovery())[0]
+        actual = record.get("hybrid", "absent")
+        if actual != expected or (expected != "absent" and not isinstance(actual, bool)):
+            print(f"ERROR: {label}: bypMeterSwitch {value!r} should give hybrid {expected!r}, got {actual!r}")
+            failed = True
+        # A later poll without the field keeps what was learnt
+        client._apply_status_payload(SN, dict(STATUS_SAMPLE))
+        again = client.build_discovery()["inverters"][0].get("hybrid", "absent")
+        if again != expected:
+            print(f"ERROR: {label}: a poll without bypMeterSwitch changed hybrid from {expected!r} to {again!r}")
+            failed = True
+        written = {}
+
+        async def capture_external(entity_id, state, attributes=None, written=written):
+            """Record a write to one of Predbat's own config entities."""
+            written[entity_id] = state
+
+        client.set_state_external = capture_external
+        run_async_local(client.automatic_config())
+        if "switch.predbat_inverter_hybrid" in written:
+            print(f"ERROR: {label}: Hanchu wrote inverter_hybrid, which is discovery's to set")
+            failed = True
+    assert not failed, "test_hanchu_discovery_record_reports_hybrid_from_the_ac_coupled_field"
+
+
 def run_hanchu_publish_tests(my_predbat):
     """Run all Hanchu publish, automatic_config and discovery tests."""
     failed = False
@@ -425,6 +473,7 @@ def run_hanchu_publish_tests(my_predbat):
         ("discovery_record", test_hanchu_discovery_record_is_complete_and_agrees_with_automatic_config),
         ("discovery_none", test_hanchu_discovery_returns_none_before_discovery),
         ("discovery_model", test_hanchu_discovery_record_names_a_known_model),
+        ("discovery_hybrid", test_hanchu_discovery_record_reports_hybrid_from_the_ac_coupled_field),
     ]:
         try:
             if fn():

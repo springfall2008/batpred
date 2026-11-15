@@ -702,7 +702,11 @@ Predbat now supports direct communication with the GivEnergy cloud services inst
 Log into the GivEnergy Portal web site and [create an API key](#givenergy-cloud-data) and copy it into the **ge_cloud_key** setting in `apps.yaml`.
 
 If you set **ge_cloud_automatic** to true, the number of inverters and their settings will be configured automatically and any inverter/battery configuration in `apps.yaml` will be ignored.
-Or, if you set **ge_cloud_automatic** to false then you need to manually configure **ge_cloud_serial** to your inverter serial number for Predbat to use on the GivEnergy Cloud.
+Or, if you set **ge_cloud_automatic** to false then you configure your inverters in `apps.yaml` yourself.
+**ge_cloud_serial** is now optional while GivEnergy Cloud Direct is running: GE Cloud Data takes the serial of the inverter GE Cloud finds (see [GivEnergy Cloud Data](#givenergy-cloud-data)).
+Set it only to choose a different serial for the cloud data. A **ge_cloud_serial** you set in `apps.yaml` is also one of the ways discovery
+recognises that the inverter you configured by hand in slot 0 is the one GE Cloud found, so with **ge_cloud_automatic** on it takes that slot over
+rather than configuring the inverter twice (see [Takeover](discovery-catalogue.md#takeover)).
 
 If you set **ge_cloud_data** to false then Predbat will use the local Home Assistant data for history rather than the cloud data;
 you will need to wait until you have a few days of history established (at least **days_previous** days) before this will work correctly.
@@ -751,6 +755,9 @@ Grid power is split into import and export and each is added up over the day, th
 solar + import - export + battery discharge - battery charge. Solar still comes from the Gateway's **pv_today** counters, added up across the inverters.
 With **gateway_shared_ct** the grid power of the first inverter is used; without it the grid power of every inverter is added together.
 These figures return to zero at midnight and also restart from zero if Predbat is restarted during the day.
+
+The Predbat Gateway used to move only the displayed **switch.predbat_inverter_hybrid**; Predbat's discovery now sets the value the planner uses from the models the Gateway reports
+(for example an All-in-One behind a hub turns it off) - see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting). A value you set by hand is put back on the next changed report (including after every restart).
 
 - **ge_cloud_automatic_split_pv** - Optional, defaults to false. When set to `true`, Predbat will also include any standalone PV-only inverters (e.g. a GivEnergy AC-coupled PV inverter with no battery attached) in **pv_today** and **pv_power**, in addition to the battery inverters.
 Use this if you have a separate PV-only inverter alongside your battery inverter(s) and want its solar generation included in Predbat's totals. Leave this off (the default) if your battery inverters already report all of your solar generation, to avoid duplicating or including unwanted readings.
@@ -1038,7 +1045,7 @@ Then manually configure all required entities following the standard Predbat inv
 The Solis Cloud API supports various Solis hybrid inverter models with battery storage, including:
 
 - RHI series (single-phase hybrid)
-- RAI series (three-phase hybrid)
+- RAI series (AC-coupled retrofit storage inverter)
 - S5 series hybrid inverters
 - Other Solis cloud-connected hybrid inverters
 
@@ -1194,7 +1201,7 @@ Charge/discharge rate handling differs by system entitlement. Systems entitled t
 
 The API does not report a grid export limit either, and Predbat defaults `export_limit` to 99999W in its absence. If your site's grid connection is capped below the inverter's rating (a G98/G99 limitation notice), you **must** set `export_limit` by hand in `apps.yaml` - otherwise Predbat will plan exports your connection cannot actually deliver.
 
-`switch.predbat_inverter_hybrid` is only ever moved towards AC-coupled (off) on positive evidence - no DC PV strings reported alongside PV energy with no PV nameplate rating - and Predbat defaults it on and leaves it alone whenever the evidence is inconclusive, since most AlphaESS units are DC-coupled hybrids. If you have retrofitted an AC-coupled AlphaESS battery onto an existing PV system, check this switch by hand rather than relying on automatic detection.
+With `alphaess_automatic` on, discovery sets `switch.predbat_inverter_hybrid` from what each system reports (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). A system is reported as AC-coupled (switch off) only on agreeing evidence - no DC PV strings reported alongside PV energy with no PV nameplate rating - and as a hybrid (switch on) when it reports DC PV strings. Until either has been seen it reports neither, since most AlphaESS units are DC-coupled hybrids; once decided, the answer is kept (across restarts too) rather than dropped each night or on a reading that leaves the strings out. If you have retrofitted an AC-coupled AlphaESS battery onto an existing PV system, check this switch by hand rather than relying on automatic detection.
 
 AlphaESS also sells plug-in solar products with no battery (the VT1000 family, for example). Systems that report no battery capacity are skipped by design during discovery - there is nothing for Predbat to control on them, and they will not appear as an inverter.
 
@@ -1265,7 +1272,11 @@ The number of inverters you have. If you increase this above 1 you must provide 
 
 ### inverter_type
 
-inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should be set to one of the inverter types that are already pre-programmed into Predbat:
+inverter_type must be set to one of the inverter types that are already pre-programmed into Predbat (or to your own custom type).
+It has no default: it may be left out only when a component configures the inverter automatically (any `*_automatic` option, such as `ge_cloud_automatic`, or `givtcp_rest`).
+Otherwise Predbat stops with the error `inverter_type is not set in apps.yaml`.
+
+The pre-programmed types are:
 
   DeyeCloud: DEYE Cloud API integration (EXPERIMENTAL)
   EnphaseCloud: Enphase Cloud integration (EXPERIMENTAL)
@@ -1290,6 +1301,36 @@ inverter_type defaults to 'GE' (GivEnergy) if not set in `apps.yaml`, or should 
 If you have multiple inverters, then set inverter_type to a list of the inverter types.
 
 If you have created a [custom inverter type](inverter-setup.md#i-want-to-add-an-unsupported-inverter-to-predbat) in `apps.yaml` then inverter_type **must** be set to the same code as has been used in the custom inverter definition.
+
+### inverter_hybrid_override
+
+`inverter_hybrid_override` sets **switch.predbat_inverter_hybrid** from `apps.yaml`, above what discovery reads from your inverters
+(see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). Without it, an inverter component with automatic configuration
+on sets the switch from what the inverter reports, and a value you set by hand is put back on the next changed report (including after
+every restart). It has two forms:
+
+- **A single value** holds the switch at that value whatever the inverters report. Predbat writes it whenever the switch differs - at
+  startup and on any changed report - and logs `Coordinator: inverter_hybrid set on - inverter_hybrid_override in apps.yaml` (or `off`):
+
+```yaml
+  inverter_hybrid_override: False   # AC coupled, whatever the inverters say
+```
+
+- **A list, one entry per inverter**, in the same order as `inverter_type`. A `True` or `False` entry replaces what discovery reports
+  for that inverter, or, for an inverter you configured by hand in `apps.yaml`, gives it a say it would not otherwise have. A `null` (or
+  `None`, or a missing) entry leaves that inverter to what it reports. The entries then go through the usual rule: any inverter not hybrid turns the
+  switch off, otherwise any hybrid turns it on, otherwise it is left as it is:
+
+```yaml
+  inverter_hybrid_override:
+    - True    # inverter 0 is a hybrid, whatever it reports
+    - null    # inverter 1: as discovery reports it
+```
+
+The list follows Predbat's inverter slots, which discovery assigns only for components that hand their inverters to it (GE Cloud
+with `ge_cloud_automatic`); an inverter from another component that configures itself is not matched to an entry, so for those use
+the single value. A value that is not `True`, `False` (or `on`/`off`, `yes`/`no`), or a list of them and `null`, is ignored with a warning.
+Teslemetry's own `teslemetry_hybrid` still sets what Teslemetry reports; `inverter_hybrid_override` sits above it.
 
 ### geserial
 
@@ -1413,8 +1454,10 @@ If you have an issue with the GivTCP data, Predbat can get the required historic
 Connecting to the cloud is less efficient and means that Predbat will be dependent upon your internet connection and the GivEnergy cloud to operate.
 
 - **ge_cloud_data** - When true Predbat will connect to the GivEnergy cloud rather than GivTCP sensors for historical load_today, import_today and export_today inverter data
-- **ge_cloud_serial** - Set the inverter serial number to use for the cloud data
+- **ge_cloud_serial** - Set the inverter serial number to use for the cloud data. Optional while GivEnergy Cloud Direct (`ge_cloud_direct`) is running, which supplies the serial of its first inverter (the first battery behind a Gateway)
 - **ge_cloud_key** - Set to your API Key for the GE Cloud (long string)
+
+When GivEnergy Cloud Direct reports a GivEnergy EMS the cloud data is not used: Predbat takes its load history from **load_today**, exactly as if **ge_cloud_data** were false, and goes back to the cloud data by itself if the EMS is no longer reported.
 
 If you need to create a **ge_cloud_key**, in the GivEnergy cloud portal:
 
@@ -1972,6 +2015,10 @@ in/out, solar and battery in/out are the set its Energy Dashboard asks for.
 - **givtcp_automatic** - Optional, defaults to `true`. Set to `false` to stop Predbat pointing its settings
 at those entities, so you can configure `apps.yaml` yourself. The entities are still published either way,
 so you can name them by hand - or point an individual setting at a sensor of your own.
+With `givtcp_automatic` on (the default) Predbat's discovery also sets **switch.predbat_inverter_hybrid** from each inverter's
+`Invertor_Type`: off for an AC-coupled or All-in-One model, on for a hybrid, and left alone when the type is unknown (see
+[The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). GivTCP did not set this switch before. A value you set by hand is put
+back on the next changed report (including after every restart); set [`inverter_hybrid_override`](#inverter_hybrid_override) to manage the switch yourself.
 
 Note that Predbat will always retrieve inverter information via REST, this configuration only applies to how Predbat controls the inverter.
 

@@ -12,7 +12,8 @@ components can each see part of the same physical setup (a GivEnergy inverter vi
 GivTCP and GE Cloud, say), or claim the same car slot, and today those situations are resolved
 silently by whichever component happens to run first. The catalogue does not change that behaviour
 
-- **nothing about it writes to your configuration, or changes anything Predbat does**. It only
+- **nothing about it writes to your configuration, or changes anything Predbat does**, except for the
+inverters of a component that hands their configuration to it (see [Automatic configuration](#automatic-configuration)). It only
 makes what was already happening visible, so a maintainer reading a bug report can see the whole
 picture at a glance instead of reconstructing it from log lines, and so a genuine ambiguity (two
 components both claiming the same inverter) is recorded as an observation rather than staying an
@@ -110,8 +111,10 @@ extra top-level sections describe the fleet as a whole rather than any one devic
     which a handful said anything, and buried the case that matters: a component that *can* report
     and did not
 - **`observations`** - things noticed about the assembled picture rather than about any one
-  component: `conflicts` (see below) and `resulting_config`, the handful of apps.yaml keys
-  (`num_inverters`, `num_cars`, `inverter_type`) discovery can be compared against
+  component: `conflicts` (see below), `resulting_config`, the handful of apps.yaml keys
+  (`num_inverters`, `num_cars`, `inverter_type`) discovery can be compared against, and, once
+  automatic configuration has run, `bindings` (see
+  [Automatic configuration](#automatic-configuration))
 
 ### Conflicts
 
@@ -124,6 +127,253 @@ happened to run first - the catalogue observes them, it does not resolve them:
 | `multiple_inverter_sources` | More than one component reports an inverter record at all (e.g. both GivTCP and GE Cloud) |
 | `multiple_import_meters` | More than one component reports an import meter |
 | `contested_car_slots` | A car is reported by a component that reports no charger, alongside a component that reports both a charger and a car - two components with a different idea of what should occupy a car slot |
+
+## Automatic configuration
+
+Discovery is more than an observer for the components that hand their inverter configuration to it:
+it configures their inverters from their inverter records. Only **GE Cloud** (`ge_cloud_automatic`)
+does so far, and it no longer writes any inverter setting itself. Every other component with an
+automatic option still configures itself as before, and running one of them alongside GE Cloud is not
+supported - Predbat now always logs a warning naming both when they run together. Until a component hands its configuration over, nothing
+here runs, except the site-wide `inverter_hybrid` rule (see [The hybrid setting](#the-hybrid-setting)).
+
+### Slots
+
+Each inverter Predbat drives is a **slot**: index `N` of every per-inverter list in `apps.yaml`
+(`inverter_type`, `charge_rate`, `soc_percent`, ...). Slots are given out in this order:
+
+1. **Manual slots first.** For each index below the `num_inverters` you wrote in `apps.yaml`
+   (default 1), the slot is yours when `apps.yaml` gives it both an `inverter_type` and a way to
+   control it (an entity on a setting Predbat writes, a `givtcp_rest` URL, or a control service).
+   Discovery never writes to a manual slot, unless it takes it over, or clears it because it names
+   the same serial as another manual slot discovery took over (see Takeover below).
+2. **Then the discovered inverters**, components in name order and records in report order, each
+   taking the lowest free slot.
+3. **At most four slots.** An inverter with no slot left is not configured, and a warning says so.
+
+A slot is **sticky**: once an inverter has one it keeps it while the fleet stays the same, so a second
+inverter found later is added in the next free slot and the first is not rewritten. A slot is released
+only when its component reports again, still with at least one inverter, but no longer with that one; a
+component that stops, or reports no inverter at all, keeps its inverters configured - though they can
+still move down when an inverter below them is released.
+
+When an inverter is released the slots **compact**: each discovered inverter above the gap moves down,
+keeping its order, so no empty slot is left below one in use, and each move is logged as `Warn:
+Coordinator: Inverter slot N moved to slot M: <component> inverter <device_id> closes the gap left by a
+device that is no longer reported`. A slot you configured by hand is **pinned**: it never moves, and
+neither does a discovered inverter that took one over by serial; the moving inverters fill in around
+them. Per-inverter tuning lists that discovery does not write (such as `inverter_limit_charge`) stay at
+their indexes, so an inverter that moves down picks up the entry of the one that has gone - as the old
+automatic configuration, which always rebuilt from slot 0, did. The same holds for a kept setting's
+`apps.yaml` entries (`inverter_mode` and `export_limit`): they stay at their indexes, so an inverter that
+moves down takes the entry you wrote for the inverter that was in its new slot, as the old automatic
+configuration did when it kept your whole value.
+
+Within its slot an inverter's bindings follow every change in its component's report, so a register that
+appears or disappears rebinds that slot while Predbat runs, where the old automatic configuration bound
+once. Only differences are written: a pass with nothing new writes nothing and logs nothing, and each slot
+it does change is logged as `Coordinator: inverter slot N configured from <component> (<device_id>)`.
+
+Where a setting is not tied to one inverter the lists are written the way the old automatic
+configuration wrote them. `load_today`, `import_today`, `export_today` and `pv_today` are summed
+whatever their length, so they hold each slot's entry in slot order with unbound slots left out
+(one entry on a shared CT clamp or behind an EMS). `pv_power` stays indexed by slot, with `0` for a
+slot that binds nothing. Entries you put past your own `num_inverters` in any of these are your
+extras and are kept, after the slots' entries; with `ge_cloud_automatic_split_pv` the PV-only
+devices' entries follow them. `battery_temperature_history` is set once, from the lowest-numbered
+discovered slot.
+
+### Options a component passes
+
+- **Skipped settings** are left exactly as `apps.yaml` has them: GE Cloud skips `load_today` when
+  `ge_cloud_load_today_ignore` is set. A skipped summed setting such as `load_today` is left alone as a
+  whole - no slot's entry, extra or PV-only device is added to it, whatever your `num_inverters`.
+- **Kept settings** yield to a value you wrote in `apps.yaml` for that slot: for GE Cloud,
+  `inverter_mode` and `export_limit`, the same keys the old configuration never overwrote. A single value
+  (not a list) for one of them in `apps.yaml` is kept as it is, for every inverter.
+- **PV-only devices** contribute their `pv_power` and `pv_today` only when GE Cloud's
+  `ge_cloud_automatic_split_pv` is on. If their component then reports no devices at all, those entries
+  drop out until its next good report; the inverter slots are kept.
+
+### Takeover
+
+A manual slot whose entities name a discovered inverter's serial (casefolded, six characters or more,
+found in any per-inverter entry of that slot, or in `ge_cloud_serial` for slot 0) is the same
+inverter configured twice. Entries are read as Predbat reads them, with `{geserial}`-style templates
+filled in from your other settings, so the template's `sensor.ge_inverter_{geserial}_...` entities name
+the serial you set in `geserial`. A template naming a `re:` pattern that has not matched yet when
+discovery first runs is not filled in. Your settings are read only that once, so it cannot name a serial
+until Predbat next starts with the pattern already matched. Discovery takes the slot over and says so:
+
+```text
+Warn: Coordinator: Inverter slot 0: gecloud inverter ce1234g567 is also configured manually in apps.yaml - discovery is taking over this slot
+```
+
+So an install still carrying the `givenergy_cloud.yaml` template bindings for its own serial ends up
+configured exactly as one with no template at all - except for a kept setting such as
+`inverter_mode`, where your value stays. Any other manual slot naming the same serial is cleared,
+with its own warning. The serials are looked for in your settings as they were before discovery first
+wrote anything, so a slot taken over or cleared stays that way on every later pass. A manual inverter
+that shares no serial with a discovered one is never changed.
+
+### A slot with no inverter_type
+
+A slot with controls but no `inverter_type` is not a manual slot: it is free, and a discovered
+inverter can take it. If one is left empty below a configured inverter, the coordinator warns:
+
+```text
+Warn: Coordinator: Inverter slot 1 is empty below a configured inverter - it has no inverter_type and Predbat will stop on it
+```
+
+Predbat no longer assumes `GE` for a missing `inverter_type`, so that slot stops the cycle with
+`inverter_type is not set in apps.yaml`, or, while an inverter component is still starting,
+`inverter_type is not set yet - waiting for <component> to configure this inverter`.
+
+When a device that held a slot is no longer reported - for example GE Cloud dropping a device that has
+been silent for more than five days - the slots compact (see Slots above), so discovery leaves no hole of
+its own. The one empty slot that can remain is your own: an `apps.yaml` slot with no `inverter_type`
+below a slot you configured by hand, once the inverter discovery placed there has gone. It gets the
+warning and errors above; give it an `inverter_type` or remove it.
+
+### The bindings in the catalogue
+
+The result of each pass is in the catalogue as `observations.bindings`, and every inverter record that
+has a slot carries a `slot` field (abridged here):
+
+```yaml
+observations:
+  bindings:
+    inverters:                  # the index in this list is the slot
+      - slot: 0
+        origin: manual          # manual | discovered | free
+        inverter_type: SolisCloud
+        settings: {charge_rate: {entity_id: number.solis_charge}}
+      - slot: 1
+        origin: discovered
+        source: gecloud
+        device_id: gecloud:ce1234g567
+        inverter_type: GEC
+        serials: [ce1234g567]
+        settings: {charge_rate: {entity_id: number.predbat_gecloud_ce1234g567_battery_charge_power, access: rw}}
+    site:
+      settings: {battery_temperature_history: {entity_id: sensor.predbat_gecloud_ce1234g567_battery_temperature, access: r}}
+      extras: {}                # summed-setting entries that belong to no slot
+```
+
+### The hybrid setting
+
+Predbat's `inverter_hybrid` switch says whether your inverters are hybrids (PV on the inverter's own DC
+inputs) rather than AC coupled. Discovery sets it from the inverter records' `hybrid` field, counting
+only components whose automatic configuration is on (their report carries `automatic: true`) and only
+the inverters they drive (records with an `inverter_type`; PV-only devices do not count):
+
+- any inverter reported as not hybrid (`hybrid: false`) turns the switch **off**;
+- otherwise, any inverter reported as hybrid (`hybrid: true`) turns it **on**;
+- otherwise, when no inverter says either way, the switch is left as it is.
+
+[`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) in `apps.yaml` comes first: a single value holds the switch
+at that value and the records are not read, and a per-inverter list replaces the verdict of the inverter in each slot it gives
+`true` or `false` for (named `inverter_hybrid_override[<slot>]` in the log), including an inverter you configured by hand, before
+the rule above runs.
+
+The rule runs whenever a component's report changes, whether or not that component hands its slots to
+discovery, and it writes only when the switch differs from its result. A change is logged once, naming
+the inverters that decided it:
+
+```text
+Coordinator: inverter_hybrid set off - gecloud:fd2445g166 reports it is not a hybrid inverter
+```
+
+If you turn the switch back yourself, the next change in a report sets it again (including after every restart,
+since each restart files a fresh report).
+An inverter whose report stops giving `hybrid` keeps the last value it gave while its component still reports it,
+so a reply that briefly lacks the model does not flip the switch; an inverter that leaves the report no longer counts.
+A write that fails is logged as `Warn: Coordinator: could not set inverter_hybrid: <reason>` and tried again on the next
+change.
+
+Discovery is the only writer: the components that used to set `inverter_hybrid` themselves (GE Cloud,
+Gateway, AlphaESS, Sigenergy and Teslemetry) no longer do. Each component reports `hybrid` only from
+evidence it has:
+
+| Component | Evidence | `hybrid` |
+| --- | --- | --- |
+| GE Cloud, GivTCP, Gateway | the GivEnergy model name (GE Cloud's device model, GivTCP's `Invertor_Type`, the Gateway's `inv.model`). Behind an EMS GE Cloud gives one record per battery, each from its own model; a gateway record uses the models of the units it fronts, and any one of them not hybrid makes it `false` | `false` for a model containing `ac` or `aio`, or any spelling of all-in-one; unknown for no model, or for a coordinator's own model (`gateway`, or `ems` as a whole word); otherwise `true` |
+| AlphaESS | its AC-coupled detection, per serial | `false` when AC coupled, `true` when hybrid; the last decided verdict is held (and cached with the ratings), so an undecided reading never changes it |
+| Sigenergy | its AC-coupled detection from the lifetime totals, per system | `false` when they show PV only from a third-party inverter, `true` when they show PV on the Sigenergy inverter's own strings; unknown while undecided (no PV history yet) |
+| Teslemetry | `teslemetry_hybrid`, then the model | your `teslemetry_hybrid` when set; otherwise `true` for a Powerwall 3 and `false` for anything else, including an unknown model |
+| Hanchu | the AC-coupled field (`bypMeterSwitch`) | `false` when it says AC coupled, else `true` when the field is present |
+| Enphase | AC batteries | `false` when the site reports AC batteries (`hasEncharge` / `hasAcb`); unknown otherwise |
+| SolaX | the residential model code (a commercial unit's code says nothing) | `false` for the AC models (X1-AC, A1-AC-G2), `true` for the Hybrid models; unknown otherwise |
+| Solis | the `machine` range | `true` for EH and RHI, `false` for EA and RAI; unknown otherwise |
+| Fox | `deviceType` / `productType` | `false` for AC1 and AC3, `true` for H1, H3 and KH; unknown otherwise, or when the two disagree |
+| Growatt | the device model | `true` for SPH, `false` for SPA; unknown otherwise |
+| Deye, Sunsynk | none - their APIs give no signal | unknown |
+
+A component counts only while its automatic configuration is on, so with GE Cloud, GivTCP, Hanchu,
+Enphase, SolaX, Solis, Fox or Growatt in automatic mode, or the Predbat Gateway (unless `gateway_display_only` is set),
+the inverter now sets `inverter_hybrid` - from its model, or for Hanchu its AC-coupled field. GivTCP's automatic configuration (`givtcp_automatic`) is on by
+default, so a GivTCP install now has the switch set from its `Invertor_Type`. A value you set by hand is put
+back on the next changed report (including after every restart); set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage the switch
+yourself - a single value holds it, a per-inverter list stands in for what chosen inverters report.
+
+### The invert settings
+
+`battery_power_invert`, `grid_power_invert` and `load_power_invert` tell Predbat to flip the sign of
+the matching power sensor. For every discovered slot discovery writes each one from that slot's
+record: `true` where the record marks the `battery_power`, `grid_power` or `load_power` entity
+`invert: true`, otherwise `false`. They are lists indexed by slot, like the other per-inverter settings.
+GE Cloud marks nothing inverted, so it now writes an explicit `false` per slot where the old
+configuration left these keys unset - which Predbat reads the same way, and which the comparison with
+the old configuration treats as matching.
+
+Discovery owns these settings on its slots, so a value you set in `apps.yaml` is replaced there: a
+single value counts for every slot, a list entry for its own slot. When your value differs from what
+discovery writes, it says so once:
+
+```text
+Warn: Coordinator: Inverter slot 0: grid_power_invert is True in apps.yaml but gecloud inverter gecloud:ce1234g567 needs False - discovery sets it; remove it from apps.yaml
+```
+
+If you also have a manual inverter and gave a single value, that value is your manual inverter's
+too, so removing it would flip that inverter's sign. The warning then tells you to give the setting as a
+list with one entry per inverter instead, such as `grid_power_invert: [true, false]`, keeping your
+manual inverter's value at its slot.
+
+Manual slots keep what `apps.yaml` gives them. A single value (not a list), as some templates write
+it, still applies to every manual inverter. An invert setting also follows the setting it describes:
+where `battery_power`, `grid_power` or `load_power` is skipped, or kept with your own `apps.yaml` value
+for that slot, the entity is yours, so its invert setting keeps your entry rather than the record's.
+
+### GE Cloud Data and `ge_cloud_serial`
+
+GE Cloud no longer sets `ge_cloud_serial` or changes `ge_cloud_data`. The GE Cloud Data component
+(`ge_cloud_data`) works out for itself what to download:
+
+- **Its serial** is your `ge_cloud_serial` when you set one; otherwise it takes it from GE Cloud's
+  inverter records - the record in the lowest slot, or the first reported when GE Cloud is not
+  configuring the inverters, using its first battery when it is a gateway and its own serial otherwise,
+  which is the battery the old configuration chose. It looks the serial up
+  before each download, so a GE Cloud report that arrives after GE Cloud Data starts is still used.
+  Only when there is neither your setting nor a serial from GE Cloud after its first ten minutes does
+  it log `GE Cloud Data has no serial to download history for`.
+- **When GivEnergy Cloud Direct reports a GivEnergy EMS** (a GE Cloud record with `composition: ems`) it
+  declines to run, logging
+  `GECloud: GE Cloud Data is not used behind a GivEnergy EMS - skipping the history download` once,
+  and Predbat takes its load history from `load_today`, exactly as if `ge_cloud_data` were off. It
+  resumes by itself when the EMS is no longer reported. Your `ge_cloud_data` setting is never changed.
+
+### Checking it against the old configuration
+
+After a pass that changed one of its slots, GE Cloud compares what discovery wrote with what its old
+automatic configuration would have written, and logs `Info: GECloud: discovery configuration matches
+the previous automatic configuration` when they agree. A difference it expects is logged at `Info`
+with its reason: the pause and discharge-target controls, which discovery binds only for an inverter
+that has the register while the old code bound them for every inverter when any had it; `givtcp_rest`,
+which the old code deleted outright and discovery clears only in its own slots; and a user-kept or
+(behind an EMS) placeholder setting. A skipped setting is not compared at all. An inverter the old
+configuration would have configured but discovery gave no slot is a `Warn: GECloud: discovery gave
+inverter N (<serial>) no slot ...` line. Anything else is a `Warn: GECloud: discovery set ...`
+line, and worth a bug report.
 
 ## What is, and is not, redacted
 
@@ -206,7 +456,13 @@ has a reserve, a target SoC, charge/discharge enable switches, idle times or a t
 from which settings `entities` binds to a writable (`rw`) entity; and protocol detail such as the time
 format or whether the charge rate is set in watts or amps is read from those entities' descriptors.
 A setting Predbat replaces with a placeholder for this inverter type - the Solis Modbus (`GS`) type's
-`reserve`, say - is left out of `entities`. See the design in
+`reserve`, say - is left out of `entities`.
+
+The structural field `hybrid` says whether the inverter is a hybrid: `true` (PV on its own DC inputs),
+`false` (AC coupled, or a battery-only unit), or left out when the component cannot tell. It must be a
+bool - anything else is dropped with a warning - and `false` is a fact, kept like any other value. It
+feeds the `inverter_hybrid` rule (see [The hybrid setting](#the-hybrid-setting)); pass it to
+`inverter_record(..., hybrid=...)`. See the design in
 `docs/superpowers/specs/2026-09-24-discovery-inverter-record-vocabulary-design.md`.
 
 ### Writing a reporter

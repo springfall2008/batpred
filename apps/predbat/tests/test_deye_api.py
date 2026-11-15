@@ -751,6 +751,9 @@ def test_deye_catalogue_describes_each_inverter():
     if "info" in record:
         print("ERROR: Deye holds no model or firmware, so info must be absent: {}".format(record["info"]))
         failed = True
+    if "hybrid" in record:
+        print("ERROR: Deye holds nothing that tells a hybrid from an AC-coupled inverter, so hybrid must be absent: {}".format(record["hybrid"]))
+        failed = True
     return failed
 
 

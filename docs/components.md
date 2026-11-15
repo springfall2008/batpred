@@ -544,6 +544,18 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
 
+With `ge_cloud_automatic` on, GE Cloud hands its inverter configuration to Predbat's discovery rather than writing it itself: each
+inverter it finds takes an inverter slot after any you configured by hand, keeps that slot while Predbat runs, and takes over a manual slot
+that names the same serial (with a warning). The options above still apply - `ge_cloud_load_today_ignore` leaves `load_today` alone, your
+own `inverter_mode` and `export_limit` are kept, and `ge_cloud_automatic_split_pv` adds the PV-only inverters - and GE Cloud logs whether
+the result matches what its previous automatic configuration would have written. GE Cloud is the only component converted so far. See
+[Automatic configuration](discovery-catalogue.md#automatic-configuration).
+
+GE Cloud no longer sets `inverter_hybrid`, `ge_cloud_serial` or `ge_cloud_data` itself. With `ge_cloud_automatic` on, discovery sets
+`inverter_hybrid` from each inverter's model (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). Whatever `ge_cloud_automatic`
+is set to, GE Cloud Data finds its serial from GE Cloud's inverters and declines to run behind an EMS by itself (see [GE Cloud Data](#givenergy-cloud-data-gecloud_data)).
+An `inverter_hybrid` value you set by hand is put back on the next changed report (including after every restart); set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage it yourself.
+
 #### Register reads (gecloud)
 
 GivEnergy limits how many API calls an account can make each month, and the GE Cloud API reads an inverter's settings one
@@ -733,13 +745,20 @@ Downloads historical energy data from GivEnergy Cloud including consumption, gen
 - You have a GivEnergy system
 - You want Predbat to use historical data from GivEnergy Cloud instead of from Home Assistant.
 
+#### Important notes (gecloud_data)
+
+- With GE Cloud (`gecloud`) running you need not set `ge_cloud_serial`: GE Cloud Data takes the serial from the inverter GE Cloud found in the lowest slot, or the first one it reported when GE Cloud is not configuring the inverters (its first battery behind a Gateway). A `ge_cloud_serial` you set is always used instead
+- When GivEnergy Cloud Direct (`gecloud`) reports a GivEnergy EMS, GE Cloud Data does not run: it logs that once and Predbat takes its load history from `load_today`, exactly as if
+  `ge_cloud_data` were off. It resumes by itself if the EMS is no longer reported. Your `ge_cloud_data` setting is not changed
+- See [GE Cloud Data and ge_cloud_serial](discovery-catalogue.md#ge-cloud-data-and-ge_cloud_serial)
+
 #### Configuration Options (gecloud_data)
 
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `ge_cloud_data` | Boolean | Yes | - | `ge_cloud_data` | Set to `true` to enable historical data download |
 | `ge_cloud_key` | String | Yes | - | `ge_cloud_key` | Your GivEnergy Cloud API key (same as Cloud Direct) |
-| `ge_cloud_serial` | String | No | Auto-detected | `ge_cloud_serial` | Your inverter serial number (usually auto-detected) |
+| `ge_cloud_serial` | String | No | From GE Cloud | `ge_cloud_serial` | Your inverter serial number. Leave unset to take it from the GE Cloud component's inverters |
 | `days_previous` | List | No | [7] | `days_previous` | List of days to download data for, e.g., `[7]` for last week |
 
 ---
@@ -870,6 +889,7 @@ It publishes comprehensive sensors for battery status, energy totals, and provid
 
 - Requires valid SolaX Cloud API credentials (client ID and client secret)
 - Supports multiple plants/inverters with automatic discovery when `solax_automatic: true`
+- With `solax_automatic: true` the inverter's residential model code now sets Predbat's `inverter_hybrid`: off for an AC-coupled model (X1-AC, A1-AC-G2), on for a Hybrid model, and left alone for any other model or a commercial unit (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). A value you set by hand is put back on the next changed report (including after every restart); set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage it yourself
 - Region-specific API endpoints: EU, US, or CN
 - Authentication tokens are automatically managed (30-day expiry with auto-refresh)
 - Supports both residential and commercial installations
@@ -1373,6 +1393,7 @@ Integrates with Fox ESS inverters for monitoring and controlling Fox ESS battery
 #### Important notes (fox)
 
 - Requires Fox ESS Cloud account and API key
+- With `fox_automatic: true` the inverter's model now sets Predbat's `inverter_hybrid`: off for an AC1 or AC3, on for an H1, H3 or KH, and left alone for any other model or when the two model fields (`deviceType`, `productType`) disagree (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). A value you set by hand is put back on the next changed report (including after every restart); set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage it yourself
 
 #### Configuration Options (fox)
 
@@ -1418,7 +1439,7 @@ Integrates a Tesla Powerwall via the [Teslemetry](https://teslemetry.com) REST A
 
 - Export freeze is not supported by the Powerwall hardware and is disabled automatically
 - The Powerwall has no charge/discharge rate control. With `automatic` on, the limits Predbat plans with come from the site's own `site_info`: the discharge rate and AC limit from the nameplate power, the export limit from the site's metered export limit (0 meaning no export), and the charge limit as 5 kW per battery unit, expansion packs included, capped at the nameplate power. A `soc_max`, `battery_rate_max`, `inverter_limit`, `inverter_limit_charge` or `export_limit` set in `apps.yaml` takes precedence over the value from the device
-- With `automatic` on, Predbat's `inverter_hybrid` setting is turned on for a Powerwall 3, whose solar on its own DC inputs shares the Powerwall's AC nameplate with the battery, and off for a Powerwall 2 or other AC-coupled Powerwall, whose solar is inverted separately. `site_info` cannot tell a Powerwall 3 with its own solar apart from one installed beside an existing solar inverter, so set `teslemetry_hybrid: false` in the second case (or `true` to force it on)
+- With `automatic` on, Predbat's discovery sets `inverter_hybrid` (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)): on for a Powerwall 3, whose solar on its own DC inputs shares the Powerwall's AC nameplate with the battery, and off for a Powerwall 2, other AC-coupled Powerwall or a model it does not recognise, whose solar is inverted separately. The component no longer writes the switch itself. `site_info` cannot tell a Powerwall 3 with its own solar apart from one installed beside an existing solar inverter, so set `teslemetry_hybrid: false` in the second case (or `true` to force it on). A value you set by hand is put back on the next changed report (including after every restart); set `teslemetry_hybrid`, or [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) above it, to manage it yourself
 - Tesla's installer-level export permission (Tesla One > Settings > Import & Export Limits) defaults to Solar Only and cannot be changed over the API. A Powerwall left at Solar Only accepts every export command and then only covers the house load. The component reads it from `site_info` (`components.net_meter_mode`, which reads `battery_ok` when battery export is allowed) and publishes `binary_sensor.predbat_teslemetry_battery_export_permitted`. With `automatic` on, Predbat stops planning export windows while it reads `off` and logs a warning saying what to ask the installer. The permission is re-read every hour while it is off, so the restriction lifts by itself once the installer sets it to "Solar and Battery". Tesla does not document the field, so set `teslemetry_battery_export: true` if your site does export battery energy despite the warning (or `false` to stop export planning)
 - When enabled (and Predbat is not read-only) the component owns the device tariff. By default (`tbc_control` on) it pushes a control-signal tariff over the committed charge and export windows so Tesla's Time-Based Control runs the charge at full rate. When neither window is in that tariff it is a flat 50p, which gives Time-Based Control no reason to cover house load, so the Powerwall is put in Self-Powered mode until a window is committed - expect the Tesla app to move between the two modes during the day. With `tbc_control` set to `false` it instead publishes Predbat's real import/export rates (quantised into a few time-of-use bands) so they show correctly in the Tesla app, with a synthetic high-price `ON_PEAK` band over the committed discharge window to drive export
 - Export start/stop is driven each cycle by the operation-mode and export-rule commands; to conserve Teslemetry's monthly API-call budget the tariff is pushed only when it actually changes (the committed windows, or with `tbc_control` off the rates), plus once every two hours with the forced re-assert of the device state, so a tariff the Powerwall has silently dropped is put back
@@ -1466,6 +1487,7 @@ Connects Predbat to the Enphase Enlighten cloud for monitoring and battery contr
 - **Predbat owns the battery schedules**: it drives exactly one window per direction, so unless it is in read-only mode it deletes any other CFG/DTG/RBD schedule it finds on the site, including ones you created in the Enlighten app. Do not add your own battery schedules while Predbat is in write mode - the Enphase cloud rejects any overlapping schedule with an HTTP 409 conflict, which would stop Predbat from controlling the battery. Set Predbat to read-only mode if you want to manage schedules yourself
 - A window that is no longer needed is deleted rather than disabled, because the Enphase cloud ignores a request to disable a schedule (it reports success but keeps enforcing the window)
 - Repeated login failures back off automatically to protect the Enphase account from lockout: a 5 minute cooldown after each rejection, rising to a 24 hour suspension after 3 consecutive rejections
+- With `enphase_automatic: true` a site that reports AC batteries (IQ Battery) now turns Predbat's `inverter_hybrid` off (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)); otherwise the switch is left alone. A value you set by hand is put back on the next changed report (including after every restart); set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage it yourself
 
 #### Configuration Options (enphase)
 
@@ -1543,6 +1565,7 @@ Integrates with Solis inverters for monitoring and controlling Solis battery sys
 - **Manual configuration** (`solis_automatic: false`): bind `reserve` to `number.predbat_solis_<serial>_reserve_soc`, not the over-discharge SOC. Predbat warns at startup if `reserve` still points at `..._over_discharge_soc`, as it would otherwise raise that safety floor to hold the battery
 - **Freeze charging**: inside a charge slot with the battery already at the slot's target SOC, Predbat sets the storage mode to `Self-Use - No Grid Charging`, so the slot holds the battery without importing from the grid while solar can still charge it. It keeps the hold through a dip of 1% below the target before charging again. On V2 firmware this mode has the same register value as `Self-Use - No Timed Charge/Discharge`, which is how the storage mode select shows it
 - Automatic configuration available - sets up all required Predbat sensors automatically
+- With `solis_automatic: true` the inverter's model now sets Predbat's `inverter_hybrid`: on for the EH and RHI ranges, off for the AC-coupled EA and RAI ranges, and left alone for any other model (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). A value you set by hand is put back on the next changed report (including after every restart); set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage it yourself
 - **Turning on read-only mode writes to the inverter once**: when **switch.predbat_set_read_only** is switched on (with `solis_control_enable` left on), Predbat hands the inverter back by switching off every timed charge/discharge slot (V2), or blanking the charge/discharge schedule (V1), and moving the storage mode to Self-Use, keeping your reserve, grid-charge permission and battery protection limits. Each change is confirmed by reading the register back, so a fully-programmed schedule can take a minute or two and uses around four Solis Cloud API requests per enabled slot from the daily allowance. Nothing is written again while read-only stays on, so a schedule you set by hand afterwards is left alone. If the cleanup cannot be confirmed, the Predbat status shows `Warn: Solis handover unconfirmed` until read-only is turned off again - check the inverter's schedule by hand, as it may still be charging or exporting on Predbat's last plan. A monitor-only setup (`solis_control_enable: false`) never wrote a schedule, so nothing is written or confirmed
 - **PV-only inverters**: an inverter Solis Cloud reports as having no battery is never managed as a battery inverter and is never written to, but its generation is still included in `pv_today` and `pv_power` so the array total covers the whole roof. Its load and grid readings are left out, as those registers can overlap with the battery inverter's on a shared-CT installation - set `pv_today`/`pv_power`/`load_today` manually with `solis_cloud_pv_load_ignore: true` if you need something different
 - **Inverter timezone must match Predbat's `timezone` setting**: charge/discharge slot times are written to the inverter as plain `HH:MM` values with no timezone attached. The inverter interprets these using its own configured timezone, not Predbat's. If your inverter's timezone is set to UTC (or anything other than Predbat's `timezone`, `Europe/London` by default), the resulting charge/discharge windows will be offset by the difference - for example, a full hour out whenever British Summer Time is in effect. Set the inverter's own timezone to match Predbat's `timezone` setting to avoid this.
@@ -1591,7 +1614,7 @@ Supports real-time monitoring (SOC, power flows, operational mode) and full char
 - The inverter's maximum power (`sensor.predbat_sigenergy_<system>_inverter_limit`, used for `inverter_limit`) is its rated power from the device list, unless the plant reports a higher maximum feed-in or absorption power over MQTT. Some inverters deliver more than their rating, for example 6.6 kW from a 6.0 kW EC 6.0 SP. The reported figure is then used: the feed-in maximum for `inverter_limit` and when exporting, and the absorption maximum when charging. A reported figure lower than the rating, or more than one and a half times it, is ignored, as are the reports from a system whose device list gives no inverter rating. The reported figures are kept across restarts; until the plant has reported them, the rating applies
 - Predbat's plan reaches the plant only through the component's own control entities (`switch.predbat_sigenergy_<system>_charge_enable`, `..._export_enable` and the matching start/end time selects, target SoC and rate numbers). `automatic: true` points the inverter controls at them for you. With `automatic: false` and controls enabled, your `apps.yaml` inverter controls must name them; if none does, the component logs a warning and sends no battery commands, rather than holding the plant in self-consumption while the plan's commands go elsewhere. Only `apps.yaml` counts: a Home Assistant automation that copies Predbat's plan entities into the component's controls is not seen, so name at least one of the component's entities in `apps.yaml` if you bridge the plan that way. It still keeps the plant in VPP mode (so does `enable_controls: false`); to hand the plant to another controller, turn on `switch.predbat_sigenergy_<system>_offboard`
 - `number.predbat_sigenergy_<system>_reserve` shows the plant's discharge cut-off SoC, the floor for discharging to the grid. It is read-only: Predbat does not write the reserve on Sigenergy, and the value comes from the plant. Forced exports stop at the higher of Predbat's export target, the discharge cut-off and the backup cut-off
-- With `automatic: true` Predbat turns `switch.predbat_inverter_hybrid` off when every system is AC-coupled: its lifetime totals show PV from a third-party inverter (for example a SolarEdge array beside the battery) and no PV on the Sigenergy inverter's own strings. A system with any native PV keeps the default (on), even if a third-party inverter is fitted as well, and a system with no PV history yet is left alone. The check runs at startup; if you turn the switch back on by hand it is turned off again on the next restart
+- With `automatic: true` discovery sets `switch.predbat_inverter_hybrid` from what each system reports (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). A system is reported as AC-coupled (switch off) when its lifetime totals show PV from a third-party inverter (for example a SolarEdge array beside the battery) and no PV on the Sigenergy inverter's own strings, and as a hybrid (switch on) when they show any native PV, even if a third-party inverter is fitted as well. A system with no PV history yet reports neither. If you turn the switch back by hand, the next change in a report sets it again
 - The Sigenergy REST energy-flow reading leaves out third-party PV, although its grid and load figures include it. On a system with a third-party inverter, Predbat works the PV power out from the balance of load, EV charger, battery and grid instead, so `sensor.predbat_sigenergy_<system>_pv_power` no longer drops to 0 between MQTT updates
 
 #### Configuration Options (sigenergy)
@@ -1771,6 +1794,7 @@ A schedule is committed in stages (window, then enable, then target SoC), so a s
 - A system that does not serve live power data automatically falls back to five-minute history data and re-probes itself back to live if it recovers
 - Using the AlphaESS phone app while Predbat is running can overwrite Predbat's settings, and vice versa - the charge and discharge endpoints are whole-object replacements, so the last writer wins. Predbat logs when a field it owns has changed since its last write
 - A write reaching the cloud does not mean the inverter has applied it: it collects new settings on its next poll, typically one to five minutes later
+- With `alphaess_automatic: true` discovery sets Predbat's `inverter_hybrid` from each system's AC-coupled detection (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)): off when a system is AC coupled, on when it is a hybrid. An undecided reading keeps the last decided verdict, which is kept across restarts; a system never decided leaves the switch alone. The component no longer writes the switch itself. A value you set by hand is put back on the next changed report (including after every restart); set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage it yourself
 
 #### Configuration Options (alphaess)
 
@@ -1822,6 +1846,7 @@ Connects to Growatt's public OAuth OpenAPI, discovers the inverter authorised du
 - Device dispatch is limited to one request per five seconds per device. Predbat changes only a differing slot table and keeps six seconds between requests
 - `getDeviceData`'s endpoint page says one request per minute, while the rate-limit appendix says one per ten seconds. Predbat polls every two minutes, since a live SPH's datalogger uploads a new sample only about every five minutes
 - The API reports the inverter and battery ratings, but not the site's grid export cap. Set `export_limit` manually when the DNO limit is below the inverter rating
+- With `growatt_automatic: true` the inverter's model now sets Predbat's `inverter_hybrid`: on for an SPH, off for an SPA, and left alone for any other model (see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting)). A value you set by hand is put back on the next changed report (including after every restart); set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage it yourself
 
 #### Configuration Options (growatt)
 

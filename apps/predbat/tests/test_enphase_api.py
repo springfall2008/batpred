@@ -2644,6 +2644,30 @@ def test_enphase_record_shape():
     assert "Grandma" not in str(report) and "user@example.com" not in str(report)
 
 
+def test_enphase_record_reports_hybrid_false_for_ac_batteries():
+    """hybrid is False when siteSettings reports AC batteries (hasEncharge or hasAcb), absent otherwise.
+
+    Enphase batteries (IQ Battery / Encharge, and the older ACB) carry their own microinverters on the AC side,
+    so a site that reports them is AC coupled. No flag, a False flag or no siteSettings read leaves hybrid out.
+    """
+    cases = [
+        ("IQ Battery / Encharge", {"hasEncharge": True, "hasAcb": False, "isEnsemble": True}, False),
+        ("ACB", {"hasEncharge": False, "hasAcb": True}, False),
+        ("both", {"hasEncharge": True, "hasAcb": True}, False),
+        ("neither flag set", {"hasEncharge": False, "hasAcb": False}, "absent"),
+        ("flags missing", {"countryCode": "GB"}, "absent"),
+        ("a truthy string is not a flag", {"hasEncharge": "yes"}, "absent"),
+        ("no siteSettings read", None, "absent"),
+    ]
+    for label, flags, expected in cases:
+        api = _discovery_enphase()
+        if flags is not None:
+            api.site_settings[DISCOVERY_SITE] = flags
+        record = validated_inverters(api.build_discovery())[0]
+        actual = record.get("hybrid", "absent")
+        assert actual == expected and type(actual) is type(expected), "{}: expected hybrid {!r}, got {!r}".format(label, expected, actual)
+
+
 def test_enphase_record_rebuilds_its_inverter_def_row():
     """The record alone rebuilds the EnphaseCloud row - no base, no exceptions."""
     record = validated_inverters(_discovery_enphase().build_discovery())[0]
@@ -2982,6 +3006,7 @@ def run_enphase_api_tests(my_predbat):
     test_apply_activates_cfg_when_setting_off_but_schedule_matches()
     test_enphase_catalogue_none_before_discovery()
     test_enphase_record_shape()
+    test_enphase_record_reports_hybrid_false_for_ac_batteries()
     test_enphase_record_rebuilds_its_inverter_def_row()
     test_enphase_record_agrees_with_automatic_config()
     test_enphase_record_keeps_pv_despite_automatic_ignore_pv()

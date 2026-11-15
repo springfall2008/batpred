@@ -1359,6 +1359,47 @@ def test_solis_catalogue_describes_battery_and_pv_only():
     return False
 
 
+def test_solis_catalogue_reports_hybrid_from_the_machine_name():
+    """hybrid is True for a machine Solis names a hybrid (S5/S6-EH, RHI), False for an AC-coupled storage range
+    (S5/S6-EA, RAI), absent for every other name.
+
+    The grid-tied GR range is left out: it names no coupling, and a GR record has no inverter_type, so the
+    coordinator would not count it anyway. productModel is not the evidence - live inverterDetail carries a
+    numeric code there - so a fixture model name alone says nothing.
+    """
+    cases = [
+        ("single-phase EH hybrid", "S5-EH1P6K-L", True),
+        ("three-phase EH hybrid", "S6-EH3P10K-H", True),
+        ("EH in lower case", "s6-eh1p5k-l", True),
+        ("RHI hybrid", "RHI-6K-48ES-5G", True),
+        ("three-phase RHI hybrid", "RHI-3P10K-HV-5G", True),
+        ("EA AC-coupled storage", "S6-EA1P5K-L", False),
+        ("EA in lower case", "s6-ea1p5k-l", False),
+        ("RAI AC-coupled retrofit", "RAI-3K-48ES-5G", False),
+        ("EH padded with whitespace", "  S6-EH1P5K-L ", True),
+        ("RAI padded with whitespace", " RAI-3K-48ES-5G\t", False),
+        ("grid-tied GR", "S6-GR1P6K", "absent"),
+        ("EH only later in the name", "S6-GR1P-EH1P", "absent"),
+        ("EA only later in the name", "S6-GR1P-EA1P", "absent"),
+        ("EA without a phase count is not the range", "S6-EAX5K", "absent"),
+        ("machine empty", "", "absent"),
+        ("machine absent", None, "absent"),
+    ]
+    for label, machine, expected in cases:
+        api = _solis_fleet()
+        if machine is None:
+            api.inverter_details["BAT001"].pop("machine", None)
+        else:
+            api.inverter_details["BAT001"]["machine"] = machine
+        record = {record["device_id"]: record for record in validated_inverters(api.build_discovery())}["solis:BAT001"]
+        actual = record.get("hybrid", "absent")
+        assert actual == expected and type(actual) is type(expected), "{}: expected hybrid {!r}, got {!r}".format(label, expected, actual)
+    api = _solis_fleet()
+    pv_record = {record["device_id"]: record for record in api.build_discovery()["inverters"]}["solis:PV001"]
+    assert "hybrid" not in pv_record, "a PV-only detail names no hybrid or AC-coupled machine"
+    return False
+
+
 def test_solis_catalogue_battery_ratings_carry_only_stated_facts():
     """battery_capacity_ah is the bank total (register 172 x pack count); no kWh rating, even with the voltage configured.
 
@@ -2343,6 +2384,7 @@ def run_solis_tests(my_predbat):
         failed |= asyncio.run(test_automatic_config_treats_grid_tied_model_as_pv_only())
         failed |= asyncio.run(test_automatic_config_pv_totals_unchanged_when_all_have_batteries())
         failed |= test_solis_catalogue_describes_battery_and_pv_only()
+        failed |= test_solis_catalogue_reports_hybrid_from_the_machine_name()
         failed |= test_solis_catalogue_battery_ratings_carry_only_stated_facts()
         failed |= asyncio.run(test_solis_catalogue_inverter_type_tracks_automatic_config())
         failed |= test_solis_catalogue_never_reports_the_inverter_name()

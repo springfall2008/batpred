@@ -1139,27 +1139,19 @@ class SigenergyAPI(ComponentBase):
             return True
         return None
 
-    async def apply_hybrid_verdict(self):
-        """Move switch.predbat_inverter_hybrid only on positive evidence of AC coupling.
+    async def log_undecided_hybrid(self):
+        """Say when the hybrid-versus-AC-coupled verdict is still undecided for some system.
 
-        inverter_hybrid is one of Predbat's OWN CONFIG_ITEMS switches rather than an apps.yaml
-        arg, so it is written with set_state_external. Predbat defaults it on, which suits the
-        DC-coupled SigenStor, and the errors are not symmetric: off on a real hybrid lets PV and
-        battery charge plan past inverter_limit, on for an AC-coupled site merely skips the
-        PV->battery conversion loss. So the switch only moves off, and only when every system
-        is AC-coupled.
+        Sigenergy no longer writes switch.predbat_inverter_hybrid: each record reports hybrid as
+        the inverse of detect_ac_coupled() (build_discovery()) and the discovery coordinator sets
+        the switch from the records. While a system is undecided its record says nothing, which
+        this logs. The errors are not symmetric - off on a real hybrid lets PV and battery charge
+        plan past inverter_limit, on for an AC-coupled site merely skips the PV->battery
+        conversion loss - which is why AC coupling needs third-party PV with no native PV.
         """
-        system_ids = list(self.systems.keys())
-        if not system_ids:
-            return
-        verdicts = [self.detect_ac_coupled(sid) for sid in system_ids]
-        entity = "switch.{}_inverter_hybrid".format(self.prefix)
-        if all(verdict is True for verdict in verdicts):
-            self.log("Info: SigenergyAPI: detected AC coupling (third-party PV inverter, no native PV) for system(s) {}; setting {} off".format(", ".join(system_ids), entity))
-            await self.set_state_external(entity, False)
-            return
-        if any(verdict is None for verdict in verdicts):
-            self.log("Info: SigenergyAPI: could not determine hybrid versus AC coupling for system(s) {} yet; leaving {} at its current value".format(", ".join(system_ids), entity))
+        undecided = [str(sid) for sid in self.systems if self.detect_ac_coupled(sid) is None]
+        if undecided:
+            self.log("Info: SigenergyAPI: could not yet tell hybrid from AC coupling for system(s) {}, so their records do not say whether they are hybrid".format(", ".join(undecided)))
 
     async def fetch_daily_summary(self, system_id):
         """Fetch daily/lifetime generation summary for a system.
@@ -2782,6 +2774,11 @@ class SigenergyAPI(ComponentBase):
         entity ids built from it. A system detect_ac_coupled() has found to be AC coupled - third-party PV,
         no native PV - is battery only; otherwise it is a hybrid with solar and battery.
 
+        hybrid is the inverse of detect_ac_coupled(): False when AC coupled, True when the lifetime totals
+        show native PV, left out while undecided (no totals, or no PV yet). The totals are read before the
+        report is filed each cycle, so it is set from the first report once they exist. The discovery
+        coordinator sets inverter_hybrid from it; Sigenergy no longer writes that switch itself.
+
         Never reported: the system name and the API credentials.
 
         Returns None when no system has been discovered.
@@ -2794,19 +2791,21 @@ class SigenergyAPI(ComponentBase):
             hardware_ids = {"system_id": str(system_id)}
             if serials:
                 hardware_ids = {"serial": serials[0], "system_id": str(system_id)}
+            ac_coupled = self.detect_ac_coupled(system_id)
             inverters.append(
                 inverter_record(
                     "sigenergy:{}".format(serials[0]) if serials else "sigenergy:system:{}".format(system_id),
                     inverter_type="SIGCLOUD",
                     composition="direct",
                     serials=serials if len(serials) > 1 else None,
-                    functions=["battery"] if self.detect_ac_coupled(system_id) is True else ["solar", "battery"],
+                    functions=["battery"] if ac_coupled is True else ["solar", "battery"],
                     capabilities=dict(SIGENERGY_CAPABILITIES),
                     flags=["third_party_gen"],
                     hardware_ids=hardware_ids,
                     info={"vendor": "Sigenergy"},
                     ratings=self._discovery_ratings(system_id),
                     entities=self._discovery_entities(system_id),
+                    hybrid=None if ac_coupled is None else not ac_coupled,
                 )
             )
         return {"automatic": self.automatic, "inverters": inverters}
@@ -2875,7 +2874,7 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("discharge_rate", ["number.{}_sigenergy_{}_export_rate".format(self.prefix, s) for s in slugs])
         self.set_arg("reserve", ["number.{}_sigenergy_{}_reserve".format(self.prefix, s) for s in slugs])
 
-        await self.apply_hybrid_verdict()
+        await self.log_undecided_hybrid()
 
         self.log("SigenergyAPI: automatic_config complete")
 

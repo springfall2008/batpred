@@ -17,11 +17,13 @@ provides the minimal PredBat base surface that ComponentBase and the components 
 a clock, an in-memory entity store, argument accessors and a logger.
 
 It is deliberately concrete rather than abstract - modules instantiate it directly, and
-the few needing extra state subclass it. ``components`` is always None, so
+the few needing extra state subclass it. ``components`` is None by default, so
 ``ComponentBase.storage`` resolves to None and the disk cache is skipped for a
-standalone run.
+standalone run. A harness whose component configures inverters through discovery gives
+its base a CoordinatorHarness instead, which holds a real discovery Coordinator.
 """
 
+import copy
 from datetime import datetime
 import json
 
@@ -69,6 +71,10 @@ class MockBase:
         self.currency_symbols = "£p"
         self.arg_errors = {}
         self.args = {key: value for key, value in kwargs.items() if value is not None}
+        # What the user wrote in apps.yaml, as PredBat keeps it before any component configures anything: the
+        # discovery coordinator and set_arg_auto() decide by it
+        self.args_from_apps_yaml = copy.deepcopy(self.args)
+        self.apps_yaml_override_warned = set()
         self.ha_interface = MockHAInterface()
 
     def log(self, message, quiet=True):
@@ -114,15 +120,23 @@ class MockBase:
         """Return a configured argument, falling back to the caller's default."""
         return self.args.get(arg, default)
 
-    def set_arg(self, key, value):
+    def set_arg(self, key, value, index=None):
         """Record an argument set by automatic_config, printing it with any referenced entity's state.
 
-        Matches userinterface.py's Fetch.set_arg: a None value deletes the key rather than
-        storing it, so a later get_arg(key, default) falls back to the caller's default
-        instead of returning None.
+        Matches userinterface.py's Fetch.set_arg: a None value deletes the whole key rather than
+        storing it (even with an index), so a later get_arg(key, default) falls back to the
+        caller's default instead of returning None. With an index the list is padded with None
+        and that entry written, as the discovery coordinator writes one inverter slot; otherwise
+        the value replaces the key's.
         """
         if value is None:
             self.args.pop(key, None)
+        elif index is not None:
+            if key not in self.args:
+                self.args[key] = []
+            while len(self.args[key]) <= index:
+                self.args[key].append(None)
+            self.args[key][index] = value
         else:
             self.args[key] = value
         if isinstance(value, str) and "." in value:
@@ -137,7 +151,7 @@ class MockBase:
                 state = "n/a []"
         else:
             state = "n/a"
-        print(f"Set arg {key} = {value} (state={state})")
+        print(f"Set arg {key}{'' if index is None else f'[{index}]'} = {value} (state={state})")
 
     def get_ha_config(self, name, default):
         """Return the caller's default - a standalone run has no Home Assistant config."""
@@ -156,3 +170,56 @@ class MockBase:
         print(f"STATUS: {message}" + (f" ({debug})" if debug else ""))
         if had_errors:
             self.had_errors = True
+
+
+class CoordinatorHarness:
+    """Stand-in for components.Components in a command-line run: a real discovery Coordinator and the components registered with it.
+
+    Built on a MockBase before any component is constructed - it becomes base.components and wraps
+    base.log, which components copy at construction, so every line logged through the base is also kept
+    in log_lines for the run's review. register() makes a component reachable through get_component(),
+    which is how the coordinator finds the check_automatic_config() it calls after a configure pass.
+    """
+
+    def __init__(self, base, components=None):
+        """Wrap base.log, build the real Coordinator on base and register this harness as base.components."""
+        # Imported here so the many command-line runs that never use a coordinator do not load it
+        from coordinator import Coordinator
+
+        self.base = base
+        self.log_lines = []
+        real_log = base.log
+
+        def log(message, *args, **kwargs):
+            """Keep the line for the review, then log it as the base does."""
+            self.log_lines.append(message)
+            return real_log(message, *args, **kwargs)
+
+        base.log = log
+        base.components = self
+        self.coordinator = Coordinator(base)
+        self.components = dict(components or {})
+
+    def register(self, name, component):
+        """Make component reachable as name."""
+        self.components[name] = component
+
+    def get_all(self):
+        """Every registered component name."""
+        return sorted(self.components)
+
+    def get_component(self, name):
+        """The registered component, None when unknown."""
+        return self.components.get(name)
+
+    def is_active(self, name):
+        """Whether the named component is registered."""
+        return self.components.get(name) is not None
+
+    def is_alive(self, name):
+        """Same as is_active: a command-line run has no component threads."""
+        return self.is_active(name)
+
+    def load_error(self, name):
+        """Never a load error: components are registered already built."""
+        return None

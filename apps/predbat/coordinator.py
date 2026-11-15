@@ -8,8 +8,14 @@
 Components report inverters, chargers, cars, meters, forecast providers and flexibility
 programmes as plain dicts during their first successful run. The coordinator validates,
 assembles and redacts them into a catalogue published in the debug YAML dump, so real user
-topologies can be read. Nothing here allocates anything or writes to self.args - see
-docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md.
+topologies can be read - see docs/superpowers/specs/2026-09-10-discovery-catalogue-design.md.
+
+The coordinator also configures the inverters of components that opt in (allow_automatic()): configure()
+builds per-slot bindings from their reports and replays them into args. bindings.py makes every decision
+about slots and values; this module holds the state, the triggers and the orchestration. Until a component
+opts in nothing here writes to args - see docs/superpowers/specs/2026-11-14-discovery-automatic-inverter-config-design.md.
+The one site-wide setting it sets for every component whose report is automatic, opted in or not, is the
+inverter_hybrid switch (apply_hybrid()) - see docs/superpowers/specs/2026-11-14-discovery-site-settings-design.md.
 
 Safety comes from typed containers rather than from enumerating every field: a record is a
 few structural fields plus containers that each declare what they accept and what happens
@@ -17,14 +23,97 @@ to them when shared. A container taking only numbers cannot leak a name or a cre
 however the catalogue grows, so components add facts freely by choosing a container.
 """
 
+import asyncio
+import copy
 import re
+import string
 import threading
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
+from bindings import BINDING_SETTINGS, COMPACT_SETTINGS, SUMMED_SETTINGS, build_bindings, replay_bindings, slot_map, slot_value
 from utils import is_secret_key
 
 SCHEMA_VERSION = 2
+
+# Settings indexed by slot, so a whole-value write to one can be traced to the slots whose entry changed
+SLOT_INDEXED_SETTINGS = (BINDING_SETTINGS - set(COMPACT_SETTINGS)) | {"inverter_type"}
+
+# The args the first pass keeps a copy of: every binding setting and inverter_type (see Coordinator.configure())
+BASELINE_SETTINGS = BINDING_SETTINGS | {"inverter_type"}
+
+# Marks a setting that was absent from args before a pass wrote it, so a failed pass can delete it again
+_ABSENT = object()
+
+
+def _unresolved(value):
+    """Whether an args value is a re: pattern that was not resolved to an entity."""
+    return isinstance(value, str) and value.startswith("re:")
+
+
+def _template_fields(value):
+    """The arg names a {name} template string refers to, or None when value is not a template format() can parse."""
+    if not isinstance(value, str) or "{" not in value:
+        return None
+    try:
+        fields = [field for _, field, _, _ in string.Formatter().parse(value) if field is not None]
+    except ValueError:
+        return None
+    return [re.split(r"[.\[]", field, maxsplit=1)[0] for field in fields]
+
+
+def expand_template(raw, resolved, args):
+    """
+    One args entry with its {name} template expanded: `resolved` (the entry as get_arg reads it) when raw is a template, otherwise raw.
+
+    Only a template is replaced, so an entry with no template is copied exactly as args hold it. A template stays as raw when
+    it did not expand to a string (get_arg gives the default for an unknown name), or when it names an arg that is still an
+    unresolved re: pattern: expanding then gives a string with the pattern inside, which names no entity and, written back,
+    would stay wrong after the pattern resolves. Kept raw, Predbat still expands it each time it reads the entry.
+    """
+    fields = _template_fields(raw)
+    if fields is None or not isinstance(resolved, str):
+        return raw
+    if any(_unresolved(args.get(field)) for field in fields):
+        return raw
+    return resolved
+
+
+def _expanded(raw, resolved, args):
+    """An args value with expand_template() applied entry by entry; a list resolved to a different length (a +[...] join) is left raw."""
+    if isinstance(raw, (list, tuple)):
+        if not isinstance(resolved, (list, tuple)) or len(resolved) != len(raw):
+            return raw
+        return [expand_template(entry, got, args) for entry, got in zip(raw, resolved)]
+    return expand_template(raw, resolved, args)
+
+
+def capture_baseline(args, read=None):
+    """A deep copy of args' BASELINE_SETTINGS with {name} templates expanded, an unresolved re: pattern counting as unset.
+
+    read(setting) gives the setting as get_arg reads it, with templates such as the GE templates' {geserial} expanded:
+    args keep the raw template and Predbat expands it only on a read, so a raw copy names no serial and a templated
+    manual slot could never be taken over. expand_template() decides, entry by entry, where the expanded value is used;
+    an entry with no template is copied as it is, read is called only for a setting that holds one, and with read None
+    (or a read that gives None) nothing is expanded.
+
+    In a list the pattern becomes None, so every other entry keeps its position; a scalar pattern drops the
+    key. A pattern can still be unresolved when the first pass runs, before finalize_config(), and copied as it
+    is it would later be written back as though it were an entity - nor can it name a serial.
+    """
+    baseline = {}
+    for setting in sorted(BASELINE_SETTINGS):
+        if setting not in args:
+            continue
+        value = args[setting]
+        if read is not None and (_template_fields(value) is not None or (isinstance(value, (list, tuple)) and any(_template_fields(entry) is not None for entry in value))):
+            value = _expanded(value, read(setting), args)
+        if isinstance(value, (list, tuple)):
+            baseline[setting] = [None if _unresolved(entry) else copy.deepcopy(entry) for entry in value]
+        elif not _unresolved(value):
+            baseline[setting] = copy.deepcopy(value)
+    return baseline
+
 
 MAX_STRING = 64
 VOCAB_RE = re.compile(r"^[a-z0-9_]{1,32}$")
@@ -74,8 +163,11 @@ NOT_APPLICABLE_DEFAULTS = {
 
 ACCESS_VALUES = ("rw", "r")
 
+# Structural fields that must be a bool: anything else is dropped and logged rather than kept as a number or string
+BOOL_STRUCTURAL = {"inverters": ("hybrid",)}
+
 SECTION_SPEC = {
-    "inverters": {"structural": ("device_id", "inverter_type", "control", "composition", "measures_meter", "serials"), "sub_records": ()},
+    "inverters": {"structural": ("device_id", "inverter_type", "control", "composition", "measures_meter", "serials", "hybrid"), "sub_records": ()},
     "chargers": {"structural": ("device_id", "serves_cars"), "sub_records": ()},
     "cars": {"structural": ("device_id", "charged_by"), "sub_records": ()},
     "meters": {"structural": ("device_id", "direction"), "sub_records": ("tariff",)},
@@ -276,11 +368,62 @@ class Redactor:
         return EMAIL_RE.sub(EMAIL_PLACEHOLDER, text)
 
 
+# The apps.yaml setting that overrides the inverter_hybrid rule (see Coordinator.hybrid_override()). Not inverter_hybrid
+# itself: that is the Predbat switch's own CONFIG_ITEM, whose value get_arg() returns ahead of apps.yaml
+HYBRID_OVERRIDE_KEY = "inverter_hybrid_override"
+HYBRID_OVERRIDE_TRUE = ("true", "on", "yes", "enable", "enabled")
+HYBRID_OVERRIDE_FALSE = ("false", "off", "no", "disable", "disabled")
+# Strings that mean "not set" - YAML reads a bare None as the string "None"
+HYBRID_OVERRIDE_UNSET = ("", "none", "null")
+
+
+def hybrid_override_unset(value):
+    """Whether an inverter_hybrid_override value or list entry means "not set": None, or an empty, "None" or "null" string."""
+    return value is None or (isinstance(value, str) and value.strip().lower() in HYBRID_OVERRIDE_UNSET)
+
+
+def hybrid_override_bool(value):
+    """True or False for a boolean, or a string that spells one (true/false, on/off, yes/no, enable(d)/disable(d)); None for anything else."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        word = value.strip().lower()
+        if word in HYBRID_OVERRIDE_TRUE:
+            return True
+        if word in HYBRID_OVERRIDE_FALSE:
+            return False
+    return None
+
+
+def remembered_hybrid(report, previous):
+    """The hybrid memory for one source after it files report: device_id -> last bool, from previous (that source's memory before).
+
+    A record carrying a bool hybrid gives that value; a record without one keeps its device's previous value, if any;
+    a device that is not in this report is dropped, so a removed inverter no longer counts.
+    """
+    known = {}
+    for record in report.get("inverters", []):
+        device_id = record.get("device_id")
+        if not isinstance(device_id, str):
+            continue
+        if isinstance(record.get("hybrid"), bool):
+            known[device_id] = record["hybrid"]
+        elif isinstance(previous.get(device_id), bool):
+            known[device_id] = previous[device_id]
+    return known
+
+
 class Coordinator:
     """Collects component discovery reports and assembles them into one catalogue.
 
     Thread-safe: components report from their own threads while assembly runs on the main
     thread at startup.
+
+    Two locks, always taken in this order and never the other way round: configure_lock (an RLock,
+    held for a whole configure() pass - build, replay and check) and then lock (held only briefly, to
+    read or replace the stored reports and opt-ins). report() and allow_automatic() release lock before
+    they call configure(), so a component thread reporting while another thread is part way through a
+    pass waits for that pass to finish and then runs its own.
     """
 
     def __init__(self, base):
@@ -288,6 +431,23 @@ class Coordinator:
         self.base = base
         self.log = base.log
         self.lock = threading.Lock()
+        self.configure_lock = threading.RLock()
+        # Automatic configuration: component name -> its allow_automatic() options, the last bindings
+        # built (None before the first pass) and their device_id -> slot map
+        self.automatic = {}
+        self.bindings = None
+        self.slot_map = {}
+        # capture_baseline() of the live args on the first pass, before anything was replayed: the serials are
+        # scanned in it, and its SUMMED_SETTINGS stand in for the snapshot's raw entries (see configure())
+        self.args_baseline = None
+        # The snapshot's ge_cloud_serial as the first pass expanded it (slot 0's serial, see _configure_pass())
+        self.ge_cloud_serial_baseline = None
+        self.warned = set()
+        # The inverter_hybrid value apply_hybrid() last scheduled a write of, until the setting holds it (None: nothing pending)
+        self.hybrid_pending = None
+        # The last bool each reported inverter record gave for hybrid, by component name then device_id: a record whose
+        # hybrid goes missing keeps its last value while its source still reports it (see hybrid_decision())
+        self.hybrid_known = {}
         self.reports = {}
         # UTC ISO-8601 timestamp of the last report(), by component name - surfaced as
         # "reported_at" for a status "ok" component in _component_status(). Kept apart from
@@ -301,13 +461,415 @@ class Coordinator:
         self.assembled = None
 
     def report(self, component_name, report):
-        """Validate and store one component's discovery report, replacing any previous one."""
+        """Validate and store one component's discovery report, replacing any previous one; a changed report re-runs configure() (opted in) and apply_hybrid() (always)."""
         cleaned = validate_report(report, component_name, self.log)
         with self.lock:
+            changed = self.reports.get(component_name) != cleaned
             self.reports[component_name] = cleaned
+            self.hybrid_known[component_name] = remembered_hybrid(cleaned, self.hybrid_known.get(component_name, {}))
             self.reported_at[component_name] = datetime.now(timezone.utc).isoformat()
+            opted_in = component_name in self.automatic
         counts = ", ".join("{} {}".format(len(cleaned.get(section, [])), section) for section in SECTION_SPEC if cleaned.get(section))
         self.log("Coordinator: {} reported {}".format(component_name, counts or "nothing"))
+        # Outside lock: configure() takes configure_lock first and lock only briefly inside it
+        if opted_in and changed:
+            self.configure()
+        # Every changed report, opted in or not: the hybrid rule is site-wide and does not depend on slot configuration
+        if changed:
+            self.apply_hybrid()
+
+    def _can_configure(self):
+        """Whether the base has what a configure pass needs: the apps.yaml snapshot, args and set_arg. False on a thin base (the bare test doubles)."""
+        base = self.base
+        return isinstance(getattr(base, "args_from_apps_yaml", None), dict) and isinstance(getattr(base, "args", None), dict) and callable(getattr(base, "set_arg", None))
+
+    def allow_automatic(self, component_name, skip_settings=(), keep_user_settings=(), include_pv_only=False):
+        """Opt a component in to automatic configuration by the coordinator; returns whether the coordinator will configure it.
+
+        The options are stored under the component's name and a pass runs at once. False, recording nothing, only
+        on a base a pass cannot configure (no apps.yaml snapshot, args or set_arg). skip_settings are left exactly
+        as args hold them; keep_user_settings yield to an apps.yaml value at the slot; include_pv_only lets records
+        with no inverter_type contribute pv_power and pv_today.
+        """
+        if not self._can_configure():
+            return False
+        options = {"skip_settings": frozenset(skip_settings or ()), "keep_user_settings": frozenset(keep_user_settings or ()), "include_pv_only": bool(include_pv_only)}
+        with self.lock:
+            self.automatic[component_name] = options
+        self.configure()
+        return True
+
+    def configure(self):
+        """One automatic configuration pass: build the bindings, replay what differs into args, then check. Never raises.
+
+        A no-op until a component has opted in (allow_automatic()), and on a base without the apps.yaml snapshot,
+        args or set_arg. Runs on whichever thread triggered it, under configure_lock for the whole pass. A pass
+        with nothing new writes nothing and logs nothing.
+
+        The first pass keeps a baseline: a copy of the live binding settings and inverter_type, before anything is
+        replayed, with {name} templates expanded as get_arg reads them (capture_baseline()). Every pass scans it for a manual slot's serials - replay rewrites the live entries at
+        every slot it takes over or clears, so a scan of live args would let such a slot come back on the next pass -
+        and hands bindings.py the snapshot with the baseline's SUMMED_SETTINGS in place of its own, since
+        args_from_apps_yaml is taken before Predbat resolves re: patterns.
+
+        A failure is logged as a warning and the writes the pass had already made are undone, so args are as they
+        were before it; the bindings stay as the last good pass left them. Every call ends with apply_hybrid(), even
+        with nothing opted in, so the startup passes apply an inverter_hybrid_override on a site with no report.
+        """
+        with self.lock:
+            opted_in = bool(self.automatic)
+        if not opted_in:
+            self.apply_hybrid()
+            return
+        with self.configure_lock:
+            before = {}
+            try:
+                self._configure_pass(before)
+            except Exception as e:
+                self.log("Warn: Coordinator: automatic configuration failed: {}".format(e))
+                self._undo(before)
+        self.apply_hybrid()
+
+    def inverter_records(self, source):
+        """A deep copy of one source's validated inverter records, in report order; [] when it has not reported."""
+        with self.lock:
+            report = self.reports.get(source) or {}
+            return copy.deepcopy(report.get("inverters", []))
+
+    def hybrid_override(self):
+        """inverter_hybrid_override from apps.yaml: None when unset, True or False, or a list by inverter slot of True, False or None.
+
+        Read through get_arg() under its own name - never inverter_hybrid, whose CONFIG_ITEM (the switch) get_arg()
+        answers first. A boolean string (on, off, yes, no and the like) counts as the boolean, and None, "None", "null"
+        or an empty string as not set. A value that is neither
+        a boolean nor a list is ignored, and so is a list entry that is not a boolean or None (it becomes None), each
+        with one Warn line naming the key.
+        """
+        get_arg = getattr(self.base, "get_arg", None)
+        if not callable(get_arg):
+            return None
+        raw = get_arg(HYBRID_OVERRIDE_KEY, None)
+        if hybrid_override_unset(raw):
+            return None
+        if isinstance(raw, (list, tuple)):
+            entries = []
+            for index, entry in enumerate(raw):
+                value = hybrid_override_bool(entry)
+                if value is None and not hybrid_override_unset(entry):
+                    self._warn_once("{}[{}] in apps.yaml is {!r}, not true, false or None - ignored".format(HYBRID_OVERRIDE_KEY, index, entry))
+                entries.append(value)
+            return entries
+        value = hybrid_override_bool(raw)
+        if value is None:
+            self._warn_once("{} in apps.yaml is {!r}, not true, false or a list of them - ignored".format(HYBRID_OVERRIDE_KEY, raw))
+        return value
+
+    def hybrid_decision(self):
+        """The site's inverter_hybrid value and what decides it: _hybrid_decide() without its single-override flag."""
+        value, deciders, _single = self._hybrid_decide()
+        return value, deciders
+
+    def _hybrid_decide(self):
+        """(value, deciders, single): the site's inverter_hybrid value from inverter_hybrid_override and the stored reports.
+
+        A single inverter_hybrid_override (True or False) decides alone: (value, ["inverter_hybrid_override in
+        apps.yaml"], True), and the records are not read. Otherwise single is False and the value comes from the records,
+        with a list override's True/False entry i standing in for slot i: it replaces the verdict of the discovered
+        record bound there, or for a manual slot counts as that inverter's verdict, named "inverter_hybrid_override[i]",
+        whether or not any component is automatic. A free slot, or one past the slots, takes nothing. With no bindings
+        (no component opted in) the manual slots are the apps.yaml inverters, 0 to num_inverters - 1.
+
+        Of the records, only reports whose automatic is true count (a component the user has not asked to configure automatically
+        does not change Predbat's settings), and only their driven records (with an inverter_type; PV-only records do
+        not count). A record's value is its hybrid, or when that is missing the last bool the same device gave in an
+        earlier report from the same source (hybrid_known): a component that loses the value on one reply does not
+        flip the switch, while a device that has left its source's report is forgotten. Any verdict False -> False,
+        decided by those device_ids (and override entries); otherwise any True -> True; otherwise (None, []), which
+        leaves the switch alone. Reports are read in component-name order, records in report order, then the list
+        override's entries in slot order.
+        """
+        override = self.hybrid_override()
+        if isinstance(override, bool):
+            return override, ["{} in apps.yaml".format(HYBRID_OVERRIDE_KEY)], True
+        slot_overrides = {index: value for index, value in enumerate(override or []) if isinstance(value, bool)}
+        with self.lock:
+            reports = [(self.reports[name], dict(self.hybrid_known.get(name, {}))) for name in sorted(self.reports)]
+            bindings = self.bindings
+        slots = slot_map(bindings)
+        found = {False: [], True: []}
+        for report, known in reports:
+            if not report.get("automatic"):
+                continue
+            for record in report.get("inverters", []):
+                if not (isinstance(record.get("inverter_type"), str) and record["inverter_type"].strip()):
+                    continue
+                if slots.get(record.get("device_id")) in slot_overrides:
+                    continue
+                value = record.get("hybrid") if isinstance(record.get("hybrid"), bool) else known.get(record.get("device_id"))
+                if isinstance(value, bool):
+                    found[value].append(record["device_id"])
+        if slot_overrides:
+            if bindings is not None:
+                occupied = {index for index, entry in enumerate(bindings.get("inverters", [])) if entry.get("origin") in ("manual", "discovered")}
+            else:
+                try:
+                    occupied = set(range(int(self.base.get_arg("num_inverters", 1))))
+                except (TypeError, ValueError):
+                    occupied = {0}
+            for index in sorted(slot_overrides):
+                if index in occupied:
+                    found[slot_overrides[index]].append("{}[{}]".format(HYBRID_OVERRIDE_KEY, index))
+        for value in (False, True):
+            if found[value]:
+                return value, found[value], False
+        return None, [], False
+
+    def apply_hybrid(self):
+        """Set Predbat's inverter_hybrid switch from hybrid_decision() when it differs from the setting and from a write still pending. Never raises.
+
+        Does nothing on a thin base (no ha_interface, get_arg or prefix). The write goes through
+        ha_interface.set_state_external() - the path a component uses, which changes the setting the planner reads -
+        and is scheduled, never awaited here (see _schedule_hybrid_write()). The value is held as pending while the
+        write is in flight - until it completes, or the setting is seen to equal it - so a second changed report
+        before the write lands does not send it again, while a user's later change is corrected on the next one.
+        """
+        base = self.base
+        ha_interface = getattr(base, "ha_interface", None)
+        prefix = getattr(base, "prefix", None)
+        if ha_interface is None or not callable(getattr(ha_interface, "set_state_external", None)) or not callable(getattr(base, "get_arg", None)) or not prefix:
+            return
+        scheduled = None
+        try:
+            value, device_ids, single = self._hybrid_decide()
+            current = base.get_arg("inverter_hybrid", True)
+            with self.lock:
+                if self.hybrid_pending is not None and current == self.hybrid_pending:
+                    self.hybrid_pending = None
+                if value is None or value == current or value == self.hybrid_pending:
+                    return
+                self.hybrid_pending = value
+                scheduled = value
+            if single:
+                reason = "{}"
+            elif value:
+                reason = "{} reports it is a hybrid inverter" if len(device_ids) == 1 else "{} report they are hybrid inverters"
+            else:
+                reason = "{} reports it is not a hybrid inverter" if len(device_ids) == 1 else "{} report they are not hybrid inverters"
+            self.log("Coordinator: inverter_hybrid set {} - {}".format("on" if value else "off", reason.format(", ".join(device_ids))))
+            self._schedule_hybrid_write("switch.{}_inverter_hybrid".format(prefix), value)
+        except Exception as e:
+            self._hybrid_write_failed(e, scheduled)
+
+    def _hybrid_write_done(self, value):
+        """A write of value has completed: it is no longer pending, unless a newer write has replaced it."""
+        with self.lock:
+            if self.hybrid_pending is not None and self.hybrid_pending == value:
+                self.hybrid_pending = None
+
+    def _hybrid_write_failed(self, error, value):
+        """Log a failed inverter_hybrid write of value and drop it from pending (only if still the pending one), so a later changed report tries again."""
+        self._hybrid_write_done(value)
+        self.log("Warn: Coordinator: could not set inverter_hybrid: {}".format(error))
+
+    def _schedule_hybrid_write(self, entity_id, value):
+        """Run set_state_external(entity_id, value) without awaiting it here.
+
+        The coordinator runs on whichever thread reported: a component's, inside that component's running event loop,
+        or the main thread, inside Predbat's loop - which sleeps between timer ticks and so cannot be relied on to run
+        a task handed to it. With a loop running in this thread the write therefore goes to a thread of its own:
+        base.create_task() (hass.py: a new thread running the coroutine to completion with its own loop, as every
+        component is started), or a plain thread on a base without one (the command-line harness). With no loop running
+        in this thread (the harness, the unit tests) it runs to completion here on a private loop, which leaves the
+        thread's own event loop setting alone.
+        """
+
+        async def write():
+            """The write, its failure logged rather than raised; either way it is no longer pending once it completes."""
+            try:
+                await self.base.ha_interface.set_state_external(entity_id, value)
+            except Exception as e:
+                self._hybrid_write_failed(e, value)
+                return
+            self._hybrid_write_done(value)
+
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            try:
+                loop.run_until_complete(write())
+            finally:
+                loop.close()
+            return
+        coro = write()
+        try:
+            create_task = getattr(self.base, "create_task", None)
+            if callable(create_task):
+                create_task(coro, name="coordinator_inverter_hybrid")
+            else:
+                threading.Thread(target=asyncio.run, args=(coro,), name="coordinator_inverter_hybrid").start()
+        except Exception:
+            coro.close()
+            raise
+
+    def _configure_pass(self, before):
+        """The body of configure(): build, replay, then log and check what changed. `before` collects each written setting's prior value."""
+        base = self.base
+        snapshot = getattr(base, "args_from_apps_yaml", None)
+        args = getattr(base, "args", None)
+        if not isinstance(snapshot, dict) or not isinstance(args, dict) or not callable(getattr(base, "set_arg", None)):
+            return
+        if self.args_baseline is None:
+            self.args_baseline = capture_baseline(args, self._read_arg)
+            # ge_cloud_serial names slot 0's inverter, and the templates write it as {geserial} too. Expanded once, with the
+            # baseline, so a template that cannot resolve is logged once rather than on every pass; nothing writes it back to args
+            serial = snapshot.get("ge_cloud_serial")
+            self.ge_cloud_serial_baseline = expand_template(serial, self._read_arg("ge_cloud_serial"), args) if _template_fields(serial) is not None else serial
+        baseline = copy.deepcopy(self.args_baseline)
+        apps_yaml = {key: value for key, value in snapshot.items() if key not in SUMMED_SETTINGS}
+        apps_yaml.update({setting: baseline[setting] for setting in SUMMED_SETTINGS if setting in baseline})
+        if "ge_cloud_serial" in apps_yaml:
+            apps_yaml["ge_cloud_serial"] = self.ge_cloud_serial_baseline
+
+        with self.lock:
+            automatic = dict(self.automatic)
+            reports = dict(self.reports)
+        # A component that opted in but has filed no report yet is left out: build_bindings keeps an absent source's
+        # slots, and would otherwise warn that it reported no inverter before it had reported anything
+        sources = [dict(automatic[name], name=name, records=list(reports[name].get("inverters", []))) for name in sorted(automatic) if name in reports]
+
+        bindings, warnings = build_bindings(apps_yaml, args, sources, self.bindings, scan_args=baseline)
+        for warning in warnings:
+            self._warn_once(warning)
+        written = replay_bindings(bindings, apps_yaml, args, self._recording_set_arg(before))
+        changed_slots = self._changed_slots(written, before, bindings)
+        self.bindings = bindings
+        self.slot_map = slot_map(bindings)
+        # Committed: from here on a failure leaves this pass's writes in place, matching the bindings just stored
+        before.clear()
+        # Every pass, not only one that wrote: a component not opted in never triggers a pass, so one that reports
+        # after the opted-in components are configured is only seen here; _warn_once keeps a repeat silent
+        self._warn_unconverted(reports, automatic)
+        if not written:
+            return
+
+        for index in sorted(changed_slots):
+            entry = bindings["inverters"][index]
+            self.log("Coordinator: inverter slot {} configured from {} ({})".format(index, entry["source"], entry["device_id"]))
+        self._check(written, bindings, sources)
+
+    def _read_arg(self, setting):
+        """setting as the base's get_arg reads it with {name} templates expanded: no HA lookup (indirect off), no API override; None when that read fails."""
+        get_arg = getattr(self.base, "get_arg", None)
+        if not callable(get_arg):
+            return None
+        try:
+            return get_arg(setting, indirect=False, can_override=False)
+        except Exception:
+            return None
+
+    def _warn_once(self, text):
+        """Log a warning the first time its text is seen in this coordinator's life; passes repeat them while the situation lasts."""
+        if text not in self.warned:
+            self.warned.add(text)
+            self.log("Warn: Coordinator: " + text)
+
+    def _recording_set_arg(self, before):
+        """base.set_arg, recording each setting's value before this pass first writes it into `before`."""
+        args = self.base.args
+        set_arg = self.base.set_arg
+
+        def record(arg, value, index=None):
+            """Note arg's prior value once, then write through to base.set_arg."""
+            if arg not in before:
+                before[arg] = copy.deepcopy(args[arg]) if arg in args else _ABSENT
+            if index is None:
+                set_arg(arg, value)
+            else:
+                set_arg(arg, value, index=index)
+
+        return record
+
+    def _undo(self, before):
+        """Put back the args a failed pass wrote, directly rather than through set_arg, which may be what failed."""
+        try:
+            for arg, value in before.items():
+                if value is _ABSENT:
+                    self.base.args.pop(arg, None)
+                else:
+                    self.base.args[arg] = value
+            # What set_arg itself would have done after changing args (userinterface.py)
+            invalidate = getattr(self.base, "_invalidate_log_secret_pattern", None)
+            if before and callable(invalidate):
+                invalidate()
+        except Exception as e:
+            self.log("Warn: Coordinator: could not undo a failed automatic configuration pass: {}".format(e))
+
+    def _changed_slots(self, written, before, bindings):
+        """The discovered slots this pass wrote: an indexed write's slot, and for a whole-value write to a slot-indexed setting each slot whose entry changed.
+
+        A compact summed list (load_today and the like) leaves unbound slots out, so its index is not a slot
+        and its writes name no slot here.
+        """
+        entries = bindings.get("inverters", [])
+        slots = set()
+        for setting, index in written:
+            if setting in COMPACT_SETTINGS:
+                continue
+            if index is not None:
+                candidates = [index]
+            elif setting in SLOT_INDEXED_SETTINGS:
+                old = before.get(setting)
+                old = None if old is _ABSENT else old
+                new = self.base.args.get(setting)
+                candidates = [slot for slot in range(len(entries)) if slot_value(old, slot) != slot_value(new, slot)]
+            else:
+                candidates = []
+            slots.update(slot for slot in candidates if slot < len(entries) and entries[slot].get("origin") == "discovered")
+        return slots
+
+    def _warn_unconverted(self, reports, automatic):
+        """Warn about a component that configures inverters itself (automatic, with a driven inverter) alongside the opted-in ones."""
+        if not automatic:
+            return
+        opted_in = ", ".join(sorted(automatic))
+        for name in sorted(reports):
+            report = reports[name]
+            if name in automatic or not report.get("automatic"):
+                continue
+            if any(isinstance(record.get("inverter_type"), str) and record["inverter_type"].strip() for record in report.get("inverters", [])):
+                self._warn_once("{} configures inverters itself and is not yet handled by discovery - running it alongside {} is not supported".format(name, opted_in))
+
+    def _check(self, written, bindings, sources):
+        """Call check_automatic_config(slots) on each opted-in component a write was attributed to, if it is running and defines one.
+
+        A write at index i is attributed to the source of slot i. A whole-value write, or one to a compact summed
+        list (whose index is not a slot), is attributed to every opted-in source. slots is the slot of each of the
+        component's records with an inverter_type, in report order, None for one that got no slot. A checker that
+        raises is logged and the pass stands.
+        """
+        entries = bindings.get("inverters", [])
+        names = set()
+        for setting, index in written:
+            if index is None or setting in COMPACT_SETTINGS:
+                names.update(source["name"] for source in sources)
+            elif index < len(entries) and entries[index].get("source"):
+                names.add(entries[index]["source"])
+        get_component = getattr(getattr(self.base, "components", None), "get_component", None)
+        if not callable(get_component):
+            return
+        for source in sources:
+            if source["name"] not in names:
+                continue
+            component = get_component(source["name"])
+            checker = getattr(component, "check_automatic_config", None) if component is not None else None
+            if not callable(checker):
+                continue
+            slots = [self.slot_map.get(record["device_id"]) for record in source["records"] if isinstance(record.get("inverter_type"), str) and record["inverter_type"].strip()]
+            try:
+                checker(slots)
+            except Exception as e:
+                self.log("Warn: Coordinator: {} automatic configuration check failed: {}".format(source["name"], e))
 
     def assemble(self):
         """Merge every report into one catalogue, with a status per component and the observation layer.
@@ -322,6 +884,9 @@ class Coordinator:
         with self.lock:
             reports = {name: report for name, report in self.reports.items()}
             reported_at = dict(self.reported_at)
+        # Read once, and the slots derived from it, so they always belong to the same pass's bindings
+        bindings = self.bindings
+        slots = slot_map(bindings)
         catalogue = {"schema_version": SCHEMA_VERSION, "generated": datetime.now(timezone.utc).isoformat(), "components": self._component_status(reports, reported_at)}
         for section in SECTION_SPEC:
             merged = []
@@ -329,9 +894,13 @@ class Coordinator:
                 for record in reports[name].get(section, []):
                     entry = {"source": name}
                     entry.update(record)
+                    if section == "inverters" and entry.get("device_id") in slots:
+                        entry["slot"] = slots[entry["device_id"]]
                     merged.append(entry)
             catalogue[section] = merged
         catalogue["observations"] = {"conflicts": self._conflicts(catalogue), "resulting_config": self._resulting_config()}
+        if bindings is not None:
+            catalogue["observations"]["bindings"] = copy.deepcopy(bindings)
         self.assembled = catalogue
         return catalogue
 
@@ -363,9 +932,8 @@ class Coordinator:
         cannot hold a name or a credential however the schema grows, and one unbounded string
         outside that boundary would be the single field a future component could leak a URL or an
         account value through into a dump attached to a public issue. The message is not lost -
-        components.initialize() logs it (with a traceback for anything but an ImportError) and
-        inverter_source_status() puts it on the component-status entity - so a maintainer reading
-        a bug report still has it, just not from this document.
+        components.initialize() logs it (with a traceback for anything but an ImportError) - so a
+        maintainer reading a bug report still has it, just not from this document.
 
         reported_at is a component-name -> ISO-8601 UTC timestamp snapshot, taken under the same
         lock as reports so the two agree with each other; it is only ever populated for a status
@@ -539,6 +1107,12 @@ def _validate_record(record, section, component_name, log):
         if field not in record or record[field] is None:
             continue
         value = record[field]
+        if field in BOOL_STRUCTURAL.get(section, ()):
+            if isinstance(value, bool):
+                out[field] = value
+            else:
+                log("Warn: Coordinator: {} {} {} is not a bool - dropped".format(component_name, section, field))
+            continue
         if isinstance(value, list):
             out[field] = [entry for entry in value if isinstance(entry, str) and len(entry) <= MAX_STRING]
         elif isinstance(value, bool) or isinstance(value, (int, float)):
@@ -588,6 +1162,7 @@ def inverter_record(
     composition=None,
     measures_meter=None,
     serials=None,
+    hybrid=None,
     functions=None,
     capabilities=None,
     flags=None,
@@ -628,6 +1203,9 @@ def inverter_record(
     reason, sorted by string form so that a set mixing types cannot raise and withhold the whole
     report, and sorted because string hashing is randomised per process, so list(some_set) comes
     out in a different order after a restart and two dumps of the same hardware would diff for nothing.
+
+    hybrid is True when the inverter is a hybrid (PV on its own DC inputs), False when it is not (AC coupled, or a
+    battery-only unit) and None, left out, when the component cannot tell. False is a fact and is kept.
     """
     return _record(
         device_id,
@@ -637,6 +1215,7 @@ def inverter_record(
             "composition": composition,
             "measures_meter": measures_meter,
             "serials": serials,
+            "hybrid": hybrid,
             "functions": functions,
             "capabilities": capabilities,
             "flags": flags,

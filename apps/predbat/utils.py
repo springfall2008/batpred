@@ -3585,3 +3585,25 @@ def intelligent_device_is_charger(dispatch_attribute, target_attribute=None):
     if size is not None and rate is None:
         return False
     return None
+
+
+def givenergy_model_is_hybrid(model):
+    """
+    Whether a GivEnergy inverter model name is a hybrid (PV on its own DC inputs): None when it cannot tell.
+
+    False when the lower-cased model contains "ac" or "aio", or any spelling of all-in-one ("All-in-One",
+    "All in One", "all_in_one", "AllInOne": matched with spaces, hyphens and underscores removed), else True. One
+    rule for every component that reads a GivEnergy model name (GE Cloud's device model, GivTCP's Invertor_Type,
+    the Gateway's inv.model), so they cannot disagree about the same box.
+
+    Unknown (None) for an empty or non-string model, and for a coordinator's own model - one containing "gateway",
+    or "ems" as a whole word ("Plant EMS", not "Systems") - since a Gateway or EMS says nothing about whether the
+    inverters it fronts are hybrid.
+    """
+    if not isinstance(model, str) or not model:
+        return None
+    model = model.lower()
+    if "gateway" in model or re.search(r"\bems\b", model):
+        return None
+    compact = model.replace(" ", "").replace("-", "").replace("_", "")
+    return not (("ac" in model) or ("aio" in model) or ("allinone" in compact))

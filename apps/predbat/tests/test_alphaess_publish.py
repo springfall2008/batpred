@@ -165,14 +165,20 @@ def test_alphaess_battery_min_soc_is_not_mapped():
     assert not failed, "test_alphaess_battery_min_soc_is_not_mapped"
 
 
-def test_alphaess_hybrid_switch_only_moves_on_agreeing_evidence():
-    """The two errors are NOT symmetric.
+def _hybrid_by_serial(client):
+    """Each record's hybrid value by serial, or the string "absent" where the record leaves it out."""
+    return {record["hardware_ids"]["serial"]: record.get("hybrid", "absent") for record in client.build_discovery()["inverters"]}
 
-    hybrid=False on a real hybrid stops PV counting against inverter_limit, so Predbat
-    plans past what the inverter passes and the surplus is clipped with targets silently
-    missed. hybrid=True on an AC-coupled system merely under-uses the battery. Predbat
-    defaults to True and every mainstream AlphaESS unit is a hybrid, so the switch moves
-    only when both signals agree.
+
+def test_alphaess_record_reports_hybrid_only_on_agreeing_evidence():
+    """Each record's hybrid is not detect_ac_coupled(): False only when both signals agree on AC coupling.
+
+    The two errors are NOT symmetric. hybrid=False on a real hybrid stops PV counting against
+    inverter_limit, so Predbat plans past what the inverter passes and the surplus is clipped
+    with targets silently missed. hybrid=True on an AC-coupled system merely under-uses the
+    battery. So the record says False only when both signals agree, and says nothing when they
+    disagree. AlphaESS no longer writes inverter_hybrid itself - discovery sets it from the
+    records - so automatic_config() must leave the switch alone in every case.
     """
     failed = False
     entity = "switch.predbat_inverter_hybrid"
@@ -183,9 +189,8 @@ def test_alphaess_hybrid_switch_only_moves_on_agreeing_evidence():
         ac.device_detail[sn] = dict(ac.device_detail[sn], popv=0.0)
         ac.device_values[sn]["ppv_detail_all_null"] = True
         ac.device_energy[sn]["pv_today"] = 6.2
-    run_async_local(ac.apply_hybrid_verdict())
-    if ac.external_state.get(entity) is not False:
-        print(f"ERROR: agreeing AC evidence did not flip the switch: {ac.external_state}")
+    if set(_hybrid_by_serial(ac).values()) != {False}:
+        print(f"ERROR: agreeing AC evidence should report hybrid False on every record: {_hybrid_by_serial(ac)}")
         failed = True
 
     # A hybrid AT NIGHT reports ZEROS, not nulls. It must never be misread as AC-coupled.
@@ -193,24 +198,116 @@ def test_alphaess_hybrid_switch_only_moves_on_agreeing_evidence():
     for sn in night.device_list:
         night.device_values[sn]["ppv_detail_all_null"] = False
         night.device_energy[sn]["pv_today"] = 0.0
-    run_async_local(night.apply_hybrid_verdict())
-    if entity in night.external_state:
-        print(f"ERROR: a hybrid at night moved the switch: {night.external_state}")
+    if set(_hybrid_by_serial(night).values()) != {True}:
+        print(f"ERROR: a hybrid at night reports DC strings, so hybrid True: {_hybrid_by_serial(night)}")
         failed = True
 
-    # Signals disagree: leave Predbat's default alone and say what was seen.
+    # Signals disagree: undecided, so the record says nothing either way.
     mixed = _ready_client()
     for sn in mixed.device_list:
         mixed.device_values[sn]["ppv_detail_all_null"] = True
         mixed.device_detail[sn] = dict(mixed.device_detail[sn], popv=9.0)
-    run_async_local(mixed.apply_hybrid_verdict())
-    if entity in mixed.external_state:
-        print(f"ERROR: disagreeing signals moved the switch: {mixed.external_state}")
+    if set(_hybrid_by_serial(mixed).values()) != {"absent"}:
+        print(f"ERROR: disagreeing signals must leave hybrid out: {_hybrid_by_serial(mixed)}")
         failed = True
-    if not any("inverter_hybrid" in message for message in mixed.log_messages):
+
+    # No telemetry yet (ppv_detail_all_null unknown): undecided too.
+    unread = _ready_client()
+    if set(_hybrid_by_serial(unread).values()) != {"absent"}:
+        print(f"ERROR: with no string telemetry the record must leave hybrid out: {_hybrid_by_serial(unread)}")
+        failed = True
+
+    # One system each way: each record states its own verdict.
+    fleet = _ready_client()
+    first, second = fleet.device_list
+    fleet.device_detail[first] = dict(fleet.device_detail[first], popv=0.0)
+    fleet.device_values[first]["ppv_detail_all_null"] = True
+    fleet.device_values[second]["ppv_detail_all_null"] = False
+    if _hybrid_by_serial(fleet) != {first: False, second: True}:
+        print(f"ERROR: each record reports its own system's verdict: {_hybrid_by_serial(fleet)}")
+        failed = True
+
+    for label, client in (("AC-coupled", ac), ("night", night), ("mixed", mixed), ("unread", unread), ("fleet", fleet)):
+        run_async_local(client.automatic_config())
+        if entity in client.external_state:
+            print(f"ERROR: {label}: automatic_config() wrote {entity}, which is discovery's to set: {client.external_state}")
+            failed = True
+
+    # Undecided: the advice to set the switch by hand on an AC-coupled retrofit is still given.
+    if not any("inverter_hybrid" in message and "by hand" in message for message in mixed.log_messages):
         print(f"ERROR: no advisory log on an undecided verdict, got {mixed.log_messages}")
         failed = True
-    assert not failed, "test_alphaess_hybrid_switch_only_moves_on_agreeing_evidence"
+    # Never a claim that the switch is left alone: another system's record may decide it.
+    for label, client in (("mixed", mixed), ("unread", unread)):
+        if any("current value" in message for message in client.log_messages):
+            print(f"ERROR: {label}: the log must not claim the switch is left at its current value: {client.log_messages}")
+            failed = True
+
+    # One decided and one undecided system: the undecided one is named, with no by-hand advice, since the other decides.
+    partial = _ready_client()
+    decided, pending = partial.device_list
+    partial.device_values[decided]["ppv_detail_all_null"] = False
+    partial.device_values[pending]["ppv_detail_all_null"] = True
+    partial.device_detail[pending] = dict(partial.device_detail[pending], popv=9.0)
+    run_async_local(partial.log_undecided_hybrid())
+    undecided_lines = [message for message in partial.log_messages if "could not yet tell hybrid" in message]
+    if len(undecided_lines) != 1 or pending not in undecided_lines[0] or decided in undecided_lines[0] or "by hand" in undecided_lines[0]:
+        print(f"ERROR: a partly decided fleet should name only {pending}, without by-hand advice: {partial.log_messages}")
+        failed = True
+    assert not failed, "test_alphaess_record_reports_hybrid_only_on_agreeing_evidence"
+
+
+def test_alphaess_record_holds_a_decided_hybrid_verdict():
+    """Once decided, the record's hybrid survives readings that are undecided again, so the report is not re-filed.
+
+    A live payload without ppvDetail, pv_today back at zero after midnight and a poll on the history
+    path all leave detect_ac_coupled() undecided. Without the hold an AC-coupled system would read as
+    a hybrid on the first (turning inverter_hybrid on until the next full payload) and drop its verdict
+    on the second, re-filing the report and undoing a user's manual change twice a day.
+    """
+    failed = False
+    ac_strings = {"soc": 50, "ppvDetail": {"ppv1": None, "ppv2": None, "ppv3": None, "ppv4": None}}
+    dc_strings = {"soc": 50, "ppvDetail": {"ppv1": 0.0, "ppv2": 0.0, "ppv3": None, "ppv4": None}}
+
+    client = _ready_client()
+    first, second = client.device_list
+    reports = []
+    client.report_discovery = reports.append
+    client.device_detail[first] = dict(client.device_detail[first], popv=0.0)
+    client.device_detail[second] = dict(client.device_detail[second], popv=9.0)
+    client._apply_live_payload(first, dict(ac_strings))
+    # The second system never decides: strings null but a PV nameplate, so the two signals disagree
+    client._apply_live_payload(second, dict(ac_strings))
+    client.refresh_discovery()
+    if _hybrid_by_serial(client) != {first: False, second: "absent"}:
+        print(f"ERROR: expected the AC-coupled system decided and the other undecided, got {_hybrid_by_serial(client)}")
+        failed = True
+
+    steps = (
+        ("a live payload without ppvDetail", lambda sn: client._apply_live_payload(sn, {"soc": 50})),
+        ("pv_today reset to zero at midnight", lambda sn: (client._apply_live_payload(sn, dict(ac_strings)), client.device_energy[sn].update(pv_today=0.0))),
+        ("a poll on the history path", lambda sn: client._apply_history_payload(sn, [{"cbat": 50}])),
+    )
+    for label, step in steps:
+        for sn in (first, second):
+            step(sn)
+        if client.detect_ac_coupled(first) is not None:
+            print(f"ERROR: {label}: the fixture must leave detect_ac_coupled() undecided, got {client.detect_ac_coupled(first)}")
+            failed = True
+        client.refresh_discovery()
+        if _hybrid_by_serial(client) != {first: False, second: "absent"}:
+            print(f"ERROR: {label}: the held verdict changed: {_hybrid_by_serial(client)}")
+            failed = True
+    if len(reports) != 1:
+        print(f"ERROR: the report must be filed once and never re-filed across undecided readings, got {len(reports)} filings")
+        failed = True
+
+    # A decided reading still replaces the held one: DC strings seen later make it a hybrid
+    client._apply_live_payload(first, dict(dc_strings))
+    if _hybrid_by_serial(client)[first] is not True:
+        print(f"ERROR: a later decided reading should replace the held verdict, got {_hybrid_by_serial(client)}")
+        failed = True
+    assert not failed, "test_alphaess_record_holds_a_decided_hybrid_verdict"
 
 
 def test_alphaess_args_only_mapped_when_every_inverter_reports_them():
@@ -377,7 +474,8 @@ def run_alphaess_publish_tests(my_predbat):
         ("automatic_args", test_alphaess_automatic_config_maps_the_expected_args),
         ("export_limit_not_guessed", test_alphaess_export_limit_is_not_guessed),
         ("battery_min_soc_not_mapped", test_alphaess_battery_min_soc_is_not_mapped),
-        ("hybrid_verdict", test_alphaess_hybrid_switch_only_moves_on_agreeing_evidence),
+        ("hybrid_verdict", test_alphaess_record_reports_hybrid_only_on_agreeing_evidence),
+        ("hybrid_verdict_held", test_alphaess_record_holds_a_decided_hybrid_verdict),
         ("map_only_when_all_report", test_alphaess_args_only_mapped_when_every_inverter_reports_them),
         ("ev_charger_detection", test_alphaess_ev_charger_detected_from_pev_detail),
         ("car_charging_energy_mapping", test_alphaess_car_charging_energy_mapped_only_for_serials_with_a_charger),

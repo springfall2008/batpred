@@ -18,6 +18,7 @@ aiomqtt
 aios
 Alertfeed
 allclose
+allinone
 alphaess
 am2
 anker
@@ -82,6 +83,7 @@ calcsize
 calib
 callees
 Cantarell
+casefolded
 cbat
 CDLL
 cdn

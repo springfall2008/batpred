@@ -275,6 +275,23 @@ SOLIS_DETAIL_SUMMARY_PATTERN = re.compile(r"model|version|firmware|machine|^powe
 # <series>-GR<phases>P (S6-GR1P6K, S5-GR3P10K), against EH/EA/RHI/RAI for the hybrid and storage ranges
 SOLIS_GRID_TIED_MACHINE_PATTERN = re.compile(r"^S\d+-GR\dP", re.IGNORECASE)
 
+# inverterDetail `machine` names, for the discovery record's hybrid value. A hybrid (DC-coupled) inverter: the EH
+# range (S5-EH1P6K-L, S6-EH3P10K-H) and RHI (RHI-6K-48ES-5G). An AC-coupled storage inverter: the EA range
+# (S6-EA1P5K-L) and RAI, the retrofit AC-coupled range (RAI-3K-48ES-5G). Any other name says nothing
+SOLIS_HYBRID_MACHINE_PATTERN = re.compile(r"^(?:S\d+-EH\dP|RHI-)", re.IGNORECASE)
+SOLIS_AC_COUPLED_MACHINE_PATTERN = re.compile(r"^(?:S\d+-EA\dP|RAI-)", re.IGNORECASE)
+
+
+def solis_machine_hybrid(machine):
+    """The discovery hybrid value an inverterDetail machine name states: True for a hybrid range, False for an AC-coupled one, else None."""
+    machine = str(machine or "").strip()
+    if SOLIS_HYBRID_MACHINE_PATTERN.match(machine):
+        return True
+    if SOLIS_AC_COUPLED_MACHINE_PATTERN.match(machine):
+        return False
+    return None
+
+
 def parse_cid_int(value, default=None):
     """Convert a CID register value to an int, returning default when it is missing or not numeric.
 
@@ -2787,6 +2804,12 @@ class SolisAPI(ComponentBase, OAuthMixin):
         The TOU V2 register layout is reported as the flag "tou_v2" - how the inverter is driven,
         not something it can do.
 
+        hybrid comes from inverterDetail's machine (solis_machine_hybrid()): True for a hybrid range (EH, RHI),
+        False for an AC-coupled storage range (EA, RAI), left out for every other name - the grid-tied GR range
+        and a missing machine. productModel is not used: live details carry a numeric code there. The machine name is
+        static device info, so the value does not move between polls. The discovery coordinator sets
+        inverter_hybrid from it.
+
         Returns None when no inverter has been discovered yet.
         """
         if not self.inverter_sn:
@@ -2853,6 +2876,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                     "solis:{}".format(sn),
                     inverter_type="SolisCloud" if drives_it else None,
                     composition="direct",
+                    hybrid=solis_machine_hybrid(detail.get("machine")),
                     functions=(["solar", "battery"] if has_battery else ["solar"]) if detail else None,
                     capabilities=dict(SOLIS_CLOUD_CAPABILITIES) if drives_it else None,
                     flags=flags,

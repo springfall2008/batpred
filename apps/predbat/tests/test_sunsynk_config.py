@@ -451,6 +451,9 @@ def test_sunsynk_catalogue_describes_each_inverter():
         if absent in record:
             print("ERROR: Sunsynk holds no model, firmware or station ID, so {} must be absent: {}".format(absent, record[absent]))
             failed = True
+    if "hybrid" in record:
+        print("ERROR: Sunsynk holds nothing that tells a hybrid from an AC-coupled inverter, so hybrid must be absent: {}".format(record["hybrid"]))
+        failed = True
     return failed
 
 

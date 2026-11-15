@@ -22,6 +22,8 @@ For an AC coupled inverter the inverter loss is just the loss of the battery inv
 or adjust your Solar forecast output. Battery loss charge and discharge are factors to account for the loss in charging and discharging the battery as DC.
 
 Also, set **switch.predbat_inverter_hybrid** to True or False depending upon if you have a Hybrid or AC-Coupled battery.
+With an inverter component's automatic configuration on, Predbat's discovery may set this switch for you from what the inverter reports - see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting).
+With an automatic inverter component - which includes GivTCP REST, on by default - discovery sets the switch and a value set by hand is put back on the next changed report and after every restart; set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage the switch yourself.
 
 The setting **input_number.predbat_metric_battery_cycle** (_expert mode_) can be used to allocate a 'virtual cost' in pence per kWh on using your battery for charging and discharging.<BR>
 If you configure this number higher then more expensive plans will be selected which avoids charging and discharging your battery as much.

@@ -463,6 +463,24 @@ def test_inverter_record_drops_an_empty_string():
     return 0
 
 
+def test_inverter_record_hybrid():
+    """hybrid is kept as a bool, False included, omitted when unset; validation keeps a bool and drops anything else with one log line."""
+    assert inverter_record("x:1", hybrid=False)["hybrid"] is False
+    assert inverter_record("x:1", hybrid=True)["hybrid"] is True
+    assert "hybrid" not in inverter_record("x:1")
+    lines = []
+    cleaned = validate_report({"inverters": [inverter_record("x:1", inverter_type="GE", hybrid=False)]}, "x", lines.append)
+    assert cleaned["inverters"][0]["hybrid"] is False, cleaned
+    assert lines == [], lines
+    for bad in ("no", 0, 1, ["yes"]):
+        lines = []
+        cleaned = validate_report({"inverters": [{"device_id": "x:1", "hybrid": bad}]}, "x", lines.append)
+        assert "hybrid" not in cleaned["inverters"][0], (bad, cleaned)
+        assert len(lines) == 1 and "hybrid" in lines[0] and "dropped" in lines[0], (bad, lines)
+    print("PASS: inverter_record and validation keep hybrid as a bool")
+    return 0
+
+
 def test_charger_record_omits_empty_containers():
     """A charger record leaves out unset and empty fields exactly as an inverter record does."""
     record = charger_record("hypervolt:ABC123", serves_cars=[], hardware_ids={"serial": "ABC123"}, account_ids={}, info={}, ratings={}, entities={})
@@ -1287,6 +1305,7 @@ def test_coordinator_all(my_predbat=None):
     failures += test_inverter_record_normalises_sets_and_tuples()
     failures += test_inverter_record_sorts_a_mixed_type_set_without_raising()
     failures += test_inverter_record_drops_an_empty_string()
+    failures += test_inverter_record_hybrid()
     failures += test_charger_record_omits_empty_containers()
     failures += test_optional_capability_defaults_false_without_a_gap()
     failures += test_optional_capability_survives_validation()
