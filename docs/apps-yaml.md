@@ -1946,6 +1946,13 @@ planning with no load model until the days build back up. This applies per setti
 the four by hand leaves the other three auto-configured. Everything else Predbat auto-configures here
 is read as a current value rather than as history, and anything you set for those is still overridden.
 
+**battery_temperature_history** is the exception to that exception: it is read as history, but it is
+still pointed at the first answering inverter's `sensor.predbat_givtcp_<n>_battery_temperature`, the same sensor
+**battery_temperature** reads. Predbat predicts the battery temperature forward from it, and a different
+sensor - such as a GivTCP battery stack sensor that always reads 0 - would make it plan every charge at
+your **battery_temperature_charge_curve**'s coldest rate. Only the last 24 hours are used, so switching
+sensor costs at most a day of temperature trend.
+
 **export_limit** is also left to you if you set it. Predbat publishes the inverter's own export limit
 as `sensor.predbat_givtcp_<n>_export_limit` (from GivTCP's `Export_Limit`, which is 0 for a
 zero-export site) and points **export_limit** at it only when `apps.yaml` does not set one. If your
@@ -3052,6 +3059,10 @@ to `sensor.givtcp_battery_stack_1_battery_temperature`, and the old sensor now r
 Predbat predicts your battery at 0 °C and plans charging and discharging at the 0 °C rates in your temperature curves.
 Check the sensor in Home Assistant and update **battery_temperature** and **battery_temperature_history** to the new name.
 Predbat warns once (in the log and on its status) when the temperature history has read 0 for the last 24 hours.
+
+If you control your inverter through Predbat's [GivTCP REST interface](#rest-interface-inverter-control) with **givtcp_automatic**
+left on, you do not need to set either: Predbat points **battery_temperature** and **battery_temperature_history** at its own
+`sensor.predbat_givtcp_<n>_battery_temperature`, read straight from GivTCP, and overrides any sensor you name for them.
 
 An example for GivEnergy Gen2 battery is below.
 
