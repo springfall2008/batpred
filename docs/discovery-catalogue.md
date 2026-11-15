@@ -186,7 +186,8 @@ discovered slot.
 ### Options a component passes
 
 - **Skipped settings** are left exactly as `apps.yaml` has them: GE Cloud skips `load_today` when
-  `ge_cloud_load_today_ignore` is set.
+  `ge_cloud_load_today_ignore` is set. A skipped summed setting such as `load_today` is left alone as a
+  whole - no slot's entry, extra or PV-only device is added to it, whatever your `num_inverters`.
 - **Kept settings** yield to a value you wrote in `apps.yaml` for that slot: for GE Cloud,
   `inverter_mode` and `export_limit`, the same keys the old configuration never overwrote. A single value
   (not a list) for one of them in `apps.yaml` is kept as it is, for every inverter.

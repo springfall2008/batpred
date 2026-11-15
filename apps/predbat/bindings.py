@@ -451,9 +451,9 @@ def _discovered_value(entry, setting, apps_yaml, args):
     """A discovered slot's entry for one binding setting.
 
     A skipped setting, or a kept one the snapshot gives a value at this slot (a re: pattern counts), is not
-    touched (a kept one the snapshot gives as a single value is not decided at all - see desired_args()): a slot-indexed one keeps the live args entry, which may be a resolved pattern or another writer's
-    value. A summed one takes the snapshot's entry, since replay rewrites those lists and a live index stops
-    meaning a slot. Otherwise it is the bound entity id or value, None when unbound - except pv_power, which is a fixed 0,
+    touched (a kept one the snapshot gives as a single value, and a skipped summed one, are not decided at all - see desired_args()):
+    a slot-indexed one keeps the live args entry, which may be a resolved pattern or another writer's value. A kept summed one
+    takes the snapshot's entry, since replay rewrites those lists and a live index stops meaning a slot. Otherwise it is the bound entity id or value, None when unbound - except pv_power, which is a fixed 0,
     and an INVERT_SETTINGS member, which is whether the descriptor of the setting it describes is marked invert (False when
     that setting is unbound or carries no invert). An invert follows the setting it describes: where that one is skipped or
     kept at this slot the live entity is the user's, so the invert keeps its live entry (_live_invert) too.
@@ -498,6 +498,12 @@ def desired_args(bindings: dict, apps_yaml: dict, args: dict) -> dict:
     it, so args keep it exactly as they hold it, for every slot, manual or discovered. That is what
     set_arg_auto(..., overwrite=False) did: it kept the user's whole value, never only its first entry. A list
     value is per slot, as _discovered_value() describes.
+
+    A SUMMED_SETTINGS member that any discovered slot skips is the user's for the whole key too, whatever apps.yaml
+    gives: nothing is decided for it, for any slot, extra or PV-only device. Its list is a site total, not indexed
+    by slot, so rebuilding it from per-slot entries plus the entries past num_inverters would count the user's own
+    entries twice whenever num_inverters is below the discovered slot count. Left undecided, args keep it exactly
+    as apps.yaml (resolved) had it, as when GE Cloud never wrote a skipped load_today.
     """
     entries = (bindings or {}).get("inverters", [])
     if not any(entry.get("origin") == "discovered" for entry in entries):
@@ -506,6 +512,7 @@ def desired_args(bindings: dict, apps_yaml: dict, args: dict) -> dict:
     extras = site.get("extras") or {}
     kept = {setting for entry in entries if entry.get("origin") == "discovered" for setting in entry.get("keep_user_settings", ())}
     user_owned = {setting for setting in kept if apps_yaml.get(setting) is not None and not isinstance(apps_yaml.get(setting), (list, tuple))}
+    user_owned |= {setting for entry in entries if entry.get("origin") == "discovered" for setting in entry.get("skip_settings", ()) if setting in SUMMED_SETTINGS}
     desired = {"num_inverters": len(entries)}
     for setting in sorted((BINDING_SETTINGS | {"inverter_type"}) - user_owned):
         values = [_slot_entry(entry, setting, apps_yaml, args) for entry in entries]

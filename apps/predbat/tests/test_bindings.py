@@ -786,6 +786,37 @@ def test_replay_skip_setting():
     return 0
 
 
+def test_replay_skip_summed_whole_key():
+    """
+    A skipped summed setting is the user's for the whole key, as on main where GE Cloud never wrote it: never decided, never
+    written, so args keep it exactly as they hold it whatever num_inverters says - no slot takes an apps.yaml entry by index
+    and nothing is appended as extras, so no entry is counted twice. A manual slot or PV-only records do not change that.
+    """
+    records = [_full("a11111"), _full("b22222")]
+    for apps in ({"load_today": ["sensor.a", "sensor.b"]}, {"num_inverters": 2, "load_today": ["sensor.a", "sensor.b"]}, {"load_today": "sensor.a"}):
+        results, args = _passes(apps, [_src(records, skip_settings={"load_today"})])
+        assert args["load_today"] == apps["load_today"] and type(args["load_today"]) is type(apps["load_today"]), (apps, args["load_today"])
+        assert "load_today" not in desired_args(results[0][0], apps, args), apps
+        for _, _, written in results:
+            assert "load_today" not in [setting for setting, _ in written], (apps, written)
+        assert args["num_inverters"] == 2 and args["charge_rate"] == ["number.a11111_rate", "number.b22222_rate"], (apps, args)
+        _assert_settled(results, 1)
+    # Absent from apps.yaml it stays absent: the records' own load_today entities are not written either
+    results, args = _passes({}, [_src(records, skip_settings={"load_today"})])
+    assert "load_today" not in args, args["load_today"]
+    # A manual slot and PV-only records beside a skipped pv_today: the user's list is still left as it is
+    apps = dict(_manual_apps("number.givtcp_sa9999s999_charge_rate"), pv_today=["sensor.manual_pv_today", "sensor.extra_pv_today"])
+    pv = _rec("pv1111", {"pv_today": _ro("sensor.pv1111_pv_today"), "pv_power": _ro("sensor.pv1111_pv_power")}, inverter_type=None)
+    records = [_rec("a11111", {"charge_rate": _rw("number.a11111_rate"), "pv_today": _ro("sensor.a11111_pv_today")}), pv]
+    results, args = _passes(apps, [_src(records, skip_settings={"pv_today"}, include_pv_only=True)])
+    assert args["pv_today"] == ["sensor.manual_pv_today", "sensor.extra_pv_today"], args["pv_today"]
+    assert args["pv_power"] == [None, 0, "sensor.pv1111_pv_power"], args.get("pv_power")  # not skipped: built as before
+    assert args["inverter_type"] == ["GE", "GEC"], args["inverter_type"]
+    _assert_settled(results, 1)
+    print("PASS: a skipped summed setting owns the whole key")
+    return 0
+
+
 def test_replay_keep_user_setting():
     """A kept setting with an apps.yaml value at the slot is not written; without one the binding is."""
     record = _rec("a11111", {"inverter_mode": _rw("select.a_mode")})
@@ -834,16 +865,16 @@ def test_replay_keep_single_value_whole_key():
 
 
 def test_replay_skip_keep_keep_live():
-    """A skipped or kept non-summed setting keeps whatever live args hold, even when that differs from apps.yaml; a summed one still takes the apps.yaml entry."""
+    """A skipped setting, or a kept non-summed one, keeps whatever live args hold, even when that differs from apps.yaml - a skipped summed one too, for its whole key."""
     apps = {"soc_percent": ["re:sensor.givtcp_(.+)_soc"], "inverter_mode": ["select.user_mode"], "load_today": ["sensor.user_load_today"]}
     args = {"soc_percent": ["sensor.givtcp_x_soc"], "inverter_mode": ["select.written_elsewhere"], "load_today": ["sensor.rewritten_load_today"]}
     record = _rec("a11111", {"soc_percent": _ro("sensor.a_soc"), "inverter_mode": _rw("select.a_mode"), "load_today": _ro("sensor.a_load_today"), "reserve": _rw("number.a_reserve")})
     b, args = _bind(apps, [record], args=args, skip_settings={"soc_percent", "load_today"}, keep_user_settings={"inverter_mode", "reserve"})
     written = _apply(b, apps, args)
-    assert written == [("battery_power_invert", 0), ("grid_power_invert", 0), ("inverter_type", 0), ("load_power_invert", 0), ("load_today", 0), ("num_inverters", None), ("pv_power", 0), ("reserve", 0)], written
+    assert written == [("battery_power_invert", 0), ("grid_power_invert", 0), ("inverter_type", 0), ("load_power_invert", 0), ("num_inverters", None), ("pv_power", 0), ("reserve", 0)], written
     assert args["soc_percent"] == ["sensor.givtcp_x_soc"] and args["inverter_mode"] == ["select.written_elsewhere"], args  # left exactly as live had them
     assert args["reserve"] == ["number.a_reserve"], args  # kept, but apps.yaml has no value: written from the record
-    assert args["load_today"] == ["sensor.user_load_today"], args  # summed: the apps.yaml entry
+    assert args["load_today"] == ["sensor.rewritten_load_today"], args  # skipped summed: the whole key is never written
     assert desired_args(b, apps, args)["soc_percent"] == ["sensor.givtcp_x_soc"]
     print("PASS: skipped and kept settings keep live args")
     return 0
@@ -1232,6 +1263,7 @@ def test_bindings_all(my_predbat=None):
     failures += test_replay_shortens_long_list()
     failures += test_replay_tuning_untouched()
     failures += test_replay_skip_setting()
+    failures += test_replay_skip_summed_whole_key()
     failures += test_replay_keep_user_setting()
     failures += test_replay_keep_single_value_whole_key()
     failures += test_replay_skip_keep_keep_live()
