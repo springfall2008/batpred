@@ -3985,6 +3985,43 @@ chart.render();
 
         return text
 
+    async def html_charts(self, request):
+        """
+        Render apps.yaml as an HTML page
+        """
+        args = request.query
+        chart = args.get("chart", "Battery")
+        self.default_page = "./charts?chart={}".format(chart)
+        text = self.get_header("Predbat Charts", refresh=60 * 5)
+        text += "<body>\n"
+        text += get_charts_css()
+
+        text += '<div class="charts-menu">'
+        text += "<h3>Charts</h3> "
+        text += f'<a href="./charts?chart=Battery" class="{"active" if chart == "Battery" else ""}">Battery</a>'
+        text += f'<a href="./charts?chart=Power" class="{"active" if chart == "Power" else ""}">Power</a>'
+        text += f'<a href="./charts?chart=Cost" class="{"active" if chart == "Cost" else ""}">Cost</a>'
+        text += f'<a href="./charts?chart=Rates" class="{"active" if chart == "Rates" else ""}">Rates</a>'
+        text += f'<a href="./charts?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
+        text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
+        text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
+        text += f'<a href="./charts?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
+        text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
+        text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
+        text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
+        text += f'<a href="./charts?chart=Curves" class="{"active" if chart == "Curves" else ""}">Curves</a>'
+        # Only show LoadML chart if ML is enabled
+        if self.base.get_arg("load_ml_enable", False):
+            text += f'<a href="./charts?chart=LoadML" class="{"active" if chart == "LoadML" else ""}">LoadML</a>'
+            text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
+        text += "</div>"
+
+        if chart not in ("MarginalCosts", "Curves"):
+            text += '<div id="chart"></div>'
+        text += self.get_chart(chart=chart)
+        text += "</body></html>\n"
+        return web.Response(content_type="text/html", text=text)
+
     def get_curves_chart(self):
         """
         The Curves page: a status table for the charge and discharge rate grids, then each grid drawn in 3D (SoC x battery
