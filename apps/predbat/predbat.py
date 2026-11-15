@@ -771,6 +771,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}
         self.battery_temperature_prediction = {}
+        self.battery_temperature_stuck_warned = None  # history sensor already warned as stuck at 0, so it is reported once
         self.alerts = []
         self.alert_active_keep = {}
         self.manual_soc_keep = {}

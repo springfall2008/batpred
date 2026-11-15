@@ -95,3 +95,184 @@ def test_battery_temperature_fetch(my_predbat):
     if not failed:
         print("✓ {} days fetched ({} minutes kept, was {}), prediction unchanged".format(BATTERY_TEMPERATURE_HISTORY_DAYS, len(history), len(full_history)))
     return failed
+
+
+def test_battery_temperature_history_stuck_warning(my_predbat):
+    """
+    check_battery_temperature_history_stuck() warns only when the last day reads exactly 0, and
+    names the GivTCP 3.6.13 replacement when the old battery stack sensor is configured (GH#6193).
+    Each case starts with the warn-once state cleared.
+    """
+    print("\n*** Test: battery temperature history stuck at 0 warns ***")
+    failed = False
+    old_sensor = "sensor.givtcp_battery_stack_1_bms_temperature"
+    day = 24 * 60
+    zero_two_days = {minute: 0 for minute in range(0, 2 * day)}
+    cases = [
+        # (description, entity, history, expect warning, expect rename hint)
+        ("old GivTCP sensor stuck at 0", old_sensor, zero_two_days, True, True),
+        ("other sensor stuck at 0", TEMP_SENSOR, zero_two_days, True, False),
+        ("old GivTCP sensor reading real temperatures", old_sensor, {minute: 18.5 for minute in range(0, 2 * day)}, False, False),
+        ("a single non-zero reading", old_sensor, {**zero_two_days, 600: 0.5}, False, False),
+        ("died a day ago, real readings before", old_sensor, {minute: (0 if minute < day else 18.0) for minute in range(0, 2 * day)}, True, True),
+        ("died under a day ago", old_sensor, {minute: (0 if minute < day - 60 else 18.0) for minute in range(0, 2 * day)}, False, False),
+        ("no history", old_sensor, {}, False, False),
+    ]
+
+    saved_log = my_predbat.log
+    saved_arg = my_predbat.args.get("battery_temperature_history", None)
+    saved_warned = my_predbat.battery_temperature_stuck_warned
+    try:
+        for description, entity, history, expect_warning, expect_hint in cases:
+            messages = []
+            my_predbat.log = messages.append
+            my_predbat.args["battery_temperature_history"] = entity
+            my_predbat.battery_temperature_stuck_warned = None
+            my_predbat.check_battery_temperature_history_stuck(history)
+            warnings = [message for message in messages if message.startswith("Warn:") and "battery_temperature_history" in message]
+            if bool(warnings) != expect_warning:
+                print("ERROR: {}: expected warning {}, got {}".format(description, expect_warning, messages))
+                failed = True
+                continue
+            if warnings and entity not in warnings[0]:
+                print("ERROR: {}: warning does not name the sensor: {}".format(description, warnings[0]))
+                failed = True
+            has_hint = bool(warnings) and "sensor.givtcp_battery_stack_1_battery_temperature" in warnings[0]
+            if has_hint != expect_hint:
+                print("ERROR: {}: expected rename hint {}, got {}".format(description, expect_hint, warnings))
+                failed = True
+    finally:
+        my_predbat.log = saved_log
+        my_predbat.battery_temperature_stuck_warned = saved_warned
+        if saved_arg is None:
+            my_predbat.args.pop("battery_temperature_history", None)
+        else:
+            my_predbat.args["battery_temperature_history"] = saved_arg
+
+    if not failed:
+        print("✓ stuck-at-0 warning fires only on a dead sensor, with the GivTCP rename hint on the old name")
+    return failed
+
+
+def test_battery_temperature_history_stuck_warning_fetch(my_predbat):
+    """
+    Through the real fetch path: HA history that read 18 °C until 25 hours ago and 0 since (one state
+    change, as the recorder stores it) warns with the GivTCP rename hint; one that died 6 hours ago does
+    not yet; one reading 18 throughout does not; and a sensor whose only record is a 0 from 6 hours ago
+    warns at once, because minute_data pads that record back across the whole window.
+    """
+    print("\n*** Test: battery temperature stuck warning through fetch_battery_temperature() ***")
+    failed = False
+    old_sensor = "sensor.givtcp_battery_stack_1_bms_temperature"
+
+    def history_with_change(change_minutes_ago, new_value):
+        """HA history: 18 °C from 2 days ago, then new_value from change_minutes_ago."""
+        now = my_predbat.now_utc
+        start = now - timedelta(days=BATTERY_TEMPERATURE_HISTORY_DAYS)
+        change = now - timedelta(minutes=change_minutes_ago)
+        return [
+            [
+                {"state": "18.0", "last_updated": start.strftime(TIME_FORMAT), "attributes": {}},
+                {"state": str(new_value), "last_updated": change.strftime(TIME_FORMAT), "attributes": {}},
+            ]
+        ]
+
+    def history_only_zero(minutes_ago):
+        """HA history: a single 0 record from minutes_ago, nothing before it (a new or renamed sensor)."""
+        stamp = my_predbat.now_utc - timedelta(minutes=minutes_ago)
+        return [[{"state": "0", "last_updated": stamp.strftime(TIME_FORMAT), "attributes": {}}]]
+
+    cases = [
+        ("dead for 25 hours", lambda: history_with_change(25 * 60, 0), True),
+        ("dead for 6 hours", lambda: history_with_change(6 * 60, 0), False),
+        ("live at 18 °C", lambda: history_with_change(25 * 60, 18.0), False),
+        ("only a 0 record from 6 hours ago", lambda: history_only_zero(6 * 60), True),
+    ]
+    saved_history = my_predbat.get_history_wrapper
+    saved_log = my_predbat.log
+    saved_arg = my_predbat.args.get("battery_temperature_history", None)
+    saved_warned = my_predbat.battery_temperature_stuck_warned
+    try:
+        my_predbat.args["battery_temperature_history"] = old_sensor
+        for description, build, expect_warning in cases:
+            messages = []
+            my_predbat.log = messages.append
+            my_predbat.battery_temperature_stuck_warned = None
+            my_predbat.get_history_wrapper = lambda entity_id, days=30, required=True, tracked=True, build=build: build() if entity_id == old_sensor else None
+            my_predbat.fetch_battery_temperature()
+            warnings = [message for message in messages if message.startswith("Warn:") and "battery_temperature_history" in message]
+            if bool(warnings) != expect_warning:
+                print("ERROR: {}: expected warning {}, got {}".format(description, expect_warning, messages))
+                failed = True
+            elif warnings and "sensor.givtcp_battery_stack_1_battery_temperature" not in warnings[0]:
+                print("ERROR: {}: warning lacks the rename hint: {}".format(description, warnings[0]))
+                failed = True
+    finally:
+        my_predbat.get_history_wrapper = saved_history
+        my_predbat.log = saved_log
+        my_predbat.battery_temperature_stuck_warned = saved_warned
+        if saved_arg is None:
+            my_predbat.args.pop("battery_temperature_history", None)
+        else:
+            my_predbat.args["battery_temperature_history"] = saved_arg
+
+    if not failed:
+        print("✓ fetch path warns on a sensor dead for over a day or with only 0 history, not on a live or recently dead one")
+    return failed
+
+
+def test_battery_temperature_history_stuck_warning_once(my_predbat):
+    """
+    The stuck warning is reported once per sensor, re-armed when the sensor reads a real temperature,
+    and only claims a plan effect when a battery temperature curve is set (GH#6193 review).
+    """
+    print("\n*** Test: battery temperature stuck warning is reported once and names the plan effect correctly ***")
+    failed = False
+    day = 24 * 60
+    stuck = {minute: 0 for minute in range(0, 2 * day)}
+    live = {minute: 18.0 for minute in range(0, 2 * day)}
+    saved = (my_predbat.log, my_predbat.args.get("battery_temperature_history", None), my_predbat.battery_temperature_stuck_warned, my_predbat.battery_temperature_charge_curve, my_predbat.battery_temperature_discharge_curve)
+    messages = []
+
+    def warnings_after(history):
+        """Run the check and return the stuck warnings it logged."""
+        messages.clear()
+        my_predbat.check_battery_temperature_history_stuck(history)
+        return [message for message in messages if "battery_temperature_history sensor" in message]
+
+    try:
+        my_predbat.log = messages.append
+        my_predbat.args["battery_temperature_history"] = TEMP_SENSOR
+        my_predbat.battery_temperature_stuck_warned = None
+        my_predbat.battery_temperature_charge_curve = {}
+        my_predbat.battery_temperature_discharge_curve = {}
+
+        first = warnings_after(stuck)
+        if len(first) != 1 or "if you set a battery temperature curve" not in first[0]:
+            print("ERROR: with no curve, expected one warning saying a curve would be affected, got {}".format(first))
+            failed = True
+        repeat = warnings_after(stuck)
+        if repeat:
+            print("ERROR: a second cycle with the same stuck sensor warned again: {}".format(repeat))
+            failed = True
+        if warnings_after(live):
+            print("ERROR: a live sensor warned")
+            failed = True
+        my_predbat.battery_temperature_charge_curve = {0: 0.3, 20: 0.5}
+        rearmed = warnings_after(stuck)
+        if len(rearmed) != 1 or "planning at the 0 °C rates" not in rearmed[0]:
+            print("ERROR: after recovering and dying again with a curve set, expected one warning naming the 0 °C rates, got {}".format(rearmed))
+            failed = True
+    finally:
+        my_predbat.log = saved[0]
+        if saved[1] is None:
+            my_predbat.args.pop("battery_temperature_history", None)
+        else:
+            my_predbat.args["battery_temperature_history"] = saved[1]
+        my_predbat.battery_temperature_stuck_warned = saved[2]
+        my_predbat.battery_temperature_charge_curve = saved[3]
+        my_predbat.battery_temperature_discharge_curve = saved[4]
+
+    if not failed:
+        print("✓ reported once, re-armed on recovery, plan effect named only when a curve is set")
+    return failed

@@ -194,12 +194,12 @@ pred_bat:
   # Battery temperature sensor per inverter, used outside REST mode to get current temperature
   #
   #battery_temperature:
-  # - sensor.givtcp_battery_stack_1_bms_temperature
-  # - sensor.givtcp2_battery_stack_1_bms_temperature
+  # - sensor.givtcp_battery_stack_1_battery_temperature
+  # - sensor.givtcp2_battery_stack_1_battery_temperature
 
   # Battery temperature history, only one for modelling, used to predict future temperature
   #
-  #battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+  #battery_temperature_history: sensor.givtcp_battery_stack_1_battery_temperature
 
   # Battery temperature charge adjustment curve
   # Specific in C which is a multiple of the battery capacity
