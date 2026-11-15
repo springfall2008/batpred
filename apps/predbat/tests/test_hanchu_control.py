@@ -1506,6 +1506,42 @@ def test_hanchu_rate_change_in_control_is_sent_after_the_debounce_not_the_next_t
     assert not failed, "test_hanchu_rate_change_in_control_is_sent_after_the_debounce_not_the_next_tick"
 
 
+def test_hanchu_debounced_write_is_dropped_if_read_only_turns_on_while_it_waits():
+    """Read-only turned on during the debounce stops the waiting write; the reconcile tick sends it once read-only is off."""
+    failed = False
+    client = ready(write_debounce=DEBOUNCE_TEST_SECONDS)
+    client.control_active.add(SN)
+    client.local_schedule[SN] = schedule(charge={"enable": True, "soc": 100, "power": 10000, "start": "14:00:00", "end": "16:00:00"}, reserve=5)
+    read_only = {"on": False}
+    client._is_read_only = lambda: read_only["on"]
+    sent = []
+    client.apply_schedule = _recording_apply(client, sent)
+    owner, thread = _start_owner_loop()
+    try:
+        client.component_loop = owner
+        run_async_local(client._handle_control_event(client._control_name("number", SN, "battery_schedule_charge_power"), 2600))
+        if not client._write_pending(SN):
+            print("ERROR: the change should arm the debounced write")
+            failed = True
+        read_only["on"] = True
+        time.sleep(DEBOUNCE_TEST_SECONDS * 1.5)
+        if sent:
+            print(f"ERROR: read-only turned on during the debounce should stop the write, sent {sent}")
+            failed = True
+        if client.local_schedule[SN]["charge"]["power"] != 2600:
+            print("ERROR: the change should stay in the local schedule for later")
+            failed = True
+        # Once read-only is off the reconcile tick sends it.
+        read_only["on"] = False
+        asyncio.run_coroutine_threadsafe(client._reconcile_control(SN), owner).result(5)
+        if len(sent) != 1 or sent[0].get(HANCHU_KEY_CHARGE_POWER) != 2600:
+            print(f"ERROR: the reconcile tick should send the held change once read-only is off, sent {sent}")
+            failed = True
+    finally:
+        _stop_owner_loop(owner, thread)
+    assert not failed, "test_hanchu_debounced_write_is_dropped_if_read_only_turns_on_while_it_waits"
+
+
 def test_hanchu_reconcile_waits_for_a_pending_debounced_write():
     """The reconcile tick does not send the half-applied schedule the debounce is waiting out."""
     failed = False
@@ -1642,6 +1678,7 @@ def run_hanchu_control_tests(my_predbat):
         ("write_debounce", test_hanchu_write_button_debounce_sends_only_the_settled_hold),
         ("write_debounce_change_only", test_hanchu_schedule_change_without_a_pending_write_does_not_start_one),
         ("write_on_change", test_hanchu_rate_change_in_control_is_sent_after_the_debounce_not_the_next_tick),
+        ("write_debounce_read_only", test_hanchu_debounced_write_is_dropped_if_read_only_turns_on_while_it_waits),
         ("write_debounce_reconcile", test_hanchu_reconcile_waits_for_a_pending_debounced_write),
         ("write_debounce_stop", test_hanchu_stopping_cancels_a_pending_debounced_write),
         ("write_debounce_no_loop", test_hanchu_debounce_is_skipped_without_a_running_component_loop),

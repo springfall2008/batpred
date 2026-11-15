@@ -1508,9 +1508,10 @@ class HanchuAPI(ComponentBase):
         the next tick - about a minute on a live HESS-HY-S-10K (batpred#6190). Starting the debounce
         sends it about write_debounce seconds later instead.
 
-        Gated exactly as the reconcile tick is (_reconcile_control): not before Predbat's first press,
-        not in read-only mode and not with control disabled, as this is a write the component
-        starts itself. An unchanged payload is still not sent, and min_write_interval still paces
+        Gated as the reconcile tick is (_reconcile_control): not before Predbat's first press, not in
+        read-only mode and not with control disabled, as this is a write the component starts
+        itself. Read-only is checked again when the timer fires (_debounced_write()), as it can be
+        turned on while the write waits. An unchanged payload is still not sent, and min_write_interval still paces
         writes. Returns whether a debounced write is now waiting.
         """
         if self._write_pending(sn):
@@ -1576,6 +1577,13 @@ class HanchuAPI(ComponentBase):
         # must start its own timer rather than cancel a write that is already on its way.
         if self.write_debounce_tasks.get(sn) is asyncio.current_task():
             self.write_debounce_tasks.pop(sn, None)
+        if self._is_read_only():
+            # Read-only was turned on while this write waited out the debounce: the switch promises no
+            # writes, and the gate that armed the timer is stale by now. The change stays in the local
+            # schedule, so the reconcile tick sends it once read-only is off. apply_schedule() re-checks
+            # control_enable itself.
+            self.log("Hanchu write for {} not sent: read-only was turned on while it waited".format(sn))
+            return
         try:
             await self.apply_schedule(sn)
         except Exception as error:
