@@ -99,6 +99,9 @@ def run_web_curves_chart_tests(my_predbat):
         failed |= _check("t1 rows", ">Charge<" in html and ">Discharge<" in html and "2026-11-01T03:00:00+0000" in html, html[:2000])
         failed |= _check("t1 learned yes/no", ">Yes</td>" in html and ">No</td>" in html)
 
+        print("Test 1b: the page wraps its text (the shared header sets p { white-space: nowrap })")
+        failed |= _check("t1b wraps", "max-width:960px;white-space:normal;" in html, html[:300])
+
         print("Test 2: a 3D surface per grid, plotly loaded once")
         failed |= _check("t2 divs", "id='curve_grid_charge'" in html and "id='curve_grid_discharge'" in html)
         failed |= _check("t2 plotly once", html.count(PLOTLY_GL3D_URL) == 1, html.count(PLOTLY_GL3D_URL))
