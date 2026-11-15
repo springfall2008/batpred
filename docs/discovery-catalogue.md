@@ -325,6 +325,14 @@ GE Cloud marks nothing inverted, so it now writes an explicit `false` per slot w
 configuration left these keys unset - which Predbat reads the same way, and which the comparison with
 the old configuration treats as matching.
 
+Discovery owns these settings on its slots, so a value you set in `apps.yaml` is replaced there: a
+single value counts for every slot, a list entry for its own slot. When your value differs from what
+discovery writes, it says so once:
+
+```text
+Warn: Coordinator: Inverter slot 0: grid_power_invert is True in apps.yaml but gecloud inverter gecloud:ce1234g567 needs False - discovery sets it; remove it from apps.yaml
+```
+
 Manual slots keep what `apps.yaml` gives them. A single value (not a list), as some templates write
 it, still applies to every manual inverter. An invert setting also follows the setting it describes:
 where `battery_power`, `grid_power` or `load_power` is skipped, or kept with your own `apps.yaml` value

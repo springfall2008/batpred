@@ -379,7 +379,8 @@ def build_bindings(apps_yaml: dict, args: dict, sources: list[dict], previous: d
     indexes, and the one move warning each discovered slot that moves down gives.
     scan_args: the args a manual slot's serials are scanned in, args when None. The coordinator passes the
     args as they were before its first replay, so a slot taken over or cleared on one pass matches again on
-    the next, however replay has rewritten its live entries.
+    the next, however replay has rewritten its live entries. The warnings include one per apps.yaml invert value
+    discovery replaces at a discovered slot (_invert_warnings()).
     """
     warnings = []
     previous_entries = [entry for entry in (previous or {}).get("inverters", []) if entry.get("origin") == "discovered"]
@@ -422,9 +423,34 @@ def build_bindings(apps_yaml: dict, args: dict, sources: list[dict], previous: d
         if entry["origin"] == "free" and entry["inverter_type"] is None:
             warnings.append("Inverter slot {} is empty below a configured inverter - it has no inverter_type and Predbat will stop on it".format(entry["slot"]))
 
+    warnings.extend(_invert_warnings(slots, apps_yaml, args))
+
     fresh_records = {record["device_id"]: record for _, record in fresh}
     site = {"settings": _site_settings(slots, fresh_records, previous), "extras": _site_extras(apps_yaml, sources)}
     return {"inverters": slots, "site": site}, warnings
+
+
+def _invert_warnings(slots, apps_yaml, args):
+    """
+    One warning for each INVERT_SETTINGS member discovery sets at a discovered slot where the snapshot gives a different value.
+
+    The user's value is read as Predbat reads a flag: a scalar is every slot's, a list entry its own slot's. Discovery owns the
+    invert settings on its slots - the record says whether each sensor needs inverting - so the value is replaced; the warning says
+    so, and to remove it. None where the snapshot gives none, nor where the invert is the user's (it, or the setting it describes,
+    is skipped or kept at the slot: _discovered_value() then keeps the live entry).
+    """
+    warnings = []
+    for entry in slots:
+        if entry["origin"] != "discovered":
+            continue
+        for setting in sorted(INVERT_SETTINGS):
+            user = _live_invert(apps_yaml, setting, entry["slot"])
+            if user is None or _user_owns_slot(entry, setting, apps_yaml) or _user_owns_slot(entry, INVERT_SETTINGS[setting], apps_yaml):
+                continue
+            value = _discovered_value(entry, setting, apps_yaml, args)
+            if user != value:
+                warnings.append("Inverter slot {}: {} is {} in apps.yaml but {} inverter {} needs {} - discovery sets it; remove it from apps.yaml".format(entry["slot"], setting, user, entry["source"], entry["device_id"], value))
+    return warnings
 
 
 def _descriptor_value(descriptor):

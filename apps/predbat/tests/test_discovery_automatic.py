@@ -1828,6 +1828,20 @@ def test_accept_template_unexpanded():
     return 0
 
 
+def test_accept_user_invert_replaced_warns():
+    """A user's grid_power_invert True in apps.yaml is replaced on GE Cloud's slot, which never needs inverting, and the coordinator warns about it once."""
+    single, _ = run_new(*_one_battery())
+    new, log = run_new(*_one_battery(), apps_yaml={"grid_power_invert": True, "battery_power_invert": [False]})
+    warning = "Warn: Coordinator: Inverter slot 0: grid_power_invert is True in apps.yaml but gecloud inverter gecloud:battery001 needs False - discovery sets it; remove it from apps.yaml"
+    assert log.count(warning) == 1, log  # run_new runs three passes: the warning is still logged once
+    assert not [line for line in log if "battery_power_invert is" in line], log  # the user's False is what discovery writes
+    assert new["grid_power_invert"] == [False] and new["battery_power_invert"] == [False], (new["grid_power_invert"], new["battery_power_invert"])
+    differences = compare_configuration(single, new)
+    assert differences == [], "\n".join(differences)
+    print("PASS: accept user invert replaced warns")
+    return 0
+
+
 def test_accept_givtcp_rest_manual():
     """A manual GivTCP inverter with givtcp_rest: the old run deletes the key and takes over, the new run keeps slot 0 and clears only its own slot (a known difference)."""
     rest = "http://192.168.1.10:6345"
@@ -1987,6 +2001,7 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_accept_template_gateway()
     failures += test_accept_template_short_gateway()
     failures += test_accept_template_unexpanded()
+    failures += test_accept_user_invert_replaced_warns()
     failures += test_accept_givtcp_rest_manual()
     failures += test_accept_battery_removed()
     failures += test_accept_run_loop_incremental()

@@ -1186,6 +1186,47 @@ def test_replay_invert_follows_skipped_partner():
     return 0
 
 
+def _invert_warning(slot, setting, user, device_id, value):
+    """The warning build_bindings gives when discovery replaces a user's apps.yaml invert value at a discovered slot."""
+    return "Inverter slot {}: {} is {} in apps.yaml but gecloud inverter {} needs {} - discovery sets it; remove it from apps.yaml".format(slot, setting, user, device_id, value)
+
+
+def test_build_invert_user_value_warns():
+    """
+    Discovery sets each invert setting on a discovered slot, and warns when that replaces the user's apps.yaml value for the slot: a
+    scalar is every slot's, a list entry its own slot's. No warning where the user's value is what discovery writes, on a manual
+    slot (it keeps its own), or where the setting the invert describes is skipped or kept (the user's entity keeps the user's invert).
+    """
+    entities = {"grid_power": _ro("sensor.a_grid_power"), "battery_power": _ro("sensor.a_battery_power"), "load_power": {"entity_id": "sensor.a_load_power", "access": "r", "invert": True}}
+    record = _rec("a11111", entities)
+    apps = {"grid_power_invert": True, "battery_power_invert": [True], "load_power_invert": [True]}
+    results, args = _passes(apps, [_src([record])])
+    expected = [_invert_warning(0, "battery_power_invert", True, "gecloud:a11111", False), _invert_warning(0, "grid_power_invert", True, "gecloud:a11111", False)]
+    for _, warnings, _ in results:
+        assert warnings == expected, warnings  # each pass gives them; the coordinator logs each text once
+    assert args["grid_power_invert"] == [False] and args["battery_power_invert"] == [False] and args["load_power_invert"] == [True], args
+
+    # The user's value matches what discovery writes: no warning
+    _, warnings = build_bindings({"grid_power_invert": False, "battery_power_invert": [False], "load_power_invert": True}, {}, [_src([record])], None)
+    assert warnings == [], warnings
+    # The discovered slot is slot 1 and the list has no entry there; slot 0 is manual and keeps its own True
+    apps = dict(_manual_apps("number.givtcp_sa9999s999_charge_rate"), grid_power_invert=[True])
+    results, args = _passes(apps, [_src([record])])
+    assert results[0][1] == [], results[0][1]
+    assert args["grid_power_invert"] == [True, False], args["grid_power_invert"]
+    # A list entry for the discovered slot itself does warn, at that slot
+    apps = dict(_manual_apps("number.givtcp_sa9999s999_charge_rate"), grid_power_invert=[True, True])
+    _, warnings = build_bindings(apps, copy.deepcopy(apps), [_src([record])], None)
+    assert warnings == [_invert_warning(1, "grid_power_invert", True, "gecloud:a11111", False)], warnings
+    # grid_power skipped or kept with the user's entity: grid_power_invert is the user's, so no warning
+    apps = {"grid_power": ["sensor.user_grid_power"], "grid_power_invert": True}
+    for options in ({"skip_settings": {"grid_power"}}, {"keep_user_settings": {"grid_power"}}):
+        _, warnings = build_bindings(apps, copy.deepcopy(apps), [_src([record], **options)], None)
+        assert warnings == [], (options, warnings)
+    print("PASS: a replaced user invert value warns")
+    return 0
+
+
 def test_replay_invert_idempotent():
     """A second replay of invert settings writes nothing."""
     apps = _manual_apps("number.givtcp_sa9999s999_charge_rate")
@@ -1287,6 +1328,7 @@ def test_bindings_all(my_predbat=None):
     failures += test_replay_invert_leaves_manual_slot()
     failures += test_replay_invert_manual_scalar()
     failures += test_replay_invert_follows_skipped_partner()
+    failures += test_build_invert_user_value_warns()
     failures += test_replay_invert_idempotent()
     failures += test_invert_not_scanned_for_serials()
     return failures
