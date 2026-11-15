@@ -287,6 +287,11 @@ def test_find_charge_curve_discharge(my_predbat):
                 print("ERROR: Discharge curve should contain SoC percentages in 5-20% range")
                 print("       Got keys: {}".format(sorted(curve_keys)))
                 failed = True
+            # The lowest learned value carries all the way down to 0%, rather than the plan reading 0-3% as full rate
+            lowest = min(key for key in discharge_curve if key >= 5)
+            if any(discharge_curve.get(soc) != discharge_curve[lowest] for soc in range(0, lowest)):
+                print("ERROR: Discharge curve below {}% should carry its value {} down to 0, got {}".format(lowest, discharge_curve[lowest], {soc: discharge_curve.get(soc) for soc in range(0, lowest)}))
+                failed = True
             # Verify curve values are between 0 and 1
             for key, value in discharge_curve.items():
                 if value < 0 or value > 1:
@@ -752,6 +757,10 @@ def test_find_charge_curve_discharge_percent_with_battery_scaling(my_predbat):
         return True
     if curves[0.8] != reference:
         print("ERROR: Discharge curve at battery_scaling 0.8 {} differs from the one at 1.0 {}".format(curves[0.8], reference))
+        return True
+    # The taper's lowest learned value (5%) carries down to 0%, rather than the plan reading 0-4% as full rate again
+    if any(reference.get(soc) != reference.get(5) for soc in range(0, 5)):
+        print("ERROR: Discharge curve below 5% should stay at {} down to 0, got {}".format(reference.get(5), {soc: reference.get(soc) for soc in range(0, 5)}))
         return True
     return False
 

@@ -743,7 +743,9 @@ class BatteryCurve:
             auto = self.base.battery_discharge_power_curve_auto if discharge else self.base.battery_charge_power_curve_auto
             found_required = False
             if discharge:
-                fill_range = range(4, 21, 1)
+                # Down to 0, not 4: below the lowest learned point the plan would otherwise read an unset SoC as 1.0, so
+                # a battery tapering towards empty was planned at full rate again for its last few percent
+                fill_range = range(0, 21, 1)
                 value = min(final_curve.values())
             else:
                 value = max(final_curve.values())
