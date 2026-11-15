@@ -229,7 +229,7 @@ class BatteryCurve:
         grid_power = self.load_grid_power_minutes()
         if grid_power is None:
             if export_limit_w < max_power_scaled:
-                self.log("Info: Inverter {} Cannot find battery discharge curve, export_limit {}W is below the discharge rate and there is no grid_power history to tell which exports it limited".format(self.id, dp0(export_limit_w)))
+                self.log("Info: Inverter {} Cannot find battery discharge rate grid evidence, export_limit {}W is below the discharge rate and there is no grid_power history to tell which exports it limited".format(self.id, dp0(export_limit_w)))
                 return None
             return set()
         threshold = export_limit_w * BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN
