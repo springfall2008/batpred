@@ -149,17 +149,17 @@ def test_combine_and_lookup():
     learned = fit_rate_grid(taper_samples([10, 15, 20], low=0.3), TODAY, False, None)
     engine = combine_rate_grid(learned, None)
     row_10 = tuple(learned["rows"][0])
-    failed = check(failed, rate_grid_curve(engine, 0.5) == row_10, "below the evidence: clamp to the coldest learned row")
-    failed = check(failed, rate_grid_curve(engine, -15) == row_10, "far below the evidence: still the coldest learned row")
-    failed = check(failed, rate_grid_curve(engine, 0) == tuple(learned["rows"][-1]), "exact 0: the 20 C row")
+    failed = check(failed, rate_grid_curve(engine, 0.5)[:101] == row_10, "below the evidence: clamp to the coldest learned row")
+    failed = check(failed, rate_grid_curve(engine, -15)[:101] == row_10, "far below the evidence: still the coldest learned row")
+    failed = check(failed, rate_grid_curve(engine, 0)[:101] == tuple(learned["rows"][-1]), "exact 0: the 20 C row")
     manual = manual_rate_grid({}, {5: 0.06, 20: 1.0}, 10.0, 1.0 / 6)  # 0.06C on 10 kWh = 0.01 kW/min = 0.06 of a 10 kW (1/6 kW/min) rating
     engine = combine_rate_grid(learned, manual)
     failed = check(failed, abs(rate_grid_curve(engine, 5)[50] - 0.06) < 1e-9, "manual cold curve applies below the evidence, got {}".format(rate_grid_curve(engine, 5)[50]))
-    failed = check(failed, rate_grid_curve(engine, 15) == tuple(learned["rows"][15 - learned["temp_low"]]), "inside the evidence the learned row is used")
+    failed = check(failed, rate_grid_curve(engine, 15)[:101] == tuple(learned["rows"][15 - learned["temp_low"]]), "inside the evidence the learned row is used")
     absolute = rate_grid_curve(engine, 15, rated=0.1)
     failed = check(failed, abs(absolute[30] - 0.1 * learned["rows"][5][30]) < 1e-12, "rated scales the row to kW/minute")
     failed = check(failed, combine_rate_grid(None, manual) is manual, "no learned grid: the manual grid is used")
-    failed = check(failed, rate_grid_curve(None, 12, rated=0.2) == (0.2,) * 101, "no grid at all: full rated rate")
+    failed = check(failed, rate_grid_curve(None, 12, rated=0.2) == (0.2,) * 102, "no grid at all: full rated rate")
     return failed
 
 

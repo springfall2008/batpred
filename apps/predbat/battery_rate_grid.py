@@ -268,20 +268,21 @@ def combine_rate_grid(learned, manual):
 
 def rate_grid_curve(grid, temperature, rated=1.0):
     """
-    The 101-entry SoC curve for one temperature, each value rated x the grid value.
+    The SoC curve for one temperature: 101 values, rated x the grid value, then rated itself as entry 101.
 
-    With rated as the battery's rated rate (kW per minute) this is the absolute ceiling the plan compares against; with
-    no grid it is the rated rate everywhere. An exact 0 reading uses the grid's zero_row.
+    With rated as the battery's rated rate (kW per minute) the values are the battery's ceiling in kW per minute, and the
+    last entry lets utils.rate_curve_ceiling() scale it for a path whose maximum is above the rated rate. With no grid it
+    is the rated rate everywhere. An exact 0 reading uses the grid's zero_row.
     """
     if grid is None:
-        return (rated,) * COLUMNS
+        return (rated,) * COLUMNS + (rated,)
     if grid["temp_low"] is None:
         row = grid["rows"][0]
     elif temperature == 0:
         row = grid["zero_row"]
     else:
         row = grid_row(grid, grid_temperature_index(temperature))
-    return tuple(value * rated for value in row)
+    return tuple(value * rated for value in row) + (rated,)
 
 
 def rate_grid_table(grid, soc_step=10, temp_step=5):

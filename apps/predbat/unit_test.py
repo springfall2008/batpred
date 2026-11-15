@@ -214,7 +214,7 @@ from tests.test_hit_charge_cache import run_hit_charge_cache_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_export_encoding import run_export_encoding_tests
 from tests.test_export_more_solar_warning import run_export_more_solar_warning_tests
-from tests.test_find_charge_rate import test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
+from tests.test_find_charge_rate import test_rate_grid_ceiling, test_find_charge_rate, test_find_charge_rate_pv_overlap, test_find_charge_rate_string_temperature, test_find_charge_rate_string_charge_curve
 from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_soc_max import run_test_manual_soc_max
@@ -783,6 +783,7 @@ def main():
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
         ("find_charge_rate_string_temp", test_find_charge_rate_string_temperature, "Find charge rate string temperature", False),
         ("find_charge_rate_string_curve", test_find_charge_rate_string_charge_curve, "Find charge rate string charge curve", False),
+        ("rate_grid_ceiling", test_rate_grid_ceiling, "Rate grid ceiling is absolute on every path", False),
         ("find_charge_curve", run_find_charge_curve_tests, "Find charge curve tests", False),
         ("battery_rate_grid", run_battery_rate_grid_tests, "Battery rate grids: manual grid, isotonic fit, lookup", False),
         ("battery_rate_grid_scan", run_battery_rate_grid_scan_tests, "Battery rate grids: full-rate runs scanned into segments", False),

@@ -4591,18 +4591,7 @@ class Fetch:
         kind = "discharge" if discharge else "charge"
         key = "battery_rate_grid_" + kind
         storage = self.components.get_component("storage") if self.components else None
-        if discharge:
-            soc_curve = self.battery_discharge_power_curve or self.battery_discharge_power_curve_default
-            temperature_curve = self.battery_temperature_discharge_curve
-            rated = self.battery_rate_max_discharge
-            configured = bool(self.battery_discharge_power_curve or self.battery_temperature_discharge_curve)
-        else:
-            soc_curve = self.battery_charge_power_curve or self.battery_charge_power_curve_default
-            temperature_curve = self.battery_temperature_charge_curve
-            rated = self.battery_rate_max_charge
-            configured = bool(self.battery_charge_power_curve or self.battery_temperature_charge_curve)
-        manual = manual_rate_grid(soc_curve, temperature_curve, self.soc_max, rated)
-        manual_key = (tuple(sorted(soc_curve.items())), tuple(sorted(temperature_curve.items())), self.soc_max, rated)
+        manual, manual_key, configured = self.rate_grid_manual(discharge)
         today = charge_day(self.now_utc, 0, self.local_tz)
         merged_on_load = [False]
 
@@ -4671,10 +4660,72 @@ class Fetch:
             except Exception as e:
                 self.log("Warn: {}: failed to save the evidence: {}".format(key, e))
 
+        self.apply_rate_grid(discharge, manual, configured)
+
+    def rate_grid_inputs(self, discharge):
+        """
+        What the manual grid for one direction is built from: (SoC curve, temperature curve, rated rate, True when a
+        curve is set in apps.yaml rather than only a _default, a key that changes when any of them or the battery size do).
+        """
+        if discharge:
+            soc_curve = self.battery_discharge_power_curve or self.battery_discharge_power_curve_default or {}
+            temperature_curve = self.battery_temperature_discharge_curve or {}
+            rated = self.battery_rate_max_discharge
+            configured = bool(self.battery_discharge_power_curve or self.battery_temperature_discharge_curve)
+        else:
+            soc_curve = self.battery_charge_power_curve or self.battery_charge_power_curve_default or {}
+            temperature_curve = self.battery_temperature_charge_curve or {}
+            rated = self.battery_rate_max_charge
+            configured = bool(self.battery_charge_power_curve or self.battery_temperature_charge_curve)
+        key = (tuple(sorted(soc_curve.items())), tuple(sorted(temperature_curve.items())), self.soc_max, rated)
+        return soc_curve, temperature_curve, rated, configured, key
+
+    def rate_grid_manual(self, discharge):
+        """
+        The grid the apps.yaml curves make for one direction: (grid, a key that changes when the curves or battery size
+        do, True when a curve is set in apps.yaml rather than only a _default).
+        """
+        soc_curve, temperature_curve, rated, configured, key = self.rate_grid_inputs(discharge)
+        return manual_rate_grid(soc_curve, temperature_curve, self.soc_max, rated), key, configured
+
+    def rate_grids(self):
+        """
+        The (charge, discharge) engine grids for the curves, battery size and learned grids as they are now.
+
+        What the plan reads: rebuilt (apply_rate_grid) only when one of those has changed since the last call, so a
+        curve or battery size set by a tariff comparison, the annual simulator or a debug replay is always the one used.
+        """
+        cache = self.__dict__.setdefault("battery_rate_grid_cache", {})
+        grids = []
+        for discharge in (False, True):
+            kind = "discharge" if discharge else "charge"
+            key = (self.rate_grid_inputs(discharge)[4], bool(self.battery_rate_grid_auto))
+            learned = self.battery_rate_grid_learned.get(kind)
+            entry = cache.get(kind)
+            if entry is None or entry[0] != key or entry[1] is not learned:
+                self.apply_rate_grid(discharge)
+                entry = (key, learned, getattr(self, "battery_{}_rate_grid".format(kind)))
+                cache[kind] = entry
+            grids.append(entry[2])
+        return tuple(grids)
+
+    def apply_rate_grid(self, discharge, manual=None, configured=None):
+        """
+        Set the engine grid the plan reads for one direction: the learned grid (battery_rate_grid_auto on) laid over the
+        manual one. With no manual grid given it is built from the current curves - no history is scanned.
+        """
+        kind = "discharge" if discharge else "charge"
+        if manual is None:
+            manual, _, configured = self.rate_grid_manual(discharge)
         learned = self.battery_rate_grid_learned.get(kind) if self.battery_rate_grid_auto else None
         self.battery_rate_grid_manual[kind] = manual
         self.battery_rate_grid_source[kind] = "learned" if learned else ("manual" if configured else "default")
         setattr(self, "battery_{}_rate_grid".format(kind), combine_rate_grid(learned, manual))
+
+    def apply_rate_grids(self):
+        """Set both engine grids from the current curves and what has been learned (see apply_rate_grid)."""
+        self.apply_rate_grid(False)
+        self.apply_rate_grid(True)
 
     def publish_battery_rate_grid_sensors(self):
         """

@@ -38,6 +38,7 @@ from const import (
     RUN_STATE_NAMES,
     STATUS_STATE_MAX_LENGTH,
 )
+from battery_rate_grid import rate_grid_curve
 from utils import (
     local_day_end_minute,
     start_of_local_day,
@@ -1269,15 +1270,13 @@ class Output:
             self.charge_limit_best[charge_window_n],
             self.battery_rate_max_charge,
             self.soc_max,
-            self.battery_charge_power_curve,
+            rate_grid_curve(self.rate_grids()[0], self.battery_temperature, rated=self.battery_rate_max_charge),
             self.set_charge_low_power,
             self.charge_low_power_margin,
             self.battery_rate_min,
             self.battery_rate_max_scaling,
             self.battery_loss,
             None,
-            self.battery_temperature,
-            self.battery_temperature_charge_curve,
             pv_window_kwh=pv_window_kwh,
             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
             solar_full_rate=self.set_charge_low_power_solar_full_rate,

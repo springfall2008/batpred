@@ -122,7 +122,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         inv = FakeInverter()
         _update(my_predbat, inv)
         failed |= _check("t1 source", my_predbat.battery_rate_grid_source.get("charge") == "default", my_predbat.battery_rate_grid_source)
-        failed |= _check("t1 grid", rate_grid_curve(my_predbat.battery_charge_rate_grid, 10) == (1.0,) * 101)
+        failed |= _check("t1 grid", rate_grid_curve(my_predbat.battery_charge_rate_grid, 10)[:101] == (1.0,) * 101)
         failed |= _check("t1 sensor off", _sensor(my_predbat, "charge") == "off")
 
         print("Test 2: a manual SoC curve is the fallback; 'auto' means no manual curve")

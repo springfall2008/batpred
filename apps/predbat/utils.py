@@ -2631,54 +2631,75 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
     return new_limit_best, new_window_best
 
 
-@lru_cache(maxsize=8192)
-def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple):
+def rate_curve_ceiling(soc, soc_max, rate_max, rate_curve):
     """
-    Cached computation of true charging rate from SoC and charge rate setting
+    The highest rate at this SoC on a path whose own maximum is rate_max.
+
+    rate_curve is battery_rate_grid.rate_grid_curve(): the battery's ceiling by SoC percent in kW per minute (101
+    entries), then the rated rate it was scaled from. On a path at or below the rated rate (AC charge, export) the
+    ceiling is absolute - a cold battery's limit is the same kW whichever path asks. History only measures the battery
+    up to its rated rate, so on a path above it (a hybrid's DC charge from PV) the curve scales with the path instead.
     """
-    battery_charge_power_curve = dict(battery_charge_power_curve_tuple) if battery_charge_power_curve_tuple else {}
-    battery_temperature_curve = dict(battery_temperature_curve_tuple) if battery_temperature_curve_tuple else {}
-
-    soc_percent = calc_percent_limit(soc, soc_max)
-    max_charge_rate = battery_rate_max_charge * get_curve_value(battery_charge_power_curve, soc_percent, 1.0)
-
-    # Temperature cap
-    max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_charge)
-    max_charge_rate = min(max_charge_rate, max_rate_cap)
-
-    return max(min(charge_rate_setting, max_charge_rate), battery_rate_min)
+    if not rate_curve:
+        return rate_max
+    soc_percent = max(min(calc_percent_limit(soc, soc_max), 100), 0)
+    rated = rate_curve[101]
+    if rate_max <= rated or rated <= 0:
+        return min(rate_max, rate_curve[soc_percent])
+    return rate_curve[soc_percent] * (rate_max / rated)
 
 
-def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
+@lru_cache(maxsize=1024)
+def rate_curve_function(rate_curve):
+    """
+    A cached rate lookup bound to one battery ceiling curve: lookup(soc, rate_setting, soc_max, rate_max, rate_min).
+
+    The plan's hot path makes millions of these lookups; keying one shared cache on the 101-entry curve would hash it on
+    every call, so each distinct curve gets its own small-keyed cache instead and is hashed once, here. Gives the same
+    answer as get_charge_rate_curve_cached() (charge) and get_discharge_rate_curve_cached() (discharge).
+    """
+
+    @lru_cache(maxsize=8192)
+    def lookup(soc, rate_setting, soc_max, rate_max, rate_min):
+        """The true rate for this SoC and setting under the bound curve."""
+        return max(min(rate_setting, rate_curve_ceiling(soc, soc_max, rate_max, rate_curve)), rate_min)
+
+    return lookup
+
+
+def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_rate_curve, battery_rate_min):
+    """
+    True charging rate from SoC and charge rate setting
+
+    No longer behind an lru_cache: the work is a percent and two comparisons, cheaper than hashing a 101-entry curve
+    for the cache key on every call (the name is kept for its many callers).
+
+    charge_rate_curve is the battery's charge ceiling by SoC percent in kW per minute for the current temperature
+    (battery_rate_grid.rate_grid_curve(grid, temperature, rated=...)), a tuple so it can key the cache; the path's own
+    maximum (battery_rate_max_charge) is a separate limit, and a setting below both is used as it is.
+    """
+    return max(min(charge_rate_setting, rate_curve_ceiling(soc, soc_max, battery_rate_max_charge, charge_rate_curve)), battery_rate_min)
+
+
+def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_rate_curve, battery_rate_min):
     """
     Compute true charging rate from SoC and charge rate setting
     """
-    return get_charge_rate_curve_cached(round(soc, 1), charge_rate_setting, soc_max, battery_rate_max_charge, charge_curve_to_tuple(battery_charge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+    return get_charge_rate_curve_cached(round(soc, 1), charge_rate_setting, soc_max, battery_rate_max_charge, tuple(charge_rate_curve) if charge_rate_curve else (), battery_rate_min)
 
 
-@lru_cache(maxsize=8192)
-def get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple):
+def get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, discharge_rate_curve, battery_rate_min):
     """
-    Cached computation of true discharging rate from SoC and charge rate setting
+    True discharging rate from SoC and discharge rate setting, as get_charge_rate_curve_cached()
     """
-    battery_discharge_power_curve = dict(battery_discharge_power_curve_tuple) if battery_discharge_power_curve_tuple else {}
-    battery_temperature_curve = dict(battery_temperature_curve_tuple) if battery_temperature_curve_tuple else {}
-
-    soc_percent = calc_percent_limit(soc, soc_max)
-    max_discharge_rate = battery_rate_max_discharge * get_curve_value(battery_discharge_power_curve, soc_percent, 1.0)
-    max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_discharge)
-    max_discharge_rate = min(max_discharge_rate, max_rate_cap)
-
-    return max(min(discharge_rate_setting, max_discharge_rate), battery_rate_min)
+    return max(min(discharge_rate_setting, rate_curve_ceiling(soc, soc_max, battery_rate_max_discharge, discharge_rate_curve)), battery_rate_min)
 
 
-def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
+def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, discharge_rate_curve, battery_rate_min):
     """
-    Compute true discharging rate from SoC and charge rate setting
+    Compute true discharging rate from SoC and discharge rate setting
     """
-    return get_discharge_rate_curve_cached(
-        round(soc, 1), discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve)
-    )
+    return get_discharge_rate_curve_cached(round(soc, 1), discharge_rate_setting, soc_max, battery_rate_max_discharge, tuple(discharge_rate_curve) if discharge_rate_curve else (), battery_rate_min)
 
 
 """
@@ -2750,15 +2771,13 @@ def find_charge_rate(
     target_soc,
     max_rate,
     soc_max,
-    battery_charge_power_curve,
+    charge_rate_curve,
     set_charge_low_power,
     charge_low_power_margin,
     battery_rate_min,
     battery_rate_max_scaling,
     battery_loss,
     log_to,
-    battery_temperature=20,
-    battery_temperature_curve=None,
     current_charge_rate=None,
     pv_window_kwh=0.0,
     low_power_pv_threshold_w=0.0,
@@ -2780,9 +2799,11 @@ def find_charge_rate(
     forecast can answer - a user charging in a free or very cheap daytime window loses nothing by
     throttling, while on a normal tariff the exported surplus has to be bought back later. Defaults to
     True, the behaviour of #4373.
+
+    charge_rate_curve is the battery's charge ceiling by SoC percent for the window's temperature
+    (battery_rate_grid.rate_grid_curve), as get_charge_rate_curve_cached() takes it.
     """
-    if battery_temperature_curve is None:
-        battery_temperature_curve = {}
+    charge_rate_curve = tuple(charge_rate_curve) if charge_rate_curve else ()
     margin = charge_low_power_margin
     target_soc = round(target_soc, 2)
 
@@ -2790,11 +2811,8 @@ def find_charge_rate(
     if current_charge_rate is None:
         current_charge_rate = max_rate
 
-    battery_temperature_curve_tuple = charge_curve_to_tuple(battery_temperature_curve)
-    battery_charge_power_curve_tuple = charge_curve_to_tuple(battery_charge_power_curve)
-
     # Real achieved max rate
-    max_rate_real = get_charge_rate_curve_cached(round(soc, 1), max_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
+    max_rate_real = get_charge_rate_curve_cached(round(soc, 1), max_rate, soc_max, max_rate, charge_rate_curve, battery_rate_min) * battery_rate_max_scaling
 
     min_battery_rate = max(400, int(round(battery_rate_min * MINUTE_WATT)))
     if set_charge_low_power:
@@ -2861,7 +2879,7 @@ def find_charge_rate(
                 rate_scale_max = 0
                 # Compute over the time period, include the completion time
                 for _minute in range(0, minutes_left, PREDICT_STEP):
-                    rate_scale = get_charge_rate_curve_cached(round(charge_now, 1), rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple)
+                    rate_scale = get_charge_rate_curve_cached(round(charge_now, 1), rate, soc_max, max_rate, charge_rate_curve, battery_rate_min)
                     highest_achievable_rate = max(highest_achievable_rate, rate_scale)
                     rate_scale *= battery_rate_max_scaling
                     rate_scale_max = max(rate_scale_max, rate_scale)
@@ -2888,11 +2906,11 @@ def find_charge_rate(
                     )
                 )
 
-        best_rate_real = get_charge_rate_curve_cached(round(soc, 1), best_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
+        best_rate_real = get_charge_rate_curve_cached(round(soc, 1), best_rate, soc_max, max_rate, charge_rate_curve, battery_rate_min) * battery_rate_max_scaling
         if log_to:
             log_to(
-                "Low Power mode: minutes left: {}, absolute: {}, SoC: {}kW, Target SoC: {}kW, Charge left: {}kW, Max rate: {}W, Min rate: {}W, Best rate: {}W, Best rate real: {}W, Battery temp {}°C".format(
-                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, dp0(max_rate * MINUTE_WATT), dp0(min_rate * MINUTE_WATT), dp0(best_rate * MINUTE_WATT), dp0(best_rate_real * MINUTE_WATT), battery_temperature
+                "Low Power mode: minutes left: {}, absolute: {}, SoC: {}kW, Target SoC: {}kW, Charge left: {}kW, Max rate: {}W, Min rate: {}W, Best rate: {}W, Best rate real: {}W".format(
+                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, dp0(max_rate * MINUTE_WATT), dp0(min_rate * MINUTE_WATT), dp0(best_rate * MINUTE_WATT), dp0(best_rate_real * MINUTE_WATT)
                 )
             )
         return best_rate, best_rate_real

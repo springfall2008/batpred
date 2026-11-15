@@ -183,6 +183,8 @@ dstart
 dtu
 dtype
 dwindow
+Dykstra
+Dykstra's
 eauth
 echargingpile
 ECONNRESET
@@ -532,6 +534,7 @@ pac
 packettypes
 paho
 parseable
+pava
 pbat
 pbgw
 pcharging
