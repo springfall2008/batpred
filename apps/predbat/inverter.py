@@ -495,6 +495,15 @@ class Inverter:
         # checks for that explicitly rather than silently dividing by a placeholder.
         self.battery_power = 0
         self.battery_power_valid = False  # True only when update_status() actually read battery_power
+        # Whether update_status() read the charge/discharge rate back as exactly 0, before the prediction
+        # minimum and scaling are applied to charge_rate_now/discharge_rate_now - a balancing hold has to
+        # read back as one, or the next pass releases it.
+        self.charge_rate_is_zero = False
+        self.discharge_rate_is_zero = False
+        # The rate balancing has seen this inverter really deliver when it fell short of its configured
+        # rate, as [watts, seen_at epoch seconds], or None. Learned and aged by utils.learn_rate_ceilings().
+        self.balance_ceiling_charge = None
+        self.balance_ceiling_discharge = None
         # The rates execute_plan() last wrote, in W, which the control-failure monitor judges against;
         # None until written (and in Monitor mode, where nothing is)
         self.requested_charge_w = None
@@ -1805,6 +1814,10 @@ class Inverter:
         # sleep inside the main planning loop whenever GivTCP was slow.
         self.charge_rate_now = self.get_current_charge_rate() / MINUTE_WATT
         self.discharge_rate_now = self.get_current_discharge_rate() / MINUTE_WATT
+        # Keep the hardware hold separate from prediction's minimum/scaled rate. Once a held
+        # battery stops moving power, balancing needs this zero to keep the hold in place.
+        self.charge_rate_is_zero = self.charge_rate_now == 0
+        self.discharge_rate_is_zero = self.discharge_rate_now == 0
 
         self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
         self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"

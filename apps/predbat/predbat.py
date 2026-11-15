@@ -36,7 +36,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.7.10"
+THIS_VERSION = "v9.7.11"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -666,6 +666,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.balance_inverters_crosscharge = True
         self.balance_inverters_threshold_charge = 1.0
         self.balance_inverters_threshold_discharge = 1.0
+        # Balancing's own record for sensor.<prefix>_balance_inverters: what it held last pass, which learned
+        # ceilings existed, its last decisions, and [epoch, time, action, inverter, direction, detail] events
+        self.balance_held_previous = {}
+        self.balance_ceilings_previous = []
+        self.balance_last_decisions = None
+        self.balance_events = []
+        # Hour start (epoch) -> [holds, releases, cross-chargers caught, ceilings learned]; restored from the sensor once
+        self.balance_counts = {}
+        self.balance_restored = False
         self.load_inday_adjustment = 1.0
         self.holiday_load_scaling = 0.7
         self.set_read_only = True

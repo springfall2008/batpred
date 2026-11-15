@@ -38,7 +38,16 @@ from tests.test_kernel_static_cache import run_kernel_static_cache_tests
 from tests.test_execute import run_execute_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
-from tests.test_predheat import test_predheat, test_predheat_smart_thermostat, test_predheat_optional_energy_history, test_predheat_temperature_units, test_predheat_volume_temp, test_predheat_volume_temp_persistence, test_predheat_heat_to_temp_off_marker
+from tests.test_predheat import (
+    test_predheat,
+    test_predheat_smart_thermostat,
+    test_predheat_pr5767_regressions,
+    test_predheat_optional_energy_history,
+    test_predheat_temperature_units,
+    test_predheat_volume_temp,
+    test_predheat_volume_temp_persistence,
+    test_predheat_heat_to_temp_off_marker,
+)
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_temperature_units import test_temperature_unit_conversion
 from tests.test_charge_hold import run_charge_hold_tests
@@ -49,6 +58,7 @@ from tests.test_car_max_rate import run_car_max_rate_tests
 from tests.test_fetch_config_options import test_fetch_config_options, test_save_restore_options_are_per_engine
 from tests.test_multi_inverter import run_inverter_multi_tests
 from tests.test_heterogeneous_fleet import test_heterogeneous_fleet
+from tests.test_balance_sim import run_balance_sim_matrix, run_balance_sim_tests
 from tests.test_window2minutes import test_window2minutes
 from tests.test_car_plan_windows import test_car_plan_windows
 from tests.test_hass_watcher import test_hass_watcher
@@ -585,6 +595,7 @@ def main():
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),
         ("predheat", test_predheat, "Predheat scheduler and predheat_enable gate tests (#4670)", False),
         ("predheat_smart_thermostat", test_predheat_smart_thermostat, "Predheat smart thermostat pre-heat window tests", False),
+        ("predheat_pr5767_regressions", test_predheat_pr5767_regressions, "Predheat fallback, hysteresis and COP regression tests (#5767)", False),
         ("predheat_optional_energy_history", test_predheat_optional_energy_history, "Predheat without optional energy history tests", False),
         ("predheat_temperature_units", test_predheat_temperature_units, "Predheat converts °F entities to °C and publishes in the internal sensor unit (#5153)", False),
         ("predheat_volume_temp", test_predheat_volume_temp, "Predheat volume temperature initialisation tests", False),
@@ -852,6 +863,8 @@ def main():
         ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
         ("heterogeneous_fleet", test_heterogeneous_fleet, "Heterogeneous multi-inverter fleet tests (#4856)", False),
         ("balance_pure", run_balance_pure_tests, "Pure balance_inverters function tests", False),
+        ("balance_sim", run_balance_sim_tests, "Closed-loop balancing harness: misbehaving, derated and CT-driven inverters", False),
+        ("balance_sim_matrix", run_balance_sim_matrix, "Full CT balancing matrix report: every mode, loop type, fleet size and cloud profile", True),
         ("allocate_export", run_allocate_export_tests, "Export rate allocator tests", False),
         # GE Cloud unit tests
         ("ge_cloud", test_ge_cloud, "GE Cloud comprehensive tests (API, devices, EVC, inverter ops, events, publishing, config, downloads, cache)", False),

@@ -274,7 +274,7 @@ Copy the template [anker_x1.yaml](https://raw.githubusercontent.com/springfall20
 
 ### Anker SOLIX X1 Prerequisites
 
-- Install the [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) integration via HACS and configure it with your X1's IP address. **Version 0.7.0 or later is required**: earlier versions took the setpoint's range from the X1's live limits, which collapse to almost nothing in VPP mode after a hold and can cap a charge to a few watts.
+- Install the [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) integration (it isn't in the default catalogue: on Home Assistant 2026.11 or newer use **Add from link** in the [Marketplace](install.md#hacs-and-the-marketplace), or on 2026.10 or older add it to HACS as a custom repository) and configure it with your X1's IP address. **Version 0.7.0 or later is required**: earlier versions took the setpoint's range from the X1's live limits, which collapse to almost nothing in VPP mode after a hold and can cap a charge to a few watts.
 - Confirm the integration's "Anker X1" device shows battery SoC, battery power, PV power and the external meter's power (`sensor.anker_x1_meter_total_power`), and that `number.anker_x1_battery_setpoint_charge_discharge` and `switch.anker_x1_modbus_control_hand_battery_to_ha_vpp` exist.
 - Make sure Home Assistant packages are enabled. `configuration.yaml` needs:
 

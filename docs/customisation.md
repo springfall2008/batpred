@@ -635,6 +635,28 @@ Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It i
 Equal SoC across the batteries is not in itself worth much, which is why the two SoC balancing switches are
 off by default. They remain fully functional if you want them.
 
+Once the cross-charge correction has stopped a battery charging from the others, it keeps that battery's charge
+held while the batteries are still discharging, so you may see its charge rate stay at 0 through the evening.
+Releasing it every minute would only let the battery's own control loop wind straight back into charging from
+its neighbours. The hold ends as soon as the batteries should be charging again (spare solar, or a charge slot) or
+stop discharging. The same applies the other way round, while the batteries soak up a solar surplus of at least
+1kW.
+
+If you turn on either SoC balancing switch, leave **switch.predbat_balance_inverters_crosscharge** on as well. SoC
+balancing holds one battery's charge (or discharge) back while the others carry on. Under broken cloud, when your
+solar is close to your house load, the site keeps tipping between surplus and deficit faster than Predbat's
+once-a-minute balancing pass. A battery held from charging then discharges into the others' charging whenever a
+cloud passes. The cross-charge correction is what stops that.
+
+Balancing only holds a battery back when the others can cover for it. It judges that from each inverter's
+charge and discharge rate, but a battery can deliver much less than its rate: when it is cold, when its BMS
+limits it, or when its inverter's AC limit is lower than Predbat was told. If a hold leaves the house importing
+(or leaves PV surplus going to the grid while charging), the batteries still running must already be giving all
+they can. Predbat records what each of them was delivering at that moment and uses it in place of its rate,
+so it releases the hold on the next pass and does not take it again while that battery cannot cover the house.
+A recorded limit is forgotten as soon as the battery delivers more, or after 30 minutes, so a battery that has
+warmed up gets its full rate back.
+
 ## Freeze Export during Demand
 
 An alternative to Predbat's full [inverter balancing](#balance-inverters) option if you have multiple inverters that can cross charge when the inverter is in Eco/Demand mode, is **switch.predbat_set_freeze_export_during_demand** (_expert mode_).

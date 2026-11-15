@@ -25,6 +25,8 @@ from email.utils import parsedate_to_datetime
 from io import StringIO
 from functools import lru_cache
 from const import (
+    BALANCE_CEILING_EXPIRY_SECONDS,
+    BALANCE_CEILING_SHORTFALL_W,
     TEMPERATURE_SCALES,
     MINUTE_WATT,
     PREDICT_STEP,
@@ -3130,6 +3132,12 @@ def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
 # Matches the +-50W floor already used to decide whether an inverter is doing anything at all.
 PV_SURPLUS_THRESHOLD = 50.0
 
+# A discharge hold latched while the fleet soaks up PV surplus is kept only while that surplus is at least this
+# large (W). Under broken cloud a smaller surplus turns into a deficit long before the next pass, and a battery
+# still held from discharging then leaves it to the grid: in the CT simulator, latching on any surplus added
+# about 0.1 kWh/h of import with PV close to the house load, more than the cross-charging it saved.
+BALANCE_LATCH_SURPLUS_W = 1000.0
+
 
 def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None):
     """
@@ -3146,10 +3154,20 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     ANY other inverter qualifies, and the rate guards consult no partner at all - SoC is never used
     as a proxy for rate capability, because a fleet's fullest battery may be its weakest inverter.
 
-    A pass only ever holds in ONE direction. The inverters share an AC bus, so holding a charger
-    and a discharger together leaves the remaining units absorbing or supplying the difference,
-    against guards that were each evaluated as though its own hold were the only change. Holds
-    within the chosen direction are therefore applied cumulatively as well.
+    SoC holds are only ever taken in the fleet's own direction, and applied cumulatively: the inverters
+    share an AC bus, so each guard has to account for the holds already taken this pass. The one hold
+    taken against that direction is the cross-charge correction, which only ever stops an inverter
+    working AGAINST the fleet - removing draw while the fleet discharges, or supply while it charges -
+    so it can only make the SoC guards' job easier, and the two are applied together.
+
+    A cross-charge hold is latched: an inverter held from charging while the fleet should discharge
+    reads back a charge rate of 0, and keeps that hold for as long as the fleet is still visibly
+    discharging. Without the latch the hold went with the next pass - the held battery reads 0W, so it no
+    longer looks like a cross-charger - and inverters whose loops disagree about the shared CT wound
+    straight back into charging from their neighbours until caught again, a write every minute or two.
+    The mirror, a discharge hold while the fleet soaks up PV, is latched only while the surplus is at
+    least BALANCE_LATCH_SURPLUS_W, because a passing cloud turns a small surplus into a deficit that a
+    battery held from discharging cannot help cover until the next pass.
 
     Args:
         intent (dict): inverter id -> rate intent, mutated in place
@@ -3160,15 +3178,25 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
         threshold_charge (float): minimum SoC% divergence to act on during charge
         threshold_discharge (float): minimum SoC% divergence to act on during discharge
         log_to (callable): optional logger, called with a single string
+
+    Returns:
+    - dict: what this pass decided, for the balance sensor. "status" is "single" or "calibrating" when nothing was
+      considered, else "considered"; "direction" is "discharge" or "charge" (the way the fleet should be going);
+      "spare_pv_w" and "spread_percent" are what that was judged on; "holds" maps each inverter id to
+      {"charge": reason, "discharge": reason}, a reason being None (not held by balancing), "soc",
+      "cross_charge" (caught working against the fleet this pass) or "cross_charge_latched" (kept from before).
     """
     num_inverters = len(snapshot)
+    decisions = {"status": "considered", "direction": None, "spare_pv_w": None, "spread_percent": None, "holds": {id: {"charge": None, "discharge": None} for id in range(num_inverters)}}
     if num_inverters < 2:
-        return
+        decisions["status"] = "single"
+        return decisions
     for entry in snapshot:
         if entry["in_calibration"]:
             if log_to:
                 log_to("BALANCE: an inverter is in calibration, not balancing")
-            return
+            decisions["status"] = "calibrating"
+            return decisions
 
     socs = [entry["soc_percent"] for entry in snapshot]
     reserves = [entry["reserve_percent"] for entry in snapshot]
@@ -3187,8 +3215,12 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
         if id in intent:
             claimed_charge = intent[id].get("charge_rate", None)
             claimed_discharge = intent[id].get("discharge_rate", None)
-            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else claimed_charge)
-            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else claimed_discharge)
+            # A claimed rate is what will be written, but the inverter can still deliver no more than the
+            # snapshot's ceiling - which carries any rate learn_rate_ceilings() has seen it really manage. A charge
+            # or export window claims every inverter's rate, so without the min() a derated peer would be counted
+            # on for its claim and the guard would let a hold leave the house short.
+            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else min(claimed_charge, snapshot[id]["battery_rate_max_charge"]))
+            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else min(claimed_discharge, snapshot[id]["battery_rate_max_discharge"]))
         else:
             # Not being written this pass (read-only, or skipped for calibration), so whatever it
             # reads now is what it will keep
@@ -3266,32 +3298,56 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     else:
         fleet_should_discharge = during_discharge and spare_pv <= PV_SURPLUS_THRESHOLD
 
+    # Inverters already held against the fleet direction read that rate back as 0 (the snapshot keeps a
+    # true zero through the prediction rate floor). Such a hold is kept while the fleet's direction is
+    # unchanged - a held battery reads 0W, so on power alone it would be released every other pass and
+    # wind straight back into cross-charging. It ends when the direction flips, as the rate the latch
+    # reads is then the other one, or when the fleet stops visibly moving power that way. A latched
+    # discharge hold also needs a comfortable PV surplus - see BALANCE_LATCH_SURPLUS_W.
     if fleet_should_discharge:
-        against_fleet = [id for id in range(num_inverters) if power_enough_charge[id] and id in intent]
+        # The charge latch also needs the fleet to be visibly discharging. A fleet sitting idle - every battery
+        # at 0W, nothing on the meter because grid_power is not configured or the site curtails PV to zero export
+        # - would otherwise keep a charge rate of 0 (left by a freeze-export slot, say) all day and take no PV.
+        fleet_discharging = total_battery_power >= 50.0
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_charge[id] or (charge_rates[id] == 0 and fleet_discharging))]
     else:
-        against_fleet = [id for id in range(num_inverters) if power_enough_discharge[id] and id in intent]
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_discharge[id] or (discharge_rates[id] == 0 and spare_pv >= BALANCE_LATCH_SURPLUS_W))]
 
-    if against_fleet and balance_crosscharge:
+    decisions["direction"] = "discharge" if fleet_should_discharge else "charge"
+    decisions["spare_pv_w"] = spare_pv
+    decisions["spread_percent"] = soc_max - soc_min
+
+    if balance_crosscharge:
         for id in against_fleet:
-            if log_to:
+            caught = power_enough_charge[id] if fleet_should_discharge else power_enough_discharge[id]
+            if log_to and caught:
                 log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
             if fleet_should_discharge:
                 intent[id]["charge_rate"] = 0
             else:
                 intent[id]["discharge_rate"] = 0
-        # This pass is done: SoC balancing on top would be the second direction of hold that the
-        # coupling between inverters rules out. When the correction is switched OFF we hold nothing
-        # here, so a same-direction SoC hold below is still a single-direction pass and is allowed.
-        return
+            decisions["holds"][id]["charge" if fleet_should_discharge else "discharge"] = "cross_charge" if caught else "cross_charge_latched"
+        # SoC balancing still runs. An inverter held here can no longer help in the direction it was held in,
+        # so the SoC guard below that needs that direction leaves it out of the capacity it counts on: one held
+        # from discharging into a surplus cannot take over the house, and one held from charging while the fleet
+        # discharges cannot soak up surplus.
+
+    cross_held_discharge = set(against_fleet) if (balance_crosscharge and not fleet_should_discharge) else set()
+    cross_held_charge = set(against_fleet) if (balance_crosscharge and fleet_should_discharge) else set()
 
     if not out_of_balance:
-        return
+        return decisions
 
     # SoC balancing, in the fleet's own direction only. Holds are applied cumulatively - the rate
     # guard asks "if I stop this one, can the rest cover?", so each hold has to account for the
     # ones already taken this pass or two holds each pass a check computed for one.
     if during_discharge and balance_discharge and total_discharge_rates > 0:
         held = set()
+        # Charging the cross-charge holds above have just stopped was being supplied by the rest of the
+        # fleet, so it no longer nets off against the house: the batteries left discharging must now cover
+        # the measured net power plus that charging. Counting only the net would let a hold pass a check
+        # that the very next second fails.
+        stopped_charging = sum(-battery_powers[other] for other in against_fleet if battery_powers[other] < 0) if (balance_crosscharge and fleet_should_discharge) else 0.0
         for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: socs[id]):
             if not soc_low[id]:
                 continue
@@ -3304,12 +3360,13 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # headroom" separately lets two different inverters answer them - a peer with energy
             # but no rate, and a peer with rate but sitting on its reserve - and holding this one
             # then leaves only unusable capacity behind, with the shortfall coming off the grid.
-            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held)
-            if (usable - 200) < total_battery_power:
+            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held and other not in cross_held_discharge)
+            if (usable - 200) < total_battery_power + stopped_charging:
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is low at {}% against {}%, holding its discharge".format(id, socs[id], soc_max))
             intent[id]["discharge_rate"] = 0
+            decisions["holds"][id]["discharge"] = "soc"
             held.add(id)
     elif during_charge and balance_charge and total_charge_rates > 0:
         held = set()
@@ -3325,13 +3382,66 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # of the fleet it is implied, so it is not restated.
             # Same on the charge side: a battery already at 100% absorbs nothing, so its rate must
             # not be counted towards what is left to soak up the surplus.
-            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held)
+            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held and other not in cross_held_charge)
             if spare_pv > usable:
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
             intent[id]["charge_rate"] = 0
+            decisions["holds"][id]["charge"] = "soc"
             held.add(id)
+    return decisions
+
+
+def learn_rate_ceilings(snapshot, now):
+    """
+    Learn the rate each inverter can really deliver from the grid meter, and cap its rate in the snapshot at it.
+
+    balance_inverters() decides whether the rest of the fleet can carry a held inverter's share from the peers'
+    CONFIGURED rates. A peer that delivers less - a cold battery, a BMS derate, an AC limit lower than Predbat
+    was told, none of which Predbat necessarily knows about - passes that check, and the house sits on the grid
+    for as long as the hold lasts. With a badly derated peer that is until SoC converges, which can be hours.
+
+    The grid meter shows it. If the site is short in a direction - importing while the batteries discharge,
+    exporting surplus while they charge - by more than BALANCE_CEILING_SHORTFALL_W while an inverter reads a
+    rate of 0 that way, every peer still moving power that way is already giving all it can, or the shortfall
+    would not be there. Each such peer's measured power becomes its learned ceiling, recorded only where it is
+    clearly below the configured rate, and caps that rate in the snapshot. The capacity guard then sees the
+    shortfall itself and lets the hold go, and does not take it again while the peer cannot cover it.
+
+    A ceiling is forgotten as soon as the peer delivers more than it, or after BALANCE_CEILING_EXPIRY_SECONDS, so
+    a battery that has warmed up is trusted with its full rate again. Learning from a moment when a peer was
+    still ramping up only records a ceiling that is too low, which makes balancing hold less, never puts more
+    on the grid, and is corrected the next time that peer is seen delivering more.
+
+    Each snapshot entry carries learned_charge_ceiling and learned_discharge_ceiling, None or [watts, seen_at],
+    as stored after the previous pass. They are updated in place, along with battery_rate_max_charge and
+    battery_rate_max_discharge.
+
+    Args:
+        snapshot (list): per-inverter readings from Execute.build_inverter_snapshot()
+        now (float): the current time in seconds, on the same clock as the stored seen_at
+    """
+    total_grid = sum(entry.get("grid_power", 0.0) for entry in snapshot)
+    # Predbat's grid convention is +ve export and battery_power is +ve discharging, so the shortfall while
+    # discharging is import (-grid) and while charging it is export (+grid); sign turns battery power into
+    # power moved in that direction.
+    for kind, sign, shortfall in (("discharge", 1.0, -total_grid), ("charge", -1.0, total_grid)):
+        rate_key = kind + "_rate_now"
+        max_key = "battery_rate_max_" + kind
+        learned_key = "learned_" + kind + "_ceiling"
+        held = {index for index, entry in enumerate(snapshot) if entry[rate_key] == 0}
+        short = bool(held) and shortfall > BALANCE_CEILING_SHORTFALL_W
+        for index, entry in enumerate(snapshot):
+            power = sign * entry["battery_power"]
+            learned = entry.get(learned_key)
+            if learned is not None and (power > learned[0] + BALANCE_CEILING_SHORTFALL_W or now - learned[1] > BALANCE_CEILING_EXPIRY_SECONDS):
+                learned = None
+            if short and index not in held and 0.0 < power < entry[max_key] * 0.95:
+                learned = [power, now]
+            entry[learned_key] = learned
+            if learned is not None:
+                entry[max_key] = min(entry[max_key], learned[0])
 
 
 def allocate_export_rates(needs, max_rates, p_fleet):

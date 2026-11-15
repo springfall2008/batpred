@@ -1,4 +1,4 @@
-# Predbat config for the Anker SOLIX X1, via the anker-x1-ha HACS integration
+# Predbat config for the Anker SOLIX X1, via the anker-x1-ha community integration
 # (local Modbus TCP, https://github.com/afewyards/anker-x1-ha, 0.7.0 or later)
 #
 # The X1 has no charge schedule, target SoC or reserve over Modbus, so this is a
@@ -7,7 +7,10 @@
 # setpoint in VPP mode. See the Anker SOLIX X1 section of the inverter setup docs.
 #
 # Copy this over your apps.yaml and:
-#   1. Install the anker-x1-ha integration via HACS and check its sensors work.
+#   1. Install the anker-x1-ha integration (not in the default catalogue: use
+#      Add from link in the Marketplace on Home Assistant 2026.11 or newer, or add
+#      it to HACS as a custom repository on 2026.10 or older) and check its
+#      sensors work.
 #   2. Install the Home Assistant package templates/anker_x1_package.yaml (the
 #      control script, rate helpers, house load and SoC sensors) and restart
 #      Home Assistant.
@@ -312,6 +315,4 @@ pred_bat:
   #  - '{octopus_intelligent_slot}'
   #  - '{octopus_ready_time}'
   #  - '{octopus_charge_limit}'
-  #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
-  #  - '+[car_charging_soc]'
