@@ -1082,7 +1082,9 @@ class BatteryCurve:
                     samples.setdefault(day, []).append([dp2(soc), temp, dp4(rate)])
                     found += 1
             run = []
-        self.log("Inverter {} {}: found {} full-rate {}-minute segments in {} days of history{}".format(self.id, purpose, found, BATTERY_RATE_GRID_SEGMENT_MINUTES, self.base.max_days_previous, "" if temperature is not None else " (no battery temperature)"))
+        self.log(
+            "Inverter {} {}: found {} full-rate {}-minute segments in {} days of history{}".format(self.id, purpose, found, BATTERY_RATE_GRID_SEGMENT_MINUTES, self.base.max_days_previous, "" if temperature is not None else " (no battery temperature)")
+        )
         return samples
 
     def find_battery_temperature_samples(self, discharge=False):
