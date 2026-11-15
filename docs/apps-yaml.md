@@ -3060,6 +3060,10 @@ Predbat predicts your battery at 0 °C and plans charging and discharging at the
 Check the sensor in Home Assistant and update **battery_temperature** and **battery_temperature_history** to the new name.
 Predbat warns once (in the log and on its status) when the temperature history has read 0 for the last 24 hours.
 
+If you control your inverter through Predbat's [GivTCP REST interface](#rest-interface-inverter-control) with **givtcp_automatic**
+left on, you do not need to set either: Predbat points **battery_temperature** and **battery_temperature_history** at its own
+`sensor.predbat_givtcp_<n>_battery_temperature`, read straight from GivTCP, and overrides any sensor you name for them.
+
 An example for GivEnergy Gen2 battery is below.
 
 *Note* You must adjust the curve for your system.

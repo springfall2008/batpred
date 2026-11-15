@@ -1176,7 +1176,8 @@ class GivTCPComponent(ComponentBase):
         publish_data() actually published its entity for this inverter (see _discovery_descriptor).
         battery_scaling is bound to the combined battery_dod_soh sensor, exactly as automatic_config()
         binds it, and inverter_time carries the format its value is published in. The site-wide
-        battery_temperature_history goes on the lowest discovered inverter's record only.
+        battery_temperature_history goes on the lowest discovered inverter's record only, whenever
+        that inverter published battery_temperature - the same per-device rule as every other key.
 
         The record describes this device alone (spec D10 and D11). automatic_config()'s fleet-wide
         gates - a key claimed only when every discovered inverter published it or runs GivTCP v3 -

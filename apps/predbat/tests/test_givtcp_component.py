@@ -3350,6 +3350,36 @@ def test_build_discovery_temperature_history_on_the_first_record_only(my_predbat
     return 0
 
 
+def test_build_discovery_temperature_history_mixed_fleet(my_predbat=None):
+    """
+    Spec D10: in a fleet where only endpoint 0 reports a temperature, record 0 still carries battery_temperature and its history.
+
+    automatic_config() claims battery_temperature only when every discovered inverter publishes it,
+    and the history only with it, so here it binds neither. The record describes the device alone and
+    the coordinator applies the fleet gate, so the history follows battery_temperature onto record 0
+    as an allowed extra - the same per-device rule test_build_discovery_mixed_fleet_is_described_per_device
+    pins for the v3-only controls.
+    """
+    temperature_keys = ("battery_temperature", "battery_temperature_history")
+    base, component = _make_component(rest_urls=["http://a:6345", "http://b:6345"])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    component.rest[0].inverter.rest_data["Battery_Details"] = {"Battery_Stack_1": {"BMS_Temperature": 15.3}}
+    component.rest[1].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    with_temperature, without_temperature = validated_inverters(component.build_discovery())
+    captured = capture_automatic_config(component)
+    assert not any(name in captured for name in temperature_keys), sorted(captured)
+    assert with_temperature["entities"]["battery_temperature_history"]["entity_id"] == "sensor.predbat_givtcp_0_battery_temperature", with_temperature["entities"].get("battery_temperature_history")
+    assert not any(name in without_temperature["entities"] for name in temperature_keys), sorted(without_temperature["entities"])
+    assert_record_agrees(with_temperature, captured, index=0)
+    assert_record_agrees(without_temperature, captured, index=1)
+    assert_record_binds_nothing_extra(with_temperature, captured, index=0, allowed_extra=temperature_keys)
+    assert_record_binds_nothing_extra(without_temperature, captured, index=1)
+    print("PASS: temperature history follows battery_temperature per device in a mixed fleet")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -3491,6 +3521,7 @@ def test_givtcp_component(my_predbat=None):
         ("temperature_history_unreported", test_battery_temperature_history_left_alone_when_unreported, "battery_temperature_history left to apps.yaml when unreported"),
         ("temperature_history_first_endpoint", test_battery_temperature_history_from_the_first_answering_endpoint, "history from the first answering endpoint, handed back on lapse"),
         ("discovery_temperature_history", test_build_discovery_temperature_history_on_the_first_record_only, "site-wide temperature history on the first record only"),
+        ("discovery_temperature_mixed_fleet", test_build_discovery_temperature_history_mixed_fleet, "temperature history follows battery_temperature per device in a mixed fleet"),
     ]
 
     sub_tests.append(("client_on_event_loop", test_client_calls_run_on_the_event_loop, "client calls awaited on the event loop, component sessions"))
