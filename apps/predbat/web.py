@@ -4073,7 +4073,8 @@ chart.render();
             """The cap at each degree as the plan applies it: never above the maximum rate, so an uncapped degree shows the rate the battery is planned at, not 1 C."""
             points = []
             for t in temperatures:
-                value = find_battery_temperature_cap(t, curve, 60.0, 1e9) * scale
+                # At 0 the line shows a real reading just above freezing: only an exact 0 (a missing reading) uses the 0 entry
+                value = find_battery_temperature_cap(t if t != 0 else 0.5, curve, 60.0, 1e9) * scale
                 if soc_max > 0 and rate_max > 0:
                     value = min(value, rate_max)
                 points.append({"x": t, "y": round(value, 3)})
@@ -4101,7 +4102,7 @@ chart.render();
             temperature_series.append({"name": "Maximum charge rate", "data": [{"x": temperatures[0], "y": round(rate_max_charge, 3)}, {"x": temperatures[-1], "y": round(rate_max_charge, 3)}], "color": "#777777", "stroke_width": 2, "dash": 4})
         if temperature_series:
             text += self.render_curve_chart(temperature_series, "Battery temperature (C)", "Rate cap ({})".format(unit), "Battery temperature curves", "chart_temperature_curve", temperatures[0], temperatures[-1], y_min=0)
-            text += "<p>The plan charges at the lower of the SoC curve rate and the temperature cap. A degree the curve does not set uses the 20 degree value above zero (then no cap) and the 0 degree value below.</p>\n"
+            text += "<p>The plan charges at the lower of the SoC curve rate and the temperature cap. A degree the curve does not set uses the 20 degree value above zero (then no cap), and below zero the 0 degree value, else the coldest value the curve sets. A reading of exactly 0, which often means the temperature is missing, uses the 0 degree value, else no cap.</p>\n"
             if temperature_evidence:
                 text += "<p>Each dot is one day's average charge rate at that temperature, from full-rate charges below {}% SoC. Faded dots are over {} days old and count for less (half every {} days); grey ones have too little evidence (under {} minutes, or fewer than {} days) to be learned.</p>\n".format(
                     BATTERY_TEMPERATURE_CURVE_SOC_MAX, CURVE_EVIDENCE_RECENT_DAYS, BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS, BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, BATTERY_TEMPERATURE_CURVE_MIN_DAYS

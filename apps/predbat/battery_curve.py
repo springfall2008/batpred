@@ -41,7 +41,7 @@ from const import (
     EXPORT_LIMIT_DEFAULT_W,
     MINUTE_WATT,
 )
-from utils import calc_percent_limit, dp0, dp1, dp2, dp4, find_battery_temperature_cap, is_entity_id, minute_data, minute_data_state
+from utils import battery_temperature_index, calc_percent_limit, dp0, dp1, dp2, dp4, find_battery_temperature_cap, is_entity_id, minute_data, minute_data_state
 
 # Largest SoC jump (percentage points) between consecutive readings that the charge curve learner
 # accepts as genuine. Wide enough for inverters that report SoC in 5% steps; a larger jump is a
@@ -876,7 +876,7 @@ class BatteryCurve:
             temp = temperature.get(minute, None)
             if temp is None or temp == 0:
                 continue
-            temp_idx = int(min(max(temp, -20), BATTERY_TEMPERATURE_CURVE_TEMP_MAX))
+            temp_idx = battery_temperature_index(temp)
             if temp_idx not in cap_cache:
                 cap_cache[temp_idx] = find_battery_temperature_cap(temp_idx, temperature_curve, soc_max, float("inf")) * MINUTE_WATT * battery_loss * rate_scaling
             cap_w = cap_cache[temp_idx]
@@ -964,7 +964,7 @@ class BatteryCurve:
 
         Returns:
             {day: {temperature: [sum_of_c, minutes]}} keyed by charge_day() (YYYY-MM-DD) and the whole degree
-            the temperature truncates to (as find_battery_temperature_cap() looks it up), or None when the
+            battery_temperature_index() gives (as find_battery_temperature_cap() looks it up), or None when the
             sensors or their history are missing.
         """
         temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
@@ -1022,10 +1022,10 @@ class BatteryCurve:
             temp = temperature.get(minute, None)
             if temp is None:
                 continue
-            temp = int(min(max(temp, -20), BATTERY_TEMPERATURE_CURVE_TEMP_MAX))
+            temp = battery_temperature_index(temp)
             if temp == 0:
-                # The 0 entry is the fallback for every reading at or below 0, including the exact 0 several integrations
-                # report for a missing reading, so it is never learned (anything between -1 and 1 truncates to it)
+                # Only an exact 0 reading lands here (battery_temperature_index() moves any other reading between -1 and 1
+                # to 1 or -1): it is how several integrations report a missing reading, so it is never learned
                 continue
             rate_c = abs(power) / 1000.0 / battery_loss / soc_max
             day = charge_day(self.base.now_utc, minute, local_tz)

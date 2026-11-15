@@ -20,7 +20,7 @@ from tests.test_infra import TestHAInterface, MockStorageComponents, make_test_s
 from predbat import PredBat
 from inverter import Inverter
 from battery_curve import charge_day, clean_battery_temperature_samples, merge_battery_temperature_samples, learn_battery_temperature_curve, overlay_battery_temperature_curve
-from utils import find_battery_temperature_cap
+from utils import battery_temperature_index, find_battery_temperature_cap
 from const import TIME_FORMAT
 
 TEMP_SENSOR = "sensor.battery_temperature"
@@ -37,8 +37,8 @@ HOUR_PLAN = {
     6: ("Charging", 2600, -2600, 50, 21.0),  # warm: learned as 0.26 C at 21 degrees (degrees up to 30 are learned)
     7: ("Exporting", 2600, 2600, 50, 7.0),  # not charging
     8: ("Charging", 2600, -10, 50, 9.0),  # charge finished, almost no power
-    9: ("Charging", 2600, -2600, 50, 0.4),  # truncates to 0, the bin that is never learned
-    10: ("Charging", 2600, -2600, 50, -0.6),  # also truncates to 0
+    9: ("Charging", 2600, -1300, 30, 0.4),  # a real reading just above freezing: learned at 1 degree (not the 0 bin), as 0.13 C
+    10: ("Charging", 2600, -2600, 50, -0.0),  # still exactly 0, a missing reading
     11: ("Charging", 2600, -2000, 50, 34.0),  # hotter than 30: learned at 30, the warmest degree looked up, as 0.2 C
 }
 IDLE = ("Idle", 0, 0, 50, 15.0)
@@ -191,6 +191,19 @@ def _test_pure_helpers():
     failed |= _check("t4c no 20 entry is uncapped", cap_c(25, {19: 0.27}) == 1.0 and cap_c(40, {19: 0.27}) == 1.0)
     failed |= _check("t4c hotter than 30 uses 30", cap_c(40, {30: 0.6}) == 0.6)
     failed |= _check("t4c a curve that only sets 20 still caps every warmer reading", cap_c(35, {20: 0.3}) == 0.3)
+
+    print("Test 4d: only an exact 0 reading is treated as missing; any other cold reading uses the coldest value the curve gives")
+    fleet = {1: 0.05, 9: 0.08, 19: 0.27}  # like the fox_ess layer curve: no 0 entry
+    failed |= _check("t4d index", [battery_temperature_index(t) for t in (0, 0.0, 0.4, -0.4, 0.99, -0.99, 1.5, -1.5, -30, 45)] == [0, 0, 1, -1, 1, -1, 1, -1, -20, 30])
+    failed |= _check("t4d exact 0 with no 0 entry is uncapped", cap_c(0, fleet) == 1.0 and cap_c(0.0, fleet) == 1.0)
+    failed |= _check("t4d just above freezing uses 1", cap_c(0.4, fleet) == 0.05)
+    failed |= _check("t4d just above freezing with no 1 entry uses the 0 entry, not the 20 fallback", cap_c(0.4, {0: 0.02, 10: 0.2, 20: 0.5}) == 0.02)
+    failed |= _check("t4d a gap at 1 degree or warmer still uses 20", cap_c(3, {0: 0.02, 10: 0.2, 20: 0.5}) == 0.5)
+    failed |= _check("t4d below freezing uses the coldest set degree, not uncapped", cap_c(-0.4, fleet) == 0.05 and cap_c(-3, fleet) == 0.05 and cap_c(-25, fleet) == 0.05)
+    failed |= _check("t4d a 0 entry still covers below freezing", cap_c(-3, {0: 0.02, 1: 0.05}) == 0.02 and cap_c(0, {0: 0.02, 1: 0.05}) == 0.02)
+    failed |= _check("t4d a set negative degree is used", cap_c(-5, {-5: 0.01, 1: 0.05}) == 0.01 and cap_c(-10, {-5: 0.01, 1: 0.05}) == 0.01)
+    failed |= _check("t4d string keys", cap_c(-3, {"1": 0.05, "9": 0.08}) == 0.05)
+    failed |= _check("t4d no curve is uncapped", cap_c(-3, {}) == 1.0)
     return failed
 
 
@@ -205,9 +218,9 @@ def _test_scan(my_predbat):
     if failed:
         return failed
     temps = {temp for day_bins in samples.values() for temp in day_bins}
-    failed |= _check("t5 only clean degrees", temps == {5, 12, 21, 30}, temps)
+    failed |= _check("t5 only clean degrees", temps == {1, 5, 12, 21, 30}, temps)
     curve, minutes = learn_battery_temperature_curve(samples, my_predbat.now_utc.date())
-    failed |= _check("t5 rates", curve == {5: 0.13, 12: 0.26, 21: 0.26, 30: 0.2}, curve)
+    failed |= _check("t5 rates", curve == {1: 0.13, 5: 0.13, 12: 0.26, 21: 0.26, 30: 0.2}, curve)
     failed |= _check("t5 minutes", minutes.get(5, 0) >= (HISTORY_DAYS - 1) * 60, minutes)
 
     print("Test 5b: the learned rate is divided by battery_rate_max_scaling (which the plan multiplies the cap by) when learning, not when recording")
@@ -223,7 +236,7 @@ def _test_scan(my_predbat):
     inv.battery_scaling = 0.8  # 85% would read 68% if it were rescaled, and hour 3's taper would be learned at 7 degrees
     samples = inv.find_battery_temperature_samples()
     temps = {temp for day_bins in samples.values() for temp in day_bins}
-    failed |= _check("t6a scaling", temps == {5, 12, 21, 30}, temps)
+    failed |= _check("t6a scaling", temps == {1, 5, 12, 21, 30}, temps)
     inv.battery_scaling = 1.0
 
     print("Test 6: battery_power_invert is honoured")
@@ -262,19 +275,19 @@ def _test_update(my_predbat):
         my_predbat.battery_temperature_charge_curve_auto = True
 
         print("Test 8: the learned curve is laid over the configured one and published")
-        my_predbat.battery_temperature_charge_curve_configured = {15: 0.2, 3: 0.04}
-        my_predbat.battery_temperature_charge_curve = {15: 0.2, 3: 0.04}
+        my_predbat.battery_temperature_charge_curve_configured = {15: 0.2, -3: 0.04}
+        my_predbat.battery_temperature_charge_curve = {15: 0.2, -3: 0.04}
         my_predbat.battery_temperature_curve_auto_update(inv)
         curve = my_predbat.battery_temperature_charge_curve
-        # 15 lies inside the learned 5-30 range, so the learned neighbours (12 and 21, both 0.26) replace the configured 0.2
-        failed |= _check("t8 curve", curve.get(5) == 0.13 and curve.get(12) == 0.26 and curve.get(15) == 0.26 and curve.get(30) == 0.2 and curve.get(3) == 0.04 and curve.get(1) == 0.13, curve)
+        # 15 lies inside the learned 1-30 range, so the learned neighbours (12 and 21, both 0.26) replace the configured 0.2
+        failed |= _check("t8 curve", curve.get(5) == 0.13 and curve.get(12) == 0.26 and curve.get(15) == 0.26 and curve.get(30) == 0.2 and curve.get(3) == 0.13 and curve.get(1) == 0.13 and curve.get(-3) == 0.04, curve)
         my_predbat.battery_temperature_charge_curve_auto = True
         my_predbat.publish_battery_curve_sensors()
         sensor = "binary_sensor." + my_predbat.prefix + "_battery_temperature_charge_curve"
         state = my_predbat.get_state_wrapper(sensor)
         attributes = my_predbat.get_state_wrapper(sensor, attribute="learned")
         updated = my_predbat.get_state_wrapper(sensor, attribute="updated")
-        failed |= _check("t8 published", state == "on" and attributes == {"5": 0.13, "12": 0.26, "21": 0.26, "30": 0.2}, "{} {}".format(state, attributes))
+        failed |= _check("t8 published", state == "on" and attributes == {"1": 0.13, "5": 0.13, "12": 0.26, "21": 0.26, "30": 0.2}, "{} {}".format(state, attributes))
         failed |= _check("t8 learned date", updated == my_predbat.now_utc.strftime(TIME_FORMAT) and my_predbat.get_state_wrapper(sensor, attribute="source") == "learned", updated)
         saved = run_async(storage.load("predbat", "battery_temperature_curve"))
         failed |= _check("t8 saved", isinstance(saved, dict) and clean_battery_temperature_samples(saved.get("samples")) == my_predbat.battery_temperature_samples and saved.get("updated") == updated, saved)
@@ -284,7 +297,7 @@ def _test_update(my_predbat):
         failed |= _check("t9 one scan", len(scans) == 1, scans)
         my_predbat.publish_battery_curve_sensors()
         configured = my_predbat.get_state_wrapper(sensor, attribute="configured")
-        failed |= _check("t9 configured still the apps.yaml curve", configured == {"3": 0.04, "15": 0.2}, configured)
+        failed |= _check("t9 configured still the apps.yaml curve", configured == {"-3": 0.04, "15": 0.2}, configured)
         failed |= _check("t9 overlay", my_predbat.battery_temperature_charge_curve.get(5) == 0.13, my_predbat.battery_temperature_charge_curve)
         my_predbat.battery_temperature_curve_last_scan = my_predbat.now_utc - timedelta(minutes=61)
         my_predbat.battery_temperature_curve_auto_update(inv)

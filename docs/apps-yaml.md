@@ -3082,7 +3082,9 @@ An example for GivEnergy Gen2 battery is below.
 
 *Note* You must adjust the curve for your system.
 Degrees from -20 to 30 can be set; a reading warmer than 30 uses 30. A positive degree the curve does not set uses the 20 entry (or full rate if there is no 20 entry),
-and gaps below 0 will use 0 degrees. Do not leave gaps in the curve between 20 and 0.
+and gaps below 0 will use 0 degrees, or the coldest degree the curve sets if it has no 0 entry. Do not leave gaps in the curve between 20 and 0.
+A reading of exactly 0 is treated as possibly missing (several integrations report a missing temperature as 0) and uses the 0 entry, or full rate if there is none;
+any other reading between -1 and 1 degrees uses the 1 (or -1) degree entry, and if that is not set, the 0 entry (or the coldest degree set) as for any reading below 1 degree.
 
 ```yaml
   # Battery temperature charge adjustment curve
@@ -3141,7 +3143,7 @@ If you have set **input_number.battery_rate_max_scaling**, the rate is divided b
 - Degrees up to 30 are learned; a warmer reading counts as 30. Many batteries still limit charging at 20-25 degrees, and the temperature a battery reports is often warmer than its coldest cell, which is the one its BMS goes by.
 - When the warmest degree learned is 20 or above, every warmer degree up to 30 that your curve does not set uses its rate. This is also how a battery that never reaches its rated charge rate at any temperature
   (a BMS or inverter limit below **battery_rate_max**) ends up planned at the rate it really charges at, below 80% SoC.
-- 0 degrees is never learned: an exact 0 is how several integrations report a missing reading.
+- A reading of exactly 0 is never learned: it is how several integrations report a missing reading. Any other reading between -1 and 1 counts towards 1 (or -1) degree.
 
 The entity **binary_sensor.predbat_battery_temperature_charge_curve** is on while a learned (or manual) curve is in use, with the learned and combined curves (and the minutes behind each degree) in its attributes - see [Checking the curves](#checking-the-curves).
 
