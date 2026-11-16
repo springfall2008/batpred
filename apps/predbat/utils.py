@@ -16,6 +16,7 @@ dictionaries, time string parsing, data filtering/pruning, rounding,
 and historical data extraction from incrementing energy counters.
 """
 
+import math
 import re
 import array
 import ctypes
@@ -1414,9 +1415,13 @@ def minute_data_state(history, days, now, state_key, last_updated_key, prev_last
     return mdata
 
 
-def history_attribute_to_minute_data(now_utc, data, backwards=True):
+def history_attribute_to_minute_data(now_utc, data, backwards=True, whole_span=False):
     """
     Get historical data for an attribute with history attribute filtering first
+
+    The minute data covers the whole days the history spans, rounded down, so a history 2 days 22 hours long gives 2 days.
+    whole_span=True covers all of it instead, back to the first record and no further (minute_data would otherwise copy the
+    first record back over the minutes before it).
     """
     history = []
     oldest_date = now_utc
@@ -1431,7 +1436,12 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
         history.append({"last_updated": key, "state": value})
     max_age = now_utc - oldest_date
     max_days = max(max_age.days, 1)
+    if whole_span:
+        max_days = max(math.ceil(max_age.total_seconds() / (24 * 60 * 60)), 1)
     mdata, _ = minute_data(history, max_days, now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
+    if whole_span:
+        first_minute = int(max_age.total_seconds() / 60)
+        mdata = {minute: value for minute, value in mdata.items() if minute <= first_minute}
     return [mdata, max_days]
 
 
