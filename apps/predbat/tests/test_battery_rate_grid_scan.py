@@ -95,6 +95,41 @@ def _make():
     return my_predbat, inv
 
 
+def _make_two(battery_power):
+    """
+    A PredBat with two 10 kWh, 2.6 kW inverters. Each has its own SoC and charge/discharge rate sensors (inverter 1's
+    mirror inverter 0's history), and battery_power is set as given, e.g. a site-wide sensor on inverter 0 and 0 on
+    inverter 1, the way GE Cloud configures an EMS.
+    """
+    my_predbat, inv0 = _make()
+    my_predbat.args["soc_percent"] = ["sensor.soc_percent", "sensor.soc_percent_1"]
+    my_predbat.args["charge_rate"] = ["number.charge_rate", "number.charge_rate_1"]
+    my_predbat.args["discharge_rate"] = ["number.discharge_rate", "number.discharge_rate_1"]
+    my_predbat.args["battery_power"] = battery_power
+    my_predbat.args["battery_power_invert"] = [False, False]
+    inv1 = Inverter(my_predbat, 1)
+    inv1.battery_rate_max_charge = RATED_W / 60000
+    inv1.battery_rate_max_discharge = RATED_W / 60000
+    inv1.soc_max = 10.0
+    inv1.battery_scaling = 1.0
+    my_predbat.num_inverters = 2
+    my_predbat.inverters = [inv0, inv1]
+    return my_predbat, inv0
+
+
+def _install_two(my_predbat, block):
+    """Install a block for inverter 0's sensors and give inverter 1's sensors the same history."""
+    _install(my_predbat, block)
+    single = my_predbat.ha_interface.get_history
+    aliases = {"sensor.soc_percent_1": "sensor.soc_percent", "number.charge_rate_1": "number.charge_rate", "number.discharge_rate_1": "number.discharge_rate"}
+
+    def mock_get_history(entity_id, now=None, days=30):
+        """Inverter 1's sensors read inverter 0's history."""
+        return single(aliases.get(entity_id, entity_id), now=now, days=days)
+
+    my_predbat.ha_interface.get_history = mock_get_history
+
+
 def _charge(minutes, power=-1560, temp=15.3, soc=40):
     """A full-rate charge block."""
     return [("Charging", RATED_W, power, soc, temp, -RATED_W) for _ in range(minutes)]
@@ -253,4 +288,22 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     block = [("Charging", 1000, -1000, 40, 15.3, -1000) for _ in range(25)]
     _, samples = _scan(block)
     failed |= _check("t8", _segments(samples) == [], samples)
+
+    print("Test 9: a site-wide battery_power on inverter 0 (0 on the others) is measured against the whole fleet's rate")
+    # Both inverters charge at their full 2.6 kW and the site-wide sensor reads the 5.2 kW total: that is the rated rate,
+    # not twice it, so it must not be divided by inverter 0's 2.6 kW alone (#6226)
+    my_predbat, inv = _make_two(["sensor.battery_power", 0])
+    _install_two(my_predbat, _charge(25, power=-2 * RATED_W))
+    segments = _segments(inv.find_rate_grid_samples(False))
+    failed |= _check("t9 charge", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+    my_predbat, inv = _make_two(["sensor.battery_power", 0])
+    _install_two(my_predbat, _export(25, power=2 * RATED_W, grid=4000))
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t9 discharge", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+
+    print("Test 9b: battery_power missing on inverter 1 (not 0) still learns from inverter 0 alone")
+    my_predbat, inv = _make_two(["sensor.battery_power"])
+    _install_two(my_predbat, _charge(25, power=-RATED_W))
+    segments = _segments(inv.find_rate_grid_samples(False))
+    failed |= _check("t9b", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
     return failed

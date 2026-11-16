@@ -144,19 +144,27 @@ class BatteryCurve:
             rate_sensor = self.base.get_arg(rate_name, indirect=False, index=inverter.id)
             battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=inverter.id)
             battery_power_invert = self.base.get_arg("battery_power_invert", False, index=inverter.id)
-            if not (soc_sensor and rate_sensor and battery_power_sensor):
-                missing_settings = [setting for setting, entity_id in [(soc_label, soc_sensor), (rate_name, rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
+            # A 0 on any inverter but the first says the first one's sensor is the site total (an EMS reporting for the whole
+            # site): this inverter's power is already counted there, so it is not a missing setting (#6226)
+            site_total = inverter is not self and battery_power_sensor is not None and not isinstance(battery_power_sensor, bool) and str(battery_power_sensor).strip() in ("0", "0.0")
+            if not (soc_sensor and rate_sensor and (battery_power_sensor or site_total)):
+                missing_settings = [setting for setting, entity_id in [(soc_label, soc_sensor), (rate_name, rate_sensor), ("battery_power", battery_power_sensor or site_total)] if not entity_id]
                 if inverter is not self:
                     self.log("Info: Inverter {} {} not set in apps.yaml, learning the {} from inverter {} alone".format(inverter.id, ", ".join(missing_settings), purpose, self.id))
                     return self.load_curve_history(discharge, purpose, fleet=[self], days=days)
                 self.log("Warn: Inverter {} Cannot find {} (settings missing), {} not set in apps.yaml".format(inverter.id, purpose, ", ".join(missing_settings)))
                 return None
-            battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
+            if site_total:
+                battery_power_sensor = "0 (counted in inverter {}'s sensor)".format(self.id)
+            else:
+                battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
             self.log("Inverter {} Looking for {} with sensors {}, {}, {} and {}".format(inverter.id, purpose, soc_sensor, rate_sensor, predbat_status_sensor, battery_power_sensor))
             soc_data = self.base.get_history_wrapper(entity_id=soc_sensor, days=days, required=False, tracked=tracked)
             rate_data = self.base.get_history_wrapper(entity_id=rate_sensor, days=days, required=False, tracked=tracked)
-            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=days, required=False, tracked=tracked)
-            history_checks = [(soc_label, soc_sensor, soc_data), (rate_name, rate_sensor, rate_data), ("battery_power", battery_power_sensor, battery_power_data), ("predbat.status", predbat_status_sensor, predbat_status_data)]
+            history_checks = [(soc_label, soc_sensor, soc_data), (rate_name, rate_sensor, rate_data), ("predbat.status", predbat_status_sensor, predbat_status_data)]
+            if not site_total:
+                battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=days, required=False, tracked=tracked)
+                history_checks.insert(2, ("battery_power", battery_power_sensor, battery_power_data))
             if not all(data for _, _, data in history_checks):
                 no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
                 if inverter is not self and predbat_status_data:
@@ -170,11 +178,13 @@ class BatteryCurve:
                 soc_kwh = {minute: dp4(value * inverter.soc_max / 100.0) for minute, value in to_minutes(soc_data[0], required_unit="%").items()}
             else:
                 soc_kwh = to_minutes(soc_data[0], scale=inverter.battery_scaling, required_unit="kWh")
-            battery_power = to_minutes(battery_power_data[0], required_unit="W")
+            # A site-total inverter adds no power of its own (the first inverter's sensor holds it) but its SoC, written rate
+            # and rated maximum still count, so the site's power is measured against the whole fleet's rate
+            battery_power = {} if site_total else to_minutes(battery_power_data[0], required_unit="W")
             if battery_power_invert:
                 battery_power = {minute: -value for minute, value in battery_power.items()}
             max_power = (inverter.battery_rate_max_discharge if discharge else inverter.battery_rate_max_charge) * MINUTE_WATT
-            per_inverter.append({"soc_kwh": soc_kwh, "rate": to_minutes(rate_data[0], required_unit="W"), "battery_power": battery_power, "max_power": max_power})
+            per_inverter.append({"soc_kwh": soc_kwh, "rate": to_minutes(rate_data[0], required_unit="W"), "battery_power": battery_power, "max_power": max_power, "site_total": site_total})
 
         # Not padded (nor the series above): a window longer than the history (28 days asked, Home Assistant keeping 10) must
         # stop where the history does, or the padding would count as evidence and as coverage, and the per-day merge would
@@ -184,7 +194,7 @@ class BatteryCurve:
             if "," in status[minute]:
                 # If there are multiple statuses take the first one
                 status[minute] = status[minute].split(",")[0].strip()
-        min_len = min([len(status)] + [min(len(series["soc_kwh"]), len(series["rate"]), len(series["battery_power"])) for series in per_inverter])
+        min_len = min([len(status)] + [min(len(series["soc_kwh"]), len(series["rate"]), *([] if series["site_total"] else [len(series["battery_power"])])) for series in per_inverter])
         fleet_max_power = int(sum(series["max_power"] for series in per_inverter))
         if len(per_inverter) == 1:
             series = per_inverter[0]

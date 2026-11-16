@@ -22,7 +22,7 @@ import yaml
 from battery_rate_grid import rate_grid_curve
 from utils import rate_curve_function
 from config import APPS_SCHEMA
-from const import BATTERY_RATE_GRID_SCAN_MINUTES
+from const import BATTERY_RATE_GRID_MAX_AGE_DAYS, BATTERY_RATE_GRID_SCAN_MINUTES
 
 
 class FakeInverter:
@@ -58,9 +58,23 @@ class FlakyStorage:
             return None
         return await self.storage.load(module, filename)
 
-    async def save(self, module, filename, data, format="yaml"):
+    async def save(self, module, filename, data, format="yaml", expiry=None):
         """Saves go through."""
-        return await self.storage.save(module, filename, data, format=format)
+        return await self.storage.save(module, filename, data, format=format, expiry=expiry)
+
+
+class RecordingStorage(FlakyStorage):
+    """A storage that never fails and records the expiry each save asked for."""
+
+    def __init__(self, storage):
+        """Wrap a real storage."""
+        super().__init__(storage, 0)
+        self.expiries = {}
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Record the expiry, then save."""
+        self.expiries[filename] = expiry
+        return await super().save(module, filename, data, format=format, expiry=expiry)
 
 
 def _check(name, condition, detail=""):
@@ -168,6 +182,18 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         failed |= _check("t3 discharge has no evidence", my_predbat.battery_rate_grid_source.get("discharge") == "default", my_predbat.battery_rate_grid_source)
         saved = run_async(storage.load("predbat", "battery_rate_grid_charge"))
         failed |= _check("t3 saved", isinstance(saved, dict) and len(saved.get("samples", {})) == 4 and saved.get("updated"), saved and list(saved.keys()))
+
+        print("Test 3b: the evidence is saved with an expiry past its retention, so a backend's default lifetime cannot drop it (#6225)")
+        my_predbat = _make({"battery_charge_power_curve": {100: 0.5}})
+        recording = RecordingStorage(make_test_storage(my_predbat, tmpdir + "/t3b"))
+        my_predbat.components = MockStorageComponents(recording)
+        inv = FakeInverter()
+        inv.scan[False] = _samples(my_predbat)
+        _settle(my_predbat, inv)
+        expiry = recording.expiries.get("battery_rate_grid_charge")
+        failed |= _check("t3b saved", "battery_rate_grid_charge" in recording.expiries, recording.expiries)
+        failed |= _check("t3b expiry past retention", expiry is not None and expiry >= my_predbat.now_utc + timedelta(days=BATTERY_RATE_GRID_MAX_AGE_DAYS), expiry)
+        failed |= _check("t3b reads back", isinstance(run_async(recording.load("predbat", "battery_rate_grid_charge")), dict))
 
         print("Test 4: a second call within the scan interval does not rescan; after a restart the stored evidence is used")
         calls = inv.calls[False]

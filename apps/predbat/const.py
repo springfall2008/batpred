@@ -142,6 +142,7 @@ BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN = 0.95  # A discharge minute whose grid 
 BATTERY_RATE_GRID_MAX = 1.2  # Highest grid value: some systems run a little above their rated rate, a reading above this is noise
 BATTERY_RATE_GRID_HALF_LIFE_DAYS = 90  # A segment counts half as much every this many days, so last winter still shapes the cold rows
 BATTERY_RATE_GRID_MAX_AGE_DAYS = 365  # Stored segments older than this are dropped
+BATTERY_RATE_GRID_STORE_EXPIRY_DAYS = BATTERY_RATE_GRID_MAX_AGE_DAYS + 30  # The evidence is saved with this expiry, past its retention, so a storage backend's default lifetime (72 h on KeyDB) cannot drop it (#6225)
 BATTERY_RATE_GRID_MIN_CELLS = 20  # A learned grid needs this many measured SoC x temperature cells ...
 BATTERY_RATE_GRID_MIN_DAYS = 3  # ... from at least this many different days, before it replaces the manual curves
 BATTERY_RATE_GRID_RUN_MINUTES = 15  # Evidence comes from runs of at least this many consecutive minutes at the full written rate
