@@ -8,7 +8,7 @@
 
 """Tests for the DEYE behaviour to work-mode derivation (``derive_control_state``)."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS
 from deye_const import CONFIG_BATTERY_KEYS, DEYE_TOU_DAYS
 from tests.test_deye_api import MockDeye, MOCK_RATED_POWER
@@ -339,6 +339,9 @@ def _patched_run(d, poll_status):
         publish_data=_fake_run_step,
         publish_schedule_settings_ha=_fake_run_step_sn,
         poll_order=fake_poll_order,
+        # Read on the static and config tiers; without a stub, they post the fake token to the live Deye API
+        fetch_measure_points=AsyncMock(return_value={}),
+        fetch_tou_config=AsyncMock(return_value=[]),
     ):
         return run_async_local(d.run(0, False))
 

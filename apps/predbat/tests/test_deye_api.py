@@ -11,7 +11,7 @@
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 import pytz
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 from coordinator import validate_report
 from deye import DeyeAPI
 from deye_const import DEYE_BASE_URLS, DEYE_TELEMETRY_KEYS, CONFIG_BATTERY_KEYS, DEYE_LATEST_BODY_KEY
@@ -226,6 +226,65 @@ def test_fetch_device_data_against_live_payload():
         print(f"ERROR: unexpected missing-key warning: {d.log_messages}")
         failed = True
     assert not failed, "test_fetch_device_data_against_live_payload"
+
+
+def _pv_payload_without_total_solar(extra):
+    """The live payload with TotalSolarPower swapped for the given PV keys."""
+    return [row for row in LIVE_DATA_LIST if row["key"] != "TotalSolarPower"] + extra
+
+
+def _fetch_pv(data_list):
+    """Run fetch_device_data on data_list, return (pv_power, missing-key warnings)."""
+    d = MockDeye()
+
+    async def fake_post(endpoint_key, body):
+        """Fake DEYE POST: return the given device/latest dataList."""
+        return {"success": True, "deviceDataList": [{"deviceSn": "INV1", "dataList": data_list}]}
+
+    with patch.object(d, "_post", side_effect=fake_post):
+        out = run_async_local(d.fetch_device_data("INV1"))
+    return out.get("pv_power"), [m for m in d.log_messages if "missing expected keys" in m]
+
+
+def test_fetch_device_data_pv_fallback_keys():
+    """Models without TotalSolarPower still report PV power (#5016)."""
+    failed = False
+    strings = [
+        {"key": "DCPowerPV1", "value": "1800.00", "unit": "W"},
+        {"key": "DCPowerPV2", "value": "1200.00", "unit": "W"},
+        {"key": "DCPowerPV3", "value": "420.00", "unit": "W"},
+    ]
+    cases = [
+        ("TotalDCInputPower is used", _pv_payload_without_total_solar([{"key": "TotalDCInputPower", "value": "3420.00", "unit": "W"}] + strings), 3420.0),
+        ("per-string sum when there is no total", _pv_payload_without_total_solar(strings), 3420.0),
+        ("TotalSolarPower still wins", LIVE_DATA_LIST + [{"key": "TotalDCInputPower", "value": "9999.00", "unit": "W"}] + strings, 1584.0),
+        ("0 W at night is a reading, not a miss", _pv_payload_without_total_solar([{"key": "TotalDCInputPower", "value": "0.00", "unit": "W"}, {"key": "DCPowerPV1", "value": "5.00", "unit": "W"}]), 0.0),
+        ("empty total falls through to the strings", _pv_payload_without_total_solar([{"key": "TotalDCInputPower", "value": "", "unit": "W"}] + strings), 3420.0),
+        ("null string reading is skipped in the sum", _pv_payload_without_total_solar(strings + [{"key": "DCPowerPV4", "value": None, "unit": "W"}]), 3420.0),
+    ]
+    for label, data_list, want in cases:
+        pv, warnings = _fetch_pv(data_list)
+        if pv is None or abs(pv - want) > 0.001:
+            print(f"ERROR: {label}: pv_power expected {want}, got {pv}")
+            failed = True
+        if warnings:
+            print(f"ERROR: {label}: unexpected missing-key warning: {warnings}")
+            failed = True
+
+    # Nothing usable at all: still zero, and still warned about under the primary key name
+    no_pv_cases = [
+        ("no PV keys", _pv_payload_without_total_solar([{"key": "DCPowerPVx", "value": "50", "unit": "W"}])),
+        ("only empty PV values", _pv_payload_without_total_solar([{"key": "TotalDCInputPower", "value": "", "unit": "W"}, {"key": "DCPowerPV1", "value": None, "unit": "W"}])),
+    ]
+    for label, data_list in no_pv_cases:
+        pv, warnings = _fetch_pv(data_list)
+        if pv != 0.0:
+            print(f"ERROR: {label}: pv_power expected 0.0, got {pv}")
+            failed = True
+        if not any("TotalSolarPower" in m for m in warnings):
+            print(f"ERROR: {label}: expected a missing-key warning naming TotalSolarPower, got {warnings}")
+            failed = True
+    assert not failed, "test_fetch_device_data_pv_fallback_keys"
 
 
 def test_derive_battery_capacity_from_live_payload():
@@ -616,6 +675,9 @@ def test_run_first_cycle_publishes_and_configures():
         publish_schedule_settings_ha=fake_pub_sched,
         get_schedule_settings_ha=fake_get_sched,
         automatic_config=fake_auto,
+        # Read on the static and config tiers; without a stub, they post the fake token to the live Deye API
+        fetch_measure_points=AsyncMock(return_value={}),
+        fetch_tou_config=AsyncMock(return_value=[]),
     ):
         ok = run_async_local(d.run(0, True))
     if not ok:
@@ -787,6 +849,9 @@ def test_deye_catalogue_filed_when_first_cycle_defers():
         publish_schedule_settings_ha=fake_pub_sched,
         get_schedule_settings_ha=fake_get_sched,
         automatic_config=fake_auto,
+        # Read on the static and config tiers; without a stub, they post the fake token to the live Deye API
+        fetch_measure_points=AsyncMock(return_value={}),
+        fetch_tou_config=AsyncMock(return_value=[]),
     ):
         ok = run_async_local(d.run(0, True))
     if ok:
@@ -911,6 +976,7 @@ def run_deye_api_tests(my_predbat):
         ("device_list_filter", test_get_device_list_filters_inverters),
         ("fetch_device_data", test_fetch_device_data_maps_keys),
         ("fetch_device_data_live_payload", test_fetch_device_data_against_live_payload),
+        ("fetch_device_data_pv_fallback", test_fetch_device_data_pv_fallback_keys),
         ("fetch_device_data_missing_keys", test_fetch_device_data_warns_on_missing_keys),
         ("derive_battery_capacity", test_derive_battery_capacity_from_live_payload),
         ("nominal_pack_voltage", test_nominal_pack_voltage_variants),

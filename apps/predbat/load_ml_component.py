@@ -406,7 +406,8 @@ class LoadMLComponent(ComponentBase):
                     total_load_energy += load_delta
 
             # Get current cumulative load value (excludes car and iBoost) before converting to per-step
-            load_minutes_now = get_now_from_cumulative(load_minutes_new, self.minutes_now, backwards=True)
+            # Back to the real start of the day: the history is keyed by real minutes back from now (GH#5760)
+            load_minutes_now = get_now_from_cumulative(load_minutes_new, self.minutes_since_day_start(), backwards=True)
 
             # Convert cumulative load data to per-5-min energy for the predictor
             # Positive keys: historical, minute 0 = most recent; energy = delta per PREDICT_STEP interval
@@ -1121,7 +1122,7 @@ class LoadMLComponent(ComponentBase):
 
         derived_baseline = 0.0
         if self.load_data:
-            for minute in range(0, self.minutes_now, PREDICT_STEP):
+            for minute in range(0, self.minutes_since_day_start(), PREDICT_STEP):
                 derived_baseline += self.load_data.get(minute, 0.0)
         derived_baseline = dp4(derived_baseline)
         self.log(

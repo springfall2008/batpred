@@ -20,7 +20,6 @@ import aiohttp
 import asyncio
 from datetime import datetime
 
-
 # Refresh when less than this remains (seconds). Kept well under the shortest token lifetime in
 # use: EDF's Kraken OAuth token lives one hour, so the old 2-hour threshold made every single
 # request refresh first - one oauth-refresh edge-function call per Kraken query.

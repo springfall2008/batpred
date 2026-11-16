@@ -8,8 +8,14 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-from utils import find_charge_rate
+from utils import find_charge_rate, get_charge_rate_curve, get_discharge_rate_curve
+from battery_rate_grid import manual_rate_grid, rate_grid_curve
 from const import MINUTE_WATT
+
+
+def grid_curve(soc_curve, temperature_curve, soc_max, max_rate, temperature):
+    """The absolute charge ceiling curve the manual curves give at one temperature (rated = max_rate)."""
+    return rate_grid_curve(manual_rate_grid(soc_curve, temperature_curve, soc_max, max_rate), temperature, rated=max_rate)
 
 
 def test_find_charge_rate(my_predbat):
@@ -47,15 +53,13 @@ def test_find_charge_rate(my_predbat):
         target_soc,
         max_rate / MINUTE_WATT,
         soc_max,
-        battery_charge_power_curve,
+        grid_curve(battery_charge_power_curve, battery_temperature_curve, soc_max, max_rate / MINUTE_WATT, battery_temperature),
         set_charge_low_power,
         charge_low_power_margin,
         battery_rate_min / MINUTE_WATT,
         battery_rate_max_scaling,
         battery_loss,
         log_to,
-        battery_temperature=battery_temperature,
-        battery_temperature_curve=battery_temperature_curve,
         current_charge_rate=current_charge_rate / MINUTE_WATT,
     )
     print("Best_rate {} Best_rate_real {}".format(best_rate * MINUTE_WATT, best_rate_real * MINUTE_WATT))
@@ -100,7 +104,7 @@ def test_find_charge_rate_pv_overlap(my_predbat):
         target_soc,
         max_rate / MINUTE_WATT,
         soc_max,
-        battery_charge_power_curve,
+        grid_curve(battery_charge_power_curve, battery_temperature_curve, soc_max, max_rate / MINUTE_WATT, 17.0),
         True,
         my_predbat.charge_low_power_margin,
         0,
@@ -108,7 +112,7 @@ def test_find_charge_rate_pv_overlap(my_predbat):
         0.96,
         log_to,
     ]
-    kwargs = {"battery_temperature": 17.0, "battery_temperature_curve": battery_temperature_curve, "current_charge_rate": max_rate / MINUTE_WATT, "low_power_pv_threshold_w": my_predbat.low_power_pv_threshold_w}
+    kwargs = {"current_charge_rate": max_rate / MINUTE_WATT, "low_power_pv_threshold_w": my_predbat.low_power_pv_threshold_w}
 
     # Without PV low power mode should slow the charge down below the max rate
     dark_rate, dark_rate_real = find_charge_rate(*args, **kwargs)
@@ -188,15 +192,13 @@ def test_find_charge_rate_string_temperature(my_predbat):
         target_soc,
         max_rate / MINUTE_WATT,
         soc_max,
-        battery_charge_power_curve,
+        grid_curve(battery_charge_power_curve, battery_temperature_curve, soc_max, max_rate / MINUTE_WATT, battery_temperature),
         set_charge_low_power,
         charge_low_power_margin,
         battery_rate_min / MINUTE_WATT,
         battery_rate_max_scaling,
         battery_loss,
         log_to,
-        battery_temperature=battery_temperature,
-        battery_temperature_curve=battery_temperature_curve,
         current_charge_rate=current_charge_rate / MINUTE_WATT,
     )
     print("String temp test - Best_rate {} Best_rate_real {}".format(best_rate * MINUTE_WATT, best_rate_real * MINUTE_WATT))
@@ -248,15 +250,13 @@ def test_find_charge_rate_string_charge_curve(my_predbat):
         target_soc,
         max_rate / MINUTE_WATT,
         soc_max,
-        battery_charge_power_curve,
+        grid_curve(battery_charge_power_curve, battery_temperature_curve, soc_max, max_rate / MINUTE_WATT, battery_temperature),
         set_charge_low_power,
         charge_low_power_margin,
         battery_rate_min / MINUTE_WATT,
         battery_rate_max_scaling,
         battery_loss,
         log_to,
-        battery_temperature=battery_temperature,
-        battery_temperature_curve=battery_temperature_curve,
         current_charge_rate=current_charge_rate / MINUTE_WATT,
     )
     print("String charge curve test - Best_rate {} Best_rate_real {}".format(best_rate * MINUTE_WATT, best_rate_real * MINUTE_WATT))
@@ -266,5 +266,52 @@ def test_find_charge_rate_string_charge_curve(my_predbat):
         failed = 1
     if best_rate_real * MINUTE_WATT != 1225:
         print("**** ERROR: Best real rate should be 1225 (with string charge curve) ****")
+        failed = 1
+    return failed
+
+
+def test_rate_grid_ceiling(my_predbat):
+    """
+    The grid ceiling is absolute: a cold 1 kW limit is 1 kW on the AC, DC-charge and export paths alike, a request below
+    it is never scaled down, and a learned grid that tapers earlier when cold changes the low-power charge rate.
+    """
+    failed = 0
+    rated = 5000 / MINUTE_WATT
+    cold = manual_rate_grid({}, {5: 0.1, 20: 1.0}, 10.0, rated)  # 0.1C of 10 kWh = 1 kW at 5 degrees
+    curve = rate_grid_curve(cold, 5, rated=rated)
+    # A manual cold cap is absolute on every path; a learned grid on a DC path above the rated rate scales instead (history only measures up to the rated rate)
+    for name, rate_max, expect in (("AC", rated, 1000), ("DC 4kW", 4000 / MINUTE_WATT, 1000), ("DC 7kW", 7000 / MINUTE_WATT, 1000)):
+        value = get_charge_rate_curve(5.0, rate_max, 10.0, rate_max, curve, 0) * MINUTE_WATT
+        if abs(value - expect) > 1e-6:
+            print("**** ERROR: {} charge ceiling should be {}W, got {} ****".format(name, expect, value))
+            failed = 1
+    export = get_discharge_rate_curve(5.0, 3600 / MINUTE_WATT, 10.0, 3600 / MINUTE_WATT, curve, 0) * MINUTE_WATT
+    if abs(export - 1000) > 1e-6:
+        print("**** ERROR: export ceiling should be 1000W, got {} ****".format(export))
+        failed = 1
+    small = get_charge_rate_curve(5.0, 200 / MINUTE_WATT, 10.0, rated, curve, 0) * MINUTE_WATT
+    if abs(small - 200) > 1e-6:
+        print("**** ERROR: a 200W request should stay 200W, got {} ****".format(small))
+        failed = 1
+    learned = {"temp_low": 5, "rows": [[0.2] * 101], "zero_row": [0.2] * 101}
+    scaled = get_charge_rate_curve(5.0, 7000 / MINUTE_WATT, 10.0, 7000 / MINUTE_WATT, rate_grid_curve(learned, 5, rated=rated), 0) * MINUTE_WATT
+    if abs(scaled - 1400) > 1e-6:
+        print("**** ERROR: a learned 0.2 row on a 7000W DC path above the 5000W rated rate scales to 1400W, got {} ****".format(scaled))
+        failed = 1
+    warm = get_charge_rate_curve(5.0, 7000 / MINUTE_WATT, 10.0, 7000 / MINUTE_WATT, rate_grid_curve(cold, 25, rated=rated), 0) * MINUTE_WATT
+    if abs(warm - 7000) > 1e-6:
+        print("**** ERROR: warm, a 7000W DC path is not held to the 5000W rated AC rate, got {} ****".format(warm))
+        failed = 1
+
+    # A learned grid: at 10 degrees the taper starts at 50% SoC, at 11 degrees and warmer it does not
+    tapered = [1.0] * 50 + [0.3] * 51
+    grid = {"temp_low": 10, "rows": [tapered, [1.0] * 101], "zero_row": [1.0] * 101}
+    minutes_now = my_predbat.minutes_now
+    window = {"start": minutes_now - 30, "end": minutes_now + 60}  # 3 kWh in an hour needs more than the cold 1.5 kW ceiling
+    rates = {}
+    for temperature in (10, 20):
+        rates[temperature] = find_charge_rate(minutes_now, 6.0, window, 9.0, rated, 10.0, rate_grid_curve(grid, temperature, rated=rated), True, my_predbat.charge_low_power_margin, 0, 1, 1.0, None, current_charge_rate=rated)
+    if rates[10][1] >= rates[20][1]:
+        print("**** ERROR: the cold row should give a lower real rate, got {} at 10C and {} at 20C ****".format(rates[10], rates[20]))
         failed = 1
     return failed

@@ -36,6 +36,7 @@ A `bug` label can arrive without that statement: the split and evidence gates (`
 
 - Write the fix or feature following this repo's conventions (`CLAUDE.md`, already loaded automatically for this session): `lower_case_with_underscores` naming, 256-character line length, a one-line docstring on every new function or class.
 - Add or update a unit test for the change, in the matching `apps/predbat/tests/test_<feature>.py` module (registered in `TEST_REGISTRY` in `apps/predbat/unit_test.py` if it's a new module) — `CLAUDE.md` requires unit tests for all new code, no exceptions for bot-authored ones.
+- If the triage replayed the reporter's log forwards (`tools/triage_replay.py`, see `/issue-triage` step 5), run it again on your branch with `--simulate` and say in the PR body's Testing section what changed in the plans. That is evidence for the fix, not a substitute for the unit test.
 - Keep the change scoped to what the issue describes. Don't refactor unrelated code, even if you notice something else worth fixing.
 
 ## 4. Quality gate

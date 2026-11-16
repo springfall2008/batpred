@@ -7639,6 +7639,8 @@ async def test_run_main():
     api3.initialize(client_id="test", client_secret="test", region="eu")
     api3.plant_info = [{"plantId": "plant1"}]
     api3.plant_list = ["plant1"]
+    # Read just now, so run() does not re-read it from the live API with the fake credentials
+    api3.plant_info_updated = datetime.now(timezone.utc)
 
     with patch.object(api3, "query_plant_realtime_data", new_callable=AsyncMock) as mock_realtime:
         with patch.object(api3, "query_device_realtime_data_all", new_callable=AsyncMock) as mock_device_realtime:
@@ -7670,6 +7672,8 @@ async def test_run_main():
     api4.initialize(client_id="test", client_secret="test", region="eu")
     api4.plant_info = [{"plantId": "plant1"}]
     api4.plant_list = ["plant1"]
+    # Read just now, so run() does not re-read it from the live API with the fake credentials
+    api4.plant_info_updated = datetime.now(timezone.utc)
 
     with patch.object(api4, "query_device_info", new_callable=AsyncMock) as mock_device:
         with patch.object(api4, "query_plant_realtime_data", new_callable=AsyncMock):
@@ -7698,6 +7702,9 @@ async def test_run_main():
     api5.initialize(client_id="test", client_secret="test", region="eu")
     api5.plant_info = [{"plantId": "plant1"}]
     api5.plant_list = ["plant1"]
+    # Read just now, so run() does not re-read it from the live API with the fake credentials
+    api5.plant_info_updated = datetime.now(timezone.utc)
+    api5.device_info_updated = datetime.now(timezone.utc)
     api5.enable_controls = True  # Controls enabled in config
 
     # Set read-only mode

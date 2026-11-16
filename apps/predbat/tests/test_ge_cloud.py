@@ -621,6 +621,8 @@ def _test_run_reports_auth_denied_scoped(my_predbat):
         ge_cloud.async_get_evc_device_data = benign
         ge_cloud.async_get_evc_sessions = benign
         ge_cloud.publish_evc_data = benign
+        # Account details are not under test; without a stub, run() fetches them from the live API with fake credentials
+        ge_cloud.async_get_account = benign
 
         denied = "access denied"
 
@@ -751,6 +753,10 @@ def _test_run_auth_status_reported_on_transition_only(my_predbat):
         ge_cloud.publish_meter = benign
         ge_cloud.async_get_device_info = benign
         ge_cloud.publish_info = benign
+        # Account details are not under test; without a stub, run() fetches them from the live API with fake credentials
+        ge_cloud.async_get_account = benign
+        # The 600s tick is also a register read
+        ge_cloud.async_get_inverter_settings = benign
 
         denied = "access denied"
 
@@ -2659,6 +2665,12 @@ def _test_settings_saved_to_storage(my_predbat):
         ge_cloud.publish_registers = mock_publish_registers
         ge_cloud.enable_default_options = mock_enable_default_options
 
+        async def mock_get_account():
+            return {}
+
+        # Account details are not under test; without a stub, run() fetches them from the live API with fake credentials
+        ge_cloud.async_get_account = mock_get_account
+
         result = await ge_cloud.run(seconds=0, first=True)
         if not result:
             print("ERROR: run() should return True")
@@ -2743,6 +2755,12 @@ def _test_settings_restored_from_fresh_cache(my_predbat):
         ge_cloud.async_get_inverter_settings = mock_get_inverter_settings
         ge_cloud.publish_registers = mock_publish_registers
         ge_cloud.enable_default_options = mock_enable_default_options
+
+        async def mock_get_account():
+            return {}
+
+        # Account details are not under test; without a stub, run() fetches them from the live API with fake credentials
+        ge_cloud.async_get_account = mock_get_account
 
         result = await ge_cloud.run(seconds=0, first=True)
         if not result:
