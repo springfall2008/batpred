@@ -232,6 +232,8 @@ def _test_fetch_only_checks_live_plan():
     fresh.args["load_today"] = "sensor.test_load_today"
     fresh.args["car_charging_energy"] = "sensor.test_car_charging_energy"
     fresh.args.pop("ge_cloud_data", None)
+    # The fixture's octopus_free_url would fetch the live free electricity page
+    fresh.args.pop("octopus_free_url", None)
     # Sensor history where the charger is evidently outside the load sensor. The test HA history carries no
     # last_updated, so the history readers are stood in for: load_today and car_charging_energy get these series,
     # everything else nothing.
