@@ -193,6 +193,136 @@ def test_settings_clamp_and_warn():
     return failed
 
 
+def evidence_days(test_api, ratios, total_kwh=None, peaks=None):
+    """
+    Evidence for pv_calibration from a list of day ratios (index 0 = yesterday): a 4 kW bell forecast at the plan interval,
+    scaled to total_kwh[i] when given, with actual = forecast x ratio, and peak_kw from peaks[i] (default 3.0).
+    """
+    from pv_calibration import pv_day
+
+    solar = test_api.solar
+    base = test_api.mock_base
+    step = solar.plan_interval_minutes
+    profile = {minute: bell(4.0)(minute + step / 2) * step / 60.0 for minute in range(0, 1440, step)}
+    profile_total = sum(profile.values())
+    evidence = {}
+    for index, ratio in enumerate(ratios):
+        scale = (total_kwh[index] / profile_total) if total_kwh else 1.0
+        slots = {minute: [kwh * scale, kwh * scale * ratio] for minute, kwh in profile.items()}
+        day = pv_day(base.now_utc, base.minutes_now + index * 1440 + 720, base.local_tz)
+        evidence[day] = {"slots": slots, "peak_kw": peaks[index] if peaks else 3.0, "clipped_minutes": 0}
+    return evidence
+
+
+def run_calibration(test_api, evidence):
+    """Run pv_calibration on a flat future forecast with the given evidence and return the solar API."""
+    solar = test_api.solar
+    solar.pv_scaling = 1.0
+    solar.pv_calibration_evidence = evidence
+    pv_minute = {minute: bell(4.0)(minute % 1440) / 60.0 for minute in range(4 * 24 * 60)}
+    pv_data = [{"period_start": "2025-06-15T00:00:00+0000", "pv_estimate": 0.5}]
+    with test_api.patch_now_utc_exact():
+        solar.pv_calibration(pv_minute, dict(pv_minute), {}, pv_data, create_pv10=True, divide_by=1.0, max_kwh=18.0, forecast_days=solar.forecast_days)
+    return solar
+
+
+def no_history(*args, **kwargs):
+    """A history reader that must not be called."""
+    raise AssertionError("history was read although the store has evidence")
+
+
+def test_calibration_sunny_after_dull_not_cut():
+    """Five sunny-forecast days that turned out dull, after 23 good days, do not cut the next sunny day as hard as the 7-day calibration did."""
+    test_api = create_test_solar_api()
+    try:
+        ratios = [0.5] * 5 + [0.95] * 23
+        totals = [12.0] * 5 + [20.0] * 23
+        solar = run_calibration(test_api, evidence_days(test_api, ratios, totals))
+        print("  sunny after dull: total_adjustment {} (the 7-day calibration gave about 0.62)".format(solar.pv_calibration_total_adjustment))
+        failed = check("sunny after dull", solar.pv_calibration_total_adjustment >= 0.72, solar.pv_calibration_total_adjustment)
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_calibration_uses_store_not_history():
+    """With stored evidence the history readers are not touched."""
+    test_api = create_test_solar_api()
+    try:
+        test_api.mock_base.minute_data_import_export = no_history
+        test_api.solar.get_history_wrapper = no_history
+        solar = run_calibration(test_api, evidence_days(test_api, [0.8] * 10))
+        failed = check("store used", abs(solar.pv_calibration_total_adjustment - 0.8) < 0.03, solar.pv_calibration_total_adjustment)
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_calibration_falls_back_to_scan():
+    """With no stored evidence the history is scanned directly, for pv_calibration_history_days."""
+    test_api = create_test_solar_api()
+    calls = []
+    try:
+        evidence = evidence_days(test_api, [0.8] * 10)
+
+        def mock_scan(days, tracked=True):
+            """Record the call and return the evidence."""
+            calls.append(days)
+            return evidence
+
+        test_api.solar.pv_calibration_scan = mock_scan
+        solar = run_calibration(test_api, None)
+        failed = check("scan called", calls == [28], calls)
+        failed |= check("scan used", abs(solar.pv_calibration_total_adjustment - 0.8) < 0.03, solar.pv_calibration_total_adjustment)
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_calibration_band_from_last_seven_days():
+    """The P10/P90 band comes from the last 7 days only."""
+    from pv_calibration import band_scaling, pv_day
+
+    test_api = create_test_solar_api()
+    try:
+        ratios = [0.6, 0.7, 0.8, 0.9, 1.0, 0.65, 0.75] + [0.9] * 20
+        evidence = evidence_days(test_api, ratios)
+        solar = run_calibration(test_api, evidence)
+        today = pv_day(test_api.mock_base.now_utc, 0, test_api.mock_base.local_tz)
+        worst, best, _ = band_scaling(evidence, today, 1.0, 7)
+        failed = check("band worst", abs(solar.pv_calibration_worst_scaling - worst) < 1e-6, (solar.pv_calibration_worst_scaling, worst))
+        failed |= check("band best", abs(solar.pv_calibration_best_scaling - best) < 1e-6, (solar.pv_calibration_best_scaling, best))
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_calibration_off_under_three_days():
+    """Two valid days: no calibration, and the default 0.7 / 1.3 band."""
+    test_api = create_test_solar_api()
+    try:
+        solar = run_calibration(test_api, evidence_days(test_api, [0.8, 0.8]))
+        failed = check("off total", solar.pv_calibration_total_adjustment == 1.0, solar.pv_calibration_total_adjustment)
+        failed |= check("off band", (solar.pv_calibration_worst_scaling, solar.pv_calibration_best_scaling) == (0.7, 1.3), (solar.pv_calibration_worst_scaling, solar.pv_calibration_best_scaling))
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_calibration_peak_from_last_seven_days():
+    """The observed peak behind the array cap comes from the last 7 days, not a summer peak weeks ago."""
+    test_api = create_test_solar_api()
+    logged = []
+    try:
+        test_api.solar.log = lambda message: logged.append(message)
+        peaks = [3.0] * 7 + [3.0] * 12 + [6.0] + [3.0] * 5
+        run_calibration(test_api, evidence_days(test_api, [0.9] * 25, peaks=peaks))
+        failed = check("peak", any("max historical power 3.0" in message for message in logged), [m for m in logged if "max historical" in m])
+    finally:
+        test_api.cleanup()
+    return failed
+
+
 def run_pv_calibration_scan_tests(my_predbat=None):
     """Run the PV calibration history scan and settings tests."""
     failed = False
@@ -205,6 +335,12 @@ def run_pv_calibration_scan_tests(my_predbat=None):
         test_scan_history_missing_returns_none,
         test_settings_defaults_and_overrides,
         test_settings_clamp_and_warn,
+        test_calibration_sunny_after_dull_not_cut,
+        test_calibration_uses_store_not_history,
+        test_calibration_falls_back_to_scan,
+        test_calibration_band_from_last_seven_days,
+        test_calibration_off_under_three_days,
+        test_calibration_peak_from_last_seven_days,
     ):
         print("**** {} ****".format(test.__name__))
         failed = test() or failed
