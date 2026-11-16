@@ -307,6 +307,31 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     segments = _segments(inv.find_rate_grid_samples(False))
     failed |= _check("t9b", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
 
+    print("Test 9c: with a site-wide battery_power, another inverter's missing history stops the learning rather than learning from inverter 0 alone")
+    # Inverter 0 alone would divide the site's power by its own maximum, the ~N x samples #6226 fixes
+    my_predbat, inv = _make_two(["sensor.battery_power", 0])
+    _install_two(my_predbat, _charge(25, power=-2 * RATED_W))
+    two = my_predbat.ha_interface.get_history
+
+    def no_soc_1(entity_id, now=None, days=30):
+        """Inverter 1's SoC sensor has no recorded history."""
+        return None if entity_id == "sensor.soc_percent_1" else two(entity_id, now=now, days=days)
+
+    my_predbat.ha_interface.get_history = no_soc_1
+    samples = inv.find_rate_grid_samples(False)
+    failed |= _check("t9c missing history", samples is None, samples)
+    my_predbat, inv = _make_two(["sensor.battery_power", 0])
+    my_predbat.args["soc_percent"] = ["sensor.soc_percent"]
+    _install_two(my_predbat, _charge(25, power=-2 * RATED_W))
+    samples = inv.find_rate_grid_samples(False)
+    failed |= _check("t9c missing setting", samples is None, samples)
+
+    print("Test 9d: an empty battery_power entry is a site-wide sensor on inverter 0, as a 0 is")
+    my_predbat, inv = _make_two(["sensor.battery_power", ""])
+    _install_two(my_predbat, _charge(25, power=-2 * RATED_W))
+    segments = _segments(inv.find_rate_grid_samples(False))
+    failed |= _check("t9d", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+
     print("Test 10: battery_temperature_history as a list is read as the fleet's average temperature, as the plan reads it")
     second_sensor = "sensor.battery_temperature_2"
     # A reading of exactly 0 is a missing one: with another sensor reading, that one is used

@@ -131,6 +131,28 @@ class BatteryCurve:
             )
             return values
 
+        def counted_in_site_total(inverter):
+            """
+            True when this inverter's battery_power is a 0 or blank rather than a sensor, on any inverter but the first: the
+            documented way to say the first one's sensor is the site total (an EMS reporting for the whole site, #6226).
+            None means no entry at all, a setting that is missing.
+            """
+            value = self.base.get_arg("battery_power", indirect=False, index=inverter.id)
+            return inverter is not self and value is not None and not is_entity_id(value)
+
+        # With a site-total battery_power the first inverter's power is the whole fleet's, so it can only be learned against
+        # the whole fleet's rate: falling back to the first inverter alone would divide the site's power by one inverter's
+        # maximum, so a missing setting or history on another inverter stops the learning instead
+        site_total_fleet = any(counted_in_site_total(inverter) for inverter in fleet)
+
+        def fall_back(inverter, reason):
+            """Learn from this inverter alone when another lacks a setting or history, unless the power is a site total."""
+            if site_total_fleet:
+                self.log("Warn: Inverter {} {}, and inverter {}'s battery_power is the site total so the {} cannot be learned from it alone - not learning it".format(inverter.id, reason, self.id, purpose))
+                return None
+            self.log("Info: Inverter {} {}, learning the {} from inverter {} alone".format(inverter.id, reason, purpose, self.id))
+            return self.load_curve_history(discharge, purpose, fleet=[self], days=days)
+
         per_inverter = []
         for inverter in fleet:
             if "soc_percent" in self.base.args:
@@ -144,14 +166,12 @@ class BatteryCurve:
             rate_sensor = self.base.get_arg(rate_name, indirect=False, index=inverter.id)
             battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=inverter.id)
             battery_power_invert = self.base.get_arg("battery_power_invert", False, index=inverter.id)
-            # A 0 on any inverter but the first says the first one's sensor is the site total (an EMS reporting for the whole
-            # site): this inverter's power is already counted there, so it is not a missing setting (#6226)
-            site_total = inverter is not self and battery_power_sensor is not None and not isinstance(battery_power_sensor, bool) and str(battery_power_sensor).strip() in ("0", "0.0")
+            # This inverter's power is already counted in the first one's site-total sensor, so it is not a missing setting
+            site_total = counted_in_site_total(inverter)
             if not (soc_sensor and rate_sensor and (battery_power_sensor or site_total)):
                 missing_settings = [setting for setting, entity_id in [(soc_label, soc_sensor), (rate_name, rate_sensor), ("battery_power", battery_power_sensor or site_total)] if not entity_id]
                 if inverter is not self:
-                    self.log("Info: Inverter {} {} not set in apps.yaml, learning the {} from inverter {} alone".format(inverter.id, ", ".join(missing_settings), purpose, self.id))
-                    return self.load_curve_history(discharge, purpose, fleet=[self], days=days)
+                    return fall_back(inverter, "{} not set in apps.yaml".format(", ".join(missing_settings)))
                 self.log("Warn: Inverter {} Cannot find {} (settings missing), {} not set in apps.yaml".format(inverter.id, purpose, ", ".join(missing_settings)))
                 return None
             if site_total:
@@ -168,8 +188,7 @@ class BatteryCurve:
             if not all(data for _, _, data in history_checks):
                 no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
                 if inverter is not self and predbat_status_data:
-                    self.log("Info: Inverter {} has no history for {}, learning the {} from inverter {} alone".format(inverter.id, ", ".join(no_history), purpose, self.id))
-                    return self.load_curve_history(discharge, purpose, fleet=[self], days=days)
+                    return fall_back(inverter, "has no history for {}".format(", ".join(no_history)))
                 self.log("Warn: Inverter {} Cannot find {} (missing history), no history found for {} - check the entity name in apps.yaml and that Home Assistant is recording its history".format(inverter.id, purpose, ", ".join(no_history)))
                 self.log("Warn: Inverter {} Sensor history record counts: {}".format(inverter.id, ", ".join("{} {}".format(setting, len(data[0]) if data else 0) for setting, entity_id, data in history_checks)))
                 return None
