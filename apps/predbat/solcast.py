@@ -126,6 +126,11 @@ class SolarAPI(ComponentBase):
         self.pv_calibration_scan_status = "not run"
         self.pv_calibration_model = None
         self.pv_calibration_settings_used = None
+        # Until calibration first runs: no calibration, and the default band
+        self.pv_calibration_worst_scaling = 0.7
+        self.pv_calibration_best_scaling = 1.3
+        self.pv_calibration_average_scaling = 1.0
+        self.pv_calibration_total_adjustment = 1.0
         self.open_meteo_forecast = open_meteo_forecast
         self.open_meteo_forecast_max_age = open_meteo_forecast_max_age
         # Set by download_open_meteo_data(): True when the last download carried a real ensemble spread
@@ -1214,6 +1219,15 @@ class SolarAPI(ComponentBase):
             ("shrink_slot", "pv_calibration_shrink_slot", PV_CALIBRATION_SHRINK_SLOT, float),
         )
         settings = {"overridden": set()}
+        # This runs twice every forecast refresh, so each problem is warned about once per value rather than every time
+        warned = self.__dict__.setdefault("pv_calibration_warned", set())
+
+        def warn_once(arg, value, message):
+            """Log message the first time arg has this value."""
+            if (arg, str(value)) not in warned:
+                warned.add((arg, str(value)))
+                self.log(message)
+
         for key, arg, default, kind in specs:
             value = self.get_arg(arg, None)
             if value is None:
@@ -1224,14 +1238,18 @@ class SolarAPI(ComponentBase):
             except (TypeError, ValueError):
                 number = None
             if number is None or number <= 0:
-                self.log("Warn: SolarAPI: PV Calibration: {} is {} - it must be a positive number, using the default {}".format(arg, value, default))
+                warn_once(arg, value, "Warn: SolarAPI: PV Calibration: {} is {} - it must be a positive number, using the default {}".format(arg, value, default))
                 settings[key] = default
                 continue
             settings[key] = number
             settings["overridden"].add(key)
         settings["scan_days"] = min(settings["scan_days"], settings["history_days"])
         if settings["history_days"] < PV_CALIBRATION_MIN_DAYS:
-            self.log("Warn: SolarAPI: PV Calibration: pv_calibration_history_days is {} - calibration needs at least {} days of evidence, so it will stay off".format(settings["history_days"], PV_CALIBRATION_MIN_DAYS))
+            warn_once(
+                "pv_calibration_history_days",
+                settings["history_days"],
+                "Warn: SolarAPI: PV Calibration: pv_calibration_history_days is {} - calibration needs at least {} days of evidence, so it will stay off".format(settings["history_days"], PV_CALIBRATION_MIN_DAYS),
+            )
         return settings
 
     def pv_calibration_scan(self, days, tracked=True):

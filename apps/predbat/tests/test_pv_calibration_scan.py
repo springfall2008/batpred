@@ -446,6 +446,42 @@ def test_scan_skips_day_forecast_starts_after_generation():
     return failed
 
 
+def test_scan_generation_on_its_own_minutes():
+    """A 5-minute pv_today increment is put on the minutes it was measured over: generation starting at 10:00 shows in the 10:00 slot, not 09:55."""
+    test_api = create_test_solar_api()
+    try:
+        build_history(test_api, 3, bell(4.0), lambda m: 2.0 if 600 <= m < 960 else 0.0)
+        with test_api.patch_now_utc_exact():
+            evidence = test_api.solar.pv_calibration_scan(3)
+        failed = check("scanned", bool(evidence), evidence)
+        for day, record in (evidence or {}).items():
+            failed |= check("{} nothing before 10:00".format(day), record["slots"][595][1] == 0, record["slots"][595])
+            failed |= check("{} generation from 10:00".format(day), record["slots"][600][1] > 0, record["slots"][600])
+            failed |= check("{} nothing from 16:00".format(day), record["slots"][960][1] == 0, record["slots"][960])
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_settings_warn_once():
+    """An invalid setting is warned about once, not on every forecast refresh."""
+    test_api = create_test_solar_api()
+    logged = []
+    try:
+        test_api.solar.log = lambda message: logged.append(message)
+        test_api.mock_base.mock_config = {"pv_calibration_shrink": -1, "pv_calibration_history_days": 2}
+        for _ in range(3):
+            test_api.solar.pv_calibration_settings()
+        failed = check("shrink warned once", sum(1 for message in logged if "pv_calibration_shrink" in message) == 1, logged)
+        failed |= check("history warned once", sum(1 for message in logged if "pv_calibration_history_days" in message) == 1, logged)
+        test_api.mock_base.mock_config = {"pv_calibration_shrink": -2, "pv_calibration_history_days": 2}
+        test_api.solar.pv_calibration_settings()
+        failed |= check("a new bad value is warned again", sum(1 for message in logged if "pv_calibration_shrink" in message) == 2, logged)
+    finally:
+        test_api.cleanup()
+    return failed
+
+
 def run_pv_calibration_scan_tests(my_predbat=None):
     """Run the PV calibration history scan and settings tests."""
     failed = False
@@ -471,6 +507,8 @@ def run_pv_calibration_scan_tests(my_predbat=None):
         test_scan_clipped_minutes_follow_pv_scaling,
         test_scan_short_history_keeps_whole_days,
         test_scan_skips_day_forecast_starts_after_generation,
+        test_scan_generation_on_its_own_minutes,
+        test_settings_warn_once,
     ):
         print("**** {} ****".format(test.__name__))
         failed = test() or failed

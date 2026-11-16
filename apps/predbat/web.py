@@ -4133,9 +4133,10 @@ chart.render();
         if solar is None:
             text += "<p>Solar forecast component is not running, so there is no PV calibration to show.</p>\n</div>\n"
             return text
-        model = getattr(solar, "pv_calibration_model", None)
-        evidence = getattr(solar, "pv_calibration_evidence", None) or {}
-        settings = getattr(solar, "pv_calibration_settings_used", None) or {}
+        # Always a solcast.SolarAPI, whose initialize() sets all of these; evidence and settings are None until it first runs
+        model = solar.pv_calibration_model
+        evidence = solar.pv_calibration_evidence or {}
+        settings = solar.pv_calibration_settings_used or {}
         overridden = settings.get("overridden") or set()
         switch_on = self.base.get_arg("metric_pv_calibration_enable", True)
 
@@ -4170,14 +4171,14 @@ chart.render();
             ("Half-life", setting("half_life", "{} days")),
             ("Shrink (day / half-hour)", "{} / {}".format(setting("shrink", "{:.2f}"), setting("shrink_slot", "{:.2f}")) if settings else ""),
             ("Days kept / daily scan", "{} / {}".format(setting("history_days", "{}"), setting("scan_days", "{}")) if settings else ""),
-            ("Band (worst / best day)", "{:.2f} / {:.2f}".format(getattr(solar, "pv_calibration_worst_scaling", 1.0), getattr(solar, "pv_calibration_best_scaling", 1.0))),
+            ("Band (worst / best day)", "{:.2f} / {:.2f}".format(solar.pv_calibration_worst_scaling, solar.pv_calibration_best_scaling)),
             (
                 "Last scan",
-                "{} - {}".format(when(getattr(solar, "pv_calibration_last_scan", None)), getattr(solar, "pv_calibration_scan_status", "")) if getattr(solar, "pv_calibration_last_scan", None) else getattr(solar, "pv_calibration_scan_status", "not run"),
+                "{} - {}".format(when(solar.pv_calibration_last_scan), solar.pv_calibration_scan_status) if solar.pv_calibration_last_scan else solar.pv_calibration_scan_status,
             ),
-            ("Next scan", when(getattr(solar, "pv_calibration_next_scan", None))),
+            ("Next scan", when(solar.pv_calibration_next_scan)),
         ]
-        ceiling = solar.pv_clipping_ceiling_kw() if hasattr(solar, "pv_clipping_ceiling_kw") else 0
+        ceiling = solar.pv_clipping_ceiling_kw()
         if ceiling:
             clipped = sum(record.get("clipped_minutes", 0) for record in evidence.values())
             rows.append(("Clipping ceiling", "{:.2f} kW ({} minutes at the ceiling taken as the forecast)".format(ceiling, clipped)))
