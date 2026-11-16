@@ -106,6 +106,13 @@ def test_annual_weather(my_predbat):
         print("  ERROR: expected the measured P10 ratio of 0.8162117357875782, got {}".format(ratio))
         failed = True
 
+    print("Test: the hour before the window is not counted as a day")
+    # The 00:00 sample on 1 January covers 23:00-00:00 on 31 December; that stub hour must not
+    # appear as a one-hour day (it would add a whole-day ratio to December's P10 on sites east of UTC)
+    if year.has_actual(date(2024, 12, 31)):
+        print("  ERROR: 31 December 2024, before the window, should have no actual data")
+        failed = True
+
     print("Test: actual daily energy is below forecast daily energy")
     day = date(2025, 1, 10)
     if not year.has_actual(day):

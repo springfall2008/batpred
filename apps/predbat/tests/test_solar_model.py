@@ -94,6 +94,20 @@ def test_solar_model(my_predbat):
             print("  ERROR: the hour ending {} should be dark, got {}".format(FLAT_TIMES[other], impulse.get(hour_ending(FLAT_TIMES[other]))))
             failed = True
 
+    print("Test: an hour is derated with the average of the temperatures at its two ends")
+    # Temperature is an instant, so 00:00-01:00 (the sample at 01:00) sees the mean of 10 and 30 degC
+    warming = gti_hourly_to_period_kwh(FLAT_TIMES[:2], [1000.0, 1000.0], [10.0, 30.0], [0.0, 0.0], kwp=1.0, system_loss=0.0)
+    middle = gti_hourly_to_period_kwh(FLAT_TIMES[:1], [1000.0], [20.0], [0.0], kwp=1.0, system_loss=0.0)
+    if abs(warming[hour_ending(FLAT_TIMES[1])]["pv_estimate"] - middle[hour_ending(FLAT_TIMES[0])]["pv_estimate"]) > 0.0001:
+        print("  ERROR: expected the 20 degC derate {}, got {}".format(middle[hour_ending(FLAT_TIMES[0])], warming[hour_ending(FLAT_TIMES[1])]))
+        failed = True
+    # With no sample an hour earlier, the hour takes the temperature given with its own sample
+    first_hour = warming[hour_ending(FLAT_TIMES[0])]["pv_estimate"]
+    alone = gti_hourly_to_period_kwh(FLAT_TIMES[:1], [1000.0], [10.0], [0.0], kwp=1.0, system_loss=0.0)[hour_ending(FLAT_TIMES[0])]["pv_estimate"]
+    if abs(first_hour - alone) > 0.0001:
+        print("  ERROR: the first hour should use its own sample's temperature, got {} vs {}".format(first_hour, alone))
+        failed = True
+
     print("Test: zero irradiance produces zero energy")
     dark = gti_hourly_to_period_kwh(FLAT_TIMES, [0.0] * 4, [15.0] * 4, [1.0] * 4, kwp=5.0, system_loss=0.05)
     if any(entry["pv_estimate"] != 0.0 for entry in dark.values()):

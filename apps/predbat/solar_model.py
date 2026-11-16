@@ -76,8 +76,9 @@ def gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, s
     Open-Meteo's hourly radiation is the mean over the PRECEDING hour ("Solar radiation is averaged
     over the past hour"), so the sample stamped t is the energy of the hour from t - 1h to t, and is
     returned keyed by that hour's start. Reading it as an instant at t and averaging neighbouring
-    samples, as this function used to, placed the forecast half an hour late. The temperature and
-    wind given with the sample (instants at t) derate it; band_ratio entries are keyed by the same
+    samples, as this function used to, placed the forecast half an hour late. Temperature and wind
+    are instants, so the hour is derated with the average of the values at its two ends (or the
+    value at t alone when the previous sample is missing); band_ratio entries are keyed by the same
     sample timestamps, so a ratio follows its sample.
 
     Args:
@@ -97,6 +98,7 @@ def gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, s
         plus "pv_estimate90": kWh when band_ratio is given
     """
     period_data = {}
+    prev_stamp = prev_temp = prev_wind = None
     for idx, ts in enumerate(times):
         if idx >= len(gti_values):
             break
@@ -110,6 +112,12 @@ def gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, s
             gti = 0.0
         temp = temp_values[idx] if idx < len(temp_values) and temp_values[idx] is not None else _DEFAULT_TEMP_C
         wind = wind_values[idx] if idx < len(wind_values) and wind_values[idx] is not None else _DEFAULT_WIND_MS
+        temp_now, wind_now = temp, wind
+        if prev_stamp is not None and stamp - prev_stamp == timedelta(hours=1):
+            # Temperature and wind are instants, so the hour the irradiance covers is the average of its two ends
+            temp = 0.5 * (prev_temp + temp)
+            wind = 0.5 * (prev_wind + wind)
+        prev_stamp, prev_temp, prev_wind = stamp, temp_now, wind_now
         eta_temp = _temperature_efficiency(gti, temp, wind)
         # A mean power over one hour is that hour's energy in kWh
         pv50 = dp4((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
