@@ -309,19 +309,31 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
 
     print("Test 10: battery_temperature_history as a list is read as the fleet's average temperature, as the plan reads it")
     second_sensor = "sensor.battery_temperature_2"
-    for sensors, expected in (([TEMP_SENSOR], 15.3), ([TEMP_SENSOR, second_sensor], 20.3)):
+    # A reading of exactly 0 is a missing one: with another sensor reading, that one is used
+    for sensors, offset, expected in (([TEMP_SENSOR], 10, 15.3), ([TEMP_SENSOR, second_sensor], 10, 20.3), ([TEMP_SENSOR, second_sensor], None, 15.3)):
         my_predbat, inv = _make()
         my_predbat.args["battery_temperature_history"] = sensors
         _install(my_predbat, _charge(25))
         single = my_predbat.ha_interface.get_history
 
-        def mock_get_history(entity_id, now=None, days=30, single=single):
-            """The second sensor reads 10 degrees warmer than the first."""
+        def mock_get_history(entity_id, now=None, days=30, single=single, offset=offset):
+            """The second sensor reads `offset` degrees warmer than the first, or exactly 0 when offset is None."""
             if entity_id != second_sensor:
                 return single(entity_id, now=now, days=days)
-            return [[dict(record, state=float(record["state"]) + 10) for record in single(TEMP_SENSOR, now=now, days=days)[0]]]
+            return [[dict(record, state=0 if offset is None else float(record["state"]) + offset) for record in single(TEMP_SENSOR, now=now, days=days)[0]]]
 
         my_predbat.ha_interface.get_history = mock_get_history
         segments = _segments(inv.find_rate_grid_samples(False))
-        failed |= _check("t10 {} sensors".format(len(sensors)), len(segments) == 3 and all(abs(s[1] - expected) < 1e-6 for s in segments), segments)
+        failed |= _check("t10 {} sensors, second {}".format(len(sensors), "at 0" if offset is None else "+{}".format(offset)), len(segments) == 3 and all(abs(s[1] - expected) < 1e-6 for s in segments), segments)
+
+    print("Test 11: battery_temperature_history given as a list does not break the scan (#6222)")
+
+    def temperature_list(my_predbat):
+        """apps.yaml gives battery_temperature_history as a list, one sensor per inverter."""
+        my_predbat.args["battery_temperature_history"] = [TEMP_SENSOR]
+
+    _, samples = _scan(_charge(25), setup=temperature_list)
+    segments = _segments(samples)
+    failed |= _check("t11 count", len(segments) == 3, segments)
+    failed |= _check("t11 temperature", all(abs(s[1] - 15.3) < 1e-6 for s in segments), segments)
     return failed

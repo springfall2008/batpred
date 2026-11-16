@@ -113,7 +113,7 @@ def test_battery_temperature_fetch_average(my_predbat):
     """
     print("\n*** Test: battery temperature history from several sensors is their average ***")
     failed = False
-    sensors = {"sensor.battery_temperature_a": 10.0, "sensor.battery_temperature_b": 20.0, "sensor.battery_temperature_missing": 0}
+    sensors = {"sensor.battery_temperature_a": 10.0, "sensor.battery_temperature_b": 20.0, "sensor.battery_temperature_missing": 0, "sensor.battery_temperature_missing_2": 0}
 
     def fake_history(entity_id, days=30, required=True, tracked=True):
         """Each sensor reads its own constant temperature."""
@@ -125,12 +125,15 @@ def test_battery_temperature_fetch_average(my_predbat):
     saved_arg = my_predbat.args.get("battery_temperature_history", None)
     my_predbat.get_history_wrapper = fake_history
     try:
-        my_predbat.args["battery_temperature_history"] = list(sensors)
+        my_predbat.args["battery_temperature_history"] = ["sensor.battery_temperature_a", "sensor.battery_temperature_b", "sensor.battery_temperature_missing"]
         my_predbat.fetch_battery_temperature()
         averaged = dict(my_predbat.battery_temperature_history)
         my_predbat.args["battery_temperature_history"] = ["sensor.battery_temperature_missing"]
         my_predbat.fetch_battery_temperature()
         only_zero = dict(my_predbat.battery_temperature_history)
+        my_predbat.args["battery_temperature_history"] = ["sensor.battery_temperature_missing", "sensor.battery_temperature_missing_2"]
+        my_predbat.fetch_battery_temperature()
+        all_zero = dict(my_predbat.battery_temperature_history)
         my_predbat.args["battery_temperature_history"] = "sensor.battery_temperature_a"
         my_predbat.fetch_battery_temperature()
         single = dict(my_predbat.battery_temperature_history)
@@ -147,11 +150,14 @@ def test_battery_temperature_fetch_average(my_predbat):
     if not only_zero or any(value != 0 for value in only_zero.values()):
         print("ERROR: a lone sensor reading 0 should still read 0 (so the stuck warning sees it), got {}".format(sorted(set(only_zero.values()))[:5]))
         failed = True
+    if not all_zero or any(value != 0 for value in all_zero.values()):
+        print("ERROR: sensors that all read 0 should read 0 (the learners ignore it later), got {}".format(sorted(set(all_zero.values()))[:5]))
+        failed = True
     if not single or any(abs(value - 10.0) > 1e-6 for value in single.values()):
         print("ERROR: a single sensor should read as it is, got {}".format(sorted(set(single.values()))[:5]))
         failed = True
     if not failed:
-        print("✓ several sensors averaged, a missing one left out, a single sensor unchanged")
+        print("✓ several sensors averaged, a missing one left out, all-zero kept as 0, a single sensor unchanged")
     return failed
 
 
