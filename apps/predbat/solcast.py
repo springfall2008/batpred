@@ -1271,7 +1271,7 @@ class SolarAPI(ComponentBase):
 
         # The uncalibrated forecast, never the calibrated h0 state (GH#5116), by minutes ago. Read a day further back than the
         # days scanned: the minute data is cut to the whole days its history spans, so days + 1 from mid-day misses part of the oldest day
-        pv_forecast, pv_forecast_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(self.pv_forecast_history(days + 2, tracked=tracked), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True))
+        pv_forecast, pv_forecast_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(self.pv_forecast_history(days + 2, tracked=tracked), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True), whole_span=True)
         if not pv_forecast:
             # A failed read, not an empty one: returning None keeps the first scan's full-length read for the retry
             self.log("Warn: SolarAPI: PV Calibration: no forecast history could be read, so no evidence was scanned")
@@ -1298,6 +1298,8 @@ class SolarAPI(ComponentBase):
                 # impute again at whatever pv_scaling is current then
                 measured = pv_power_hist.get(minute, 0.0)
                 record["actual"][slot] = record["actual"].get(slot, 0.0) + measured / 60.0
+                if measured > 0:
+                    record["first_generation"] = max(record.get("first_generation", -1), minute)
                 record["peak"] = max(record["peak"], measured)
                 if value != measured:
                     record["clipped"] += 1
@@ -1310,6 +1312,10 @@ class SolarAPI(ComponentBase):
             # The pv_today history must reach the start of the day (a partly recorded day would read as forecast error), and the
             # forecast history must span it; the forecast itself may leave out zero periods, so its slots are not counted
             if oldest_minute < day_start_minutes_ago or days_prev > pv_forecast_days:
+                continue
+            # Nor a day whose forecast history starts after its generation does (Predbat installed part-way through a day on a
+            # system whose generation history is older): only the later slots could be compared, and their ratio is not the day's
+            if record.get("first_generation", -1) > oldest_forecast_minute:
                 continue
             # Only the slots from the start of the forecast history on, so a day whose forecast history starts part-way through
             # compares its forecast and its generation over the same slots; after that start a slot with no forecast is a zero

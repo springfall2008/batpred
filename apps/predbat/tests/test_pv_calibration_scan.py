@@ -396,6 +396,56 @@ def test_scan_clipped_minutes_follow_pv_scaling():
     return failed
 
 
+def forecast_from(test_api, minutes_ago):
+    """Cut the mocked forecast history so it starts minutes_ago before now (Predbat installed then)."""
+    from datetime import timedelta
+
+    solar = test_api.solar
+    wrapped = solar.get_history_wrapper
+    cut = (test_api.mock_base.now_utc_exact - timedelta(minutes=minutes_ago)).strftime("%Y-%m-%dT%H:%M:%S+0000")
+
+    def history(entity_id, days, required=False, **kwargs):
+        """The forecast history from the cut onwards."""
+        rows = wrapped(entity_id, days, required, **kwargs)
+        return [[row for row in rows[0] if row["last_updated"] >= cut]] if rows else rows
+
+    solar.get_history_wrapper = history
+
+
+def test_scan_short_history_keeps_whole_days():
+    """Starting from no history (both histories begin at 14:00 three days ago): the part day is skipped and the two full days are stored whole."""
+    test_api = create_test_solar_api()
+    try:
+        start_ago = 2 * 1440 + test_api.mock_base.minutes_now + 10 * 60
+        build_history(test_api, 4, bell(4.0), lambda m: 0.9 * bell(4.0)(m), pv_today_from_minutes_ago=start_ago)
+        forecast_from(test_api, start_ago)
+        with test_api.patch_now_utc_exact():
+            evidence = test_api.solar.pv_calibration_scan(4)
+        slots = 1440 // test_api.solar.plan_interval_minutes
+        failed = check("two days", evidence is not None and len(evidence) == 2, evidence and sorted(evidence))
+        for day, record in (evidence or {}).items():
+            forecast, actual = day_totals(record)
+            failed |= check("{} whole".format(day), len(record["slots"]) == slots and abs(actual / forecast - 0.9) < 0.01, (len(record["slots"]), actual / forecast if forecast else None))
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_scan_skips_day_forecast_starts_after_generation():
+    """Generation history older than Predbat's forecast history (Predbat installed at 14:00 on an existing system): that day is skipped."""
+    test_api = create_test_solar_api()
+    try:
+        build_history(test_api, 4, bell(4.0), lambda m: bell(4.0)(m) * (0.7 if m < 780 else 1.2))
+        forecast_from(test_api, 2 * 1440 + test_api.mock_base.minutes_now + 10 * 60)
+        with test_api.patch_now_utc_exact():
+            evidence = test_api.solar.pv_calibration_scan(4)
+        slots = 1440 // test_api.solar.plan_interval_minutes
+        failed = check("part day skipped", evidence is not None and len(evidence) == 2 and all(len(record["slots"]) == slots for record in evidence.values()), evidence and {day: len(record["slots"]) for day, record in evidence.items()})
+    finally:
+        test_api.cleanup()
+    return failed
+
+
 def run_pv_calibration_scan_tests(my_predbat=None):
     """Run the PV calibration history scan and settings tests."""
     failed = False
@@ -419,6 +469,8 @@ def run_pv_calibration_scan_tests(my_predbat=None):
         test_scan_empty_forecast_history_is_a_failed_read,
         test_calibration_band_default_when_recent_week_mostly_down,
         test_scan_clipped_minutes_follow_pv_scaling,
+        test_scan_short_history_keeps_whole_days,
+        test_scan_skips_day_forecast_starts_after_generation,
     ):
         print("**** {} ****".format(test.__name__))
         failed = test() or failed
