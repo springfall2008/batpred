@@ -100,7 +100,8 @@ def run_web_curves_chart_tests(my_predbat):
         failed |= _check("t1 learned yes/no", ">Yes</td>" in html and ">No</td>" in html)
 
         print("Test 1b: the page wraps its text (the shared header sets p { white-space: nowrap })")
-        failed |= _check("t1b wraps", "max-width:960px;white-space:normal;" in html, html[:300])
+        # A rule on the paragraphs themselves: p { white-space: nowrap } in the header beats anything inherited from the div
+        failed |= _check("t1b wraps", "<div class='curves-page'" in html and ".curves-page p { white-space: normal; }" in html, html[:300])
 
         print("Test 2: a 3D surface per grid, plotly loaded once")
         failed |= _check("t2 divs", "id='curve_grid_charge'" in html and "id='curve_grid_discharge'" in html)
