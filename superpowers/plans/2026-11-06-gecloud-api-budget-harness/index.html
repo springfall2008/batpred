@@ -1,0 +1,462 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>GE Cloud API Budget Harness Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "GE Cloud API Budget Harness Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-11-06-gecloud-api-budget-harness.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">GE Cloud API Budget Harness Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="ge-cloud-api-budget-harness-implementation-plan">GE Cloud API Budget Harness Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> A test harness that runs one simulated day (00:00–23:55) of a GE Cloud inverter through the real <code>execute.py</code> → <code>gecloud.py</code> path against a fake GE Cloud, and reports every API call with when and why it was made.</p>
+<p><strong>Architecture:</strong> A fake GE Cloud replaces <code>aiohttp.ClientSession</code> and is the only thing gecloud can reach. It records each request as a <code>CallRecord</code>. A harness builds a real <code>PredBat</code> and a real <code>GECloudDirect</code> (a subclass whose clock is simulated). It cold-starts gecloud against the fake and lets <code>ge_cloud_automatic</code> wire the inverter. It applies a random scenario at midnight and plans once. Then it steps 5 minutes at a time: gecloud's <code>run()</code> once per minute, <code>fetch_inverter_data()</code>, <code>calculate_plan(recompute=False)</code> and <code>execute_plan()</code>. Writes from execute reach gecloud's <code>select_event</code> / <code>number_event</code> / <code>switch_event</code> through a harness HA interface.</p>
+<p><strong>Tech Stack:</strong> Python 3, the repo's own test infrastructure (<code>create_predbat()</code>, <code>TestHAInterface</code>, <code>run_async</code>), <code>unittest.mock.patch</code>, <code>contextvars</code>.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-11-06-gecloud-api-budget-harness-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Every function and class has a docstring (interrogate 100%).</li>
+<li>British spelling (cspell <code>en-gb</code>). Add unknown valid words to <code>.cspell/custom-dictionary-workspace.txt</code>.</li>
+<li>Black line length 256, Flake8 250. Names are <code>lower_case_with_underscores</code>.</li>
+<li>File header: copy the 5-line copyright block and the <code># pylint: disable=...</code> lines from <code>apps/predbat/tests/fleet_rig.py</code>.</li>
+<li><strong>No production code changes.</strong> <code>gecloud.py</code>, <code>execute.py</code>, <code>inverter.py</code> and <code>plan.py</code> stay as they are. Everything lives under <code>apps/predbat/tests/</code>.</li>
+<li>Count at the HTTP boundary (the faked <code>aiohttp.ClientSession</code>), never at <code>async_get_inverter_data</code>.</li>
+<li>An unmatched request raises <code>AssertionError</code>. Nothing may reach <code>api.givenergy.cloud</code>.</li>
+<li>No real wall-clock waiting. Patch <code>asyncio.sleep</code> (gecloud's retry back-offs and its 0.2 s sweep pacing) and <code>Inverter.sleep</code> (<code>write_and_poll_sleep</code>, 10 s for GEC) for the whole simulation.</li>
+<li><strong><code>coverage/ge_cloud.log</code> contains a live API key and a customer's personal details.</strong> Copy only register names and types out of it. Never copy serials, the key, or account data. Use the anonymised identities in Task 1.</li>
+<li>Do not run <code>git stash</code> in this worktree (the stash stack is shared). Use WIP commits.</li>
+<li>Tests are run from <code>coverage/</code> with output saved to a file and then grepped, e.g. <code>./run_all --test gecloud_budget_harness &gt; /tmp/claude-501/gb.txt 2&gt;&amp;1; grep -n "ERROR\|FAIL\|passed\|failed" /tmp/claude-501/gb.txt</code>.</li>
+</ul>
+<h2 id="review-focus">Review Focus</h2>
+<ol>
+<li><strong>A write that never reaches gecloud.</strong> If <code>call_service</code> routing misses one of execute's service shapes (for example <code>select/select_option</code> with <code>option=</code>), execute's write-and-poll sees no change and quietly retries. That gives a plausible but wrong count. Pinned in Task 2 by <code>test_execute_write_reaches_fake</code>.</li>
+<li><strong>The day wrap firing anyway.</strong> If <code>minutes_now</code> or <code>plan_last_updated_minutes</code> drift, <code>calculate_plan</code> logs "Force recompute due to start of day" and re-optimises mid-run. Pinned in Task 3 by <code>test_short_day_never_recomputes</code>.</li>
+<li><strong>Template inverter args leaking.</strong> <code>cases/predbat_debug_agile1.yaml</code> is a GivTCP (<code>GE</code>) dump. Any inverter entity arg that automatic config doesn't overwrite would point execute at a <code>dummy_items</code> entity, and its writes would never reach the fake. Pinned in Task 2 by <code>test_inverter_args_point_at_gecloud</code>.</li>
+<li><strong>Calls from the wrong place.</strong> <code>fetch_inverter_data()</code> must cost no API calls: it reads the entities gecloud publishes. If it does make calls, the harness is miscounting or mis-wiring. Pinned in Task 3 by <code>test_fetch_makes_no_calls</code>.</li>
+<li><strong>Device skipped as stale.</strong> <code>async_get_devices</code> skips a device whose <code>last_updated</code> is more than 5 days before the <em>real</em> <code>datetime.now()</code>, not the simulated one, so the fake must stamp real "now". Pinned in Task 2 by <code>test_startup_finds_device</code>.</li>
+</ol>
+<hr />
+<h2 id="file-structure">File Structure</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/tests/gecloud_fake_cloud.py</code></td>
+<td>Captured register fixture, anonymised identities, <code>CallRecord</code>, <code>FakeGECloud</code> (routing, state, recording, categorising) and its fake <code>aiohttp</code> session</td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/gecloud_budget_harness.py</code></td>
+<td><code>HarnessGECloud</code>, <code>HarnessHAInterface</code>, <code>GECloudBudgetHarness</code> (start-up, midnight plan, 5-minute step, day loop), <code>DayResult</code>, <code>summarise()</code>, <code>write_call_log()</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_gecloud_budget.py</code></td>
+<td>Unit tests for both modules (quick) and the full-day baseline run (slow)</td>
+</tr>
+<tr>
+<td><code>apps/predbat/unit_test.py</code></td>
+<td>Two <code>TEST_REGISTRY</code> entries</td>
+</tr>
+<tr>
+<td><code>.gitignore</code></td>
+<td>Ignore <code>coverage/gecloud_api_budget_log.jsonl</code></td>
+</tr>
+<tr>
+<td><code>docs/superpowers/specs/2026-11-06-gecloud-api-budget-harness-design.md</code></td>
+<td>"Baseline results" section appended in Task 4</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="task-1-fake-ge-cloud-and-call-record">Task 1: Fake GE Cloud and call record</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/tests/gecloud_fake_cloud.py</code>
+- Create: <code>apps/predbat/tests/test_gecloud_budget.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code> (import + <code>TEST_REGISTRY</code> entry)</p>
+<p><strong>Interfaces:</strong>
+- Produces:
+  - Constants: <code>HARNESS_SERIAL = "SA0000H001"</code> (as the cloud returns it; gecloud lowercases it), <code>HARNESS_DONGLE_SERIAL = "WA0000H001"</code>, <code>HARNESS_SITE_ID = 10001</code>, <code>HARNESS_ACCOUNT_ID = 1</code>.
+  - <code>CAPTURED_REGISTERS: list[tuple[str, str]]</code>. These are <code>(friendly_name, kind)</code> for the 81 registers in <code>coverage/ge_cloud.log</code>, with names exactly as the log's <code>friendly_name</code> (e.g. <code>"AC Charge 1 Start Time"</code>). <code>kind</code> is one of <code>"time"</code>, <code>"number"</code>, <code>"switch"</code>, <code>"option"</code>, <code>"writeonly"</code>. Restart Hardware is <code>"writeonly"</code>. Export Power Priority and Pause Battery are <code>"option"</code>.
+  - <code>build_register_list(registers: list[tuple[str, str]], rate_w: int) -&gt; list[dict]</code>. Each entry is <code>{"id": int, "name": str, "validation_rules": list[str], "validation": str}</code>, with ids 1..N in order. Rules by kind: time → <code>["date_format:H:i"]</code>; number → <code>["between:0,100"]</code>, except Battery Charge Power / Battery Discharge Power → <code>["between:0,&lt;rate_w&gt;"]</code>; switch → <code>["boolean"]</code>; option → <code>["in:0,1,2,3"]</code>; writeonly → <code>["writeonly"]</code>.
+  - <code>CALL_CONTEXT: contextvars.ContextVar[str]</code> (default <code>"unlabelled"</code>). The harness sets it to say why calls are being made. Because it is a ContextVar, tasks gecloud creates with <code>loop.create_task</code> inherit it.
+  - <code>@dataclass CallRecord</code>: <code>sim_time: datetime</code>, <code>scenario_id: int</code>, <code>method: str</code>, <code>endpoint: str</code> (the <code>GE_API_*</code> template), <code>path: str</code>, <code>serial: str</code>, <code>setting_id: str</code>, <code>setting_name: str</code>, <code>category: str</code>, <code>context: str</code>, <code>caller: str</code>, <code>status: int</code>, <code>retry: bool</code>. Plus <code>to_dict() -&gt; dict</code> with <code>sim_time</code> as ISO text.
+  - <code>class FakeGECloud</code>:
+    - <code>__init__(self, battery_kwh: float, rate_w: int, clock: Callable[[], datetime], registers=CAPTURED_REGISTERS, model: str = "GIV-HY5.0")</code>
+    - attributes: <code>soc_percent: float</code>, <code>meter_today: dict</code>, <code>meter_total: dict</code>, <code>register_values: dict[int, object]</code>, <code>calls: list[CallRecord]</code>, <code>scenario_id: int</code>
+    - <code>handle(self, method: str, url: str, body: dict | None) -&gt; tuple[int, dict]</code>: route, record, respond
+    - <code>session_factory(self) -&gt; Callable[..., object]</code>: a drop-in for <code>aiohttp.ClientSession(timeout=...)</code> (async context manager with <code>.get(url, headers=)</code> and <code>.post(url, headers=, json=)</code> returning an async context manager response with <code>.status</code> and <code>async .json()</code>)
+    - <code>register_count(self) -&gt; int</code>: readable (non-writeonly) registers</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> in <code>apps/predbat/tests/test_gecloud_budget.py</code>, under <code>run_gecloud_budget_harness_tests(my_predbat) -&gt; bool</code> (returns True on failure, the repo's convention). Each sub-test is a plain function called from it. Drive requests through <code>fake.session_factory()</code> with <code>run_async</code> from <code>tests.test_infra</code>, exactly as gecloud would:</li>
+<li><code>test_register_fixture</code>: <code>len(CAPTURED_REGISTERS) == 81</code>; <code>regname_to_ha(name)</code> for every name gives the snake-case suffixes in the log (spot-check <code>ac_charge_1_start_time</code>, <code>battery_reserve_percent_limit</code>, <code>enable_eco_mode</code>); <code>register_count() == 80</code>.</li>
+<li><code>test_routes_status_and_meter</code>: GET <code>.../inverter/SA0000H001/system-data/latest</code> → 200, <code>["data"]["battery"]["percent"] == fake.soc_percent</code>; GET <code>.../meter-data/latest</code> → 200 with <code>today</code> and <code>total</code> dicts; records have categories <code>"status"</code> and <code>"meter"</code>.</li>
+<li><code>test_read_returns_written_value</code>: POST <code>.../settings/5/write</code> with <code>{"value": "55", "context": "predbat"}</code>, then POST <code>.../settings/5/read</code> → <code>["data"]["value"] == "55"</code>; categories <code>"register_write"</code> then <code>"register_read"</code>; <code>setting_name</code> is register 5's name.</li>
+<li><code>test_device_list_shape</code>: GET <code>.../communication-device</code> returns one device whose <code>inverter.serial == HARNESS_SERIAL</code>, <code>site_id == HARNESS_SITE_ID</code>, one battery in <code>connections.batteries</code>, and <code>last_updated</code> within 1 minute of real UTC now.</li>
+<li><code>test_unmatched_request_raises</code>: GET <code>.../nonsense</code> raises <code>AssertionError</code>; GET to any host other than <code>api.givenergy.cloud</code> raises <code>AssertionError</code>.</li>
+<li><code>test_context_and_caller_recorded</code>: with <code>CALL_CONTEXT.set("poll seconds=120")</code>, a request's record has <code>context == "poll seconds=120"</code>. A request made from inside a coroutine named <code>async_get_device_info</code> in a module whose file is <code>gecloud.py</code> is not needed here; <code>caller</code> only has to be a string (Task 2 asserts real callers).</li>
+<li>
+<p><code>test_device_info_vs_device_list_category</code>: the same path <code>communication-device</code> is categorised <code>"device_info"</code> when <code>caller</code> contains <code>async_get_device_info</code>, and <code>"device_list"</code> otherwise.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Register the quick test and run it to see it fail</strong></p>
+</li>
+</ul>
+<p>Add to <code>TEST_REGISTRY</code> in <code>apps/predbat/unit_test.py</code>, next to the <code>random</code> entries:
+<code>("gecloud_budget_harness", run_gecloud_budget_harness_tests, "GE Cloud API budget harness unit tests", False),</code>
+and the import <code>from tests.test_gecloud_budget import run_gecloud_budget_harness_tests</code>.</p>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test gecloud_budget_harness &gt; /tmp/claude-501/gb.txt 2&gt;&amp;1; tail -30 /tmp/claude-501/gb.txt</code>
+Expected: FAIL, with an import error for <code>tests.gecloud_fake_cloud</code>.</p>
+<ul>
+<li>[ ] <strong>Step 3: Implement <code>apps/predbat/tests/gecloud_fake_cloud.py</code></strong></li>
+</ul>
+<p>Routing: strip <code>GE_API_URL</code> (import it from <code>gecloud</code>). Match the remainder against regexes built from the <code>GE_API_*</code> templates in <code>gecloud.py</code> (<code>{name}</code> → <code>[^/?]+</code>, query string ignored). Response bodies follow the shapes in the docstrings of <code>publish_status</code>, <code>publish_meter</code>, <code>publish_info</code> and <code>async_get_devices</code> in <code>gecloud.py</code>, wrapped as <code>{"data": ...}</code>. Device info: <code>nominal_voltage</code> 51.2, <code>nominal_capacity = battery_kwh * 1000 / 51.2</code>, <code>depth_of_discharge</code> 1, <code>max_charge_rate</code>/<code>max_discharge_rate = rate_w</code>, <code>model</code>, and battery <code>capacity.full == capacity.design</code>. Account: an <code>id</code>, <code>standard_timezone: "Europe/London"</code>, placeholder name fields. Site: <code>{"id": HARNESS_SITE_ID}</code> with no <code>limits</code>. EVC and smart-device lists: empty <code>[]</code>. Writes store <code>body["value"]</code> and answer <code>{"data": {"value": &lt;stored&gt;, "success": True}}</code>.</p>
+<p><code>caller</code>: walk <code>inspect.stack()</code>, keep frames whose filename ends in <code>gecloud.py</code>, drop <code>async_get_inverter_data</code> and <code>async_get_inverter_data_retry</code>, and join the function names outermost first with <code>" &gt; "</code>.</p>
+<p><code>retry</code>: True when the previous record with the same <code>method</code> + <code>path</code> and the same <code>context</code> got a non-2xx status or a negative <code>value</code>. (The ideal fake never fails, so this stays False, but the column must be real.)</p>
+<p>Categories: <code>account</code>, <code>site</code>, <code>device_list</code>, <code>device_info</code>, <code>status</code>, <code>meter</code>, <code>register_list</code> (GET settings), <code>register_read</code>, <code>register_write</code>, <code>evc</code>, <code>smart_device</code>.</p>
+<ul>
+<li>[ ] <strong>Step 4: Run the tests and see them pass</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test gecloud_budget_harness &gt; /tmp/claude-501/gb.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|passed\|failed" /tmp/claude-501/gb.txt</code>
+Expected: no <code>ERROR</code>/<code>Traceback</code>, test reported passed.</p>
+<ul>
+<li>[ ] <strong>Step 5: Commit</strong></li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/tests/gecloud_fake_cloud.py apps/predbat/tests/test_gecloud_budget.py apps/predbat/unit_test.py
+git commit -m &quot;test(gecloud): fake GE Cloud with per-call recording for the API budget harness&quot;
+</code></pre>
+<hr />
+<h3 id="task-2-harness-start-up-and-the-execute-gecloud-write-route">Task 2: Harness start-up and the execute → gecloud write route</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/tests/gecloud_budget_harness.py</code>
+- Modify: <code>apps/predbat/tests/test_gecloud_budget.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: everything Task 1 produces; <code>create_predbat</code> (import it inside functions from <code>unit_test</code>, as <code>run_random_scenario_tests</code> does, to avoid a circular import); <code>load_scenarios</code>, <code>apply_scenario_to_predbat</code>, <code>RANDOM_SCENARIOS</code>, <code>RANDOM_TEMPLATE</code>, <code>reset_inverter</code> from <code>tests.test_random_scenarios</code> / <code>tests.test_infra</code>.
+- Produces:
+  - <code>class HarnessGECloud(GECloudDirect)</code>: attribute <code>sim_now: datetime</code>; property <code>now_utc_exact</code> returns <code>self.sim_now</code>.
+  - <code>class HarnessHAInterface(TestHAInterface)</code>: attribute <code>gecloud: HarnessGECloud | None</code>. <code>call_service(self, service, **kwargs)</code>: when <code>entity_id</code> starts with <code>"&lt;domain&gt;.predbat_gecloud_"</code>, route <code>switch/turn_on|turn_off|toggle</code> → <code>gecloud.switch_event(entity_id, "turn_on"|...)</code>, <code>number/set_value</code> → <code>gecloud.number_event(entity_id, value)</code>, <code>select/select_option</code> → <code>gecloud.select_event(entity_id, option)</code>. Each runs through <code>run_async</code>, with <code>CALL_CONTEXT</code> set to <code>"execute &lt;entity_id&gt; &lt;old&gt;-&gt;&lt;new&gt;"</code> (old = current <code>dummy_items</code> state), and returns True. Any other call goes to <code>super().call_service</code>.
+  - <code>class GECloudBudgetHarness</code>:
+    - <code>__init__(self, scenario: dict, template_path: str = RANDOM_TEMPLATE)</code>
+    - attributes: <code>my_predbat</code>, <code>gecloud: HarnessGECloud</code>, <code>fake: FakeGECloud</code>, <code>scenario</code>, <code>midnight: datetime</code>, <code>startup_calls: list[CallRecord]</code>
+    - <code>startup(self) -&gt; None</code>: build and cold-start, then plan at midnight (steps below)
+    - <code>sim_time(self, minute: int) -&gt; datetime</code>: <code>self.midnight + timedelta(minutes=minute)</code>
+  - <code>reset_config_to_defaults(my_predbat) -&gt; None</code>: for every <code>CONFIG_ITEMS</code> entry with a <code>"default"</code>, <code>my_predbat.expose_config(name, default)</code>, then <code>my_predbat.fetch_config_options()</code>.</p>
+<p><code>startup()</code> does this, in this order:
+1. <code>my_predbat = create_predbat()</code>. Replace its <code>ha_interface</code> with a <code>HarnessHAInterface</code> that keeps the original's <code>dummy_items</code>/<code>history</code>, and set <code>ha_interface.base = my_predbat</code>. Then <code>reset_inverter(my_predbat)</code>, <code>my_predbat.read_debug_yaml(template_path)</code>, and <code>my_predbat.config_root = my_predbat.save_restore_dir = "./"</code>.
+2. <code>reset_config_to_defaults(my_predbat)</code>, so the simulated user has default settings, not the template user's (spec: "the defaults a GE Cloud user gets").
+3. Delete from <code>my_predbat.args</code> every inverter-entity arg that <code>async_automatic_config</code> in <code>gecloud.py</code> sets with <code>set_arg</code>, plus <code>pause_mode</code>, <code>inverter_time</code>, <code>scheduled_charge_enable</code>, <code>scheduled_discharge_enable</code> and <code>inverter_mode</code>. This stops the GivTCP template's entities surviving. Keep the list as a module constant <code>TEMPLATE_INVERTER_ARGS</code>.
+4. <code>self.midnight = my_predbat.midnight_utc</code>. Create <code>FakeGECloud(battery_kwh=scenario.params.battery.soc_max_kwh, rate_w=int(rate_max_charge_kw * 1000), clock=lambda: self.gecloud.sim_now)</code>.
+5. <code>HarnessGECloud(my_predbat, ge_cloud_direct=True, api_key="harness-key", automatic=True)</code>, <code>sim_now = self.midnight</code>. Under <code>patch("aiohttp.ClientSession", fake.session_factory())</code> and <code>CALL_CONTEXT = "startup"</code>, run <code>run_async(gecloud.run(0, True))</code>. Startup calls are the records made so far; copy them into <code>startup_calls</code> and clear <code>fake.calls</code>.
+6. <code>my_predbat.inverters = []</code>, <code>my_predbat.fetch_inverter_data()</code> (builds real <code>Inverter</code>s from the args automatic config set).
+7. Deep-copy the scenario, set <code>params["clock"] = {"minutes_now": 0}</code>, and <code>apply_scenario_to_predbat(my_predbat, scenario_copy)</code>. Set <code>my_predbat.args["threads"] = 0</code>, then <code>calculate_plan(recompute=True)</code> and <code>execute_plan()</code> under <code>CALL_CONTEXT = "execute 00:00"</code>. Records from this first execute belong to the day (minute 0), not to start-up.</p>
+<p><code>patch("asyncio.sleep", &lt;async no-op&gt;)</code> and <code>patch.object(Inverter, "sleep", lambda self, seconds: None)</code> are active throughout <code>startup()</code> and Task 3's day loop. Expose a context manager <code>GECloudBudgetHarness.patched(self)</code> that enters all three patches.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> (add to <code>run_gecloud_budget_harness_tests</code>), using scenario id 0 from <code>load_scenarios(RANDOM_SCENARIOS)</code>:</li>
+<li><code>test_startup_finds_device</code>: after <code>startup()</code>, <code>harness.gecloud.device_list == ["sa0000h001"]</code>, <code>harness.gecloud.polling_mode is True</code>, and <code>startup_calls</code> contains at least one record of each category <code>account</code>, <code>device_list</code>, <code>register_list</code>, <code>register_read</code>.</li>
+<li><code>test_inverter_args_point_at_gecloud</code>: for every arg in <code>TEMPLATE_INVERTER_ARGS</code> that is present in <code>my_predbat.args</code>, every entity id in it contains <code>"predbat_gecloud_sa0000h001"</code>; <code>my_predbat.inverters[0].inverter_type == "GEC"</code>.</li>
+<li><code>test_inverter_reads_fake_soc</code>: set <code>fake.soc_percent = 37</code>, run <code>gecloud.run(120, False)</code> under the patches, then <code>my_predbat.fetch_inverter_data()</code>; <code>round(my_predbat.soc_kw / my_predbat.soc_max * 100) == 37</code>.</li>
+<li><code>test_execute_write_reaches_fake</code>: clear <code>fake.calls</code>. Call <code>my_predbat.inverters[0].adjust_charge_window(&lt;start&gt;, &lt;end&gt;, my_predbat.minutes_now)</code> with a start/end different from the current registers. There is ≥1 <code>register_write</code> record whose <code>setting_name</code> is <code>"AC Charge 1 Start Time"</code> and whose <code>context</code> starts with <code>"execute select.predbat_gecloud_sa0000h001_ac_charge_1_start_time"</code>, and <code>caller</code> contains <code>select_event</code>. There are no <code>register_read</code> records (read-back costs no calls).</li>
+<li>
+<p><code>test_config_defaults</code>: <code>my_predbat.get_arg("set_charge_low_power")</code> equals its <code>CONFIG_ITEMS</code> default (False).</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run them and see them fail</strong></p>
+</li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test gecloud_budget_harness &gt; /tmp/claude-501/gb.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|passed\|failed" /tmp/claude-501/gb.txt</code>
+Expected: FAIL, with an import error for <code>tests.gecloud_budget_harness</code>.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 3: Implement <code>apps/predbat/tests/gecloud_budget_harness.py</code></strong> with the start-up sequence above.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Run them and see them pass</strong> (same command; no <code>ERROR</code>/<code>Traceback</code>). If <code>test_execute_write_reaches_fake</code> shows writes going to <code>dummy_items</code> instead of the fake, the service shape execute uses is not routed. Fix the routing rather than the test.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/tests/gecloud_budget_harness.py apps/predbat/tests/test_gecloud_budget.py
+git commit -m &quot;test(gecloud): API budget harness start-up and execute-to-gecloud write route&quot;
+</code></pre>
+<hr />
+<h3 id="task-3-the-5-minute-step-the-day-loop-the-summary-and-the-log">Task 3: The 5-minute step, the day loop, the summary and the log</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/tests/gecloud_budget_harness.py</code>
+- Modify: <code>apps/predbat/tests/test_gecloud_budget.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: Task 2's <code>GECloudBudgetHarness</code>.
+- Produces:
+  - <code>GECloudBudgetHarness.step(self, minute: int) -&gt; None</code>, for <code>minute</code> in 5..1435 (multiples of 5).
+  - <code>GECloudBudgetHarness.simulate_day(self, last_minute: int = 1435) -&gt; DayResult</code>: <code>startup()</code>, then <code>step(m)</code> for <code>m</code> in <code>range(5, last_minute + 1, 5)</code>.
+  - <code>@dataclass DayResult</code>: <code>scenario_id: int</code>, <code>startup_calls: list[CallRecord]</code>, <code>day_calls: list[CallRecord]</code>, <code>register_count: int</code>, <code>steps: int</code> (executes run, including minute 0), <code>recomputes: int</code>.
+  - <code>summarise(results: list[DayResult]) -&gt; str</code>
+  - <code>write_call_log(results: list[DayResult], path: str) -&gt; None</code>: JSON lines, one <code>CallRecord.to_dict()</code> per line, with startup records' <code>context</code> kept as <code>"startup"</code>.
+  - Constants: <code>MONTH_DAYS = 30</code>, <code>BUDGETS = (10000, 20000)</code>.</p>
+<p><code>step(minute)</code>:
+1. <strong>Ideal SOC:</strong> <code>fake.soc_percent</code> = the previous plan's <code>my_predbat.predict_soc_best[5] / my_predbat.soc_max * 100</code> (kWh → %). Read it at the end of the previous step, store it on the harness, and apply it here. Keep this in one method, <code>next_soc_percent(self) -&gt; float</code>, so the follow-on SOC-drift mode is a one-method override.
+2. <strong>Meter:</strong> add the scenario's daily load kWh / 288 to <code>meter_today</code>/<code>meter_total</code> consumption and import, and daily PV kWh / 288 to solar. They only need to move.
+3. For each <code>m</code> in <code>minute-4 .. minute</code>: <code>gecloud.sim_now = sim_time(m)</code>, <code>CALL_CONTEXT = "poll seconds=&lt;60*m&gt;"</code>, <code>run_async(gecloud.run(60 * m, False))</code>.
+4. <code>my_predbat.update_time(now=sim_time(minute))</code>, then <code>CALL_CONTEXT = "fetch"</code> and <code>my_predbat.fetch_inverter_data()</code>.
+5. <code>CALL_CONTEXT = "plan advance"</code>, then <code>my_predbat.calculate_plan(recompute=False)</code>. This drops expired charge/export windows, as a real <code>update_pred</code> cycle does when it does not re-plan.
+6. <code>CALL_CONTEXT = "execute &lt;HH:MM&gt;"</code>, then <code>my_predbat.execute_plan()</code>. <code>HarnessHAInterface</code> replaces the context with the entity-level reason for each routed write. Writes not routed through it (for example gecloud's own AC charge gate inside <code>run()</code>) keep the poll context and their <code>caller</code>.</p>
+<p><code>recomputes</code>: 1 + the number of times <code>my_predbat.plan_last_updated_minutes</code> changes after start-up. It must stay 1.</p>
+<p><code>summarise()</code> output, per scenario then overall:
+- Start-up calls (a cost paid on each restart) and the register count the run used.
+- Steady-state day total, and the count per category.
+- Month projection = day total × <code>MONTH_DAYS</code>, shown against each of <code>BUDGETS</code> as a percentage.
+- Writes per day, broken down by <code>setting_name</code>.
+- Worst-case scenario.
+- The fixed lines <code>"SOC follows the plan exactly (ideal mode): write counts are a floor."</code> and <code>"GECloudData history download: not simulated (not used)."</code></p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests:</strong></li>
+<li><code>test_summary_maths</code>: build two <code>DayResult</code>s by hand with known records (e.g. 100 status + 20 register_write, and 300 status). <code>summarise</code> contains <code>"3600"</code> (120 × 30) for the first, the worst case names the second scenario, and <code>"36.0%"</code> (3600 / 10000) appears.</li>
+<li><code>test_short_day_cadence</code> (scenario 0, <code>simulate_day(last_minute=60)</code>): <code>steps == 13</code>; <code>day_calls</code> has 30 <code>status</code> records (gecloud polls when <code>seconds % 120 == 0</code>, so even minutes 2..60) and the same for <code>meter</code>; <code>register_read</code> count == <code>register_count * 6</code> (sweeps at minutes 10..60, from <code>polling_mode</code>).</li>
+<li><code>test_short_day_never_recomputes</code>: the same run has <code>recomputes == 1</code>, and no log line containing <code>"Force recompute due to start of day"</code> (capture <code>my_predbat.log</code>).</li>
+<li><code>test_fetch_makes_no_calls</code>: in the same run, no <code>day_calls</code> record has <code>context == "fetch"</code> or <code>context == "plan advance"</code>.</li>
+<li>
+<p><code>test_call_log_round_trip</code>: <code>write_call_log</code> into a temp file. Line count == startup + day records, and every line parses as JSON with the <code>CallRecord</code> keys.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run them and see them fail</strong></p>
+</li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test gecloud_budget_harness &gt; /tmp/claude-501/gb.txt 2&gt;&amp;1; grep -n "ERROR\|Traceback\|passed\|failed" /tmp/claude-501/gb.txt</code>
+Expected: FAIL (<code>step</code> / <code>summarise</code> not defined).</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 3: Implement <code>step</code>, <code>simulate_day</code>, <code>DayResult</code>, <code>summarise</code> and <code>write_call_log</code>.</strong></p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Run them and see them pass</strong> (same command). If the cadence counts differ, check them against <code>GECloudDirect.run</code> before changing the test. The test pins gecloud's real cadence on main.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/tests/gecloud_budget_harness.py apps/predbat/tests/test_gecloud_budget.py
+git commit -m &quot;test(gecloud): simulate a day of 5-minute cycles and summarise API calls&quot;
+</code></pre>
+<hr />
+<h3 id="task-4-full-day-baseline-run-and-results">Task 4: Full-day baseline run and results</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/tests/test_gecloud_budget.py</code>
+- Modify: <code>apps/predbat/unit_test.py</code>
+- Modify: <code>.gitignore</code>
+- Modify: <code>docs/superpowers/specs/2026-11-06-gecloud-api-budget-harness-design.md</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>run_gecloud_api_budget(my_predbat) -&gt; bool</code>, <code>DEFAULT_SCENARIO_IDS: tuple[int, ...]</code>, <code>BUDGET_LOG_PATH = "gecloud_api_budget_log.jsonl"</code> (relative to <code>coverage/</code>).</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 1: Choose <code>DEFAULT_SCENARIO_IDS</code></strong>: five ids from <code>coverage/cases/random_scenarios.yaml</code>. Include at least one with cars (<code>params.cars.num_cars &gt; 0</code>), one with an IOG run, and one whose plan exports. Record next to the constant which id covers which case.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Implement <code>run_gecloud_api_budget(my_predbat)</code></strong>: <code>simulate_day()</code> for each id (a fresh harness each time), <code>print(summarise(results))</code>, <code>write_call_log(results, BUDGET_LOG_PATH)</code>. It returns True only if a simulation raised. There is deliberately no budget assertion (spec: current main would fail any sensible one). Register it:
+<code>("gecloud_api_budget", run_gecloud_api_budget, "GE Cloud API calls over a simulated day (baseline measurement)", True),</code>
+Add <code>coverage/gecloud_api_budget_log.jsonl</code> to <code>.gitignore</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Run the baseline</strong></p>
+</li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --test gecloud_api_budget &gt; /tmp/claude-501/gab.txt 2&gt;&amp;1; grep -n "Traceback\|ERROR\|Month projection\|Start-up\|Worst" /tmp/claude-501/gab.txt</code>
+Expected: no Traceback, five scenario summaries, and <code>coverage/gecloud_api_budget_log.jsonl</code> written.</p>
+<ul>
+<li>[ ] <strong>Step 4: Check the quick suite is not slowed or broken</strong></li>
+</ul>
+<p>Run: <code>cd coverage &amp;&amp; ./run_all --quick &gt; /tmp/claude-501/quick.txt 2&gt;&amp;1; tail -20 /tmp/claude-501/quick.txt</code>
+Expected: all pass, and <code>gecloud_api_budget</code> skipped as slow.</p>
+<ul>
+<li>
+<p>[ ] <strong>Step 5: Append a "Baseline results (main @ <short sha>)" section to the spec.</strong> It holds the summary table (start-up, steady-state per day by category, month projection vs 10k/20k, writes per day by setting) and the register count used.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 6: Pre-commit, then commit</strong></p>
+</li>
+</ul>
+<p>Run: <code>cd &lt;worktree root&gt; &amp;&amp; git add -A apps/predbat/tests .gitignore docs apps/predbat/unit_test.py &amp;&amp; ./run_pre_commit &gt; /tmp/claude-501/pc.txt 2&gt;&amp;1; grep -n "Failed\|Passed\|Skipped" /tmp/claude-501/pc.txt</code>
+Expected: no <code>Failed</code>. Re-stage <code>.cspell/custom-dictionary-workspace.txt</code> if it was re-sorted.</p>
+<pre><code class="language-bash">git commit -m &quot;test(gecloud): full-day GE Cloud API budget baseline&quot;
+</code></pre>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

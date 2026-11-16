@@ -1,0 +1,78 @@
+# Octopus export tariff comparison, runnable with no SaaS:
+#
+#   python3 apps/predbat/annual_cli.py --config docs/annual/export-compare.yaml
+#
+# Or, without this file at all, the same run from flags:
+#
+#   python3 apps/predbat/annual_cli.py --config <your-config>.yaml --year 2026 --months 7 --export-compare
+#
+# This is deliberately the same shape the hosted page submits, so a figure it prints can be
+# reproduced here. Change `--year`/`--months` (or this file's `year`/`months`) to the most
+# recent COMPLETE calendar month: the Open-Meteo archive runs about five days behind, and
+# the weather window itself reaches two days past the month's end on top of that, so a
+# month is only usable once it ended at least eight days ago - validate_config will reject
+# one that has not. `--year` defaults to last year, which is wrong for Outgoing Prime (it
+# launched 23 June 2026): a month before that falls back to synthesised current rates on
+# the export side, so name the year explicitly for any month in Prime's first year.
+annual:
+  location:
+    # London GSP region centroid. Region C.
+    latitude: 51.51
+    longitude: -0.13
+
+  year: 2026
+  months: [7]
+
+  # One day per weekday position, each drawn from a different week of the month. The
+  # synthetic load is identical every day, so this buys rate variation (Agile Outgoing
+  # tracks wholesale, and weekend prices differ) rather than load variation.
+  sampling: weekday_spread
+  samples_per_month: 5
+
+  # Fast mode interpolates unplanned months from four seasonal anchors. There is nothing to
+  # interpolate in a single month, so it is off - validate_config forces this anyway.
+  fast_mode: false
+
+  solar:
+    - panels: 8
+      panel_watts: 400
+      declination: 35
+      # Azimuth convention: see solar_model.py's convert_azimuth() docstring for the
+      # authoritative mapping rather than restating it here - a restated copy is exactly what
+      # went stale and had east and west swapped in an earlier version of this comment.
+      azimuth: 180
+      # 0.85, not the engine's 0.95 default: real UK systems run at a ~85% performance ratio
+      # once inverter, temperature, wiring and soiling losses are counted.
+      efficiency: 0.85
+
+  battery:
+    size_kwh: 9.5
+    inverter_kw: 3.6
+    discharge_rate_kw: 3.6
+    hybrid: true
+
+  # The property's grid export cap, independent of the battery. 3.68 kW is a typical G98
+  # single-phase limit. Applied as a min() against what the hardware would otherwise allow.
+  export_limit_kw: 3.68
+
+  load:
+    # Ofgem TDCV medium single-rate.
+    annual_kwh: 2700
+    shape: flat
+
+  tariff:
+    dno_region: C
+    import_octopus_url: "https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/"
+
+  # The three products to score against otherwise identical inputs. --export-compare sets
+  # exactly this list from the catalogue, so prefer the flag over copying URLs by hand.
+  export_tariffs:
+    - id: outgoing_fixed
+      name: Octopus Outgoing Fixed
+      export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/"
+    - id: outgoing_prime
+      name: Octopus Outgoing Prime
+      export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-PRIME-FIX-12M-26-06-23/electricity-tariffs/E-1R-OUTGOING-PRIME-FIX-12M-26-06-23-{dno_region}/standard-unit-rates/"
+    - id: agile_outgoing
+      name: Octopus Agile Outgoing
+      export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{dno_region}/standard-unit-rates/"

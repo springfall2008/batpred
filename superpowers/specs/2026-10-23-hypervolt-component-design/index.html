@@ -1,0 +1,686 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Hypervolt Component — Design - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Hypervolt Component \u2014 Design";
+        var mkdocs_page_input_path = "superpowers/specs/2026-10-23-hypervolt-component-design.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Hypervolt Component — Design</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="hypervolt-component-design">Hypervolt Component — Design</h1>
+<p>Date: 2026-10-23
+Status: Awaiting review</p>
+<h2 id="1-purpose">1. Purpose</h2>
+<p>Add Hypervolt EV charger support to Predbat as a pluggable cloud component, in the shape of
+the Wallbox component (<code>apps/predbat/wallbox.py</code>,
+<a href="../2026-10-05-wallbox-component-design/">its design</a>), so a Hypervolt works without Home
+Assistant (Predbat.com and Docker) and without the regex wiring and start/stop automation that
+<a href="../../../devices/">docs/devices.md</a> describes today.</p>
+<p>Scope:</p>
+<ul>
+<li>Monitoring of every charger on one Hypervolt account, published as Predbat entities.</li>
+<li>Automatic configuration wiring those entities into the <code>car_charging_*</code> arguments.</li>
+<li>Manual controls: charge on/off, maximum charging current and charge mode.</li>
+<li>Opt-in Predbat-led charging, where the car plan stops and allows charging on the charger.</li>
+<li>A command line test mode that doubles as the tool for capturing real payloads.</li>
+</ul>
+<p>The reference is the Home Assistant custom integration
+<a href="https://github.com/gndean/home-assistant-hypervolt-charger">gndean/home-assistant-hypervolt-charger</a>
+(v2.10.0, MIT). It uses the <code>websockets</code> library; its calls are reimplemented over <code>aiohttp</code>
+(<code>ClientSession.ws_connect</code>), so no dependency is added. Hypervolt publishes no API: what follows
+is what that integration does, and section 13 lists what must be confirmed on a real charger.</p>
+<h2 id="2-the-hypervolt-api">2. The Hypervolt API</h2>
+<h3 id="21-authentication">2.1 Authentication</h3>
+<p>Keycloak, OpenID Connect token endpoint
+<code>https://kc.prod.hypervolt.co.uk/realms/retail-customers/protocol/openid-connect/token</code>,
+form-encoded:</p>
+<table>
+<thead>
+<tr>
+<th>Call</th>
+<th>Body</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sign in</td>
+<td><code>client_id=home-assistant</code>, <code>grant_type=password</code>, <code>scope=openid profile email offline_access</code>, <code>username</code>, <code>password</code></td>
+<td>401 or 400 <code>invalid_grant</code> means bad credentials</td>
+</tr>
+<tr>
+<td>Refresh</td>
+<td><code>client_id=home-assistant</code>, <code>grant_type=refresh_token</code>, <code>refresh_token</code></td>
+<td>400 or 401 means the refresh token is no longer valid: fall back to sign in</td>
+</tr>
+</tbody>
+</table>
+<p>Both return <code>access_token</code>, <code>refresh_token</code> and <code>expires_in</code> (seconds). REST calls send
+<code>Authorization: Bearer &lt;access_token&gt;</code>. The <code>client_id</code> is the one the Home Assistant
+integration uses; see section 13.</p>
+<h3 id="22-rest">2.2 REST</h3>
+<table>
+<thead>
+<tr>
+<th>Purpose</th>
+<th>Request</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>List chargers</td>
+<td><code>GET https://api.hypervolt.co.uk/users/me?includes=chargers</code></td>
+<td><code>chargers: [{"id": "&lt;decimal string&gt;", "model": "Home 3 Pro", "adopted_at": "…"}]</code></td>
+</tr>
+</tbody>
+</table>
+<p>The V2 schedule endpoint is not used (schedule editing is out of scope).</p>
+<h3 id="23-the-sync-websocket">2.3 The sync websocket</h3>
+<p>One per charger: <code>wss://api.hypervolt.co.uk/ws/charger/{id}/sync</code>, opened with headers
+<code>Origin: https://hypervolt.co.uk</code> and <code>User-Agent: Predbat</code>. Messages are JSON-RPC 2.0. Every
+request carries a unique string <code>id</code>; the reply carries the same <code>id</code> with <code>result</code> or <code>error</code>.
+The server also pushes unsolicited messages with <code>method</code> and <code>params</code>.</p>
+<p>After connecting, the client sends <code>login</code> and, on <code>{"authenticated": true}</code>, asks for state:</p>
+<table>
+<thead>
+<tr>
+<th>Request</th>
+<th>Params</th>
+<th>Reply / push</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>login</code></td>
+<td><code>{"token": &lt;access_token&gt;, "version": 3}</code></td>
+<td><code>{"authenticated": true}</code></td>
+</tr>
+<tr>
+<td><code>sync.snapshot</code></td>
+<td>—</td>
+<td>list of single-key objects, see 2.5</td>
+</tr>
+<tr>
+<td><code>plugncharge.get</code></td>
+<td>— (API version 3 only)</td>
+<td><code>{"applied": "boost"}</code></td>
+</tr>
+<tr>
+<td><code>firmware.version</code></td>
+<td>—</td>
+<td>a string or number, e.g. <code>"2483.2"</code></td>
+</tr>
+<tr>
+<td><code>get.name</code></td>
+<td>—</td>
+<td>the charger's name</td>
+</tr>
+<tr>
+<td><code>get.pilot_status</code></td>
+<td>—</td>
+<td><code>{"pilot_status": …}</code>; the integration only sees it pushed, so whether the request is answered is to be confirmed (section 13)</td>
+</tr>
+<tr>
+<td><code>sync.apply</code></td>
+<td>one or more of <code>{"release": bool}</code>, <code>{"max_current": &lt;mA&gt;}</code>, <code>{"solar_mode": "&lt;mode&gt;"}</code></td>
+<td>the applied keys, as a snapshot</td>
+</tr>
+<tr>
+<td><code>plugncharge.set</code></td>
+<td><code>{"mode": "&lt;mode&gt;"}</code> (API version 3 only)</td>
+<td><code>{"mode": "boost", "applied": true}</code></td>
+</tr>
+</tbody>
+</table>
+<p>Pushes seen on the sync socket: <code>sync.apply</code> (same shape as a snapshot), <code>get.session</code> (2.6,
+API version 3) and <code>get.pilot_status</code> (<code>{"pilot_status": "A"|"B"|"C"}</code>). An <code>error</code> reply looks
+like <code>{"code": 409, "error": "Concurrent modifications invalidated this request"}</code>.</p>
+<h3 id="24-the-session-websocket-api-version-2-only">2.4 The session websocket (API version 2 only)</h3>
+<p><code>wss://api.hypervolt.co.uk/ws/charger/{id}/session/in-progress</code>, same headers, no login message.
+It pushes session objects (2.6) only. An API version 3 charger delivers the same data as
+<code>get.session</code> on the sync socket, so this socket is opened only for API version 2.</p>
+<h3 id="25-snapshot-fields-used">2.5 Snapshot fields used</h3>
+<table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>release_state</code></td>
+<td><code>default</code>, or <code>released</code> when charging has been stopped by the user or by Predbat</td>
+</tr>
+<tr>
+<td><code>max_current</code></td>
+<td>milliamps</td>
+</tr>
+<tr>
+<td><code>solar_mode</code></td>
+<td>charge mode on API version 2: <code>boost</code>, <code>eco</code>, <code>super_eco</code></td>
+</tr>
+<tr>
+<td><code>lock_state</code></td>
+<td><code>unlocked</code>, <code>pending_lock</code>, <code>locked</code>; published as an attribute only</td>
+</tr>
+<tr>
+<td><code>features</code></td>
+<td>list; <code>home-battery-drain-prevention</code> adds the <code>super_eco_battery_safe</code> mode</td>
+</tr>
+</tbody>
+</table>
+<h3 id="26-session-fields-used">2.6 Session fields used</h3>
+<p><code>charging</code> (bool), <code>session</code> (id; a new id is a new session), <code>watt_hours</code>, <code>true_milli_amps</code>,
+<code>voltage</code>, <code>ct_current</code> (mA), and on API version 3 <code>ev_power</code>, <code>house_power</code>, <code>grid_power</code>,
+<code>generation_power</code> (W).</p>
+<h3 id="27-charger-and-api-versions">2.7 Charger and API versions</h3>
+<p>Pure function <code>charger_api_version(charger_id, firmware_version)</code>, ported from the integration:</p>
+<ul>
+<li>Major version from the id: the number of hex digits in the decimal id, rounded up to an even
+  number; 12 → 2, 16 → 3, anything else (or unparsable) → 3.</li>
+<li>Major 3 → API 3. Major 2 with a firmware version string of 7 characters or fewer (updated V2
+  firmware reports <code>"1"</code> or <code>"1.0"</code>) → API 3. Otherwise → API 2, including while firmware is not
+  yet known.</li>
+</ul>
+<p>So a V2 charger first logs in as API 2 and is promoted to API 3 once <code>firmware.version</code> arrives.
+On promotion the client sends <code>plugncharge.get</code> and closes the session socket.</p>
+<h2 id="3-architecture">3. Architecture</h2>
+<p>One new file, <code>apps/predbat/hypervolt.py</code>:</p>
+<ul>
+<li><code>HypervoltCharger</code> — dataclass of one charger's state, built up from messages: id, model,
+  name, firmware, <code>api_version</code>, <code>release_state</code>, <code>charging</code>, <code>pilot_status</code>, power in watts,
+  session id, session energy in kWh, max current in amps, charge mode, features, lock state,
+  <code>last_message</code> (epoch seconds of the last message from either socket).</li>
+<li><code>apply_snapshot(charger, items)</code>, <code>apply_session(charger, result)</code>, <code>apply_pilot(charger,
+  result)</code>, <code>apply_plugncharge(charger, result)</code> — pure functions that update a
+  <code>HypervoltCharger</code> in place from a message body. A missing key leaves the field unchanged; a
+  malformed value is ignored, never raised.</li>
+<li><code>HypervoltTransport</code> — owns tokens, the REST call, and per charger a <code>ChargerLink</code>: the sync
+  socket, the session socket where needed, a reader task each, and a map of pending request ids
+  to futures. Request/response correlation makes every command awaitable:
+  <code>await transport.set_release(charger_id, True)</code> returns the result or raises. Raises
+  <code>HypervoltAuthError</code> (bad credentials), <code>HypervoltRefusedError</code> (an <code>error</code> reply),
+  <code>HypervoltTimeoutError</code> (no reply within <code>COMMAND_TIMEOUT_SECONDS</code>), <code>HypervoltApiError</code>
+  (anything else), all under <code>HypervoltError</code>. REST calls and websocket connects are recorded
+  with <code>record_api_call("hypervolt", …)</code>.</li>
+<li><code>HypervoltAPI(ComponentBase)</code> — publishing, event handling, automatic configuration and
+  plan-led control, driven from <code>run()</code> every 60 seconds. It reads charger state from the
+  transport and never touches <code>aiohttp</code>.</li>
+</ul>
+<h3 id="31-connection-model">3.1 Connection model</h3>
+<p>The sockets are long-lived, unlike Wallbox's per-request REST. <code>HypervoltTransport.connect(id)</code>
+starts a reader task per socket that loops: connect, (sync) login and request state, read until
+closed, back off, reconnect. Back-off starts at a random 3–12 seconds and grows by 1.7× to a
+300 second cap, reset after the fourth message on a connection, as the integration does. The
+reader updates the <code>HypervoltCharger</code> through the pure <code>apply_*</code> functions and resolves pending
+futures; it never calls Predbat.</p>
+<p><code>run()</code> checks link health each cycle:</p>
+<ul>
+<li>The access token is refreshed when it has less than <code>TOKEN_MARGIN_SECONDS</code> (600), or half its
+  lifetime if that is shorter, left (a 300 second Keycloak token would otherwise always be due).
+  A refresh does not reconnect the sockets: the token is only sent at login, and a reader that is
+  dropped reconnects with the current token. <code>authenticate()</code> holds a lock, so readers
+  reconnecting together share one refresh.</li>
+<li>Only the sync reader signs in; the session socket carries no token. Once a password sign in
+  is refused, readers get the refusal without a request, and only <code>run()</code> retries.</li>
+<li>After start-up, a refused sign in backs off (120 seconds doubling to an hour) so old
+  credentials cannot lock the Hypervolt account; each <code>run()</code> still logs and returns False.
+  When it succeeds again the stopped readers are restarted.</li>
+<li>A charger with no message for <code>PROBE_SECONDS</code> (120) is sent <code>sync.snapshot</code>; at
+  <code>STALE_SECONDS</code> (240) it is stale, published but skipped by control; at 480 seconds it is
+  reconnected. A charger whose reader task has ended is reconnected on the next <code>run()</code>.</li>
+<li>One message that cannot be handled is logged and skipped; anything else unexpected reconnects
+  with back-off. An <code>error</code> reply may be a dict or a bare string.</li>
+<li><code>final()</code> cancels every reader task and closes every socket, so a component restart leaves no
+  orphaned task.</li>
+</ul>
+<h2 id="4-configuration">4. Configuration</h2>
+<h3 id="41-component_list-entry-componentspy">4.1 <code>COMPONENT_LIST</code> entry (<code>components.py</code>)</h3>
+<pre><code class="language-python">&quot;hypervolt&quot;: {
+    &quot;class&quot;: &quot;hypervolt.HypervoltAPI&quot;,
+    &quot;name&quot;: &quot;Hypervolt Charger&quot;,
+    &quot;event_filter&quot;: &quot;predbat_hypervolt_&quot;,
+    &quot;args&quot;: {
+        &quot;username&quot;: {&quot;required&quot;: True, &quot;secret&quot;: True, &quot;config&quot;: &quot;hypervolt_username&quot;},
+        &quot;password&quot;: {&quot;required&quot;: True, &quot;secret&quot;: True, &quot;config&quot;: &quot;hypervolt_password&quot;},
+        &quot;automatic&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;hypervolt_automatic&quot;, &quot;default&quot;: True},
+        &quot;hypervolt_control&quot;: {&quot;required&quot;: False, &quot;config&quot;: &quot;hypervolt_control&quot;, &quot;default&quot;: False},
+    },
+    &quot;phase&quot;: 1,
+    &quot;can_restart&quot;: True,
+},
+</code></pre>
+<p>There is no poll interval: state is pushed, and <code>run()</code> publishes every 60 seconds.</p>
+<h3 id="42-apps_schema-additions-configpy">4.2 <code>APPS_SCHEMA</code> additions (<code>config.py</code>)</h3>
+<pre><code class="language-python">&quot;hypervolt_username&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+&quot;hypervolt_password&quot;: {&quot;type&quot;: &quot;string&quot;, &quot;empty&quot;: False},
+&quot;hypervolt_automatic&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+&quot;hypervolt_control&quot;: {&quot;type&quot;: &quot;boolean&quot;},
+</code></pre>
+<h2 id="5-published-entities">5. Published entities</h2>
+<p>Per charger, with <code>&lt;p&gt;</code> = <code>{prefix}_hypervolt_{charger_id}</code>, all through <code>dashboard_item</code> with
+<code>app="hypervolt"</code>. Friendly names carry the charger's name, as Wallbox's do.</p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>State</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sensor.&lt;p&gt;_status</code></td>
+<td><code>charging</code>, <code>stopped</code> (released), <code>connected</code>, <code>disconnected</code>, <code>unknown</code></td>
+<td>attributes: <code>model</code>, <code>name</code>, <code>firmware_version</code>, <code>api_version</code>, <code>release_state</code>, <code>pilot_status</code>, <code>lock_state</code>, <code>features</code>, <code>stale</code></td>
+</tr>
+<tr>
+<td><code>sensor.&lt;p&gt;_power</code></td>
+<td>W</td>
+<td><code>ev_power</code> when present, unless it is under half of <code>true_milli_amps</code> × <code>voltage</code> / 1000 (and that is at least 500 W) - a V3 charger's <code>ev_power</code> lags at the start of a charge - else <code>true_milli_amps</code> × <code>voltage</code> / 1000; a message with neither keeps the last value; 0 when not charging</td>
+</tr>
+<tr>
+<td><code>sensor.&lt;p&gt;_session_energy</code></td>
+<td>kWh</td>
+<td><code>watt_hours</code> / 1000, the session maximum; holds the last value between sessions and restarts at the new value when the session id changes, so it is never <code>unknown</code>. On the V3 API a message with no session id (it sends none; seen on a Home 3 Pro, firmware 4009) starts a new session when its reading is below the held value, so the sensor drops to 0 at a stop</td>
+</tr>
+<tr>
+<td><code>binary_sensor.&lt;p&gt;_connected</code></td>
+<td>on/off/unavailable</td>
+<td>pilot B or C → on, A → off; with no pilot status yet: on while charging, else unavailable</td>
+</tr>
+<tr>
+<td><code>binary_sensor.&lt;p&gt;_plugged</code></td>
+<td>on/off/unavailable</td>
+<td>as <code>_connected</code>, but never inferred from charging (see <code>plugged_state</code>)</td>
+</tr>
+<tr>
+<td><code>binary_sensor.&lt;p&gt;_charging</code></td>
+<td>on/off</td>
+<td>session <code>charging</code></td>
+</tr>
+<tr>
+<td><code>switch.&lt;p&gt;_charging</code></td>
+<td>on/off</td>
+<td>on when <code>release_state</code> is <code>default</code>; on sends <code>release: false</code>, off sends <code>release: true</code></td>
+</tr>
+<tr>
+<td><code>number.&lt;p&gt;_max_charging_current</code></td>
+<td>A</td>
+<td>min 6, max 32, step 1</td>
+</tr>
+<tr>
+<td><code>select.&lt;p&gt;_charge_mode</code></td>
+<td><code>boost</code> / <code>eco</code> / <code>super_eco</code> (+ <code>super_eco_battery_safe</code> when the feature is listed)</td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<p>Global: <code>switch.{prefix}_hypervolt_control</code>, published only while plan-led control is available.</p>
+<p>The state of charge is not published: the charger cannot know it.</p>
+<h2 id="6-automatic-configuration">6. Automatic configuration</h2>
+<p>As Wallbox section 6, with <code>hypervolt</code> in place of <code>wallbox</code>. Car order is the account's charger
+list in id order, append-only while Predbat runs. Through <code>set_arg_auto</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Argument</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>car_charging_energy</code></td>
+<td>list of <code>sensor.&lt;p&gt;_session_energy</code></td>
+</tr>
+<tr>
+<td><code>car_charging_planned</code></td>
+<td>list of <code>binary_sensor.&lt;p&gt;_connected</code></td>
+</tr>
+<tr>
+<td><code>car_charging_plugged</code></td>
+<td>list of <code>binary_sensor.&lt;p&gt;_plugged</code></td>
+</tr>
+<tr>
+<td><code>car_charging_power</code></td>
+<td>list of <code>sensor.&lt;p&gt;_power</code></td>
+</tr>
+<tr>
+<td><code>car_charging_now</code></td>
+<td>the same power list, <code>overwrite=False</code></td>
+</tr>
+<tr>
+<td><code>num_cars</code></td>
+<td>raised to the number of chargers if lower, via <code>set_arg</code></td>
+</tr>
+</tbody>
+</table>
+<p>An API version 2 charger has no pilot status, so its <code>_connected</code> sensor is on while it charges
+and unavailable otherwise. The component logs one <code>Info</code> per such charger pointing at the V2 guidance in
+<code>docs/car-charging.md</code> (a user-maintained helper for <code>car_charging_planned</code>), but still wires it,
+so the list stays one entry per car.</p>
+<h2 id="7-controls">7. Controls</h2>
+<h3 id="71-manual">7.1 Manual</h3>
+<p>Event stubs queue <code>(handler, args)</code>; the queue is drained at the top of the next <code>run()</code>, as in
+Wallbox. Each command is awaited for its reply. A refused or timed-out command logs a warning
+with Hypervolt's reason and does not fail the component.</p>
+<table>
+<thead>
+<tr>
+<th>Entity</th>
+<th>Action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>switch.&lt;p&gt;_charging</code></td>
+<td>on → <code>sync.apply {"release": false}</code>, off → <code>{"release": true}</code></td>
+</tr>
+<tr>
+<td><code>number.&lt;p&gt;_max_charging_current</code></td>
+<td><code>sync.apply {"max_current": amps × 1000}</code>, amps clamped to 6–32; non-numeric ignored</td>
+</tr>
+<tr>
+<td><code>select.&lt;p&gt;_charge_mode</code></td>
+<td>API 3: <code>plugncharge.set {"mode": value}</code>; API 2: <code>sync.apply {"solar_mode": value}</code>; a value not in the options ignored</td>
+</tr>
+</tbody>
+</table>
+<h3 id="72-predbat-led-charging-hypervolt_control">7.2 Predbat-led charging (<code>hypervolt_control</code>)</h3>
+<p>Available when <code>hypervolt_control</code> and <code>hypervolt_automatic</code> are both on; the user can then turn
+it on and off with <code>switch.{prefix}_hypervolt_control</code>. Each <code>run()</code>, for car N, read the
+<code>planned</code> attribute of <code>binary_sensor.{prefix}_car_charging_slot</code> (suffix <code>_N</code> for N &gt; 0) and
+parse it with <code>utils.parse_car_plan_windows</code> / <code>in_car_plan_window</code>:</p>
+<ul>
+<li>Inside a window, not disconnected, and <code>release_state</code> is <code>released</code> → send <code>release: false</code>,
+  and drop the charger from <code>released_by_predbat</code>. "Not disconnected" rather than "connected",
+  so an API 2 charger, which never reports a car that is not drawing power, can be started.</li>
+<li>Outside a window, connected, and <code>release_state</code> is <code>default</code> → add the charger to
+  <code>released_by_predbat</code>, save, then send <code>release: true</code>. Recorded before it is sent, as Wallbox
+  records a pause.</li>
+<li>Disconnected (pilot A) → if it is still <code>released</code> and Predbat stopped it, send <code>release: false</code>
+  (whether a stop outlives the unplug is not known); then forget it.</li>
+<li>Stale, or no plan for the car → nothing.</li>
+</ul>
+<p>Unlike Wallbox, which can only pause a charger that is already charging, a Hypervolt can be
+released while it waits for the car, so a car plugged in outside a window is stopped at the next
+<code>run()</code> that sees pilot B, within 60 seconds. <code>run()</code> is the one place commands are sent; the
+reader tasks only record state.</p>
+<p>At most one command per charger per <code>run()</code>, only on fresh state (no message older than
+<code>STALE_SECONDS</code>).</p>
+<p><strong>Fail open.</strong> A charger in <code>released_by_predbat</code> that still reads <code>released</code> and whose
+connection is unknown publishes <code>_connected</code> as on. One whose stop never took effect (it reads
+<code>default</code>) does not, and is forgotten inside a window. Otherwise a V2 API charger, or a V3 charger after a restart with no pilot
+status, would drop out of <code>car_charging_planned</code> once stopped, get no plan, and never be started.</p>
+<p><strong>Read only</strong> is read with <code>get_arg("set_read_only")</code>: the base's <code>set_read_only</code> attribute is
+<code>True</code> from <code>reset()</code> until the first <code>update_pred()</code>, which comes after this component's first
+run.</p>
+<p><strong>Release.</strong> When Predbat is read-only, or the control switch is off, or control is unavailable,
+every charger in <code>released_by_predbat</code> is sent <code>release: false</code> and forgotten. This hands the
+charger back to its own charge mode and schedule.</p>
+<p><strong>Persistence.</strong> The switch state and <code>released_by_predbat</code> are saved with
+<code>storage.save("hypervolt", "control_state", …)</code> and loaded on the first run, merging rather than
+replacing, retried until the read succeeds. This is the myenergi lesson in
+<code>tools/debug-journal.md</code>: release must run from stored state even when control has since been
+turned off.</p>
+<p><strong>Known limits.</strong> A schedule enabled in the Hypervolt app competes with Predbat: inside a Predbat
+window the charger still waits for its own schedule. Eco and Super Eco modes only charge from
+surplus solar. The docs tell users to use Boost with the schedule off when they turn
+<code>hypervolt_control</code> on, and the status sensor carries the charge mode so the conflict is visible.</p>
+<h2 id="8-error-handling">8. Error handling</h2>
+<ul>
+<li><code>HypervoltAuthError</code> at sign in logs an error and returns False, so the base class's start-up
+  back-off applies. After start-up, a failed refresh falls back to sign in; a failed sign in
+  logs an error each <code>run()</code> and returns False.</li>
+<li>A socket that will not connect is the reader's business (its back-off); <code>run()</code> returns True
+  while the account signed in and at least one charger has a fresh message, and False when every
+  charger is stale. An account with no chargers yet returns True without stamping a success, as
+  Wallbox does, so start-up is not held up waiting for it.</li>
+<li><code>update_success_timestamp()</code> is called only when at least one charger has a fresh message.</li>
+<li>The charger list is fetched on the first run and every 30 minutes; a charger added later gets
+  a link and becomes the next car.</li>
+</ul>
+<h2 id="9-command-line-test-interface">9. Command line test interface</h2>
+<p><code>python3 hypervolt.py --username … --password …</code>, in the shape of Wallbox's <code>main()</code>:</p>
+<ul>
+<li>Default: sign in, list chargers, connect, wait <code>--wait</code> seconds (default 20), print each
+  charger's record.</li>
+<li><code>--raw</code> prints every message received (with the token redacted) as JSON lines, for fixtures.</li>
+<li><code>--charger &lt;id&gt;</code> selects a charger for the actions; default the first.</li>
+<li><code>--start</code>, <code>--stop</code> (release false/true), <code>--max-current &lt;amps&gt;</code>,
+  <code>--mode {boost,eco,super_eco,super_eco_battery_safe}</code>.</li>
+</ul>
+<h2 id="10-testing">10. Testing</h2>
+<p><code>apps/predbat/tests/test_hypervolt.py</code>, in the Wallbox style: assert-style functions called from
+one <code>test_hypervolt(my_predbat=None)</code>, registered in <code>TEST_REGISTRY</code> as <code>hypervolt</code>.</p>
+<ul>
+<li>Transport: REST under <code>patch("aiohttp.ClientSession")</code>; sockets through a <code>FakeSocket</code> whose
+  <code>receive()</code> returns queued messages and records <code>send_str()</code> calls. No real network.</li>
+<li>Component tests replace the transport with a stub holding <code>HypervoltCharger</code> records.</li>
+<li>Fixtures are real messages captured with <code>--raw</code> from a maintainer's charger, with ids, names
+  and tokens replaced. Capture is the second task, so the <code>apply_*</code> functions are written
+  against real data.</li>
+</ul>
+<p>Coverage: every <code>apply_*</code> function, including missing and malformed keys; <code>charger_api_version</code>
+for 12- and 16-byte ids, short and long firmware, unparsable ids; sign in, refresh, refresh
+rejected then sign in, bad credentials; login sent with the token, state requested after
+<code>authenticated</code>, <code>plugncharge.get</code> only for API 3; reply correlation, error reply, timeout;
+reconnect with back-off and reconnect after token refresh; promotion from API 2 to 3; the
+session socket only for API 2; entity set for one and two chargers; session energy across a new
+session; every manual control and its clamping; automatic configuration; every control rule in
+7.2, release, persistence across a restart; staleness skips control and fails the cycle only
+when every charger is stale; <code>final()</code> cancels the tasks.</p>
+<p>The last task is a live check on real hardware: stop, start, plug in outside a window, release.</p>
+<h2 id="11-documentation">11. Documentation</h2>
+<ul>
+<li><code>docs/components.md</code>: a <code>Hypervolt Charger (hypervolt)</code> section and table of contents entry.</li>
+<li><code>docs/car-charging.md</code>: a "Hypervolt direct integration" section with Predbat-led charging,
+  the schedule and Eco caveats, the V2 plug detection limit, and the missing state of charge;
+  add Hypervolt to the lists of supported charger integrations.</li>
+<li><code>docs/apps-yaml.md</code>: the four keys and the two secrets.</li>
+<li><code>docs/devices.md</code>: the existing Hypervolt section becomes the Home Assistant route, with a
+  pointer to the direct component.</li>
+<li><code>apps/predbat/config/apps.yaml</code>: a commented example block after Wallbox's.</li>
+<li><code>CLAUDE.md</code>, <code>AGENTS.md</code>, <code>.github/copilot-instructions.md</code>: the component count and names.</li>
+</ul>
+<h2 id="12-out-of-scope">12. Out of scope</h2>
+<ul>
+<li>Schedule editing, activation mode (plug and charge / schedule / Octopus), LED controls, lock
+  control and charger renaming.</li>
+<li>Octopus Intelligent wiring: the API exposes no dispatch slots.</li>
+<li>Reporting to the discovery coordinator.</li>
+<li>The Predbat.com integration definition and credential UI, which live in another repo.</li>
+</ul>
+<h2 id="13-risks-to-settle-on-hardware">13. Risks, to settle on hardware</h2>
+<ul>
+<li><strong>The <code>client_id</code>.</strong> <code>home-assistant</code> is the client Hypervolt issued for the community
+  integration. Reusing it from Predbat may or may not be welcome; ask Hypervolt (or gndean)
+  before release. It is one constant, <code>HYPERVOLT_CLIENT_ID</code>.</li>
+<li><strong>Pilot status at connect.</strong> The integration never requests <code>get.pilot_status</code>; it may be
+  pushed only on a change, leaving <code>_connected</code> unavailable after a restart until the cable
+  moves. The capture task must establish this. If it is not pushed at connect, try sending
+  <code>get.pilot_status</code> as a request.</li>
+<li><strong>Release across unplug.</strong> Whether <code>release_state</code> returns to <code>default</code> when the car is
+  unplugged, and whether a <code>release: false</code> sent to a disconnected charger is refused.</li>
+<li><strong><code>ev_power</code> units and presence</strong>, and whether <code>get.session</code> is pushed while not charging.</li>
+<li><strong>Lock.</strong> Whether a locked charger refuses <code>release</code>.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

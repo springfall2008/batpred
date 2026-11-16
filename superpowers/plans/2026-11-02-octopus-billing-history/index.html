@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Octopus/Kraken Billing in the History View Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Octopus/Kraken Billing in the History View Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-11-02-octopus-billing-history.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Octopus/Kraken Billing in the History View Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="octopuskraken-billing-in-the-history-view-implementation-plan">Octopus/Kraken Billing in the History View Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Read half-hourly billing from the Kraken <code>measurements</code> API for Octopus and Kraken (EDF/E.ON) users, publish it as <code>predbat.billing</code>, and show it alongside Predbat's own cost on the Plan page's History view, with a 7-day picker.</p>
+<p><strong>Architecture:</strong> A new pure module <code>billing.py</code> parses <code>measurements</code> responses, keeps a 7-day slot cache, builds the sensor, and attaches billing to History-view plan JSON. <code>OctopusAPI</code> and <code>KrakenAPI</code> each call it on a 3-hour cadence and publish the same <code>predbat.billing</code> entity. <code>calculate_yesterday()</code>'s replay is extracted into a reusable per-day function, so the six older days are rebuilt once a day and published as <code>predbat.plan_history</code>. The Plan page renders the extra columns, the summary strip and the day picker from JSON.</p>
+<p><strong>Tech Stack:</strong> Python 3 (aiohttp, asyncio), the Predbat component framework (<code>ComponentBase</code>, Storage, <code>dashboard_item</code>), embedded JS in <code>web_helper.py</code>, the custom <code>unit_test.py</code> harness.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-11-01-octopus-billing-history-design.md</code>. Read it first; this plan argues from it.</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Line length 256 (Black) / 250 (Flake8); 100% docstrings (<code>interrogate</code>); British English (CSpell, add new words to <code>.cspell/custom-dictionary-workspace.txt</code>); <code>lower_case_with_underscores</code> names.</li>
+<li>Components read config via <code>get_arg</code>, never <code>self.base.&lt;attr&gt;</code> / <code>getattr(self.base, ...)</code>. File access goes through the Storage component (<code>self.storage.load/save</code>).</li>
+<li><strong>Run GitNexus <code>impact</code> (upstream) on every existing symbol before editing it, and report the blast radius.</strong> Warn the user on HIGH/CRITICAL. Run <code>detect_changes()</code> before every commit.</li>
+<li>Tests: new tests go in <code>apps/predbat/tests/test_billing.py</code> (and the modules named per task). Each exported runner returns <code>failed</code> (bool) and is registered in <code>TEST_REGISTRY</code> in <code>apps/predbat/unit_test.py</code>. Run from <code>coverage/</code>: <code>./run_all --test &lt;name&gt; &gt; /tmp/... 2&gt;&amp;1</code>, then grep the saved file. Never pipe straight to grep.</li>
+<li>Bucket labels are never matched by name. Store whatever labels arrive.</li>
+<li><strong>Bad data is worse than no data.</strong> If a figure cannot be trusted, hide it.</li>
+<li>Billing amounts are stored in <strong>pence</strong>; plan JSON cost fields stay in the currency's major unit (as <code>cost_change</code> is today).</li>
+<li>Enabled automatically for every running <code>OctopusAPI</code> / <code>KrakenAPI</code>. No new config switch.</li>
+<li>Only the MPANs Predbat models: Octopus <code>self.tariffs["import"]["mpan"]</code> / <code>self.tariffs["export"]["mpan"]</code>; Kraken <code>self.import_mpan</code> / <code>self.export_mpan</code> (export queried on <code>self.export_account_id or self.account_id</code>).</li>
+</ul>
+<h2 id="review-focus">Review Focus</h2>
+<ol>
+<li><strong>Clock-change days (46/50 half-hours).</strong> A day is complete at its <em>actual</em> slot count in local time; it is never shown as incomplete or with a shifted row mapping. Test in Task 2 (<code>complete</code> on 25 Oct 2026, 50 slots) and Task 5 (rows map by UTC instant, not by local hour).</li>
+<li><strong>A Kraken/Octopus response that returns <code>data</code> with partial <code>errors</code></strong> (e.g. <code>KT-CT-4718</code> on one MPAN). It must count as a failed read for that leg, never as an empty day. Test in Task 3.</li>
+<li><strong><code>plan_interval_minutes</code> other than 30</strong> (e.g. 60). A row sums the billing slots inside it, and a row only partly covered by published billing shows "—". Test in Task 5.</li>
+<li><strong>A row whose Predbat cost includes the midnight standing-charge step.</strong> Diff must not show the standing charge as a mismatch. Test in Task 5.</li>
+<li><strong>Restart mid-cycle.</strong> The billing cache is restored from Storage and not refetched until it is due, and complete days are never refetched. Test in Task 3.</li>
+</ol>
+<hr />
+<h2 id="file-structure">File Structure</h2>
+<table>
+<thead>
+<tr>
+<th>File</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apps/predbat/billing.py</code> (create)</td>
+<td>Pure functions: parse <code>measurements</code>, merge/prune the slot cache, day completeness, sensor state/attributes, attach billing + summary to plan JSON, the shared async <code>BillingReader</code> used by both components</td>
+</tr>
+<tr>
+<td><code>apps/predbat/octopus.py</code> (modify)</td>
+<td><code>OctopusAPI.run()</code> calls the billing reader every 180 min; billing cache in Storage</td>
+</tr>
+<tr>
+<td><code>apps/predbat/kraken.py</code> (modify)</td>
+<td><code>KrakenAPI.run()</code> does the same</td>
+</tr>
+<tr>
+<td><code>apps/predbat/output.py</code> (modify)</td>
+<td>Extract the History replay into <code>replay_history_day()</code>; add <code>calculate_history_days()</code>; attach billing to yesterday JSON and the older days</td>
+</tr>
+<tr>
+<td><code>apps/predbat/predbat.py</code> or wherever <code>calculate_yesterday()</code> is called (modify)</td>
+<td>Call <code>calculate_history_days()</code> next to it</td>
+</tr>
+<tr>
+<td><code>apps/predbat/web.py</code> (modify)</td>
+<td><code>/api/plan_data</code> adds <code>history_days</code>; new <code>/api/plan_history?date=</code></td>
+</tr>
+<tr>
+<td><code>apps/predbat/web_helper.py</code> (modify)</td>
+<td>Day picker, Billed/Diff columns, summary strip, bucket hover, event highlight</td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_billing.py</code> (create)</td>
+<td>Tests for <code>billing.py</code> and the component integrations</td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_history_days.py</code> (create)</td>
+<td>Tests for the replay extraction and older days</td>
+</tr>
+<tr>
+<td><code>apps/predbat/tests/test_billing_client_js.py</code> (create)</td>
+<td>Structural JS tests (same pattern as <code>tests/test_debug_history_client_js.py</code>)</td>
+</tr>
+<tr>
+<td><code>docs/</code> (modify)</td>
+<td>The new sensor and the History-view additions</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="task-1-verify-the-live-data-shape-spike-needs-the-user">Task 1: Verify the live data shape (spike, needs the user)</h3>
+<p>Nothing else is built until this is done. It settles the facts the parser depends on.</p>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/tests/billing_fixtures.py</code>: anonymised responses as Python dicts (MPANs, account numbers and addresses replaced)
+- Modify: <code>docs/superpowers/specs/2026-11-01-octopus-billing-history-design.md</code>: append a "Verified data shape" section</p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>OCTOPUS_IOG_IMPORT_DAY</code>, <code>OCTOPUS_EXPORT_DAY</code> (or <code>None</code> if export returns nothing), <code>EON_IMPORT_DAY</code> (if an E.ON account is available) in <code>tests/billing_fixtures.py</code>. Each is the <code>data</code> part of a <code>MEASUREMENTS_QUERY</code> response for one complete local day.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write a scratch script</strong> (in the session scratchpad, not the repo) that obtains a Kraken token the way <code>OctopusAPI</code> does and runs <code>octopus.MEASUREMENTS_QUERY</code> for the import MPAN, then the export MPAN, for one complete local day, printing the raw JSON. Do the same against <code>https://api.eonnext-kraken.energy/v1/graphql/</code> if an E.ON account is available.</li>
+<li>[ ] <strong>Step 2: Ask the user to run it</strong> (it needs their API key; never store the key) and paste or save the output.</li>
+<li>[ ] <strong>Step 3: Record the answers</strong> in the spec's new section, each with the evidence:</li>
+<li><code>estimatedAmount</code> units (pence or pounds) for <code>costInclTax</code>;</li>
+<li>whether <code>statistics</code> holds only per-bucket rows, or also a total row (so bucket kWh would double the node <code>value</code>);</li>
+<li>the standing-charge statistic's shape (<code>value</code> 0/None and non-zero cost?);</li>
+<li>export: does the export MPAN return edges, and is its cost positive (earnings)?</li>
+<li>whether <code>costInclTax ÷ kWh</code> matches Predbat's inc-VAT <code>value_inc_vat</code> rate for the same slots on the user's tariff.</li>
+<li>[ ] <strong>Step 4: Save the anonymised fixtures</strong> to <code>tests/billing_fixtures.py</code> with a module docstring saying where and when each came from.</li>
+<li>[ ] <strong>Step 5: Gate.</strong> If any answer contradicts Task 2's rules (bucket = statistic with kWh &gt; 0; standing = kWh 0 and cost ≠ 0; <code>costInclTax</code>; pence), stop and update this plan and the spec before Task 2.</li>
+<li>[ ] <strong>Step 6: Commit</strong> <code>tests/billing_fixtures.py</code> and the spec update: <code>git commit -m "test(billing): record live measurements fixtures and verified data shape"</code></li>
+</ul>
+<hr />
+<h3 id="task-2-billingpy-parse-cache-completeness-sensor">Task 2: <code>billing.py</code>: parse, cache, completeness, sensor</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/billing.py</code>
+- Create: <code>apps/predbat/tests/test_billing.py</code> (runner <code>run_billing_tests(my_predbat) -&gt; bool</code>)
+- Modify: <code>apps/predbat/unit_test.py</code>: import and register <code>("billing", run_billing_tests, "Octopus/Kraken billing parser, cache, sensor and History attach", False)</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>tests/billing_fixture.json</code> from Task 1 (keys <code>octopus_iog_import_2026_10_31</code>, <code>octopus_iog_import_2026_10_25</code>, <code>octopus_export_2026_10_31</code>).
+- Produces (all in <code>billing.py</code>):
+  - <code>BILLING_DAYS = 7</code>, <code>BILLING_REFRESH_MINUTES = 180</code>, <code>BILLING_ENTITY_SUFFIX = "billing"</code>
+  - <code>parse_measurements(response_data: dict | None) -&gt; dict[str, dict] | None</code>: keyed by slot start as <code>"%Y-%m-%dT%H:%M:%SZ"</code> UTC. Each value is <code>{"kwh": float, "cost": float, "standing": float, "buckets": {label: {"kwh": float, "cost": float}}}</code> in pence. Returns <code>None</code> if <code>response_data</code> is <code>None</code> (a failed read), and <code>{}</code> for a read with zero edges.
+  - <code>day_slot_starts(day: date, tz) -&gt; list[datetime]</code>: the UTC starts of every half-hour in that local day (46, 48 or 50).
+  - <code>merge_slots(cache: dict, leg: str, new_slots: dict, now_utc: datetime, tz) -&gt; dict</code>: returns a new cache with <code>new_slots</code> written under <code>cache[leg]</code> and anything before local midnight <code>BILLING_DAYS</code> days ago dropped.
+  - <code>days_to_fetch(cache: dict, leg: str, now_utc: datetime, tz) -&gt; list[date]</code>: local dates in the window (the <code>BILLING_DAYS</code> days before today, plus today) that are not complete for that leg.
+  - <code>build_billing_sensor(cache: dict, legs: dict, supplier: str, now_utc: datetime, tz) -&gt; tuple[float | None, dict]</code>: returns <code>(state, attributes)</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> in <code>tests/test_billing.py</code>:</li>
+<li><code>test_parse_iog_buckets</code>: parse <code>OCTOPUS_IOG_IMPORT_DAY</code>. Assert 48 slots; for every slot, <code>abs(sum(b["kwh"]) - kwh) &lt; 0.01</code> and <code>cost == sum(b["cost"])</code>; every slot's <code>standing</code> is 1.15674 and the day's standing sums to 55.52 (± 0.01), with no standing in <code>buckets</code>; labels are exactly the set found in the fixture (no hard-coded names in <code>billing.py</code>).</li>
+<li><code>test_parse_export_generation</code>: parse <code>octopus_export_2026_10_31</code>. 48 slots; the 18:00Z slot has one bucket <code>GENERATION</code> with kWh 1.417 and cost 44.86; the day sums to 5.363 kWh and 168.92p.</li>
+<li><code>test_parse_unknown_labels</code>: a synthetic node whose statistics are labelled <code>"Zebra"</code> and <code>"Yak"</code> gives buckets <code>{"Zebra": …, "Yak": …}</code>.</li>
+<li><code>test_parse_bucket_mismatch_drops_slot</code>: a node with <code>value</code> 1.0 whose buckets sum to 2.0 is left out of the result (an untrusted slot).</li>
+<li><code>test_parse_none_vs_empty</code>: <code>parse_measurements(None) is None</code>; <code>parse_measurements({"account": {"properties": [{"measurements": {"edges": []}}]}}) == {}</code>.</li>
+<li><code>test_day_slot_starts_clock_change</code>: <code>len(day_slot_starts(date(2026, 10, 25), ZoneInfo("Europe/London"))) == 50</code>, <code>… date(2026, 3, 29) … == 46</code>, <code>… date(2026, 11, 2) … == 48</code>.</li>
+<li><code>test_days_to_fetch_skips_complete</code>: with 48 import slots cached for 31 Oct and none for 1 Nov, <code>now</code> = 2 Nov 10:00 local. Assert 31 Oct is not in the result, 1 Nov and 2 Nov are, and nothing is before 26 Oct.</li>
+<li><code>test_merge_prunes_old</code>: a slot dated 20 Oct is gone after a merge at 2 Nov.</li>
+<li><code>test_sensor_shape</code>: from a cache holding a complete 1 Nov (import and export) and a partial 2 Nov, <code>build_billing_sensor</code> returns <code>state</code> equal to 1 Nov's net energy cost in pence. Attributes include <code>supplier</code>, <code>legs</code> (<code>{"import": True, "export": True}</code>), <code>complete_until</code> (ISO UTC end of the last contiguous published import slot), <code>slots</code> (<code>{"import": {...}, "export": {...}}</code>), and <code>days</code> (<code>{"2026-11-01": {"complete": True, "import_cost", "export_cost", "standing", "import_kwh", "export_kwh", "buckets": {label: {"kwh", "cost"}}}}</code>), plus <code>friendly_name</code>, <code>unit_of_measurement</code> <code>"p"</code> and <code>icon</code> <code>"mdi:receipt-text"</code>.</li>
+<li><code>test_sensor_no_data</code>: an empty cache gives <code>state is None</code>.</li>
+<li>[ ] <strong>Step 2: Run</strong> <code>cd coverage &amp;&amp; ./run_all --test billing &gt; /tmp/billing.txt 2&gt;&amp;1; grep -n "ERROR\|FAIL\|passed" /tmp/billing.txt</code>. Expected: import error (module missing).</li>
+<li>[ ] <strong>Step 3: Implement the functions</strong> in <code>billing.py</code> with the signatures above. Classify statistics by their <code>type</code> enum (verified in Task 1): <code>STANDING_CHARGE_COST</code> is standing charge; any other type is a bucket keyed by <code>label</code> (falling back to <code>type</code>). A bucket's kWh is its own <code>value</code>, or the node's <code>value</code> when it is <code>null</code> and it is the only non-standing statistic (export's <code>GENERATION_VALUE</code>). Drop buckets with zero kWh and zero cost. Cost is <code>costInclTax.estimatedAmount</code>, already in pence. A slot is complete for a day only when every start from <code>day_slot_starts</code> is present.</li>
+<li>[ ] <strong>Step 4: Run the tests.</strong> Expected: all pass.</li>
+<li>[ ] <strong>Step 5: Commit</strong> <code>git commit -m "feat(billing): parse Kraken measurements into a 7-day half-hour billing cache"</code></li>
+</ul>
+<hr />
+<h3 id="task-3-billingreader-octopus-integration">Task 3: <code>BillingReader</code> + Octopus integration</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/billing.py</code>: add <code>BillingReader</code>
+- Modify: <code>apps/predbat/octopus.py</code>: <code>OctopusAPI.__init__</code>/<code>initialize</code>, <code>run()</code> (around lines 824-930), plus <code>load_octopus_cache</code> and <code>save_octopus_cache</code> are <strong>not</strong> reused; billing gets its own Storage key
+- Test: <code>apps/predbat/tests/test_billing.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: Task 2 functions; <code>octopus.MEASUREMENTS_QUERY</code>; <code>OctopusAPI.async_graphql_query(query, request_context, ignore_errors=False)</code>.
+- Produces:
+  - <code>class BillingReader</code> in <code>billing.py</code>: <code>__init__(self, log, storage, storage_app: str, storage_name: str, tz)</code>; <code>async load(self) -&gt; None</code>; <code>async refresh(self, query_fn, account_id: str, mpans: dict[str, tuple[str, str] | None], now_utc: datetime) -&gt; bool</code> (where <code>mpans</code> = <code>{"import": (account_id, mpan), "export": (account_id, mpan) or None}</code> and <code>query_fn(query: str, context: str) -&gt; awaitable dict | None</code>; returns True if anything new was stored); <code>due(self, now_utc) -&gt; bool</code> (180 min since <code>fetched_at</code>, or never fetched); <code>sensor(self, supplier, now_utc) -&gt; tuple[float | None, dict]</code>.
+  - Publishes entity <code>self.base.prefix + ".billing"</code> (i.e. <code>predbat.billing</code>) via <code>dashboard_item(..., app="octopus")</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests:</strong></li>
+<li><code>test_reader_fetches_only_incomplete_days</code>: a mocked <code>query_fn</code> records each formatted query. With 31 Oct complete in the cache, <code>refresh</code> at 2 Nov 10:00 issues no query whose <code>startAt</code> is 31 Oct, and does issue queries for 1 Nov and 2 Nov.</li>
+<li><code>test_reader_failed_read_marks_leg</code>: <code>query_fn</code> returns <code>None</code> for the export MPAN. After <code>refresh</code>, <code>sensor()</code> attributes have <code>legs["export"] is False</code>, and the export cache is unchanged (not wiped).</li>
+<li><code>test_reader_partial_errors_is_failure</code>: (Review Focus 2) an <code>OctopusAPI</code> whose transport returns <code>{"data": {...}, "errors": [{"extensions": {"errorCode": "KT-CT-4718"}}]}</code> makes the Octopus <code>query_fn</code> adapter return <code>None</code>, so the day is not stored as empty.</li>
+<li><code>test_reader_restart_restores_cache</code>: (Review Focus 5) save via a fake Storage, construct a new reader, <code>load()</code>. <code>due()</code> is False when <code>fetched_at</code> was 10 minutes ago, and the slots are restored.</li>
+<li><code>test_octopus_run_publishes_billing</code>: drive <code>OctopusAPI.run()</code> with the test infra's mocked GraphQL (as the existing Octopus tests do) returning the Task 1 fixture. Assert <code>predbat.billing</code> was published, and that the import query used <code>tariffs["import"]["mpan"]</code> and no other MPAN.</li>
+<li>[ ] <strong>Step 2: Run</strong> <code>./run_all --test billing &gt; /tmp/billing.txt 2&gt;&amp;1</code> and grep. Expected: the new tests FAIL.</li>
+<li>[ ] <strong>Step 3: Implement <code>BillingReader</code>.</strong> Query one local day per request (<code>first</code> = 50), using <code>billing.BILLING_MEASUREMENTS_QUERY</code> (the <code>MEASUREMENTS_QUERY</code> shape plus <code>readingDirection: {direction}</code>; <code>CONSUMPTION</code> for import, <code>GENERATION</code> for export — Task 1 found the export MPAN returns nothing without it). Store under Storage <code>(storage_app, storage_name)</code> with a 14-day expiry, saving <code>{"slots": ..., "legs": ..., "fetched_at": ISO}</code>.</li>
+<li>[ ] <strong>Step 4: Wire it into <code>OctopusAPI</code>.</strong> Run <code>impact</code> on <code>OctopusAPI.run</code> first. Construct the reader in <code>initialize</code> with <code>storage_app="octopus_user"</code> and <code>storage_name="billing"</code>, and <code>await load()</code> inside the <code>if first:</code> block. After the tariff block, <code>if self.billing.due(now)</code>: call <code>refresh</code> with a <code>query_fn</code> that wraps <code>self.async_graphql_query(query, context)</code> and returns <code>None</code> whenever the raw response carried <code>errors</code>. Then publish the sensor whenever it refreshed, and on <code>first</code>. Skip the whole block when <code>"import"</code> is not in <code>self.tariffs</code> or has no <code>mpan</code>.</li>
+<li>[ ] <strong>Step 5: Run the tests</strong>, plus <code>./run_all -k octopus_ &gt; /tmp/oct.txt 2&gt;&amp;1</code>. Expected: all pass, and no existing Octopus test changes.</li>
+<li>[ ] <strong>Step 6: Commit</strong> <code>git commit -m "feat(octopus): publish half-hourly billing as predbat.billing"</code></li>
+</ul>
+<hr />
+<h3 id="task-4-kraken-integration">Task 4: Kraken integration</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/kraken.py</code>: <code>KrakenAPI.initialize</code>, <code>run()</code> (lines ~1800-1957)
+- Test: <code>apps/predbat/tests/test_billing.py</code> (reuse <code>make_kraken_api</code> / <code>attach_fake_storage</code> from <code>tests/test_kraken.py</code>)</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>BillingReader</code> (Task 3); <code>KrakenAPI.async_graphql_query(query, request_context)</code>, which already returns <code>None</code> on any GraphQL <code>errors</code>.
+- Produces: the same <code>predbat.billing</code> entity, <code>app="kraken"</code>, with <code>supplier = self.provider</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests:</strong></li>
+<li><code>test_kraken_run_publishes_billing</code>: with <code>current_tariff</code> and <code>import_mpan</code> set, mocked GraphQL returns <code>EON_IMPORT_DAY</code> (or a synthetic single-bucket day if Task 1 had no E.ON account). Assert <code>predbat.billing</code> is published with one bucket label per slot and <code>supplier == "eon"</code>.</li>
+<li><code>test_kraken_export_uses_export_account</code>: with <code>export_account_id="A-EXP"</code> and <code>export_mpan="X"</code>, the export query contains <code>accountNumber: "A-EXP"</code> and <code>marketSupplyPointId: "X"</code>.</li>
+<li><code>test_kraken_no_mpan_skips</code>: with <code>import_mpan=None</code>, no measurements query is sent and nothing is published.</li>
+<li>[ ] <strong>Step 2: Run</strong> them. Expected: FAIL.</li>
+<li>[ ] <strong>Step 3: Implement.</strong> Run <code>impact</code> on <code>KrakenAPI.run</code>. Storage is <code>("kraken", f"billing_{self.account_id}")</code>. <code>query_fn</code> is <code>self.async_graphql_query</code> directly. The billing block goes after the rates block and does not touch the existing <code>save_kraken_cache</code> condition.</li>
+<li>[ ] <strong>Step 4: Run</strong> <code>./run_all --test billing --test kraken &gt; /tmp/kr.txt 2&gt;&amp;1</code>. Expected: all pass.</li>
+<li>[ ] <strong>Step 5: Commit</strong> <code>git commit -m "feat(kraken): publish half-hourly billing as predbat.billing"</code></li>
+</ul>
+<hr />
+<h3 id="task-5-attach-billing-to-history-view-plan-json">Task 5: Attach billing to History-view plan JSON</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/billing.py</code>
+- Test: <code>apps/predbat/tests/test_billing.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: the <code>predbat.billing</code> attribute shape (Task 2).
+- Produces: <code>attach_billing(plan_json: dict, billing: dict, view_midnight_utc: datetime, plan_interval_minutes: int, predbat_slot_cost: dict[int, float], standing_pence: float, events: dict[int, str], import_only: bool, predbat_import_kwh: float | None, predbat_export_kwh: float | None) -&gt; dict</code>. It mutates and returns <code>plan_json</code>. <code>predbat_slot_cost</code> maps each row's <code>slot_minute</code> to Predbat's cost for that row in pence: net, or import-only when <code>import_only</code>. <code>events</code> maps a minute (relative to <code>view_midnight_utc</code>) to an event tag. For each row it adds:
+  - <code>billed</code> (major units, dp2) or <code>None</code>;
+  - <code>billed_buckets</code> (<code>{label: {"kwh", "cost"}}</code>, cost in major units) or <code>None</code>;
+  - <code>billing_diff</code> (major units, dp2) or <code>None</code>;
+  - <code>billing_event</code> (a display string) or <code>None</code>.</p>
+<p>It also adds <code>plan_json["billing_summary"]</code> = <code>{"predbat_cost", "billed_cost", "diff", "standing_predbat", "standing_billed", "import_kwh": [predbat, meter], "export_kwh": [predbat, meter], "complete_until", "import_only": bool, "supplier"}</code>. Every cost is in major units, and the key is left out entirely when the view has no billed rows.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests:</strong></li>
+<li><code>test_attach_basic</code>: rows at 30-minute slots where billing equals Predbat's cost. Assert <code>billing_diff == 0.0</code> on every row, and that the summary <code>diff == 0.0</code>.</li>
+<li><code>test_attach_unpublished_row</code>: a row with no billing slot has <code>billed is None</code> and <code>billing_diff is None</code>, and the summary's <code>predbat_cost</code> leaves that row out.</li>
+<li><code>test_attach_hour_rows</code>: (Review Focus 3) with <code>plan_interval_minutes=60</code>, a row's <code>billed</code> is the sum of two slots. A row with only one of its two slots published gets <code>billed is None</code>.</li>
+<li><code>test_attach_standing_stripped</code>: (Review Focus 4) the row at <code>slot_minute</code> 0 has <code>predbat_slot_cost[0] = standing_pence + 10</code>, and its billing is 10p energy. Assert <code>billing_diff == 0.0</code> and <code>standing_predbat == standing_pence / 100</code>.</li>
+<li><code>test_attach_clock_change</code>: (Review Focus 1) for 25 Oct 2026 with <code>view_midnight_utc</code> = 24 Oct 23:00Z, the rows map by UTC instant, and the row at <code>slot_minute</code> 120 picks up the billing slot starting <code>2026-10-25T01:00:00Z</code>.</li>
+<li><code>test_attach_event_label</code>: <code>events={600: "saving"}</code> puts <code>billing_event == "Saving session"</code> on the row covering minute 600. Tags <code>"manual"</code>/<code>"user"</code> map to <code>"Manual rate"</code>, <code>"increment"</code> to <code>"Rate adjustment"</code>, and any other tag gives <code>None</code>.</li>
+<li><code>test_attach_import_only</code>: <code>import_only=True</code> uses only the import billing, and the summary has <code>import_only is True</code>.</li>
+<li><code>test_attach_no_billing</code>: an empty <code>billing</code> leaves <code>plan_json</code> without <code>billing_summary</code> and its rows without the new keys.</li>
+<li>[ ] <strong>Step 2: Run</strong> them. Expected: FAIL.</li>
+<li>[ ] <strong>Step 3: Implement <code>attach_billing</code>.</strong> A row covers <code>[view_midnight_utc + slot_minute, + plan_interval_minutes)</code>. It is billed only if every 30-minute billing slot inside it is present. Billed net is the import cost minus the export cost (or import only, when <code>import_only</code>). Standing is removed from Predbat's side for any row whose <code>slot_minute % 1440 == 0</code>.</li>
+<li>[ ] <strong>Step 4: Run</strong> the tests. Expected: PASS.</li>
+<li>[ ] <strong>Step 5: Commit</strong> <code>git commit -m "feat(billing): attach billed cost, diff and day summary to History plan JSON"</code></li>
+</ul>
+<hr />
+<h3 id="task-6-extract-the-history-replay-from-calculate_yesterday-no-behaviour-change">Task 6: Extract the History replay from <code>calculate_yesterday()</code> (no behaviour change)</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/output.py</code>: <code>calculate_yesterday()</code> (lines ~3423-3990); the "Now try to show what really happened yesterday" block (~3683-3832) moves into a new method
+- Test: <code>apps/predbat/tests/test_history_days.py</code> (runner <code>run_history_days_tests(my_predbat) -&gt; bool</code>, registered as <code>("history_days", …, "History view replay and 7-day history", False)</code>)</p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>Output.replay_history_day(self, end_record: int, pv_step: dict, load_step: dict, soc_array: dict, cost_array: dict, status_data: list | None, rates_import: dict, rates_export: dict) -&gt; dict</code>. It returns the plan JSON for the replay, and saves and restores every attribute it fakes, exactly as the current code does.</p>
+<ul>
+<li>[ ] <strong>Step 1: Run <code>impact</code> upstream</strong> on <code>calculate_yesterday</code> and <code>publish_html_plan</code>, and report the blast radius to the user. Expect HIGH: it feeds the savings sensors. Warn and get the go-ahead before editing.</li>
+<li>[ ] <strong>Step 2: Write the guard test</strong> <code>test_replay_matches_calculate_yesterday</code>. Using <code>test_calculate_yesterday.py</code>'s helpers (<code>_make_constant_history</code>, <code>_make_mock_step_data</code>), run <code>calculate_yesterday()</code> and capture the <code>json</code> attribute of <code>predbat.cost_yesterday</code>. Then call <code>replay_history_day</code> with the same inputs, and assert the <code>rows</code> are equal apart from <code>timestamp</code>.</li>
+<li>[ ] <strong>Step 3: Run</strong> it. Expected: FAIL (method missing).</li>
+<li>[ ] <strong>Step 4: Extract</strong> the block into <code>replay_history_day</code>, and have <code>calculate_yesterday()</code> call it with its existing arrays.</li>
+<li>[ ] <strong>Step 5: Run</strong> <code>./run_all --test history_days --test calculate_yesterday --test savings_stability &gt; /tmp/hd.txt 2&gt;&amp;1</code>. Expected: all pass, and <code>calculate_yesterday</code> / <code>savings_stability</code> behave as before.</li>
+<li>[ ] <strong>Step 6: Commit</strong> <code>git commit -m "refactor(output): extract the History view replay into replay_history_day()"</code></li>
+</ul>
+<hr />
+<h3 id="task-7-older-days-and-billing-on-the-history-view">Task 7: Older days and billing on the History view</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/output.py</code>: add <code>calculate_history_days()</code>; call <code>attach_billing</code> on yesterday's JSON inside <code>calculate_yesterday()</code>
+- Modify: the caller of <code>calculate_yesterday()</code> (find it with <code>context({name: "calculate_yesterday"})</code>), to call <code>calculate_history_days()</code> straight after it
+- Test: <code>apps/predbat/tests/test_history_days.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>replay_history_day</code> (Task 6), <code>attach_billing</code> (Task 5), and the <code>predbat.billing</code> attributes (read with <code>get_state_wrapper(self.prefix + ".billing", attribute=...)</code>).
+- Produces:
+  - <code>Output.calculate_history_days(self) -&gt; None</code>. It publishes <code>self.prefix + ".plan_history"</code> with state = the number of days and attribute <code>days</code> = <code>{"YYYY-MM-DD": plan_json}</code> for days 2..7 back (local dates).
+  - <code>self.history_days_built_for: date | None</code>, which gates the rebuild to once per local date. It also rebuilds when the billing sensor's <code>complete_until</code> has moved on since the last build, so late-arriving billing appears the same day.
+  - The yesterday JSON (<code>predbat.cost_yesterday</code> <code>json</code>) now carries the Task 5 billing keys.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests:</strong></li>
+<li><code>test_history_days_built_once_per_day</code>: two calls on the same date with unchanged billing build once (count via a spy on <code>replay_history_day</code>); a third call after <code>now</code> moves past midnight builds again.</li>
+<li><code>test_history_days_rebuild_on_new_billing</code>: a changed <code>complete_until</code> triggers a rebuild on the same date.</li>
+<li><code>test_history_days_limited_by_history</code>: with <code>max_days_previous = 3</code>, only days 2 and 3 back are published, and days HA history can't reach are left out.</li>
+<li><code>test_history_days_rates_from_history</code>: older-day rows take <code>import_rate</code> from the mocked <code>predbat.rates</code> history. Where that history is missing for a minute, the row's <code>import_rate</code> is <code>None</code>, and the JS shows "—" (Task 8).</li>
+<li><code>test_yesterday_json_has_billing</code>: with a <code>predbat.billing</code> state set, <code>predbat.cost_yesterday</code>'s <code>json</code> has <code>billing_summary</code>. A saving-session tag at yesterday minute 600 (in <code>self.rate_import_replicated</code> at key <code>600 - 1440</code>) appears as <code>billing_event</code> on that row.</li>
+<li><code>test_import_only_when_export_leg_missing</code>: billing <code>legs={"import": True, "export": False}</code> with an export tariff (<code>rate_export</code> non-zero) makes <code>billing_summary.import_only</code> True, with Predbat's side taken from <code>cost_today_import</code> history.</li>
+<li>[ ] <strong>Step 2: Run</strong> them. Expected: FAIL.</li>
+<li>[ ] <strong>Step 3: Implement <code>calculate_history_days</code>.</strong> Read <code>cost_today</code>, <code>cost_today_import</code>, <code>soc_kw_h0</code>, <code>status</code>, <code>rates</code> and <code>rates_export</code> history for <code>min(8, max_days_previous + 1)</code> days in one <code>get_history_wrapper</code> call each. Build each day's arrays with the same <code>minute_data(..., backwards=True)</code> indexing <code>calculate_yesterday()</code> uses, offset by whole days. Use <code>step_data_history</code> with <code>base_offset = days_back * 24 * 60 + self.minutes_now</code> for load and PV. Pass event tags only where <code>rate_import_replicated</code> reaches; older days have none. Take <code>predbat_import_kwh</code> / <code>predbat_export_kwh</code> for each day from the day's change in <code>self.import_today</code> / <code>self.export_today</code> (incrementing minute data, which reaches back <code>max_days_previous</code> days), over the billed slots only.</li>
+<li>[ ] <strong>Step 4: Run</strong> <code>./run_all --test history_days --test calculate_yesterday --test billing &gt; /tmp/hd.txt 2&gt;&amp;1</code>. Expected: all pass.</li>
+<li>[ ] <strong>Step 5: Commit</strong> <code>git commit -m "feat(output): 7-day History replay with billing attached"</code></li>
+</ul>
+<hr />
+<h3 id="task-8-web-ui-day-picker-columns-summary-strip">Task 8: Web UI: day picker, columns, summary strip</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web.py</code>: <code>html_api_plan_data</code> (~2577-2665) adds <code>"history_days": sorted(list of dates)</code>; new route <code>app.router.add_get("/api/plan_history", self.html_api_plan_history)</code>
+- Modify: <code>apps/predbat/web_helper.py</code>: <code>renderPlanTable</code> (~7033), <code>switchView</code>/<code>refreshPlan</code> (~7810-7890), the History button area (<code>web.py</code> ~2686)
+- Test: <code>apps/predbat/tests/test_billing_client_js.py</code> (runner <code>test_billing_client_js(my_predbat) -&gt; bool</code>, registered <code>("billing_client_js", …, "History billing columns/picker JS structure", False)</code>); a web handler test in <code>tests/test_history_days.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: the plan JSON keys from Task 5, and <code>predbat.plan_history</code> from Task 7.
+- Produces: <code>async html_api_plan_history(self, request)</code>. <code>GET /api/plan_history?date=YYYY-MM-DD</code> returns that day's plan JSON, or 404 <code>{"error": "no history for date"}</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests:</strong></li>
+<li>Handler: <code>test_api_plan_history_returns_day</code> (200 with <code>rows</code>) and <code>test_api_plan_history_unknown_date</code> (404).</li>
+<li>JS structure (assert on the <code>get_plan_renderer_js()</code> text, as <code>test_debug_history_client_js.py</code> does):<ul>
+<li><code>renderPlanTable</code> adds <code>th('billed', 'Billed')</code> and <code>th('billing_diff', 'Diff')</code> only when <code>jsonData.rows.some(r =&gt; r.billed !== undefined)</code>;</li>
+<li>the Billed cell sets a <code>title</code> built from <code>billed_buckets</code>;</li>
+<li>the Diff cell's colour logic uses red for <code>&gt; 0</code> and green for <code>&lt; 0</code>;</li>
+<li><code>null</code> renders as <code>—</code>;</li>
+<li>a <code>renderBillingSummary(</code> function exists, reads <code>billing_summary</code>, and writes "billing complete to";</li>
+<li><code>billing_event</code> is rendered in the row;</li>
+<li>the History picker fetches <code>./api/plan_history?date=</code> only when an older day is chosen (no fetch on the default yesterday+today view);</li>
+<li><code>COLUMN_HEADER_HELP</code> has <code>billed</code> and <code>billing_diff</code> entries;</li>
+<li>the merged-blocks view sums <code>billed</code> / <code>billing_diff</code> across the merged rows, and shows <code>—</code> if any merged row is <code>null</code>.</li>
+</ul>
+</li>
+<li>[ ] <strong>Step 2: Run</strong> <code>./run_all --test billing_client_js --test history_days &gt; /tmp/web.txt 2&gt;&amp;1</code>. Expected: FAIL.</li>
+<li>[ ] <strong>Step 3: Implement.</strong></li>
+<li>The picker is a row of buttons under the History button, shown only when <code>currentView === 'yesterday'</code>: one per <code>history_days</code> date (oldest first), then "Yesterday + today", the default.</li>
+<li>The summary strip shows <code>predbat_cost</code>, <code>billed_cost</code>, <code>diff</code> (coloured), import and export kWh pairs, the standing charge (Predbat vs billed), "billing complete to HH:MM" in local time, and "import only" when set.</li>
+<li>Hide every billing element when <code>billing_summary</code> is absent.</li>
+<li>Honour the existing dark-mode colour handling (<code>updateTableColors</code>).</li>
+<li>[ ] <strong>Step 4: Run</strong> the tests, plus <code>./run_all --test debug_history_client_js &gt; /tmp/web2.txt 2&gt;&amp;1</code> (no regression).</li>
+<li>[ ] <strong>Step 5: Check it in the browser.</strong> Run Predbat with the debug-file replay or the test harness, open <code>/plan</code>, click History, and confirm the columns, strip and picker against mockup C (<code>.superpowers/brainstorm/*/content/history-billing.html</code>).</li>
+<li>[ ] <strong>Step 6: Commit</strong> <code>git commit -m "feat(web): billing columns, summary strip and 7-day picker on the History view"</code></li>
+</ul>
+<hr />
+<h3 id="task-9-docs-full-checks-pr">Task 9: Docs, full checks, PR</h3>
+<p><strong>Files:</strong>
+- Modify: the docs page that covers the Plan page/History view, and the Octopus and Kraken component pages in <code>docs/</code>: describe <code>predbat.billing</code>, the History additions, the 1–2 day lag, the import-only label, and that Octopus users who only use the HA Octopus integration (no <code>octopus_api_key</code> in Predbat) don't get billing
+- Modify: <code>.cspell/custom-dictionary-workspace.txt</code> as needed</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the docs.</strong></li>
+<li>[ ] <strong>Step 2: Run</strong> <code>cd coverage &amp;&amp; ./run_all --quick &gt; /tmp/quick.txt 2&gt;&amp;1; grep -n "FAIL\|ERROR\|passed\|failed" /tmp/quick.txt</code>. Expected: no failures.</li>
+<li>[ ] <strong>Step 3: Run</strong> <code>./run_pre_commit &gt; /tmp/pc.txt 2&gt;&amp;1</code> and grep for <code>Failed</code>. Re-stage the auto-sorted dictionary, then re-run until clean.</li>
+<li>[ ] <strong>Step 4: Run</strong> <code>detect_changes({scope: "compare", base_ref: "main"})</code>. Expected: changes limited to <code>billing.py</code>, <code>OctopusAPI.run</code>/<code>initialize</code>, <code>KrakenAPI.run</code>/<code>initialize</code>, <code>calculate_yesterday</code>/<code>replay_history_day</code>/<code>calculate_history_days</code>, the web handlers and the plan renderer JS.</li>
+<li>[ ] <strong>Step 5: Commit</strong> the docs, push the branch, and open the PR (ask the user before pushing).</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
