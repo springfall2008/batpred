@@ -326,6 +326,14 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     samples = inv.find_rate_grid_samples(False)
     failed |= _check("t9c missing setting", samples is None, samples)
 
+    print("Test 9e: the fleet is every inverter, as the plan's fetch loop sums them, even one whose soc_max reads 0")
+    # Dropping it would leave inverter 0 alone against the site-wide power: the ~N x samples again
+    my_predbat, inv = _make_two(["sensor.battery_power", 0])
+    my_predbat.inverters[1].soc_max = 0
+    _install_two(my_predbat, _charge(25, power=-2 * RATED_W))
+    segments = _segments(inv.find_rate_grid_samples(False))
+    failed |= _check("t9e", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+
     print("Test 9d: an empty battery_power entry is a site-wide sensor on inverter 0, as a 0 is")
     my_predbat, inv = _make_two(["sensor.battery_power", ""])
     _install_two(my_predbat, _charge(25, power=-2 * RATED_W))

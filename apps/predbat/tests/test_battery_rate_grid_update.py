@@ -22,7 +22,7 @@ import yaml
 from battery_rate_grid import rate_grid_curve
 from utils import rate_curve_function
 from config import APPS_SCHEMA
-from const import BATTERY_RATE_GRID_MAX_AGE_DAYS, BATTERY_RATE_GRID_SCAN_MINUTES
+from const import BATTERY_RATE_GRID_MAX_AGE_DAYS, BATTERY_RATE_GRID_RESAVE_MINUTES, BATTERY_RATE_GRID_SCAN_MINUTES
 
 
 class FakeInverter:
@@ -194,6 +194,26 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         failed |= _check("t3b saved", "battery_rate_grid_charge" in recording.expiries, recording.expiries)
         failed |= _check("t3b expiry past retention", expiry is not None and expiry >= my_predbat.now_utc + timedelta(days=BATTERY_RATE_GRID_MAX_AGE_DAYS), expiry)
         failed |= _check("t3b reads back", isinstance(run_async(recording.load("predbat", "battery_rate_grid_charge")), dict))
+
+        print("Test 3c: unchanged evidence is still re-saved once after a restart and then daily, so its expiry keeps moving (#6225)")
+        restarted = _make({"battery_charge_power_curve": {100: 0.5}})
+        resaves = RecordingStorage(recording.storage)
+        restarted.components = MockStorageComponents(resaves)
+        quiet = FakeInverter()
+        quiet.scan[False] = None  # no new evidence: the scan leaves the stored samples alone
+        _update(restarted, quiet)
+        failed |= _check("t3c saved after the first load", "battery_rate_grid_charge" in resaves.expiries, resaves.expiries)
+        resaves.expiries.clear()
+        # Within the hour no scan (and so no re-fit) is due: nothing changed, so nothing is saved
+        restarted.now_utc += timedelta(minutes=30)
+        _update(restarted, quiet)
+        failed |= _check("t3c not again within a day", "battery_rate_grid_charge" not in resaves.expiries, resaves.expiries)
+        # A day after the last save it is saved again although still nothing has changed
+        restarted.battery_rate_grid_last_save["charge"] = restarted.now_utc - timedelta(minutes=BATTERY_RATE_GRID_RESAVE_MINUTES)
+        restarted.now_utc += timedelta(minutes=1)
+        _update(restarted, quiet)
+        expiry = resaves.expiries.get("battery_rate_grid_charge")
+        failed |= _check("t3c again a day later", expiry is not None and expiry >= restarted.now_utc + timedelta(days=BATTERY_RATE_GRID_MAX_AGE_DAYS), expiry)
 
         print("Test 4: a second call within the scan interval does not rescan; after a restart the stored evidence is used")
         calls = inv.calls[False]

@@ -63,10 +63,9 @@ class BatteryCurve:
         """
         inverters = getattr(self.base, "inverters", None) or []
         if self.id == 0 and getattr(self.base, "num_inverters", 1) > 1 and len(inverters) == self.base.num_inverters and inverters[0] is self:
-            # An inverter with no battery (soc_max 0, e.g. a PV-only one) adds nothing to the combined battery
-            fleet = [inverter for inverter in inverters if inverter is self or (inverter.soc_max or 0) > 0]
-            if len(fleet) > 1:
-                return fleet
+            # Every inverter, as fetch_inverter_data() sums every one into the battery the plan models - one whose soc_max
+            # reads 0 included, as leaving it out would measure a site-wide battery_power against the rest alone (#6226)
+            return list(inverters)
         return [self]
 
     def record_curve_scan_coverage(self, kind, minutes):

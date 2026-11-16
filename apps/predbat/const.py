@@ -157,6 +157,7 @@ BATTERY_RATE_GRID_TEMP_MIN = -20  # Coldest grid row
 BATTERY_RATE_GRID_TEMP_MAX = 40  # Warmest grid row
 BATTERY_RATE_GRID_UNKNOWN_TEMP = 20  # An exact 0 reading is treated as missing and uses this row of a learned grid
 BATTERY_RATE_GRID_SCAN_MINUTES = 24 * 60  # Gap between history scans for grid evidence
+BATTERY_RATE_GRID_RESAVE_MINUTES = 24 * 60  # The evidence is saved at least this often even when unchanged, so its expiry keeps moving (#6225)
 BATTERY_RATE_GRID_FIRST_SCAN_DAYS = 28  # battery_rate_grid_history_days default: until a scan has succeeded, read this many days of history (or as many as there are)
 BATTERY_RATE_GRID_DAILY_SCAN_DAYS = 2  # battery_rate_grid_scan_days default: later scans read this many - a day since the last plus a day's overlap - widened to cover a longer gap
 BATTERY_RATE_GRID_RETRY_MINUTES = 60  # A scan whose history read failed is tried again after this long, rather than a day later

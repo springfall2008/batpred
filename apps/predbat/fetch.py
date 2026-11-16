@@ -66,6 +66,7 @@ from const import (
     BATTERY_RATE_GRID_FIRST_SCAN_DAYS,
     BATTERY_RATE_GRID_LOAD_ATTEMPTS,
     BATTERY_RATE_GRID_LOAD_WAIT_MINUTES,
+    BATTERY_RATE_GRID_RESAVE_MINUTES,
     BATTERY_RATE_GRID_MAX_AGE_DAYS,
     BATTERY_RATE_GRID_RETRY_MINUTES,
     BATTERY_RATE_GRID_SCAN_MINUTES,
@@ -4306,6 +4307,11 @@ class Fetch:
         # empty (a new install) once its reads have failed on BATTERY_RATE_GRID_LOAD_ATTEMPTS cycles spanning at least
         # BATTERY_RATE_GRID_LOAD_WAIT_MINUTES; until then a save waits, so a storage outage cannot replace a year of evidence
         # with one scan. The scanned days are kept in memory meanwhile and merged with the store once it reads back.
+        # Saved at least daily even when nothing changed, and once after the store first reads back in this run, so a store
+        # written with an older (or no) expiry gets the current one and a quiet store's expiry keeps moving (#6225)
+        last_save = self.battery_rate_grid_last_save.get(kind)
+        if self.battery_rate_grid_loaded.get(kind) and self.battery_rate_grid_samples.get(kind) and (last_save is None or (self.now_utc - last_save) >= timedelta(minutes=BATTERY_RATE_GRID_RESAVE_MINUTES)):
+            save = True
         store_ready = self.battery_rate_grid_loaded.get(kind) or (len(failures) >= BATTERY_RATE_GRID_LOAD_ATTEMPTS and (self.now_utc - failures[0]) >= timedelta(minutes=BATTERY_RATE_GRID_LOAD_WAIT_MINUTES))
         self.battery_rate_grid_pending_save[kind] = bool(save and storage and not store_ready)
         if save and storage and store_ready:
@@ -4318,6 +4324,8 @@ class Fetch:
                     storage.save("predbat", key, {"samples": self.battery_rate_grid_samples.get(kind, {}), "updated": self.battery_rate_grid_updated.get(kind)}, format="json", expiry=self.now_utc + timedelta(days=BATTERY_RATE_GRID_STORE_EXPIRY_DAYS))
                 ):
                     self.log("Warn: {}: failed to save the evidence".format(key))
+                else:
+                    self.battery_rate_grid_last_save[kind] = self.now_utc
             except Exception as e:
                 self.log("Warn: {}: failed to save the evidence: {}".format(key, e))
 
