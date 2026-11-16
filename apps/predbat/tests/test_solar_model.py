@@ -61,6 +61,10 @@ def test_solar_model(my_predbat):
     if len(result) != 4:
         print("  ERROR: 4 samples should yield 4 hourly periods, got {}".format(len(result)))
         failed = True
+    # The sample at 00:00 covers 23:00-00:00 on the day before
+    if pytz.utc.localize(datetime(2025, 5, 31, 23, 0)) not in result:
+        print("  ERROR: the 00:00 sample should give the period starting 23:00 the day before, got {}".format(sorted(result)))
+        failed = True
     first = result.get(hour_ending(FLAT_TIMES[1]))
     if first is None:
         print("  ERROR: missing the first period")
@@ -128,6 +132,15 @@ def test_solar_model(my_predbat):
     if abs(capped_first["pv_estimate10"] - capped_first["pv_estimate"]) > 0.0001 or abs(capped_first["pv_estimate90"] - capped_first["pv_estimate"]) > 0.0001:
         print("  ERROR: a P10 ratio above 1 and a P90 ratio below 1 should both be held at P50, got {} / {}".format(capped_first["pv_estimate10"], capped_first["pv_estimate90"]))
         failed = True
+    # Each ratio belongs to the sample with the same stamp, so it must land on the hour ending there
+    per_hour = {FLAT_TIMES[index]: (0.1 * (index + 1), 1.0 + 0.1 * (index + 1)) for index in range(4)}
+    aligned = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, band_ratio=per_hour)
+    for index, text in enumerate(FLAT_TIMES):
+        entry = aligned[hour_ending(text)]
+        p10_ratio, p90_ratio = per_hour[text]
+        if abs(entry["pv_estimate10"] - round(entry["pv_estimate"] * p10_ratio, 4)) > 0.0002 or abs(entry["pv_estimate90"] - round(entry["pv_estimate"] * p90_ratio, 4)) > 0.0002:
+            print("  ERROR: the band ratios stamped {} should apply to the hour ending then, got {}".format(text, entry))
+            failed = True
     sparse = gti_hourly_to_period_kwh(FLAT_TIMES, flat_gti, flat_temp, flat_wind, kwp=1.0, system_loss=0.0, band_ratio={})
     sparse_first = sparse[hour_ending(FLAT_TIMES[1])]
     if abs(sparse_first["pv_estimate10"] - sparse_first["pv_estimate"] * 0.7) > 0.0002 or abs(sparse_first["pv_estimate90"] - sparse_first["pv_estimate"] * 1.3) > 0.0002:
