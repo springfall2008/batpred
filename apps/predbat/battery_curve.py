@@ -27,7 +27,7 @@ from const import (
     EXPORT_LIMIT_DEFAULT_W,
     MINUTE_WATT,
 )
-from utils import dp0, dp2, dp4, is_entity_id, minute_data, minute_data_state
+from utils import average_temperature_minutes, battery_temperature_entities, dp0, dp2, dp4, is_entity_id, minute_data, minute_data_state
 
 
 def charge_day(now_utc, minutes_ago, local_tz=None):
@@ -63,10 +63,9 @@ class BatteryCurve:
         """
         inverters = getattr(self.base, "inverters", None) or []
         if self.id == 0 and getattr(self.base, "num_inverters", 1) > 1 and len(inverters) == self.base.num_inverters and inverters[0] is self:
-            # An inverter with no battery (soc_max 0, e.g. a PV-only one) adds nothing to the combined battery
-            fleet = [inverter for inverter in inverters if inverter is self or (inverter.soc_max or 0) > 0]
-            if len(fleet) > 1:
-                return fleet
+            # Every inverter, as fetch_inverter_data() sums every one into the battery the plan models - one whose soc_max
+            # reads 0 included, as leaving it out would measure a site-wide battery_power against the rest alone (#6226)
+            return list(inverters)
         return [self]
 
     def record_curve_scan_coverage(self, kind, minutes):
@@ -131,6 +130,28 @@ class BatteryCurve:
             )
             return values
 
+        def counted_in_site_total(inverter):
+            """
+            True when this inverter's battery_power is a 0 or blank rather than a sensor, on any inverter but the first: the
+            documented way to say the first one's sensor is the site total (an EMS reporting for the whole site, #6226).
+            None means no entry at all, a setting that is missing.
+            """
+            value = self.base.get_arg("battery_power", indirect=False, index=inverter.id)
+            return inverter is not self and value is not None and not is_entity_id(value)
+
+        # With a site-total battery_power the first inverter's power is the whole fleet's, so it can only be learned against
+        # the whole fleet's rate: falling back to the first inverter alone would divide the site's power by one inverter's
+        # maximum, so a missing setting or history on another inverter stops the learning instead
+        site_total_fleet = any(counted_in_site_total(inverter) for inverter in fleet)
+
+        def fall_back(inverter, reason):
+            """Learn from this inverter alone when another lacks a setting or history, unless the power is a site total."""
+            if site_total_fleet:
+                self.log("Warn: Inverter {} {}, and inverter {}'s battery_power is the site total so the {} cannot be learned from it alone - not learning it".format(inverter.id, reason, self.id, purpose))
+                return None
+            self.log("Info: Inverter {} {}, learning the {} from inverter {} alone".format(inverter.id, reason, purpose, self.id))
+            return self.load_curve_history(discharge, purpose, fleet=[self], days=days)
+
         per_inverter = []
         for inverter in fleet:
             if "soc_percent" in self.base.args:
@@ -144,24 +165,29 @@ class BatteryCurve:
             rate_sensor = self.base.get_arg(rate_name, indirect=False, index=inverter.id)
             battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=inverter.id)
             battery_power_invert = self.base.get_arg("battery_power_invert", False, index=inverter.id)
-            if not (soc_sensor and rate_sensor and battery_power_sensor):
-                missing_settings = [setting for setting, entity_id in [(soc_label, soc_sensor), (rate_name, rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
+            # This inverter's power is already counted in the first one's site-total sensor, so it is not a missing setting
+            site_total = counted_in_site_total(inverter)
+            if not (soc_sensor and rate_sensor and (battery_power_sensor or site_total)):
+                missing_settings = [setting for setting, entity_id in [(soc_label, soc_sensor), (rate_name, rate_sensor), ("battery_power", battery_power_sensor or site_total)] if not entity_id]
                 if inverter is not self:
-                    self.log("Info: Inverter {} {} not set in apps.yaml, learning the {} from inverter {} alone".format(inverter.id, ", ".join(missing_settings), purpose, self.id))
-                    return self.load_curve_history(discharge, purpose, fleet=[self], days=days)
+                    return fall_back(inverter, "{} not set in apps.yaml".format(", ".join(missing_settings)))
                 self.log("Warn: Inverter {} Cannot find {} (settings missing), {} not set in apps.yaml".format(inverter.id, purpose, ", ".join(missing_settings)))
                 return None
-            battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
+            if site_total:
+                battery_power_sensor = "0 (counted in inverter {}'s sensor)".format(self.id)
+            else:
+                battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
             self.log("Inverter {} Looking for {} with sensors {}, {}, {} and {}".format(inverter.id, purpose, soc_sensor, rate_sensor, predbat_status_sensor, battery_power_sensor))
             soc_data = self.base.get_history_wrapper(entity_id=soc_sensor, days=days, required=False, tracked=tracked)
             rate_data = self.base.get_history_wrapper(entity_id=rate_sensor, days=days, required=False, tracked=tracked)
-            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=days, required=False, tracked=tracked)
-            history_checks = [(soc_label, soc_sensor, soc_data), (rate_name, rate_sensor, rate_data), ("battery_power", battery_power_sensor, battery_power_data), ("predbat.status", predbat_status_sensor, predbat_status_data)]
+            history_checks = [(soc_label, soc_sensor, soc_data), (rate_name, rate_sensor, rate_data), ("predbat.status", predbat_status_sensor, predbat_status_data)]
+            if not site_total:
+                battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=days, required=False, tracked=tracked)
+                history_checks.insert(2, ("battery_power", battery_power_sensor, battery_power_data))
             if not all(data for _, _, data in history_checks):
                 no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
                 if inverter is not self and predbat_status_data:
-                    self.log("Info: Inverter {} has no history for {}, learning the {} from inverter {} alone".format(inverter.id, ", ".join(no_history), purpose, self.id))
-                    return self.load_curve_history(discharge, purpose, fleet=[self], days=days)
+                    return fall_back(inverter, "has no history for {}".format(", ".join(no_history)))
                 self.log("Warn: Inverter {} Cannot find {} (missing history), no history found for {} - check the entity name in apps.yaml and that Home Assistant is recording its history".format(inverter.id, purpose, ", ".join(no_history)))
                 self.log("Warn: Inverter {} Sensor history record counts: {}".format(inverter.id, ", ".join("{} {}".format(setting, len(data[0]) if data else 0) for setting, entity_id, data in history_checks)))
                 return None
@@ -170,11 +196,13 @@ class BatteryCurve:
                 soc_kwh = {minute: dp4(value * inverter.soc_max / 100.0) for minute, value in to_minutes(soc_data[0], required_unit="%").items()}
             else:
                 soc_kwh = to_minutes(soc_data[0], scale=inverter.battery_scaling, required_unit="kWh")
-            battery_power = to_minutes(battery_power_data[0], required_unit="W")
+            # A site-total inverter adds no power of its own (the first inverter's sensor holds it) but its SoC, written rate
+            # and rated maximum still count, so the site's power is measured against the whole fleet's rate
+            battery_power = {} if site_total else to_minutes(battery_power_data[0], required_unit="W")
             if battery_power_invert:
                 battery_power = {minute: -value for minute, value in battery_power.items()}
             max_power = (inverter.battery_rate_max_discharge if discharge else inverter.battery_rate_max_charge) * MINUTE_WATT
-            per_inverter.append({"soc_kwh": soc_kwh, "rate": to_minutes(rate_data[0], required_unit="W"), "battery_power": battery_power, "max_power": max_power})
+            per_inverter.append({"soc_kwh": soc_kwh, "rate": to_minutes(rate_data[0], required_unit="W"), "battery_power": battery_power, "max_power": max_power, "site_total": site_total})
 
         # Not padded (nor the series above): a window longer than the history (28 days asked, Home Assistant keeping 10) must
         # stop where the history does, or the padding would count as evidence and as coverage, and the per-day merge would
@@ -184,7 +212,7 @@ class BatteryCurve:
             if "," in status[minute]:
                 # If there are multiple statuses take the first one
                 status[minute] = status[minute].split(",")[0].strip()
-        min_len = min([len(status)] + [min(len(series["soc_kwh"]), len(series["rate"]), len(series["battery_power"])) for series in per_inverter])
+        min_len = min([len(status)] + [min(len(series["soc_kwh"]), len(series["rate"]), *([] if series["site_total"] else [len(series["battery_power"])])) for series in per_inverter])
         fleet_max_power = int(sum(series["max_power"] for series in per_inverter))
         if len(per_inverter) == 1:
             series = per_inverter[0]
@@ -289,26 +317,29 @@ class BatteryCurve:
         The battery temperature history by minute before now, or None when battery_temperature_history is not set, has
         no history, or only ever reads exactly 0 (how several integrations report a missing reading).
         """
-        temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
-        if not temperature_sensor:
-            return None
-        temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=days, required=False, tracked=days <= self.base.max_days_previous)
-        if not temperature_data:
-            return None
-        temperature, _ = minute_data(
-            temperature_data[0],
-            days,
-            self.base.now_utc,
-            "state",
-            "last_updated",
-            backwards=True,
-            clean_increment=False,
-            smoothing=False,
-            divide_by=1.0,
-            scale=1.0,
-            can_modify_history=True,  # history is not accessed after this point
-            pad=False,  # only the history that exists, so the scan stops where it does
-        )
+        series = []
+        # One sensor or a list of them (one per inverter): the combined battery's temperature is their average, the same
+        # one the plan reads (fetch_battery_temperature)
+        for temperature_sensor in battery_temperature_entities(self.base.get_arg("battery_temperature_history", indirect=False)):
+            temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=days, required=False, tracked=days <= self.base.max_days_previous)
+            if not temperature_data:
+                continue
+            temperature, _ = minute_data(
+                temperature_data[0],
+                days,
+                self.base.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                scale=1.0,
+                can_modify_history=True,  # history is not accessed after this point
+                pad=False,  # only the history that exists, so the scan stops where it does
+            )
+            series.append(temperature)
+        temperature = average_temperature_minutes(series)
         if not any(value != 0 for value in temperature.values()):
             return None
         return temperature

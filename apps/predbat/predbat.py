@@ -36,7 +36,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.8.1"
+THIS_VERSION = "v9.9.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -698,6 +698,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_rate_grid_load_failures = {}  # "charge"/"discharge" -> times of cycles whose store reads all came back empty
         self.battery_rate_grid_pending_save = {}  # "charge"/"discharge" -> True while a save waits for the store to read back
         self.battery_rate_grid_last_success = {}  # "charge"/"discharge" -> time of the last scan whose history read succeeded
+        self.battery_rate_grid_last_save = {}  # "charge"/"discharge" -> time of the last successful save of the evidence
         self.battery_rate_grid_history_days = 28  # battery_rate_grid_history_days: days a scan reads until one has succeeded
         self.battery_rate_grid_scan_days = 2  # battery_rate_grid_scan_days: days a daily scan reads
         self.isCharging = False
