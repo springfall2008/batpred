@@ -22,7 +22,17 @@ import random
 import aiohttp
 from datetime import datetime, timedelta, timezone
 
-from const import TIME_FORMAT, TIME_FORMAT_SOLCAST
+from const import (
+    TIME_FORMAT,
+    TIME_FORMAT_SOLCAST,
+    PV_CALIBRATION_HISTORY_DAYS,
+    PV_CALIBRATION_SCAN_DAYS,
+    PV_CALIBRATION_HALF_LIFE_DAYS,
+    PV_CALIBRATION_SHRINK,
+    PV_CALIBRATION_SHRINK_SLOT,
+    PV_CALIBRATION_MIN_DAYS,
+)
+from pv_calibration import pv_day
 from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today, str2time, strptime_aware
 from predbat_metrics import record_api_call, metrics
 from component_base import ComponentBase
@@ -1108,7 +1118,7 @@ class SolarAPI(ComponentBase):
                     app="solar",
                 )
 
-    def pv_forecast_history(self, days):
+    def pv_forecast_history(self, days, tracked=True):
         """
         Return the past uncalibrated PV forecast in kW, keyed by timestamp and oldest first, on the same
         pv_scaling basis as pv_forecast_minute.
@@ -1129,7 +1139,9 @@ class SolarAPI(ComponentBase):
         The history is scaled by the current pv_scaling rather than stored scaled, so a pv_scaling change
         takes effect over the whole window at once instead of settling in over the following week.
         """
-        history = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0_uncalibrated", days, required=False), scale=self.pv_scaling)
+        # tracked=False (a long one-off read) only when asked for, so mocks without it are unchanged
+        tracked_kwargs = {} if tracked else {"tracked": False}
+        history = history_attribute(self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0_uncalibrated", days, required=False, **tracked_kwargs), scale=self.pv_scaling)
 
         oldest = None
         for key in history:
@@ -1142,7 +1154,7 @@ class SolarAPI(ComponentBase):
         window_start = self.now_utc_exact - timedelta(days=days)
         if oldest is None or oldest - window_start > timedelta(hours=1):
             legacy = history_attribute(
-                self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False),
+                self.get_history_wrapper("sensor." + self.prefix + "_pv_forecast_h0", days, required=False, **tracked_kwargs),
                 state_key="now",
                 attributes=True,
                 scale=self.pv_scaling,
@@ -1168,6 +1180,108 @@ class SolarAPI(ComponentBase):
             # mirror's stored attributes JSON failed to decode for the whole window (db_engine.py).
             self.log("Warn: SolarAPI: PV Calibration: could not read any forecast history from sensor.{}_pv_forecast_h0_uncalibrated or sensor.{}_pv_forecast_h0 - calibration will be disabled until history builds up".format(self.prefix, self.prefix))
         return history
+
+    def pv_calibration_settings(self):
+        """
+        The pv_calibration_* apps.yaml settings: each the user's value when it is a positive number, otherwise the default
+        (with a warning for an invalid value). overridden lists the keys the user set. scan_days is held to history_days.
+        """
+        specs = (
+            ("history_days", "pv_calibration_history_days", PV_CALIBRATION_HISTORY_DAYS, int),
+            ("scan_days", "pv_calibration_scan_days", PV_CALIBRATION_SCAN_DAYS, int),
+            ("half_life", "pv_calibration_half_life", PV_CALIBRATION_HALF_LIFE_DAYS, float),
+            ("shrink", "pv_calibration_shrink", PV_CALIBRATION_SHRINK, float),
+            ("shrink_slot", "pv_calibration_shrink_slot", PV_CALIBRATION_SHRINK_SLOT, float),
+        )
+        settings = {"overridden": set()}
+        for key, arg, default, kind in specs:
+            value = self.get_arg(arg, None)
+            if value is None:
+                settings[key] = default
+                continue
+            try:
+                number = kind(float(value))
+            except (TypeError, ValueError):
+                number = None
+            if number is None or number <= 0:
+                self.log("Warn: SolarAPI: PV Calibration: {} is {} - it must be a positive number, using the default {}".format(arg, value, default))
+                settings[key] = default
+                continue
+            settings[key] = number
+            settings["overridden"].add(key)
+        settings["scan_days"] = min(settings["scan_days"], settings["history_days"])
+        if settings["history_days"] < PV_CALIBRATION_MIN_DAYS:
+            self.log("Warn: SolarAPI: PV Calibration: pv_calibration_history_days is {} - calibration needs at least {} days of evidence, so it will stay off".format(settings["history_days"], PV_CALIBRATION_MIN_DAYS))
+        return settings
+
+    def pv_calibration_scan(self, days, tracked=True):
+        """
+        The last `days` complete days of history as calibration evidence, {local date: {"slots": {minute of day: [forecast kWh,
+        actual kWh]}, "peak_kw", "clipped_minutes"}}, or None when the pv_today history could not be read.
+
+        The forecast is the uncalibrated one with pv_scaling taken back out, so a later pv_scaling change applies to the whole
+        store at once; the actual has inverter clipping imputed (impute_clipped_pv_history), as calibration always measured
+        against; peak_kw is the measured peak. A day is kept only when the pv_today history reaches its start and the
+        forecast covers at least 5/6 of its slots, so a partly recorded day cannot read as forecast error.
+        """
+        if self.pv_scaling <= 0:
+            self.log("SolarAPI: PV Calibration: pv_scaling is {} - there is no forecast to calibrate against, so no evidence was scanned".format(self.pv_scaling))
+            return {}
+        reader_kwargs = {} if tracked else {"tracked": False}
+        pv_today_hist = self.base.minute_data_import_export(days + 1, self.now_utc, "pv_today", required_unit="kWh", pad=False, **reader_kwargs)
+        if not pv_today_hist:
+            self.log("Warn: SolarAPI: PV Calibration: no pv_today history could be read, so no evidence was scanned")
+            return None
+        oldest_minute = max(pv_today_hist.keys())
+
+        # pv_today (cumulative kWh by minutes ago) into kW for each minute, as calibration always derived it
+        current_value = None
+        pv_power_hist = {}
+        for minute in range(oldest_minute - 5, -5, -5):
+            current_value = pv_today_hist.get(minute, current_value)
+            next_value = pv_today_hist.get(minute - 5, current_value)
+            if current_value is None or next_value is None:
+                continue
+            power_amount = max(0, next_value - current_value) * 60.0 / 5.0
+            for sub_minute in range(1, 6):
+                pv_power_hist[minute + 5 - sub_minute] = power_amount
+
+        # The uncalibrated forecast, never the calibrated h0 state (GH#5116), by minutes ago. Read a day further back than the
+        # days scanned: the minute data is cut to the whole days its history spans, so days + 1 from mid-day misses part of the oldest day
+        pv_forecast, _ = history_attribute_to_minute_data(self.now_utc_exact, prune_today(self.pv_forecast_history(days + 2, tracked=tracked), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True))
+        pv_power_hist_calibrate = self.impute_clipped_pv_history(pv_power_hist, pv_forecast)
+
+        slot_minutes = self.plan_interval_minutes
+        slots_per_day = (24 * 60) // slot_minutes
+        per_day = {}
+        for source, field in ((pv_forecast, "forecast"), (pv_power_hist_calibrate, "actual")):
+            for minute, value in source.items():
+                minute_absolute = self.minutes_now - minute
+                if minute_absolute >= 0:
+                    continue
+                days_prev = (-minute_absolute + 24 * 60 - 1) // (24 * 60)  # 00:00 yesterday is day 1, 23:59 two days ago is day 2
+                if days_prev > days:
+                    continue
+                slot = (minute_absolute % (24 * 60)) // slot_minutes * slot_minutes
+                record = per_day.setdefault(days_prev, {"forecast": {}, "actual": {}, "peak": 0.0, "clipped": 0})
+                record[field][slot] = record[field].get(slot, 0.0) + value / 60.0
+                if field == "actual":
+                    measured = pv_power_hist.get(minute, 0.0)
+                    record["peak"] = max(record["peak"], measured)
+                    if value != measured:
+                        record["clipped"] += 1
+
+        evidence = {}
+        for days_prev, record in per_day.items():
+            day_start_minutes_ago = self.minutes_now + days_prev * 24 * 60
+            if oldest_minute < day_start_minutes_ago or len(record["forecast"]) * 6 < slots_per_day * 5:
+                continue
+            slots = {}
+            for slot in range(0, 24 * 60, slot_minutes):
+                slots[slot] = [dp4(record["forecast"].get(slot, 0.0) / self.pv_scaling), dp4(record["actual"].get(slot, 0.0))]
+            day = pv_day(self.now_utc, self.minutes_now + (days_prev - 1) * 24 * 60 + 12 * 60, self.local_tz)  # the noon of that day, so DST cannot move it
+            evidence[day] = {"slots": slots, "peak_kw": dp4(record["peak"]), "clipped_minutes": record["clipped"]}
+        return evidence
 
     def pv_clipping_ceiling_kw(self):
         """

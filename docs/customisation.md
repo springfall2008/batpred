@@ -313,9 +313,14 @@ If `pv_metric10_weight` and `pv_metric90_weight` together exceed 1.0 they are sc
 
 **switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
 This can be useful to adjust for your systems real performance.<BR>
+Predbat keeps up to 28 days of evidence - each half hour's forecast and actual generation - in its cache, adding the latest days once a day, and calibrates from it:
+a day factor (how much of the forecast your system really produces) and a half-hour shape (for example morning shading). Recent days count for more: a day's weight halves every 3.5 days.
+Each factor only moves as far as the evidence supports. When your actual generation scatters either side of the forecast with no consistent direction, as it does when your forecast provider already calibrates for your site,
+the factor stays close to 1 and the forecast is left almost alone. A consistent difference, such as shading, a misconfigured array or inverter losses, is corrected.
+A few dull days in a row therefore no longer pull down the forecast for the next sunny day. The settings are described under PV calibration in [apps.yaml](apps-yaml.md#pv-calibration), and the **PVCalibration** chart in the web interface shows the evidence against the calibration.<BR>
 The comparison is made against the forecast your solar provider gave, recorded in `sensor.predbat_pv_forecast_h0_uncalibrated`, rather than against Predbat's own calibrated figure,
-so the scaling factor settles on the full measured ratio of actual to forecast generation.<BR>
-Until that sensor has a week of history, for example just after upgrading, the older days are read from `sensor.predbat_pv_forecast_h0` instead.<BR>
+so the scaling factor settles on the measured ratio of actual to forecast generation.<BR>
+Where that sensor's history does not reach back far enough, for example just after upgrading, the older days are read from `sensor.predbat_pv_forecast_h0` instead.<BR>
 The history is scaled by `pv_scaling` before the comparison, so both sides are on the same basis - to sanity-check the calibration factor by hand, divide your actual generation by the raw provider forecast **multiplied by** `pv_scaling`
 (equivalently, divide your actual-over-raw ratio by `pv_scaling`); comparing against the raw figure on its own leaves your answer out by a factor of `pv_scaling`.<BR>
 When your forecast provider supplies its own 10% and 90% figures (Solcast, or Open-Meteo's ensemble), they are scaled by the same calibration as the central forecast, so they keep the provider's spread around it.<BR>
