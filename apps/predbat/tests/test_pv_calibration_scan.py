@@ -323,6 +323,50 @@ def test_calibration_peak_from_last_seven_days():
     return failed
 
 
+def test_calibration_band_default_when_recent_week_down():
+    """A down last week after good older days keeps the default 0.7 / 1.3 band rather than collapsing it to 1.0 / 1.0."""
+    test_api = create_test_solar_api()
+    try:
+        solar = run_calibration(test_api, evidence_days(test_api, [0.05] * 7 + [0.9] * 10))
+        failed = check("band default", (solar.pv_calibration_worst_scaling, solar.pv_calibration_best_scaling) == (0.7, 1.3), (solar.pv_calibration_worst_scaling, solar.pv_calibration_best_scaling))
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_calibration_empty_store_does_not_rescan():
+    """An empty store after the update has run (evidence {}) is not followed by a second, tracked history read in pv_calibration."""
+    test_api = create_test_solar_api()
+    calls = []
+    try:
+
+        def mock_scan(days, tracked=True):
+            """Record the call."""
+            calls.append((days, tracked))
+            return {}
+
+        test_api.solar.pv_calibration_scan = mock_scan
+        solar = run_calibration(test_api, {})
+        failed = check("no rescan", calls == [], calls)
+        failed |= check("off", solar.pv_calibration_total_adjustment == 1.0, solar.pv_calibration_total_adjustment)
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_scan_empty_forecast_history_is_a_failed_read():
+    """No forecast history is a failed read (None), so the 28-day first scan is retried rather than marked done."""
+    test_api = create_test_solar_api()
+    try:
+        build_history(test_api, 3, bell(4.0), bell(4.0))
+        test_api.solar.get_history_wrapper = lambda *args, **kwargs: []
+        with test_api.patch_now_utc_exact():
+            evidence = test_api.solar.pv_calibration_scan(3)
+    finally:
+        test_api.cleanup()
+    return check("empty forecast history", evidence is None, evidence)
+
+
 def run_pv_calibration_scan_tests(my_predbat=None):
     """Run the PV calibration history scan and settings tests."""
     failed = False
@@ -341,6 +385,9 @@ def run_pv_calibration_scan_tests(my_predbat=None):
         test_calibration_band_from_last_seven_days,
         test_calibration_off_under_three_days,
         test_calibration_peak_from_last_seven_days,
+        test_calibration_band_default_when_recent_week_down,
+        test_calibration_empty_store_does_not_rescan,
+        test_scan_empty_forecast_history_is_a_failed_read,
     ):
         print("**** {} ****".format(test.__name__))
         failed = test() or failed

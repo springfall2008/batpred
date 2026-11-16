@@ -1271,6 +1271,10 @@ class SolarAPI(ComponentBase):
         # The uncalibrated forecast, never the calibrated h0 state (GH#5116), by minutes ago. Read a day further back than the
         # days scanned: the minute data is cut to the whole days its history spans, so days + 1 from mid-day misses part of the oldest day
         pv_forecast, pv_forecast_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(self.pv_forecast_history(days + 2, tracked=tracked), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True))
+        if not pv_forecast:
+            # A failed read, not an empty one: returning None keeps the first scan's full-length read for the retry
+            self.log("Warn: SolarAPI: PV Calibration: no forecast history could be read, so no evidence was scanned")
+            return None
         pv_power_hist_calibrate = self.impute_clipped_pv_history(pv_power_hist, pv_forecast)
         oldest_forecast_minute = max(pv_forecast.keys()) if pv_forecast else -1
 
@@ -1491,9 +1495,15 @@ class SolarAPI(ComponentBase):
         settings = self.pv_calibration_settings()
         self.pv_calibration_settings_used = settings
         evidence = self.pv_calibration_evidence
-        if not evidence:
-            self.log("SolarAPI: PV Calibration: no stored evidence yet, reading {} days of history".format(settings["history_days"]))
-            evidence = self.pv_calibration_scan(settings["history_days"]) or {}
+        if evidence is None:
+            # Only a direct call (no evidence update has run): fetch_pv_forecast always updates the store first, which scans
+            # untracked and leaves at least an empty dict, so a forecast refresh never repeats the long read here
+            self.log("SolarAPI: PV Calibration: no evidence update has run, reading {} days of history".format(settings["history_days"]))
+            try:
+                evidence = self.pv_calibration_scan(settings["history_days"]) or {}
+            except Exception as e:
+                self.log("Warn: SolarAPI: PV Calibration: the history scan failed: {}".format(e))
+                evidence = {}
         today = pv_day(self.now_utc, 0, self.local_tz)
         model = fit_pv_calibration(evidence, today, self.pv_scaling, settings["half_life"], settings["shrink"], settings["shrink_slot"], self.plan_interval_minutes)
         self.pv_calibration_model = model
@@ -1503,10 +1513,8 @@ class SolarAPI(ComponentBase):
 
         # The P10/P90 band and the observed peak come from the last PV_CALIBRATION_BAND_DAYS days, as they did before the store
         worst_day_scaling, best_day_scaling, average_day_scaling = band_scaling(evidence, today, self.pv_scaling, PV_CALIBRATION_BAND_DAYS)
-        if worst_day_scaling is None:
-            worst_day_scaling = min(max(1.0 / average_day_scaling, 0.3), 1.0)
-            best_day_scaling = min(1.0 / average_day_scaling, 2.0)
-        if not enabled_calibration:
+        if worst_day_scaling is None or not enabled_calibration:
+            # No valid day in the band window (a down week after older good days) or no calibration: the default band, as before
             worst_day_scaling = 0.7
             best_day_scaling = 1.3
         max_pv_power_hist = evidence_peak_kw(evidence, today, PV_CALIBRATION_BAND_DAYS)

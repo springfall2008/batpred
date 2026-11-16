@@ -4819,12 +4819,12 @@ def test_fetch_pv_forecast_solcast_band_follows_calibration(my_predbat):
                 for m_of_day in range(window_start, window_start + window_length):
                     pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = 1.0
 
-            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist, **kwargs):
                 """Return the synthetic pv_today history."""
                 return dict(_hist) if key == "pv_today" else {}
 
             base.minute_data_import_export = mock_minute_import_export
-            solar.get_history_wrapper = lambda entity_id, days, required=False: []
+            solar.get_history_wrapper = lambda entity_id, days, required=False, **kwargs: []
             solar.forecast_solar = None
 
             # 1 kW in each 30-minute slot of the window, in kW as both Solcast routes report it
@@ -4969,12 +4969,12 @@ def test_fetch_pv_forecast_solcast_band_does_not_compound(my_predbat):
                 for m_of_day in range(window_start, window_start + window_length):
                     pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = 1.0
 
-            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist, **kwargs):
                 """Return the synthetic pv_today history."""
                 return dict(_hist) if key == "pv_today" else {}
 
             base.minute_data_import_export = mock_minute_import_export
-            solar.get_history_wrapper = lambda entity_id, days, required=False: []
+            solar.get_history_wrapper = lambda entity_id, days, required=False, **kwargs: []
             solar.forecast_solar = None
 
             detailed = None

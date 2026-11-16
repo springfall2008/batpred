@@ -746,6 +746,8 @@ thirdparty
 threadpool
 threadpoolctl
 tickfont
+ticktext
+tickvals
 timea
 timeb
 timec

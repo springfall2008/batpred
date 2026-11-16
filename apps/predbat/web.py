@@ -4220,12 +4220,13 @@ chart.render();
   var layout = function(xt) { return {paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', margin: {l: 50, r: 10, t: 10, b: 40}, legend: {font: {color: fg}, orientation: 'h'},
     xaxis: axis(xt), yaxis: axis('Actual / forecast', {range: [0, 3]})}; };
   Plotly.newPlot('pv_calibration_slots', [
-    {type: 'scatter', mode: 'markers', name: 'stored days', x: s.points.map(function(p) { return hhmm(p[0]); }), y: s.points.map(function(p) { return Math.min(p[1], 3); }),
+    {type: 'scatter', mode: 'markers', name: 'stored days', x: s.points.map(function(p) { return p[0] / 60; }), text: s.points.map(function(p) { return hhmm(p[0]); }), y: s.points.map(function(p) { return Math.min(p[1], 3); }),
       marker: {size: s.points.map(function(p) { return 6 + 10 * p[2] / maxF; }), color: '#f5c43d', opacity: s.points.map(function(p) { return Math.max(p[3], 0.15); })}},
-    {type: 'scatter', mode: 'lines', name: 'unshrunk', x: minutes.map(hhmm), y: minutes.map(function(m) { return s.raw_adj[m]; }), line: {color: '#a8a8a7', dash: 'dot'}},
-    {type: 'scatter', mode: 'lines', name: 'applied', x: minutes.map(hhmm), y: minutes.map(function(m) { return s.adj[m]; }), line: {color: '#e90a0a', width: 3}},
-    {type: 'scatter', mode: 'lines', name: 'no correction', x: [minutes.map(hhmm)[0], minutes.map(hhmm)[minutes.length - 1]], y: [1, 1], line: {color: fg, dash: 'dash', width: 1}}
-  ], layout('Time of day'), {responsive: true});
+    {type: 'scatter', mode: 'lines', name: 'unshrunk', x: minutes.map(function(m) { return m / 60; }), y: minutes.map(function(m) { return s.raw_adj[m]; }), line: {color: '#a8a8a7', dash: 'dot'}},
+    {type: 'scatter', mode: 'lines', name: 'applied', x: minutes.map(function(m) { return m / 60; }), y: minutes.map(function(m) { return s.adj[m]; }), line: {color: '#e90a0a', width: 3}},
+    {type: 'scatter', mode: 'lines', name: 'no correction', x: [0, 24], y: [1, 1], line: {color: fg, dash: 'dash', width: 1}}
+  ], (function() { var l = layout('Time of day'); var ticks = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24];
+    l.xaxis = Object.assign(l.xaxis, {range: [0, 24], tickvals: ticks, ticktext: ticks.map(function(h) { return hhmm(h * 60); })}); return l; })(), {responsive: true});
   var good = d.points.filter(function(p) { return !p[3] && p[1] !== null; }), down = d.points.filter(function(p) { return p[3] && p[1] !== null; });
   var maxD = Math.max.apply(null, d.points.map(function(p) { return p[2]; }).concat([0.001]));
   var days = d.points.map(function(p) { return p[0]; });

@@ -130,6 +130,10 @@ def run_web_pv_calibration_chart_tests(my_predbat):
         my_predbat.components = StubComponents(StubSolar(model, evidence))
         failed |= _check("t7 alias", web.get_chart("PVAccuracy") == web.get_chart("PVCalibration"))
 
+        print("Test 9: the slot chart plots time as numbers, so the axis runs in time order")
+        html = web.get_chart("PVCalibration")
+        failed |= _check("t9 numeric x", "tickvals" in html and "x: s.points.map(function(p) { return p[0] / 60; })" in html)
+
         print("Test 8: the text wraps and the page is width-capped")
         html = web.get_chart("PVCalibration")
         failed |= _check("t8 wrap", ".pv-calibration-page p { white-space: normal; }" in html and "max-width:960px" in html)
