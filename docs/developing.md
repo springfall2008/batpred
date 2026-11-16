@@ -1100,7 +1100,7 @@ on Predbat.
 
 ## The C++ prediction kernel
 
-Predbat has a compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast, bit-for-bit-identical mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), On by default; it automatically falls back to the Python engine if the binary for your architecture can't be loaded.
+Predbat has a compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). The simulation itself is bit-for-bit identical; the one deliberate difference is that the kernel rounds its ten scalar results (metric, import/export kWh, minimum and final SoC, cycles, metric keep, iBoost and carbon) to 4 decimal places with a fast scale-and-round, so a value that falls exactly on a halfway point can land one unit in the 4th decimal place away from Python's `round(x, 4)`. It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), On by default; it automatically falls back to the Python engine if the binary for your architecture can't be loaded.
 
 ### Building the C++ kernel locally
 
@@ -1126,7 +1126,7 @@ A GitHub Actions job (`kernel-binaries` in `.github/workflows/code-quality.yml`)
 
 Three test targets exercise the kernel:
 
-- `./run_all --test kernel_parity` - dual-runs a large set of deterministic edge cases and seeded random scenarios through both engines and asserts the results match to within `1e-6`
+- `./run_all --test kernel_parity` - dual-runs a large set of deterministic edge cases and seeded random scenarios through both engines and asserts the SoC series and `soc_min_minute` match to within `1e-6`, and the ten rounded scalar results to within one unit in the 4th decimal place (`ROUNDED_RESULT_TOLERANCE`)
 - `./run_all --test model_kernel` - runs the standard model test suite (`./run_all --test model`) with the kernel enabled
 - `./run_all --test optimise_windows_kernel` - runs the optimiser test suite with and without the kernel, checking results match and reporting the speedup
 
@@ -1235,3 +1235,38 @@ that will be built before merging it in.
 
 The Predbat repository contains a `CLAUDE.md` file, which gives the same guidance (how to run the tests, the coding standards, and the architecture)
 to AI coding assistants such as Claude Code. If you change how the tests are run or the standards that are enforced, keep that file and this guide consistent.
+
+## Embedding the engine
+
+A host that supplies its own state, storage and component adapters can use the same
+startup stages as `initialize()` without starting the normal components or timers:
+
+1. Construct `PredBat`, populate its `args` configuration dictionary and provide a working
+   `log()` function, then call `initialize_state()` once for the new engine. These are
+   prerequisites for state initialisation, before the remaining adapters are attached.
+2. Attach the host's HA interface, storage, components and optional plugin adapter.
+3. Call `initialize_config()`, then complete the host's component discovery.
+4. Call `finalize_config(schedule_retry=False)`. An optional `before_validate(engine)`
+   callback applies discovered settings after registration and before final validation.
+   The return value is the normal `validate_config()` result.
+5. Restore the plan with `load_plan()` after applying the host's configuration policy.
+
+For each run, refresh the adapter's input state and call
+`update_pred(scheduled=True, plan_at=instant)`. Use `scheduled=False` to force a new
+plan. Do not repeat startup between warm cycles: the engine retains its current plan
+and native history cache. Rebuild an engine when its configuration changes; the host
+owns adapter resources and must close them when retiring it. These helpers do not
+make an engine safe for concurrent calls.
+
+`update_pred()` owns planning, execution, late replanning and bookkeeping. It returns
+`None` when planning is refused, otherwise a dictionary containing `recomputed` and
+`executed`. A failed execution skips bookkeeping. An optional `timings` dictionary
+accumulates `plan_s` and `execute_s`, including time spent in failed stages. `plan_s`
+includes plan persistence; `execute_s` includes post-run bookkeeping (plugin hooks,
+savings, status recording and cleanup), as well as physical execution.
+
+`scheduled_bookkeeping` defaults to `scheduled`. A host that reseeds accounting values
+from an external snapshot can set it to `False` to avoid advancing scheduled totals
+while retaining the normal plan reuse policy. It does not disable controls or replace
+the normal read-only switch. Set `plan_random_delay` to zero if the host schedules work
+centrally and must avoid sleeping a worker during late replanning.

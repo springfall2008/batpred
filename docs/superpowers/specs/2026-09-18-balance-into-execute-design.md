@@ -66,6 +66,18 @@ the inverters happened to be configured in. Two coupled faults came with it:
 A pass now commits to a single direction, holds within it are applied cumulatively, the energy
 guards ask whether *any* other inverter qualifies, and the rate guards consult no partner at all.
 
+**Single direction per pass, relaxed for the cross-charge hold (#6194, November 2026).** A closed-loop
+simulator (`tests/balance_ct_harness.py`: one shared CT, inverters sampling it at different moments and
+reading it with slightly different offsets) showed the cross-charge correction holding an inverter, the
+held battery reading 0W at the next pass, the hold being released, and the inverter's loop winding
+straight back into charging from its neighbours. That was a write every minute or two, and SoC balancing
+was skipped on every pass the correction fired. The hold is now latched on its own zero readback for as
+long as the fleet's direction is unchanged, and SoC balancing runs alongside it. Combining them is safe
+because the cross-charge hold only ever removes draw (or supply) that the rest of the fleet was
+providing. It never adds to what the other inverters must cover, and the SoC guard still counts that
+inverter's own capacity in the fleet's direction. In the model this took eco-mode writes from 80-139 an
+hour to 6-17, and cross-charging to zero.
+
 **Cross-charge detection (was: "today's power-sign rule moves unchanged").** Changed. The
 power-sign rule chose direction from `sign(total_battery_power)`, a battery-side proxy for a
 whole-site question. On an export window with a large PV surplus it held every inverter that was
