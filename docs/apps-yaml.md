@@ -2881,6 +2881,24 @@ The auto_restart itself is a list of commands to run to trigger a restart.
 NB: If you are running GivTCP v2 then the line '533ea71a_givtcp' must be replaced with 'a6a2857d_givtcp'
 as the slug-id (Home Assistant App identifier) is different between GivTCP v2 and v3.
 
+## PV calibration
+
+When **switch.predbat_metric_pv_calibration_enable** is On (the default) Predbat calibrates your solar forecast from your own generation history - see [PV calibration](customisation.md) for how it works. These optional settings tune it; the defaults suit most systems:
+
+- **pv_calibration_history_days** - how many days of evidence are kept, and how many days the first scan reads (default 28). Home Assistant's recorder keeps 10 days unless you change `purge_keep_days`, so the evidence builds up to this over the following weeks. A long first read bypasses Predbat's history cache. Calibration needs at least 3 days.
+- **pv_calibration_scan_days** - how many days each daily scan reads (default 2), more if it has not scanned for longer. A scan whose history read fails is tried again an hour later.
+- **pv_calibration_half_life** - how quickly older evidence counts for less, in days (default 3.5): a day's weight halves every this many days. Shorter follows a change in your system faster; longer is steadier.
+- **pv_calibration_shrink** - how readily the day factor moves away from 1 (default 0.20). Smaller leaves a forecast that is already accurate for your site more alone; larger follows a real, consistent difference faster.
+- **pv_calibration_shrink_slot** - the same for the half-hour shape (default 0.20).
+
+```yaml
+  pv_calibration_history_days: 28
+  pv_calibration_scan_days: 2
+  pv_calibration_half_life: 3.5
+  pv_calibration_shrink: 0.20
+  pv_calibration_shrink_slot: 0.20
+```
+
 ## Battery rate grids
 
 Batteries do not always charge or discharge at their full rated rate: most tail off their charge rate near full and their discharge rate near empty, and many limit charging (and sometimes discharging) when cold.
