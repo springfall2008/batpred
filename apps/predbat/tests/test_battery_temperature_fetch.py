@@ -97,6 +97,70 @@ def test_battery_temperature_fetch(my_predbat):
     return failed
 
 
+def _constant_history(now_utc, days, temperature):
+    """HA-style history at one temperature, one record every 30 minutes, oldest first."""
+    records = []
+    for minutes_ago in range(days * 24 * 60, -1, -30):
+        stamp = now_utc - timedelta(minutes=minutes_ago)
+        records.append({"state": str(temperature), "last_updated": stamp.strftime(TIME_FORMAT), "attributes": {}})
+    return [records]
+
+
+def test_battery_temperature_fetch_average(my_predbat):
+    """
+    battery_temperature_history given as a list (one sensor per inverter) is the fleet's average temperature, as the
+    plan models one combined battery: not the sum, and a sensor reading exactly 0 (a missing reading) is left out.
+    """
+    print("\n*** Test: battery temperature history from several sensors is their average ***")
+    failed = False
+    sensors = {"sensor.battery_temperature_a": 10.0, "sensor.battery_temperature_b": 20.0, "sensor.battery_temperature_missing": 0, "sensor.battery_temperature_missing_2": 0}
+
+    def fake_history(entity_id, days=30, required=True, tracked=True):
+        """Each sensor reads its own constant temperature."""
+        if entity_id not in sensors:
+            return None
+        return _constant_history(my_predbat.now_utc, days, sensors[entity_id])
+
+    saved_history = my_predbat.get_history_wrapper
+    saved_arg = my_predbat.args.get("battery_temperature_history", None)
+    my_predbat.get_history_wrapper = fake_history
+    try:
+        my_predbat.args["battery_temperature_history"] = ["sensor.battery_temperature_a", "sensor.battery_temperature_b", "sensor.battery_temperature_missing"]
+        my_predbat.fetch_battery_temperature()
+        averaged = dict(my_predbat.battery_temperature_history)
+        my_predbat.args["battery_temperature_history"] = ["sensor.battery_temperature_missing"]
+        my_predbat.fetch_battery_temperature()
+        only_zero = dict(my_predbat.battery_temperature_history)
+        my_predbat.args["battery_temperature_history"] = ["sensor.battery_temperature_missing", "sensor.battery_temperature_missing_2"]
+        my_predbat.fetch_battery_temperature()
+        all_zero = dict(my_predbat.battery_temperature_history)
+        my_predbat.args["battery_temperature_history"] = "sensor.battery_temperature_a"
+        my_predbat.fetch_battery_temperature()
+        single = dict(my_predbat.battery_temperature_history)
+    finally:
+        my_predbat.get_history_wrapper = saved_history
+        if saved_arg is None:
+            my_predbat.args.pop("battery_temperature_history", None)
+        else:
+            my_predbat.args["battery_temperature_history"] = saved_arg
+
+    if not averaged or any(abs(value - 15.0) > 1e-6 for value in averaged.values()):
+        print("ERROR: expected the average 15°C at every minute, got {}".format(sorted(set(averaged.values()))[:5]))
+        failed = True
+    if not only_zero or any(value != 0 for value in only_zero.values()):
+        print("ERROR: a lone sensor reading 0 should still read 0 (so the stuck warning sees it), got {}".format(sorted(set(only_zero.values()))[:5]))
+        failed = True
+    if not all_zero or any(value != 0 for value in all_zero.values()):
+        print("ERROR: sensors that all read 0 should read 0 (the learners ignore it later), got {}".format(sorted(set(all_zero.values()))[:5]))
+        failed = True
+    if not single or any(abs(value - 10.0) > 1e-6 for value in single.values()):
+        print("ERROR: a single sensor should read as it is, got {}".format(sorted(set(single.values()))[:5]))
+        failed = True
+    if not failed:
+        print("✓ several sensors averaged, a missing one left out, all-zero kept as 0, a single sensor unchanged")
+    return failed
+
+
 def test_battery_temperature_history_stuck_warning(my_predbat):
     """
     check_battery_temperature_history_stuck() warns only when the last day reads exactly 0, and

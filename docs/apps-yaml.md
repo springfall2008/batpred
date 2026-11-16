@@ -1823,6 +1823,19 @@ If you have multiple inverters then you need to configure both battery and PV po
     - sensor.givtcp2_{geserial2)_pv_power
 ```
 
+If a single sensor reports the battery power for the whole site (for example an EMS in front of several inverters, which GE Cloud configures for you),
+put it on the first inverter and a dummy `0` on the others. Predbat then treats the first sensor as the total for every inverter, and the rate grids
+learn it against the combined battery (every inverter's SoC and rated rate together) rather than against the first inverter alone:
+
+```yaml
+  battery_power:
+    - sensor.ems_battery_power
+    - 0
+```
+
+With that set up, the rate grids are only learned while every inverter's SoC and charge/discharge rate sensors have history; if one is missing they
+keep the curves they have rather than learn from the first inverter alone.
+
 #### Battery SoC
 
 - **soc_kw** - Entity name of the battery SoC in kWh, should be the inverter one not an individual battery
@@ -2976,7 +2989,7 @@ Example:
     1 : 0.05
 ```
 
-For Predbat to learn the grids it needs historical Home Assistant data for **status**, **battery_charge_rate** (and **battery_discharge_rate**), **battery_power** and **soc_percent** or **soc_kw**,
+For Predbat to learn the grids it needs historical Home Assistant data for **status**, **battery_charge_rate** (and **battery_discharge_rate**), **battery_power** (one per inverter, or a [site-wide sensor on the first](#power-data)) and **soc_percent** or **soc_kw**,
 plus **battery_temperature_history** for the temperature dimension and **grid_power** to spot exports that did not reach the grid.
 If you have a GivEnergy inverter and are using the recommended default [REST mode to control your inverter](#inverter-control-configurations)
 then you will need to uncomment out the following entries in `apps.yaml`:
@@ -2998,7 +3011,9 @@ Your battery's maximum charge and discharge rate can be impacted by cold weather
 you can also describe it in `apps.yaml`, as the fallback where there is no evidence (or what Predbat plans with when **battery_rate_grid_auto** is off).
 
 - You must make sure battery_temperature is defined (one per inverter).
-- Set **battery_temperature_history** to a sensor with history, this will be used to predict future temperatures based on past changes
+- Set **battery_temperature_history** to a sensor with history, this will be used to predict future temperatures based on past changes.
+  With more than one inverter you can give a list of sensors, one per battery: Predbat plans with their average, minute by minute,
+  leaving out any that read exactly 0 (a missing reading), and the rate grids learn from the same average
 - Set **battery_temperature_charge_curve** to define the maximum charge rate in C which is a percentage of your battery capacity.
 - Set **battery_temperature_discharge_curve** to define the maximum discharge rate in C which is a percentage of your battery capacity.
 

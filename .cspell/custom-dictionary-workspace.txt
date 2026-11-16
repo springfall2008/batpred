@@ -318,6 +318,7 @@ guoxia
 guoxiatech
 GWMQTT
 HACS
+hacsfiles
 hadashboard
 hahistory
 hainterface
