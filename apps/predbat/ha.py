@@ -37,6 +37,8 @@ from http_sync import http_get, http_post, HttpJSONDecodeError, HttpTimeout, Htt
 HISTORY_CHUNK_DAYS = 3
 HA_STARTUP_API_RETRY_INTERVAL = 5
 HA_STARTUP_API_RETRY_TIMEOUT = 10 * 60
+# How long a service call waits to complete, over the websocket or looped back to a Predbat-published control
+HA_SERVICE_CALL_TIMEOUT = 2 * 60
 
 # The 2-minute refresh of a tracked entity reads from its last record or from its last check less
 # this overlap, whichever is later, so a quiet entity is not re-read from a change days ago. The
@@ -609,7 +611,7 @@ class HAInterface(ComponentBase):
         self.ws_sync_event.set()
 
         # Wait for response with 2 minute timeout
-        event.wait(timeout=2 * 60)
+        event.wait(timeout=HA_SERVICE_CALL_TIMEOUT)
 
         # Extract result
         if result_holder.get("error"):
@@ -1233,6 +1235,39 @@ class HAInterface(ComponentBase):
             return False
         return all(entity_id in self.base.dashboard_index_app for entity_id in entities)
 
+    def call_service_owned_control(self, domain, service, data):
+        """
+        Run a write to a Predbat-published control on a thread, waiting up to HA_SERVICE_CALL_TIMEOUT for it.
+
+        This keeps what routing the write through Home Assistant gave: HA fires the call_service event
+        before it runs the service and sends the websocket result after, and the socket loop runs the
+        Predbat handler inline on that event, so the caller waited for the handler, capped by the
+        websocket wait, and a handler exception never reached it. Returns the handler's result, or None
+        (the websocket branch's failure value) if the handler raised or is still running at the timeout,
+        in which case it is left to finish on its thread.
+        """
+        data_frame = {"domain": domain, "service": service, "service_data": data}
+        outcome = {}
+
+        def run_handler():
+            """Thread body: run the handler on its own event loop and keep its result or exception."""
+            try:
+                outcome["result"] = asyncio.run(self.base.trigger_callback(data_frame))
+            except Exception as e:
+                outcome["error"] = e
+                self.log("Warn: Service call {}/{} data {} failed: exception {}".format(domain, service, data, e))
+                self.log("Warn: " + traceback.format_exc())
+
+        thread = threading.Thread(target=run_handler, name="predbat-service-{}.{}".format(domain, service), daemon=True)
+        thread.start()
+        thread.join(timeout=HA_SERVICE_CALL_TIMEOUT)
+        if thread.is_alive():
+            self.log("Warn: Service call {}/{} data {} did not complete within {} seconds (timeout), leaving it to finish".format(domain, service, data, HA_SERVICE_CALL_TIMEOUT))
+            return None
+        if "error" in outcome:
+            return None
+        return outcome.get("result")
+
     def call_service(self, service, **kwargs):
         """
         Call a service in Home Assistant via Websocket
@@ -1248,10 +1283,13 @@ class HAInterface(ComponentBase):
         else:
             domain = ""
 
-        if self.websocket_active and not self._is_owned_virtual_control(domain, data):
+        if self.websocket_active:
+            if self._is_owned_virtual_control(domain, data):
+                # A control Predbat published itself: HA has no platform for it, so run it here
+                return self.call_service_owned_control(domain, service, data)
             return self.call_service_websocket_command(domain, service, data)
         else:
-            # Loopback with no home assistant, or for a control Predbat published itself
+            # Loopback with no home assistant
             data_frame = {"domain": domain, "service": service, "service_data": data}
             return run_async(self.base.trigger_callback(data_frame))
 

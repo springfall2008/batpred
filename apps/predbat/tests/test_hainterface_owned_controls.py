@@ -16,6 +16,11 @@ fires the call_service event (which is what has been completing the write) and t
 Predbat directly, for every component, while real HA entities still go through the websocket.
 """
 
+import asyncio
+import threading
+import time
+from unittest.mock import patch
+
 from tests.test_hainterface_common import MockBase, create_ha_interface
 
 
@@ -98,6 +103,94 @@ def test_real_ha_entities_still_use_websocket(my_predbat=None):
     return failed
 
 
+def test_owned_control_runs_on_thread_and_returns_result(my_predbat=None):
+    """A looped-back write runs off the caller's thread and call_service returns the handler's result once it completes"""
+    print("\n=== Testing call_service() runs a Predbat-published control write on a thread and waits for it ===")
+    failed = 0
+    ha_interface, mock_base, websocket_calls = _make_ha_interface({"number.predbat_fox_0_reserve": "fox"})
+    handler_threads = []
+
+    async def trigger_callback(service_data):
+        """Record which thread the handler ran on and report a matched listener."""
+        handler_threads.append(threading.current_thread())
+        await asyncio.sleep(0.05)
+        return True
+
+    mock_base.trigger_callback = trigger_callback
+    result = ha_interface.call_service("number/set_value", entity_id="number.predbat_fox_0_reserve", value=20)
+
+    if result is not True:
+        print("ERROR: Expected call_service to return the handler result True, got {}".format(result))
+        failed += 1
+    if len(handler_threads) != 1 or handler_threads[0] is threading.current_thread():
+        print("ERROR: Expected the handler to run once on another thread, ran on {}".format(handler_threads))
+        failed += 1
+    if websocket_calls:
+        print("ERROR: Expected no websocket call, got {}".format(websocket_calls))
+        failed += 1
+    return failed
+
+
+def test_owned_control_handler_exception_returns_none(my_predbat=None):
+    """An exception raised by a component handler is logged and returned as None (failure), not raised into the caller"""
+    print("\n=== Testing call_service() catches a Predbat-published control handler exception ===")
+    failed = 0
+    ha_interface, mock_base, _ = _make_ha_interface({"switch.predbat_deye_0_write": "deye"})
+
+    async def trigger_callback(service_data):
+        """Fail the way a cloud write does once its retries are exhausted."""
+        raise RuntimeError("cloud write failed")
+
+    mock_base.trigger_callback = trigger_callback
+    try:
+        result = ha_interface.call_service("switch/turn_on", entity_id="switch.predbat_deye_0_write")
+    except Exception as e:
+        print("ERROR: Handler exception escaped call_service: {}".format(e))
+        return failed + 1
+
+    if result is not None:
+        print("ERROR: Expected None after a handler exception, got {}".format(result))
+        failed += 1
+    if not any("Warn:" in message and "cloud write failed" in message for message in mock_base.log_messages):
+        print("ERROR: Expected a Warn naming the exception, got {}".format(mock_base.log_messages))
+        failed += 1
+    return failed
+
+
+def test_owned_control_timeout_returns_none(my_predbat=None):
+    """A handler that outlasts the service call timeout makes call_service return None with a Warn, as the websocket wait did"""
+    print("\n=== Testing call_service() gives up on a slow Predbat-published control write after the timeout ===")
+    failed = 0
+    ha_interface, mock_base, _ = _make_ha_interface({"select.predbat_gecloud_0_mode": "gecloud"})
+    finished = threading.Event()
+
+    async def trigger_callback(service_data):
+        """Take longer than the patched timeout, then note that the write still completed."""
+        await asyncio.sleep(0.5)
+        finished.set()
+        return True
+
+    mock_base.trigger_callback = trigger_callback
+    start = time.monotonic()
+    with patch("ha.HA_SERVICE_CALL_TIMEOUT", 0.1):
+        result = ha_interface.call_service("select/select_option", entity_id="select.predbat_gecloud_0_mode", option="Eco")
+    elapsed = time.monotonic() - start
+
+    if result is not None:
+        print("ERROR: Expected None after the timeout, got {}".format(result))
+        failed += 1
+    if elapsed >= 0.45:
+        print("ERROR: call_service waited {:.2f}s, expected it to return at the 0.1s timeout".format(elapsed))
+        failed += 1
+    if not any("Warn:" in message and "timeout" in message for message in mock_base.log_messages):
+        print("ERROR: Expected a timeout Warn, got {}".format(mock_base.log_messages))
+        failed += 1
+    if not finished.wait(timeout=2):
+        print("ERROR: The handler did not carry on to completion after call_service returned")
+        failed += 1
+    return failed
+
+
 def run_hainterface_owned_controls_tests(my_predbat):
     """Run the HAInterface Predbat-published control routing tests and return the failure count"""
     print("\n" + "=" * 80)
@@ -107,6 +200,9 @@ def run_hainterface_owned_controls_tests(my_predbat):
     failed = 0
     failed += test_owned_controls_loop_back_for_every_component(my_predbat)
     failed += test_real_ha_entities_still_use_websocket(my_predbat)
+    failed += test_owned_control_runs_on_thread_and_returns_result(my_predbat)
+    failed += test_owned_control_handler_exception_returns_none(my_predbat)
+    failed += test_owned_control_timeout_returns_none(my_predbat)
 
     print("\n" + "=" * 80)
     if failed == 0:
