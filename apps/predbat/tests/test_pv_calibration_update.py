@@ -251,6 +251,27 @@ def test_update_scan_exception_is_a_failed_scan():
     return failed
 
 
+def test_update_scans_after_midnight_for_yesterday():
+    """A scan at 21:00 is followed by one just after local midnight, so yesterday is in the store that morning; no more until the next day."""
+    from datetime import datetime, timezone
+
+    test_api, calls = setup(FakeStorage([{"slot_minutes": 5, "days": {}}]), [lambda t: {day(t, 1): record()}])
+    try:
+        test_api.mock_base.now_utc = datetime(2025, 6, 15, 20, 0, tzinfo=timezone.utc)  # 21:00 BST
+        test_api.mock_base.now_utc_exact = test_api.mock_base.now_utc
+        update(test_api)
+        advance(test_api, 4 * 60)  # 01:00 BST the next day
+        update(test_api)
+        failed = check("scan after midnight", len(calls) == 2, calls)
+        failed |= check("yesterday stored", day(test_api, 1) in (test_api.solar.pv_calibration_evidence or {}), sorted(test_api.solar.pv_calibration_evidence or {}))
+        advance(test_api, 60)
+        update(test_api)
+        failed |= check("no further scan", len(calls) == 2, calls)
+    finally:
+        test_api.cleanup()
+    return failed
+
+
 def run_pv_calibration_update_tests(my_predbat=None):
     """Run the PV calibration evidence store tests."""
     failed = False
@@ -264,6 +285,7 @@ def run_pv_calibration_update_tests(my_predbat=None):
         test_update_resaves_daily,
         test_update_without_storage,
         test_update_scan_exception_is_a_failed_scan,
+        test_update_scans_after_midnight_for_yesterday,
     ):
         print("**** {} ****".format(test.__name__))
         failed = test() or failed

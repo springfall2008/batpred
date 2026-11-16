@@ -367,6 +367,35 @@ def test_scan_empty_forecast_history_is_a_failed_read():
     return check("empty forecast history", evidence is None, evidence)
 
 
+def test_calibration_band_default_when_recent_week_mostly_down():
+    """One valid day in the last 7 (and older good days) keeps the default 0.7 / 1.3 band, as the 7-day calibration did."""
+    test_api = create_test_solar_api()
+    try:
+        solar = run_calibration(test_api, evidence_days(test_api, [0.05] * 6 + [0.9] + [0.9] * 14))
+        failed = check("band default mostly down", (solar.pv_calibration_worst_scaling, solar.pv_calibration_best_scaling) == (0.7, 1.3), (solar.pv_calibration_worst_scaling, solar.pv_calibration_best_scaling))
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_scan_clipped_minutes_follow_pv_scaling():
+    """Clipped minutes are stored so a later pv_scaling change still applies to them: at the clipped noon slot actual / forecast stays 1."""
+    from pv_calibration import fit_pv_calibration, pv_day
+
+    test_api = create_test_solar_api()
+    try:
+        test_api.mock_base.mock_config = {"inverter_hybrid": True, "inverter_limit": 3000.0}
+        build_history(test_api, 5, bell(4.0), lambda m: min(bell(4.0)(m), 3.0))
+        with test_api.patch_now_utc_exact():
+            evidence = test_api.solar.pv_calibration_scan(5)
+        today = pv_day(test_api.mock_base.now_utc, 0, test_api.mock_base.local_tz)
+        model = fit_pv_calibration(evidence, today, 0.8, 3.5, 1e6, 1e6, test_api.solar.plan_interval_minutes)
+        failed = check("clipped noon follows pv_scaling", model is not None and abs(model["raw_adj"][720] - 1.0) < 0.05, model and model["raw_adj"][720])
+    finally:
+        test_api.cleanup()
+    return failed
+
+
 def run_pv_calibration_scan_tests(my_predbat=None):
     """Run the PV calibration history scan and settings tests."""
     failed = False
@@ -388,6 +417,8 @@ def run_pv_calibration_scan_tests(my_predbat=None):
         test_calibration_band_default_when_recent_week_down,
         test_calibration_empty_store_does_not_rescan,
         test_scan_empty_forecast_history_is_a_failed_read,
+        test_calibration_band_default_when_recent_week_mostly_down,
+        test_scan_clipped_minutes_follow_pv_scaling,
     ):
         print("**** {} ****".format(test.__name__))
         failed = test() or failed

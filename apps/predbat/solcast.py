@@ -20,7 +20,7 @@ import hashlib
 import math
 import random
 import aiohttp
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from const import (
     TIME_FORMAT,
@@ -1240,8 +1240,9 @@ class SolarAPI(ComponentBase):
         actual kWh]}, "peak_kw", "clipped_minutes"}}, or None when the pv_today history could not be read.
 
         The forecast is the uncalibrated one with pv_scaling taken back out, so a later pv_scaling change applies to the whole
-        store at once; the actual has inverter clipping imputed (impute_clipped_pv_history), as calibration always measured
-        against; peak_kw is the measured peak. A day is kept only when the pv_today history reaches its start and the
+        store at once. The actual is as measured; a slot with minutes at the inverter's clipping ceiling also carries those
+        minutes' forecast and measured energy, so the fit imputes them (pv_calibration.slot_actual) at the pv_scaling then
+        current. peak_kw is the measured peak. A day is kept only when the pv_today history reaches its start and the
         forecast history spans it, so a partly recorded day cannot read as forecast error.
         """
         if self.pv_scaling <= 0:
@@ -1289,13 +1290,19 @@ class SolarAPI(ComponentBase):
                 if days_prev > days:
                     continue
                 slot = (minute_absolute % (24 * 60)) // slot_minutes * slot_minutes
-                record = per_day.setdefault(days_prev, {"forecast": {}, "actual": {}, "peak": 0.0, "clipped": 0})
-                record[field][slot] = record[field].get(slot, 0.0) + value / 60.0
-                if field == "actual":
-                    measured = pv_power_hist.get(minute, 0.0)
-                    record["peak"] = max(record["peak"], measured)
-                    if value != measured:
-                        record["clipped"] += 1
+                record = per_day.setdefault(days_prev, {"forecast": {}, "actual": {}, "clip_forecast": {}, "clip_measured": {}, "peak": 0.0, "clipped": 0})
+                if field == "forecast":
+                    record["forecast"][slot] = record["forecast"].get(slot, 0.0) + value / 60.0
+                    continue
+                # The measured actual is stored, and a clipped minute's imputed value (the forecast) separately, so the fit can
+                # impute again at whatever pv_scaling is current then
+                measured = pv_power_hist.get(minute, 0.0)
+                record["actual"][slot] = record["actual"].get(slot, 0.0) + measured / 60.0
+                record["peak"] = max(record["peak"], measured)
+                if value != measured:
+                    record["clipped"] += 1
+                    record["clip_forecast"][slot] = record["clip_forecast"].get(slot, 0.0) + value / 60.0
+                    record["clip_measured"][slot] = record["clip_measured"].get(slot, 0.0) + measured / 60.0
 
         evidence = {}
         for days_prev, record in per_day.items():
@@ -1311,7 +1318,10 @@ class SolarAPI(ComponentBase):
             for slot in range(0, 24 * 60, slot_minutes):
                 if day_start_minutes_ago - slot > oldest_forecast_minute:
                     continue
-                slots[slot] = [dp4(record["forecast"].get(slot, 0.0) / self.pv_scaling), dp4(record["actual"].get(slot, 0.0))]
+                pair = [dp4(record["forecast"].get(slot, 0.0) / self.pv_scaling), dp4(record["actual"].get(slot, 0.0))]
+                if slot in record["clip_forecast"]:
+                    pair += [dp4(record["clip_forecast"][slot] / self.pv_scaling), dp4(record["clip_measured"][slot])]
+                slots[slot] = pair
             if not slots:
                 continue
             day = pv_day(self.now_utc, self.minutes_now + (days_prev - 1) * 24 * 60 + 12 * 60, self.local_tz)  # the noon of that day, so DST cannot move it
@@ -1369,7 +1379,11 @@ class SolarAPI(ComponentBase):
         if self.pv_calibration_evidence is None:
             self.pv_calibration_evidence = {}
 
-        if self.pv_calibration_next_scan is None or self.now_utc >= self.pv_calibration_next_scan:
+        # Due a day after the last success (an hour after a failure), and also once the local date has moved on and yesterday
+        # is not stored yet, so a completed day is calibrated from that morning rather than whenever the daily scan falls
+        yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
+        new_day = self.pv_calibration_last_success is not None and pv_day(self.pv_calibration_last_success, 0, self.local_tz) < today and yesterday not in self.pv_calibration_evidence
+        if self.pv_calibration_next_scan is None or self.now_utc >= self.pv_calibration_next_scan or new_day:
             self.pv_calibration_last_scan = self.now_utc
             days = pv_calibration_scan_length(self.pv_calibration_last_success, self.now_utc, history_days, settings["scan_days"])
             try:
@@ -1512,9 +1526,10 @@ class SolarAPI(ComponentBase):
             self.log("SolarAPI: PV Calibration: Not enough valid days of evidence for calibration ({} days stored, at least {} valid days needed)".format(len(evidence), PV_CALIBRATION_MIN_DAYS))
 
         # The P10/P90 band and the observed peak come from the last PV_CALIBRATION_BAND_DAYS days, as they did before the store
-        worst_day_scaling, best_day_scaling, average_day_scaling = band_scaling(evidence, today, self.pv_scaling, PV_CALIBRATION_BAND_DAYS)
+        worst_day_scaling, best_day_scaling, average_day_scaling = band_scaling(evidence, today, self.pv_scaling, PV_CALIBRATION_BAND_DAYS, PV_CALIBRATION_MIN_DAYS)
         if worst_day_scaling is None or not enabled_calibration:
-            # No valid day in the band window (a down week after older good days) or no calibration: the default band, as before
+            # Fewer than PV_CALIBRATION_MIN_DAYS valid days in the band window (a mostly down week after older good days), or no
+            # calibration: the default band, as the 7-day calibration used when it had too few days
             worst_day_scaling = 0.7
             best_day_scaling = 1.3
         max_pv_power_hist = evidence_peak_kw(evidence, today, PV_CALIBRATION_BAND_DAYS)

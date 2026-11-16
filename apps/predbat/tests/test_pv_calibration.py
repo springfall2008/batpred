@@ -170,6 +170,10 @@ def test_clean_drops_malformed():
     failed = check("clean keys", sorted(cleaned) == [day_before(1)], sorted(cleaned))
     failed |= check("clean ints", cleaned.get(day_before(1), {}).get("slots", {}).get(720) == [1.0, 0.9], cleaned)
     failed |= check("clean non-dict", clean_pv_calibration_evidence(None) == {} and clean_pv_calibration_evidence([1, 2]) == {})
+    clipped = {day_before(1): {"slots": {"720": [1.0, 0.8, 0.5, 0.4]}, "peak_kw": 3.0, "clipped_minutes": 30}, day_before(2): {"slots": {"720": [1.0, 0.8, 0.5]}}}
+    cleaned = clean_pv_calibration_evidence(clipped)
+    failed |= check("clean clipped slot kept", cleaned.get(day_before(1), {}).get("slots", {}).get(720) == [1.0, 0.8, 0.5, 0.4], cleaned)
+    failed |= check("clean three numbers dropped", day_before(2) not in cleaned, sorted(cleaned))
     return failed
 
 

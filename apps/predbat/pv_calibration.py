@@ -72,14 +72,14 @@ def clean_pv_calibration_evidence(data):
         for minute, pair in record["slots"].items():
             try:
                 minute_int = int(minute)
-                forecast, actual = float(pair[0]), float(pair[1])
-            except (TypeError, ValueError, IndexError, KeyError):
+                values = [float(value) for value in pair]
+            except (TypeError, ValueError, KeyError):
                 good = False
                 break
-            if not 0 <= minute_int < 24 * 60 or forecast < 0 or actual < 0:
+            if not 0 <= minute_int < 24 * 60 or len(values) not in (2, 4) or min(values) < 0:
                 good = False
                 break
-            slots[minute_int] = [forecast, actual]
+            slots[minute_int] = values
         if not good or not slots:
             continue
         try:
@@ -112,10 +112,22 @@ def pv_calibration_scan_length(last_success, now, history_days, scan_days):
     return min(max(scan_days, gap_days), history_days)
 
 
+def slot_actual(pair, pv_scaling):
+    """
+    A slot's actual kWh with inverter clipping imputed at the current pv_scaling. A slot is [forecast, actual], or for a slot
+    with clipped minutes [forecast, measured, clipped minutes' forecast, clipped minutes' measured] (forecasts before
+    pv_scaling): a clipped minute counts as the forecast when that is above what was measured, as impute_clipped_pv_history
+    does, so a later pv_scaling change applies to clipped minutes too.
+    """
+    if len(pair) >= 4:
+        return pair[1] - pair[3] + max(pair[2] * pv_scaling, pair[3])
+    return pair[1]
+
+
 def _day_totals(record, pv_scaling):
     """(forecast kWh x pv_scaling, actual kWh) summed over a day's slots."""
     forecast = sum(pair[0] for pair in record["slots"].values()) * pv_scaling
-    actual = sum(pair[1] for pair in record["slots"].values())
+    actual = sum(slot_actual(pair, pv_scaling) for pair in record["slots"].values())
     return forecast, actual
 
 
@@ -192,7 +204,7 @@ def fit_pv_calibration(evidence, today, pv_scaling, half_life, shrink_day, shrin
             if not pair:
                 continue
             f = pair[0] * pv_scaling
-            a = pair[1]
+            a = slot_actual(pair, pv_scaling)
             if f < PV_CALIBRATION_MIN_SLOT_KWH:
                 continue
             values.append((clamp(math.log(max(a, 0.005) / f / total), -log_clamp, log_clamp), w * f))
@@ -220,12 +232,13 @@ def fit_pv_calibration(evidence, today, pv_scaling, half_life, shrink_day, shrin
     }
 
 
-def band_scaling(evidence, today, pv_scaling, band_days):
+def band_scaling(evidence, today, pv_scaling, band_days, min_days=1):
     """
     (worst, best, average) day scaling over the last band_days days, as the 7-day calibration worked them out: worst and
     best are the extreme day ratios divided by the weighted average, weights max(1 - 0.1 x (age - 1), 0.3). worst and best
-    are None when no valid day is in the window.
+    are None when the window holds fewer than min_days valid days (one day's ratio over the average is 1, a band of nothing).
     """
+    valid = 0
     worst = best = None
     weighted_actual = weighted_forecast = 0.0
     for day in sorted(evidence or {}):
@@ -235,6 +248,7 @@ def band_scaling(evidence, today, pv_scaling, band_days):
         forecast, actual = _day_totals(evidence[day], pv_scaling)
         if _is_down(forecast, actual):
             continue
+        valid += 1
         ratio = actual / forecast
         worst = ratio if worst is None else min(worst, ratio)
         best = ratio if best is None else max(best, ratio)
@@ -242,7 +256,7 @@ def band_scaling(evidence, today, pv_scaling, band_days):
         weighted_actual += actual * weight
         weighted_forecast += forecast * weight
     average = clamp(weighted_actual / weighted_forecast if weighted_forecast > 0 else 1.0, 0.1, 2.0)
-    if worst is None:
+    if worst is None or valid < min_days:
         return None, None, average
     return clamp(worst / average, 0.3, 1.0), min(best / average, 2.0), average
 
