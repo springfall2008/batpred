@@ -106,7 +106,7 @@ def test_hass_watcher(my_predbat):
         if saved_env is not None:
             os.environ["PREDBAT_APPS_FILE"] = saved_env
 
-    print("  [resolve_apps_yaml_path] honours PREDBAT_APPS_FILE when set (e.g. by the Annual tool's headless instance)")
+    print("  [resolve_apps_yaml_path] honours PREDBAT_APPS_FILE when set (e.g. by whatever launches a standalone PredBat process; nothing in the engine sets it)")
     saved_env = os.environ.get("PREDBAT_APPS_FILE")
     try:
         os.environ["PREDBAT_APPS_FILE"] = "/tmp/some_other_dir/apps.yaml"

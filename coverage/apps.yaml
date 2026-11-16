@@ -138,13 +138,13 @@ pred_bat:
   discharge_end_time:
   - select.givtcp_{geserial}_discharge_end_time_slot_1
   battery_temperature:
-  - sensor.givtcp_battery_stack_1_bms_temperature
+  - sensor.givtcp_battery_stack_1_battery_temperature
 
   # Battery temperature charge adjustment curve
   # Specific in C which is a multiple of the battery capacity
   # e.g. 0.33 C is 33% of the battery capacity
   # values unspecified will be assumed to be 1.0 hence rate is capped by max charge rate
-  battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+  battery_temperature_history: sensor.givtcp_battery_stack_1_battery_temperature
   #battery_temperature_charge_curve:
   #  19: 0.33
   #  18: 0.33

@@ -95,7 +95,7 @@ exported if the battery is full. This is described as 'Eco' Mode for GivEnergy i
 The grid or solar covers any house load. If there is a shortfall of Solar power to meet house load, the excess house load is met from grid import,
 but if there is excess Solar power above the house load, the excess solar will be used to charge the battery,
 
-- **Hold charging** - A type of charge where the target SoC % is the same or lower than the current SoC %. This is similar to charge freeze, but it is selected as a result of planning, and cannot be manually selected.
+- **Hold charging** - A type of charge where the target SoC % is the same or lower than the current SoC %. This is similar to charge freeze, but it is selected as a result of planning, and cannot be manually selected. With **switch.predbat_set_discharge_during_charge** on (the default), a battery above the target still covers the house until it is within 1% of the target, and then holds there. On an inverter that cannot hold at the target using its reserve or a pause, and has no target SoC, Predbat runs in demand mode with no charge window until the target is reached.
 
 - **No Charge** - A charge where the target SoC % is lower than the current battery SoC level so there will be no charging unless the usage is unexpectedly high.
 
@@ -115,7 +115,7 @@ This is shown explicitly rather than the headline status just reflecting whichev
 If inverters only disagree on sub-state within the same side (e.g. one still actively Charging while another has reached Hold charging), the most active sub-state is shown instead, since Cross-charging specifically means disagreement across the charge/export divide, not within one side.
 
 - **Hold for car** and **Demand, Hold for car** - A car is charging (either Predbat-led or Octopus-led), the battery is in Demand mode,
-but is set to prevent discharging into the car (requires **switch.predbat_car_charging_from_battery** to be set to On).
+but is set to prevent discharging into the car (requires **switch.predbat_car_charging_from_battery** to be Off, the default).
 
 - **Hold for iBoost** and **Demand, Hold for iBoost** - iBoost is active, the battery is in Demand mode, but is set to prevent discharging into the iBoost (requires **switch.predbat_iboost_prevent_discharge** to be set to On).
 

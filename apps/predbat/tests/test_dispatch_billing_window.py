@@ -17,6 +17,7 @@ and its completed list only has the half hours the car charged in. With intellig
 keeps the dispatch rate for the day, and nothing strips the rate from a car that is not charging.
 The held half hours are saved to storage under either rule, so a restart does not lose them.
 """
+
 import copy
 import shutil
 import tempfile
@@ -24,7 +25,7 @@ from datetime import timedelta
 
 from const import OCTOPUS_DISPATCH_HOLD_MINUTES
 from tests.test_infra import make_test_storage
-from tests.test_octopus_dispatch_hold import STATE_FIELDS, _check, _cycle, _day, _dispatch, _held, _low, _reset
+from tests.test_octopus_dispatch_hold import CAR_SENSOR, STATE_FIELDS, _check, _cycle, _day, _dispatch, _held, _low, _reset
 
 EXTRA_FIELDS = ("components", "octopus_slots_held_saved", "octopus_intelligent_consider_full")
 
@@ -162,7 +163,8 @@ def _run_window(my_predbat):
     completed = [_dispatch(my_predbat, 1080, 1110, kwh=3.0)]
     rates = _cycle(my_predbat, 1135, planned=_running(my_predbat, 1135, 1200), completed=completed)
     failed |= _check("t6 cheap with a completed entry", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
-    failed |= _check("t6 nothing held under a completed entry", _held(my_predbat) == [], "held {}".format(_held(my_predbat)))
+    # Only the part of the half hour in progress that the running dispatch has gone past is held
+    failed |= _check("t6 nothing held under a completed entry", [slot["start"] for slot in _held(my_predbat)] == [_dispatch(my_predbat, 1110, 1133)["start"]], "held {}".format(_held(my_predbat)))
 
     print("Test 7: the window hold runs out after a day")
     _setup(my_predbat)
@@ -203,6 +205,8 @@ def _restart(my_predbat):
     Lose the held half hours, as a restart does, then restore them from storage.
     """
     my_predbat.octopus_slots_held = {}
+    my_predbat.octopus_slots_held_until = {}
+    my_predbat.octopus_slots_held_charged = {}
     my_predbat.octopus_slots_held_saved = {}
     my_predbat.octopus_held_load()
 
@@ -283,6 +287,62 @@ def _run_persistence(my_predbat):
         rates = _cycle(my_predbat, 1120)
         failed |= _check("t15 18:00-18:30 cheap after the restart", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
         storage.backend.save = counting_save
+
+        print("Test 16: a dispatch withdrawn after a restart still lets go the half hour in progress (GH#5957)")
+        # The 19:30 half hour is held at the boundary for a dispatch due to run to 20:00, then Predbat restarts
+        _setup(my_predbat, billing="octopus", storage=storage)
+        my_predbat.dynamic_load_car_sensors = {0: CAR_SENSOR}
+        my_predbat.set_state_wrapper(CAR_SENSOR, "off")
+        dispatch = _dispatch(my_predbat, 1170, 1200, kwh=3.45, source="SMART", location=None)
+        _cycle(my_predbat, 1145, planned=[dispatch])
+        _cycle(my_predbat, 1170, planned=[dispatch])
+        _restart(my_predbat)
+        rates = _cycle(my_predbat, 1175)
+        failed |= _check("t16 day rate once withdrawn", _day(rates, 1170, 1200), "rate {}".format(rates[1175]))
+
+        print("Test 17: a car seen charging before a restart keeps the half hour when the dispatch is withdrawn after it")
+        # The car charged at the boundary and filled up before confirmation; after the restart the dispatch is still
+        # listed for a cycle, so its end is known again, then Octopus withdraws it
+        _setup(my_predbat, billing="octopus", storage=storage)
+        my_predbat.dynamic_load_car_sensors = {0: CAR_SENSOR}
+        my_predbat.set_state_wrapper(CAR_SENSOR, "on")
+        _cycle(my_predbat, 1145, planned=[dispatch])
+        _cycle(my_predbat, 1170, planned=[dispatch])
+        my_predbat.set_state_wrapper(CAR_SENSOR, "off")
+        _restart(my_predbat)
+        _cycle(my_predbat, 1172, planned=[dispatch])
+        rates = _cycle(my_predbat, 1175)
+        failed |= _check("t17 held", _low(rates, 1170, 1200), "rate {}".format(rates[1175]))
+
+        print("Test 18: what the withdrawn check saved is not restored once its half hour has ended")
+        half_hour = my_predbat.midnight_utc + timedelta(minutes=1170)
+        my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=1200)
+        _restart(my_predbat)
+        failed |= _check("t18 half hour still held", half_hour in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+        failed |= _check("t18 end not restored", not my_predbat.octopus_slots_held_until.get(0), "until {}".format(my_predbat.octopus_slots_held_until))
+        failed |= _check("t18 charged not restored", not my_predbat.octopus_slots_held_charged.get(0), "charged {}".format(my_predbat.octopus_slots_held_charged))
+        # ...nor hours later under the window rule, which still restores the half hour itself
+        my_predbat.args["intelligent_dispatch_billing"] = "window"
+        my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=1170 + 6 * 60)
+        _restart(my_predbat)
+        failed |= _check("t18 restored under window", half_hour in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+        failed |= _check("t18 end not restored hours later", not my_predbat.octopus_slots_held_until.get(0), "until {}".format(my_predbat.octopus_slots_held_until))
+        failed |= _check("t18 charged not restored hours later", not my_predbat.octopus_slots_held_charged.get(0), "charged {}".format(my_predbat.octopus_slots_held_charged))
+        my_predbat.args["intelligent_dispatch_billing"] = "octopus"
+
+        print("Test 19: a store from before the withdrawn check, or with a corrupt record of it, still restores the half hours")
+        my_predbat.now_utc = my_predbat.midnight_utc + timedelta(minutes=1175)
+        start = half_hour.isoformat()
+        run_async(run_save("predbat", "octopus_held", {"cars": {"0": {start: "SMART"}}}, format="json"))
+        _restart(my_predbat)
+        failed |= _check("t19 old store restored", half_hour in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+        failed |= _check("t19 old store has no end", not my_predbat.octopus_slots_held_until.get(0), "until {}".format(my_predbat.octopus_slots_held_until))
+        corrupt = {"cars": {"0": {start: "SMART"}}, "until": {"0": {start: "never", "bad": start}, "x": {}}, "charged": {"0": "nope", "1": [start, 5]}}
+        run_async(run_save("predbat", "octopus_held", corrupt, format="json"))
+        _restart(my_predbat)
+        failed |= _check("t19 corrupt store restored", half_hour in my_predbat.octopus_slots_held.get(0, {}), "held {}".format(my_predbat.octopus_slots_held))
+        failed |= _check("t19 corrupt end ignored", not my_predbat.octopus_slots_held_until.get(0), "until {}".format(my_predbat.octopus_slots_held_until))
+        failed |= _check("t19 charged ignored for a half hour not held", not my_predbat.octopus_slots_held_charged.get(1), "charged {}".format(my_predbat.octopus_slots_held_charged))
 
         print("Test 14: no storage component, nothing breaks")
         _setup(my_predbat, storage=None)

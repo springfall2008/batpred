@@ -101,13 +101,13 @@ def test_get_charge_rate_curve_cached_hysteresis_clamps_to_zero(my_predbat):
     which path calls it.
     """
     failed = 0
-    rate = get_charge_rate_curve_cached(9.7, 2500 / MINUTE_WATT, 10.0, 2500 / MINUTE_WATT, (), 200 / MINUTE_WATT, 20, (), full_hysteresis_active=True)
+    rate = get_charge_rate_curve_cached(9.7, 2500 / MINUTE_WATT, 10.0, 2500 / MINUTE_WATT, (), 200 / MINUTE_WATT, full_hysteresis_active=True)
     if rate != 0.0:
         print("**** ERROR: get_charge_rate_curve_cached should return 0.0 when full_hysteresis_active, got {} ****".format(rate))
         failed = 1
 
     # And confirm it behaves normally (nonzero) when the flag is absent/False - opt-in only.
-    rate_normal = get_charge_rate_curve_cached(9.7, 2500 / MINUTE_WATT, 10.0, 2500 / MINUTE_WATT, (), 200 / MINUTE_WATT, 20, ())
+    rate_normal = get_charge_rate_curve_cached(9.7, 2500 / MINUTE_WATT, 10.0, 2500 / MINUTE_WATT, (), 200 / MINUTE_WATT)
     if rate_normal <= 0.0:
         print("**** ERROR: get_charge_rate_curve_cached should charge normally without full_hysteresis_active, got {} ****".format(rate_normal))
         failed = 1

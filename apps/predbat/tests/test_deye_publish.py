@@ -20,11 +20,13 @@ class RecordingDeye(MockDeye):
         """Set up a RecordingDeye with empty published/entity_states stores."""
         super().__init__(**kw)
         self.published = {}
+        self.published_attributes = {}
         self.entity_states = {}
 
     def dashboard_item(self, entity, state=None, attributes=None, app=None):
-        """Record a published entity."""
+        """Record a published entity and its attributes."""
         self.published[entity] = state
+        self.published_attributes[entity] = attributes or {}
 
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         """Serve a canned entity state."""
@@ -47,6 +49,47 @@ def test_publish_data_creates_soc_sensor():
         print("ERROR: soc value wrong")
         failed = True
     assert not failed, "test_publish_data_creates_soc_sensor"
+
+
+def test_publish_data_sets_ha_sensor_classes():
+    """publish_data gives the telemetry and daily energy sensors the classes HA's Energy dashboard and statistics need.
+
+    The daily counters reset at midnight, so they must be total_increasing (a drop starts a
+    new cycle). Plain total would record the midnight drop as negative energy, and
+    measurement is rejected by the Energy dashboard outright.
+    """
+    failed = False
+    d = RecordingDeye()
+    d.device_list = ["INV1"]
+    d.device_values = {"INV1": {"soc": 63.0, "battery_power": 100.0, "grid_power": 0.0, "pv_power": 500.0, "load_power": 400.0, "temperature": 21.0}}
+    d.device_energy = {"INV1": {"import_today": 7.0, "export_today": 0.0, "pv_today": 4.5, "load_today": 12.8}}
+    import tests.test_infra as ti
+
+    ti.run_async(d.publish_data())
+    expected = {
+        "soc": ("%", "battery", "measurement"),
+        "battery_power": ("W", "power", "measurement"),
+        "grid_power": ("W", "power", "measurement"),
+        "pv_power": ("W", "power", "measurement"),
+        "load_power": ("W", "power", "measurement"),
+        "temperature": ("°C", "temperature", "measurement"),
+        "import_today": ("kWh", "energy", "total_increasing"),
+        "export_today": ("kWh", "energy", "total_increasing"),
+        "pv_today": ("kWh", "energy", "total_increasing"),
+        "load_today": ("kWh", "energy", "total_increasing"),
+    }
+    for leaf, (unit, device_class, state_class) in expected.items():
+        entity = f"sensor.predbat_deye_inv1_{leaf}"
+        attributes = d.published_attributes.get(entity)
+        if attributes is None:
+            print(f"ERROR: {entity} not published")
+            failed = True
+            continue
+        got = (attributes.get("unit_of_measurement"), attributes.get("device_class"), attributes.get("state_class"))
+        if got != (unit, device_class, state_class):
+            print(f"ERROR: {entity} published with (unit, device_class, state_class) {got}, expected {(unit, device_class, state_class)}")
+            failed = True
+    assert not failed, "test_publish_data_sets_ha_sensor_classes"
 
 
 def test_publish_data_publishes_battery_capacity():
@@ -612,6 +655,7 @@ def run_deye_publish_tests(my_predbat):
     failed = False
     for name, fn in [
         ("publish_data_soc", test_publish_data_creates_soc_sensor),
+        ("publish_data_ha_classes", test_publish_data_sets_ha_sensor_classes),
         ("publish_data_battery_capacity", test_publish_data_publishes_battery_capacity),
         ("publish_data_battery_capacity_missing", test_publish_data_skips_battery_capacity_when_config_missing),
         ("schedule_roundtrip", test_schedule_roundtrip),

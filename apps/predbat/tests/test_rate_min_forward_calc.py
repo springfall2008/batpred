@@ -111,19 +111,64 @@ def test_rate_min_forward_calc(my_predbat):
     # Every minute in the output range should see 1.0 as the forward minimum
     failed |= _check_range(result, output_start, output_end, 1.0, "min at end of array")
 
-    # --- Test 7: rate_scan derives rate_min_forward from its `rates` argument, not self.rate_import ---
-    # Regression: fetch's atomic rebuild defers publishing self.rate_import to the end of the block, so
-    # during the build it still holds the previous cycle's data. rate_scan must scan its argument, not
-    # self.rate_import, or rate_min_forward (which drives plan.py charge/discharge economics) goes stale.
-    print("*** rate_min_forward_calc test 7: rate_scan uses passed rates, not stale self.rate_import")
+    # --- Test 7: rate_scan leaves rate_min_forward alone ---
+    # rate_min_forward is the replacement cost battery_value_rate gives a kWh left in the battery, so
+    # fetch_sensor_data() builds it from the tariff before the saving/free/Axle sessions go on. The final
+    # rate_scan sees the rates with the sessions in, and rebuilding the forward minimum there let a 0p
+    # free session tomorrow afternoon drag the value of every stored kWh down to the 1p floor.
+    print("*** rate_min_forward_calc test 7: rate_scan does not rebuild rate_min_forward from session rates")
     # rate_scan mutates several shared fields; snapshot and restore them all so later tests are unaffected.
     saved = {attr: getattr(my_predbat, attr, None) for attr in ("rate_import", "rate_min", "rate_max", "rate_average", "rate_min_minute", "rate_max_minute", "rate_min_forward")}
     total = my_predbat.forecast_minutes + my_predbat.minutes_now + 48 * 60
-    my_predbat.rate_import = {m: 99.0 for m in range(total)}  # stale previous-cycle rates (expensive)
-    my_predbat.rate_scan({m: 5.0 for m in range(total)}, print=True)  # freshly-built current-cycle rates (cheap)
-    sample = my_predbat.rate_min_forward.get(my_predbat.minutes_now)
-    if sample is None or sample > 50:
-        print("ERROR: test 7: rate_min_forward {} reflects stale self.rate_import, not the scanned rates".format(sample))
+    tariff_forward = my_predbat.rate_min_forward_calc({m: 10.0 for m in range(total)})
+    my_predbat.rate_min_forward = dict(tariff_forward)
+    session_rates = {m: 10.0 for m in range(total)}
+    for minute in range(my_predbat.minutes_now + 6 * 60, my_predbat.minutes_now + 7 * 60):
+        session_rates[minute] = 0.0
+    my_predbat.rate_scan(session_rates, print=True)
+    if my_predbat.rate_min_forward != tariff_forward:
+        print("ERROR: test 7: rate_scan rebuilt rate_min_forward from rates with a free session in, now {} at minutes_now".format(my_predbat.rate_min_forward.get(my_predbat.minutes_now)))
+        failed = 1
+    if my_predbat.rate_min != 0.0:
+        print("ERROR: test 7: rate_min should still see the free session (thresholds handle sessions themselves), got {}".format(my_predbat.rate_min))
+        failed = 1
+    for attr, value in saved.items():
+        setattr(my_predbat, attr, value)
+
+    # --- Test 8: a debug replay with --redo rebuilds the stored-energy terms without the sessions ---
+    # The debug file keeps the pre-saving import rates for the session minutes only, so the replay puts
+    # those minutes back; a minute the session created from nothing (no tariff rate) is forward filled.
+    print("*** rate_min_forward_calc test 8: debug replay rebuilds battery value rates without sessions")
+    from tests.test_single_debug import rebuild_battery_value_rates
+
+    replay_attrs = ("rate_import", "rate_import_saving_minutes", "rate_import_pre_saving", "rate_export_base", "rate_min_forward", "rate_export_max_forward", "rate_export_min_base")
+    saved = {attr: getattr(my_predbat, attr, None) for attr in replay_attrs}
+    total = my_predbat.forecast_minutes + my_predbat.minutes_now + 48 * 60
+    session_start = my_predbat.minutes_now + 6 * 60
+    session = set(range(session_start, session_start + 60))
+    created_minute = session_start + 120
+    rate_import = {m: 10.0 for m in range(total)}
+    for minute in session | {created_minute}:
+        rate_import[minute] = 0.0
+    my_predbat.rate_import = rate_import
+    my_predbat.rate_import_saving_minutes = session | {created_minute}
+    my_predbat.rate_import_pre_saving = {minute: 10.0 for minute in session}
+    my_predbat.rate_export_base = {m: (5.0 if m == session_start else 15.0) for m in range(total)}
+    rebuild_battery_value_rates(my_predbat)
+    failed |= _check_range(my_predbat.rate_min_forward, output_start, output_end, 10.0, "test 8 replayed rate_min_forward ignores the session")
+    if my_predbat.rate_import[session_start] != 0.0:
+        print("ERROR: test 8: rebuilding changed the replayed import rates")
+        failed = 1
+    if my_predbat.rate_export_min_base != 5.0 or my_predbat.rate_export_max_forward.get(output_start) != 15.0:
+        print("ERROR: test 8: export terms should come from rate_export_base, got min {} max forward {}".format(my_predbat.rate_export_min_base, my_predbat.rate_export_max_forward.get(output_start)))
+        failed = 1
+
+    # A debug file with no base export rates leaves the export terms as they were
+    my_predbat.rate_export_base = {}
+    my_predbat.rate_export_min_base = None
+    rebuild_battery_value_rates(my_predbat)
+    if my_predbat.rate_export_min_base is not None:
+        print("ERROR: test 8: no rate_export_base should leave rate_export_min_base unset, got {}".format(my_predbat.rate_export_min_base))
         failed = 1
     for attr, value in saved.items():
         setattr(my_predbat, attr, value)

@@ -90,6 +90,16 @@ def test_validate_config(my_predbat):
     print("  [string empty:True] empty string fails")
     _run(my_predbat, {"predbat_repository": ""}, expect_errors=["predbat_repository"])
 
+    # predbat_branch is a string or a list of strings, and blank is allowed as it just means no extra branch entry
+    print("  [string|string_list] predbat_branch single branch name passes")
+    _run(my_predbat, {"predbat_branch": "fix/my-feature"}, expect_clean=["predbat_branch"])
+
+    print("  [string|string_list] predbat_branch list of branch names passes")
+    _run(my_predbat, {"predbat_branch": ["fix/one", "feat/two"]}, expect_clean=["predbat_branch"])
+
+    print("  [string|string_list] predbat_branch blank passes")
+    _run(my_predbat, {"predbat_branch": ""}, expect_clean=["predbat_branch"])
+
     # ==========================================================================
     # STRING_LIST type  (notify_devices: {"type": "string_list"})
     # ==========================================================================
@@ -365,6 +375,14 @@ def test_validate_config(my_predbat):
         expect_errors=["charge_rate"],
     )
 
+    print("  [sensor_list blank_entries] inverter_mode None entry passes (GE Cloud full power eco inverter has no inverter_mode)")
+    _run(
+        my_predbat,
+        {"inverter_mode": [None, "switch.predbat_gecloud_test_enable_eco_mode"], "num_inverters": 2},
+        extra_states={"switch.predbat_gecloud_test_enable_eco_mode": "on"},
+        expect_clean=["inverter_mode"],
+    )
+
     print("  [sensor_list modify] sensor.predbat_ prefix is exempt from modify restriction")
     _run(
         my_predbat,
@@ -372,6 +390,26 @@ def test_validate_config(my_predbat):
         extra_states={"sensor.predbat_charge_rate": 2.5},
         expect_clean=["charge_rate"],
     )
+
+    print("  [sensor_list modify] a placeholder named with a custom prefix is exempt too (#5242)")
+    saved_prefix = my_predbat.prefix
+    try:
+        my_predbat.prefix = "predbatsolcast"
+        _run(
+            my_predbat,
+            {"inverter_mode": ["sensor.predbatsolcast_solax_cloud_0_inverter_mode"], "num_inverters": 1},
+            extra_states={"sensor.predbatsolcast_solax_cloud_0_inverter_mode": "Eco"},
+            expect_clean=["inverter_mode"],
+        )
+        # The prefix only matches as a whole name part, and an ordinary sensor still fails
+        _run(
+            my_predbat,
+            {"charge_rate": ["sensor.predbatsolcast2_charge_rate"], "num_inverters": 1},
+            extra_states={"sensor.predbatsolcast2_charge_rate": 2.5},
+            expect_errors=["charge_rate"],
+        )
+    finally:
+        my_predbat.prefix = saved_prefix
 
     print("  [sensor_list modify] select. prefix is allowed for modification")
     _run(
@@ -524,6 +562,24 @@ def test_validate_config(my_predbat):
     finally:
         my_predbat.args = saved_args
         my_predbat.ha_interface.dummy_items = saved_states
+
+    # inverter_reserve_max (#5369): single_value_ok lets one value cover every inverter, as the docs
+    # show, while a per-inverter list must still have an entry for each one
+    print("  [integer single_value_ok] inverter_reserve_max single value passes with two inverters")
+    _run(my_predbat, {"inverter_reserve_max": 98, "num_inverters": 2}, expect_clean=["inverter_reserve_max"])
+    print("  [integer single_value_ok] inverter_reserve_max list per inverter passes")
+    _run(my_predbat, {"inverter_reserve_max": [98, 98], "num_inverters": 2}, expect_clean=["inverter_reserve_max"])
+    print("  [integer single_value_ok] inverter_reserve_max short list still fails")
+    _run(my_predbat, {"inverter_reserve_max": [98], "num_inverters": 2}, expect_errors=["inverter_reserve_max"])
+    print("  [integer single_value_ok] inverter_reserve_max zero still fails")
+    _run(my_predbat, {"inverter_reserve_max": 0, "num_inverters": 2}, expect_errors=["inverter_reserve_max"])
+    # inverter_battery_rate_min has the same documented single-value form
+    print("  [integer single_value_ok] inverter_battery_rate_min single value passes with two inverters")
+    _run(my_predbat, {"inverter_battery_rate_min": 200, "num_inverters": 2}, expect_clean=["inverter_battery_rate_min"])
+    print("  [integer single_value_ok] inverter_battery_rate_min list per inverter passes")
+    _run(my_predbat, {"inverter_battery_rate_min": [200, 100], "num_inverters": 2}, expect_clean=["inverter_battery_rate_min"])
+    print("  [integer single_value_ok] inverter_battery_rate_min short list still fails")
+    _run(my_predbat, {"inverter_battery_rate_min": [200], "num_inverters": 2}, expect_errors=["inverter_battery_rate_min"])
 
     print("**** test_validate_config PASSED ****")
     return False
