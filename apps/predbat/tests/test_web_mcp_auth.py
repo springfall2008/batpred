@@ -22,7 +22,7 @@ from unittest.mock import patch
 from urllib.parse import parse_qs, urlparse
 from datetime import datetime, timedelta, timezone
 
-import jwt as pyjwt
+import jwt_hs256
 from agent_tools import TOOL_DEFS
 from web_mcp import PredbatMCPServer, MCPServerWrapper, MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE
 
@@ -137,7 +137,7 @@ def test_mcp_signing_key(my_predbat):
     server = make_server(my_predbat)
     old_key = hashlib.sha256("jwt_signing_key_{}".format(TEST_SECRET).encode()).hexdigest()
     now = datetime.now(timezone.utc)
-    forged = pyjwt.encode({"sub": "x", "client_id": "x", "aud": "http://localhost:8199", "scope": "mcp:read mcp:write mcp:control", "type": "access", "iat": now, "exp": now + timedelta(days=1)}, old_key, algorithm="HS256")
+    forged = jwt_hs256.encode({"sub": "x", "client_id": "x", "aud": "http://localhost:8199", "scope": "mcp:read mcp:write mcp:control", "type": "access", "iat": now, "exp": now + timedelta(days=1)}, old_key)
     if server.verify_access_token(forged):
         print("  ERROR: a token signed with the key derived from mcp_secret was accepted")
         failed = True
@@ -418,8 +418,16 @@ def test_mcp_base_url_behind_proxy(my_predbat):
             print("  ERROR: token with audience {} was refused".format(aud))
             failed = True
     token = server.generate_access_token("connector", resource="https://other.example.com")
-    if server.verify_access_token(token, expected_audience="https://mcp.example.com"):
-        print("  ERROR: token for another server was accepted")
+    logged = []
+    server.log = lambda message, *args, **kwargs: logged.append(message)
+    try:
+        if server.verify_access_token(token, expected_audience="https://mcp.example.com"):
+            print("  ERROR: token for another server was accepted")
+            failed = True
+    finally:
+        server.log = my_predbat.log
+    if not any("Invalid token audience" in line for line in logged):
+        print("  ERROR: a wrong-audience token was not logged as one: {}".format(logged))
         failed = True
 
     print("Test: the base URL follows the proxy headers, and ignores bad ones")

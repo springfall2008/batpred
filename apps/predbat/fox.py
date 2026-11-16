@@ -20,6 +20,7 @@ import os
 import yaml
 import time
 import hashlib
+import math
 from predbat_metrics import record_api_call
 import aiohttp
 import json
@@ -92,7 +93,13 @@ FOX_CACHE_KEYS = ["device_list", "device_detail", "battery_charging_time", "devi
 FOX_REFRESH_STATIC = 24 * 60  # Device list, detail and battery charge times rarely change
 FOX_REFRESH_SETTINGS = 60  # Device settings and scheduler
 FOX_REFRESH_PRODUCTION = 15  # Monthly production totals
-FOX_REFRESH_REALTIME = 5  # Real time monitoring data
+FOX_REFRESH_REALTIME = 5  # Real time monitoring data, default for fox_poll_seconds
+
+# Bounds for fox_poll_seconds, which sets the real time refresh only. ComponentBase.start() calls
+# run() every 60 seconds, so the interval is a whole number of minutes; the 30 minute cap matches
+# myenergi_poll_seconds and wallbox_poll_seconds.
+FOX_POLL_SECONDS_MIN = 60
+FOX_POLL_SECONDS_MAX = 30 * 60
 
 # Fox productType codes that must use the v2/v3 scheduler API. Fox's v1 scheduler
 # endpoints return errno 41200 permanently for these (EVO series) even though the
@@ -105,6 +112,18 @@ FOX_V2_SCHEDULER_PRODUCT_TYPES = {"812"}
 
 # Dummy attribute table for testing
 fox_attribute_table = {"mode": {}}
+
+
+def fox_poll_minutes(poll_seconds):
+    """Convert fox_poll_seconds to the real time refresh age in whole minutes, rounded to the nearest minute and clamped."""
+    try:
+        seconds = float(poll_seconds)
+    except (TypeError, ValueError, OverflowError):
+        return FOX_REFRESH_REALTIME
+    if math.isnan(seconds):
+        return FOX_REFRESH_REALTIME
+    seconds = min(FOX_POLL_SECONDS_MAX, max(FOX_POLL_SECONDS_MIN, seconds))
+    return int(round(seconds / 60.0))
 
 
 def schedules_are_equal(time_now, schedule1, schedule2):
@@ -392,11 +411,14 @@ def groups_to_v3(groups, extra_extra_param=None):
 class FoxAPI(ComponentBase, OAuthMixin):
     """Fox API client."""
 
-    def initialize(self, key, automatic, automatic_ignore_pv=False, inverter_sn=None, auth_method=None, token_expires_at=None, token_hash=None):
+    def initialize(self, key, automatic, automatic_ignore_pv=False, inverter_sn=None, auth_method=None, token_expires_at=None, token_hash=None, poll_seconds=FOX_REFRESH_REALTIME * 60):
         """Initialise the Fox API component"""
         self.key = key
         self.automatic = automatic
         self.automatic_ignore_pv = automatic_ignore_pv
+        # Maximum age of the real time data before it is re-fetched; settings, production and
+        # static data keep their own fixed refresh intervals
+        self.realtime_refresh_minutes = fox_poll_minutes(poll_seconds)
         self.failures_total = 0
         self.device_list = []
         self.device_detail = {}
@@ -601,7 +623,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                 await self._save_cache("device_production_month", self.device_production_month)
 
         # Real time monitoring data - refresh based on age
-        realtime_refresh = self._needs_refresh("device_values", FOX_REFRESH_REALTIME)
+        realtime_refresh = self._needs_refresh("device_values", self.realtime_refresh_minutes)
         if realtime_refresh:
             realtime_updated = False
             for device in self.device_list:

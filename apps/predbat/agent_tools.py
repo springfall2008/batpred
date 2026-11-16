@@ -1616,7 +1616,7 @@ class PredbatTools:
             # reason: a one-off browse of any HA entity must not become a permanent subscription.
             # Offloaded for the same reason get_log is: get_history_wrapper reaches
             # HAInterface.get_history, which chunks the window at HISTORY_CHUNK_DAYS and issues
-            # one synchronous requests.get per chunk, each with TIMEOUT (300s) to spare. A 30-day
+            # one synchronous http_get per chunk, each with TIMEOUT (300s) to spare. A 30-day
             # window is up to 11 sequential blocking fetches of potentially tens of megabytes,
             # and tracked=False means none of it is cached, so every call refetches. Run on the
             # event loop that would freeze the component - and with it every chat and MCP request

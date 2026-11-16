@@ -9,7 +9,6 @@
 # pylint: disable=attribute-defined-outside-init
 
 from tests.fleet_rig import FleetInverter, setup_fleet
-from utils import balance_inverters
 
 
 def run_balance(my_predbat):
@@ -20,7 +19,6 @@ def run_balance(my_predbat):
     Replaces the old balance_inverters(test_mode=True) entry point, which built its own Inverter
     objects and wrote rates directly.
     """
-    my_predbat.inverter_crosscharge_held = {}
     my_predbat.balance_inverters_enable = True
     my_predbat.set_read_only = False
     intent = {}
@@ -29,6 +27,104 @@ def run_balance(my_predbat):
     my_predbat.balance_inverter_rates(intent)
     for inverter in my_predbat.inverters:
         my_predbat.apply_inverter_rates(inverter, intent[inverter.id])
+
+
+def balance_sensor(my_predbat):
+    """
+    The balance sensor's state and attributes as published, or None if it was not.
+    """
+    item = my_predbat.ha_interface.dummy_items.get("sensor.{}_balance_inverters".format(my_predbat.prefix))
+    if not isinstance(item, dict):
+        return None
+    return item
+
+
+def test_balance_sensor(my_predbat):
+    """
+    sensor.<prefix>_balance_inverters follows a cross-charge hold through being caught, latched and released.
+
+    The latched pass must not count as a second hold, the release must be counted once, and switching balancing
+    off reports status "off" with nothing held. A single inverter gets no sensor at all.
+    """
+    failed = False
+    my_predbat.balance_held_previous = {}
+    my_predbat.balance_ceilings_previous = []
+    my_predbat.balance_last_decisions = None
+    my_predbat.balance_events = []
+    my_predbat.balance_counts = {}
+    my_predbat.balance_restored = False
+    my_predbat.ha_interface.dummy_items.pop("sensor.{}_balance_inverters".format(my_predbat.prefix), None)
+    my_predbat.balance_inverters_discharge = False
+    my_predbat.balance_inverters_charge = False
+    my_predbat.balance_inverters_crosscharge = True
+
+    def expect(condition, message):
+        """Record a failed expectation."""
+        nonlocal failed
+        if not condition:
+            print("ERROR: balance sensor: {} - {}".format(message, balance_sensor(my_predbat)))
+            failed = True
+
+    # Caught: inverter 1 charging while the fleet discharges
+    setup_two_inverters(my_predbat, soc1=50, soc2=40, battery_power1=1000, battery_power2=-100)
+    run_balance(my_predbat)
+    sensor = balance_sensor(my_predbat)
+    expect(sensor is not None, "not published")
+    if sensor:
+        expect(sensor["state"] == 1 and sensor["status"] == "holding", "one inverter should be held")
+        expect(sensor["inverters"][1]["charge_hold"] == "cross_charge" and sensor["inverters"][0]["charge_hold"] is None, "inverter 1 should be held from charging, caught")
+        expect(sensor["fleet_direction"] == "discharge", "the fleet should be discharging")
+        expect(sensor["holds_24h"] == 1 and sensor["cross_charges_caught_24h"] == 1 and sensor["releases_24h"] == 0, "one hold, caught cross-charging")
+        expect(sensor["events"] and sensor["events"][-1]["action"] == "hold" and sensor["events"][-1]["inverter"] == 1, "the hold should be the last event")
+
+    # Latched: held, so it now reads 0W and a charge rate of 0, while the fleet still discharges
+    setup_two_inverters(my_predbat, soc1=50, soc2=40, battery_power1=1000, battery_power2=0, charge_rate2=0)
+    for inverter in my_predbat.inverters:
+        inverter.charge_rate_is_zero = inverter.id == 1
+    run_balance(my_predbat)
+    sensor = balance_sensor(my_predbat)
+    if sensor:
+        expect(sensor["state"] == 1 and sensor["inverters"][1]["charge_hold"] == "cross_charge_latched", "the hold should be kept, latched")
+        expect(sensor["holds_24h"] == 1, "a latched hold must not count as another hold")
+
+    # Released: the fleet turns to soaking up PV surplus
+    setup_two_inverters(my_predbat, soc1=50, soc2=40, battery_power1=-1000, battery_power2=0, charge_rate2=0)
+    run_balance(my_predbat)
+    sensor = balance_sensor(my_predbat)
+    if sensor:
+        expect(sensor["state"] == 0 and sensor["status"] == "balanced", "nothing should be held once the fleet charges")
+        expect(sensor["releases_24h"] == 1 and sensor["events"][-1]["action"] == "release", "the release should be counted once")
+        expect(isinstance(sensor["history"], dict) and len(sensor["history"]) == 1, "the hourly counts should be published")
+
+    # Restart: Predbat's in-memory record is gone, the sensor is not. The next pass reads it back and carries on.
+    my_predbat.balance_counts = {}
+    my_predbat.balance_events = []
+    my_predbat.balance_held_previous = {}
+    my_predbat.balance_ceilings_previous = []
+    my_predbat.balance_restored = False
+    setup_two_inverters(my_predbat, soc1=50, soc2=40, battery_power1=1000, battery_power2=-100)
+    run_balance(my_predbat)
+    sensor = balance_sensor(my_predbat)
+    if sensor:
+        expect(sensor["holds_24h"] == 2 and sensor["releases_24h"] == 1 and sensor["cross_charges_caught_24h"] == 2, "the counts should carry on from before the restart")
+        expect(len(sensor["events"]) == 3 and [event["action"] for event in sensor["events"]] == ["hold", "release", "hold"], "the events from before the restart should be kept")
+
+    # Balancing switched off
+    my_predbat.balance_inverters_enable = False
+    my_predbat.balance_inverter_rates({inverter.id: {"charge_rate": None, "discharge_rate": None, "owner": "demand"} for inverter in my_predbat.inverters})
+    sensor = balance_sensor(my_predbat)
+    if sensor:
+        expect(sensor["state"] == 0 and sensor["status"] == "off", "balancing off should report status off")
+
+    # A single inverter has nothing to balance, so no sensor
+    del my_predbat.ha_interface.dummy_items["sensor.{}_balance_inverters".format(my_predbat.prefix)]
+    my_predbat.inverters = my_predbat.inverters[:1]
+    my_predbat.balance_inverters_enable = True
+    my_predbat.balance_inverter_rates({0: {"charge_rate": None, "discharge_rate": None, "owner": "demand"}})
+    expect(balance_sensor(my_predbat) is None, "a single inverter should get no sensor")
+    if not failed:
+        print("✓ Test passed: balance sensor follows hold, latch, release, off and single inverter")
+    return failed
 
 
 def run_balance_inverters_tests(my_predbat):
@@ -106,6 +202,8 @@ def run_balance_inverters_tests(my_predbat):
     # Test 11: Reset balance
     print("Test 11: Reset balance when already balanced, charge")
     failed |= test_balance_reset_balanced_charge(my_predbat)
+    failed |= test_balance_charge_hold_latched_while_discharging(my_predbat)
+    failed |= test_balance_sensor(my_predbat)
     if failed:
         return failed
 
@@ -121,114 +219,6 @@ def run_balance_inverters_tests(my_predbat):
     if failed:
         return failed
 
-    # Test 14: Cross-charge hold latch
-    print("Test 14: Cross-charge hold is latched until the fleet direction changes")
-    failed |= test_balance_crosscharge_latch(my_predbat)
-    if failed:
-        return failed
-
-    return failed
-
-
-def pure_balance_snapshot(powers, grid=0.0, calibrating=False):
-    """
-    Plain readings for a fleet of equal, balanced inverters, as balance_inverters() consumes them.
-
-    Returns:
-    - list: one dict per inverter
-    """
-    snapshot = []
-    for index, power in enumerate(powers):
-        snapshot.append(
-            {
-                "soc_percent": 50.0,
-                "reserve_percent": 4.0,
-                "battery_power": power,
-                "pv_power": 0.0,
-                "grid_power": grid if index == 0 else 0.0,
-                "charge_rate_now": 2600.0,
-                "discharge_rate_now": 2600.0,
-                "battery_rate_max_charge": 2600.0,
-                "battery_rate_max_discharge": 2600.0,
-                "in_calibration": calibrating,
-            }
-        )
-    return snapshot
-
-
-def run_pure_balance(powers, held=None, crosscharge=True, grid=0.0, calibrating=False):
-    """
-    Run balance_inverters() on an unclaimed intent.
-
-    Returns:
-    - tuple: the mutated intent, and the cross-charge holds the call returned
-    """
-    intent = {index: {"charge_rate": None, "discharge_rate": None, "pause_charge": False, "pause_discharge": False, "owner": "demand"} for index in range(len(powers))}
-    result = balance_inverters(intent, pure_balance_snapshot(powers, grid, calibrating), False, False, crosscharge, 1, 1, held_crosscharge=held)
-    return intent, result
-
-
-def test_balance_crosscharge_latch(my_predbat):
-    """
-    The cross-charge hold is latched against the fleet direction it was taken in, and balance_inverters() reports
-    which inverters it holds so the caller can feed that back in on the next pass.
-    """
-    failed = False
-
-    # First pass: inverter 1 cross-charges at -500W while inverter 0 discharges
-    intent, result = run_pure_balance([2000.0, -500.0])
-    if result != {1: True} or intent[1]["charge_rate"] != 0 or intent[0]["charge_rate"] is not None:
-        print("ERROR: first pass should hold inverter 1 charge only and return {{1: True}}, got {} {}".format(result, intent))
-        failed = True
-
-    # The trickle has gone (0W): without the latch the hold is lost, which is the flap
-    intent, result = run_pure_balance([2000.0, 0.0])
-    if result != {} or intent[1]["charge_rate"] is not None:
-        print("ERROR: with no latch an inverter reading 0W should not be held, got {} {}".format(result, intent))
-        failed = True
-
-    # With the latch the hold survives
-    intent, result = run_pure_balance([2000.0, 0.0], held={1: True})
-    if result != {1: True} or intent[1]["charge_rate"] != 0 or intent[0]["charge_rate"] is not None:
-        print("ERROR: a latched cross-charge hold should be kept at 0W, got {} {}".format(result, intent))
-        failed = True
-
-    # The fleet direction changes (net charging): the latch must not apply
-    intent, result = run_pure_balance([-1000.0, 0.0], held={1: True})
-    if result != {} or intent[1]["charge_rate"] is not None:
-        print("ERROR: a change of fleet direction should release the latch, got {} {}".format(result, intent))
-        failed = True
-
-    # A hold taken in the other direction is not a charge hold in this one
-    intent, result = run_pure_balance([2000.0, 0.0], held={1: False})
-    if result != {} or intent[1]["charge_rate"] is not None:
-        print("ERROR: a latch recorded for the other direction should be ignored, got {} {}".format(result, intent))
-        failed = True
-
-    # A held inverter that now reads as discharging stays held while the fleet direction is unchanged: a charge-paused inverter
-    # in Eco can still discharge, and releasing on that would let it cross-charge again and bring the flap back
-    intent, result = run_pure_balance([1000.0, 1000.0], held={1: True})
-    if result != {1: True} or intent[1]["charge_rate"] != 0:
-        print("ERROR: a latched inverter that is now discharging should stay held until the fleet direction changes, got {} {}".format(result, intent))
-        failed = True
-
-    # Cross-charge balancing switched off: nothing is held, latch or not
-    intent, result = run_pure_balance([2000.0, 0.0], held={1: True}, crosscharge=False)
-    if result != {} or intent[1]["charge_rate"] is not None:
-        print("ERROR: with cross-charge balancing off nothing should be held, got {} {}".format(result, intent))
-        failed = True
-
-    # Early returns hand back an empty dict (not None), so the caller's latch is cleared
-    intent, result = run_pure_balance([2000.0, -500.0], calibrating=True)
-    if result != {}:
-        print("ERROR: calibration should return an empty dict, got {}".format(result))
-        failed = True
-    if balance_inverters({0: {}}, pure_balance_snapshot([2000.0]), False, False, True, 1, 1) != {}:
-        print("ERROR: a single inverter should return an empty dict")
-        failed = True
-
-    if not failed:
-        print("✓ Test passed: cross-charge hold latch")
     return failed
 
 
@@ -558,7 +548,9 @@ def test_balance_already_balanced(my_predbat):
 def test_balance_reset_balanced_charge(my_predbat):
     """
     Test when inverters are already balanced, resetting charge/discharge rates
-    Expected: Rate goes back to full
+    Expected: with the cross-charge correction OFF the rate goes back to full. With it ON (see
+    test_balance_charge_hold_latched_while_discharging) a zero charge rate while the fleet discharges is a latched
+    cross-charge hold and is kept.
     """
     # Setup: Both inverters at 50%
     setup_two_inverters(
@@ -573,7 +565,7 @@ def test_balance_reset_balanced_charge(my_predbat):
     # Enable balance
     my_predbat.balance_inverters_discharge = True
     my_predbat.balance_inverters_charge = True
-    my_predbat.balance_inverters_crosscharge = True
+    my_predbat.balance_inverters_crosscharge = False
     my_predbat.balance_inverters_threshold_charge = 5
     my_predbat.balance_inverters_threshold_discharge = 5
     my_predbat.inverters[0].charge_rate_now = 0  # Simulate previously balanced state
@@ -602,6 +594,35 @@ def test_balance_reset_balanced_charge(my_predbat):
         return True
 
     print("✓ Test passed: Rate adjustments made when already balanced")
+    return False
+
+
+def test_balance_charge_hold_latched_while_discharging(my_predbat):
+    """
+    A battery whose charge rate reads back 0 while the fleet discharges keeps that hold with the cross-charge
+    correction on. Released, a battery whose loop reads the shared CT as export winds straight back into charging
+    from its neighbours (tests/balance_ct_harness.py, CT disagree).
+    """
+    setup_two_inverters(my_predbat, soc1=50, soc2=50, battery_power1=0, battery_power2=1000)
+    ha = my_predbat.ha_interface
+    my_predbat.balance_inverters_discharge = True
+    my_predbat.balance_inverters_charge = True
+    my_predbat.balance_inverters_crosscharge = True
+    my_predbat.balance_inverters_threshold_charge = 5
+    my_predbat.balance_inverters_threshold_discharge = 5
+    my_predbat.inverters[0].charge_rate_now = 0
+    my_predbat.inverters[0].charge_rate_is_zero = True
+    ha.dummy_items["number.charge_rate"] = 0
+    ha.service_store_enable = True
+    ha.get_service_store()
+    run_balance(my_predbat)
+    services = ha.get_service_store()
+    ha.service_store_enable = False
+    for service, kwargs in services:
+        if service == "number/set_value" and kwargs.get("entity_id") == "number.charge_rate" and kwargs.get("value") != 0:
+            print("ERROR: the latched charge hold was released to {}W while the fleet discharges".format(kwargs.get("value")))
+            return True
+    print("✓ Test passed: latched charge hold kept while the fleet discharges")
     return False
 
 
