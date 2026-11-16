@@ -1398,7 +1398,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         for key in meter:
             if key == "today":
                 if device == self.ems_device:
-                    self.publish_ems_load_today(device, meter[key])
+                    await self.publish_ems_load_today(device, meter[key])
                 for subkey in meter[key]:
                     entity_name = f"sensor.{self.prefix}_gecloud_{device}"
                     entity_name = entity_name.lower()
@@ -1429,7 +1429,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                         self.dashboard_item(entity_name + "_grid_import_total", state=meter[key][subkey].get("import", 0), attributes=attribute_table.get("grid_import_total", {}), app="gecloud")
                         self.dashboard_item(entity_name + "_grid_export_total", state=meter[key][subkey].get("export", 0), attributes=attribute_table.get("grid_export_total", {}), app="gecloud")
 
-    def publish_ems_load_today(self, device, today, now=None):
+    async def publish_ems_load_today(self, device, today, now=None):
         """
         Publish sensor.<prefix>_gecloud_<ems>_consumption_derived_today, the house load so far today worked out
         from the EMS's daily grid, solar and battery counters by energy balance (ems_load_balance), as the
@@ -1442,6 +1442,10 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         the day, and once one falls by EMS_LOAD_RESET_STEP_KWH or more near local midnight (or on a later day,
         should polling have stalled across midnight) the sensor reads 0 until every counter has reset, or
         EMS_LOAD_RESET_WINDOW_MINUTES pass. A fall at any other time is ignored.
+
+        A reset in progress is kept in storage, so a restart part-way through one carries on holding at 0
+        rather than taking the partly reset counters as today's. Outside a reset, the counters a fresh start
+        first sees are today's, so nothing else needs keeping.
         """
         counters = ems_today_counters(today)
         if counters is None:
@@ -1450,6 +1454,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             now = self.now_utc_exact
         window = timedelta(minutes=EMS_LOAD_RESET_WINDOW_MINUTES)
         state = self.ems_load_state.get(device)
+        if state is None:
+            state = await self.restore_ems_load_reset(device, now)
+        was_resetting = state is not None and state["reset_from"] is not None
         if state is None:
             state = {"latched": dict(counters), "day": now.date(), "reset_from": None, "reset_since": None}
         else:
@@ -1471,9 +1478,42 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     # The day the new counters belong to: a reset just before midnight starts tomorrow
                     state = {"latched": dict(counters), "day": (now + window).date(), "reset_from": None, "reset_since": None}
         self.ems_load_state[device] = state
+        if (state["reset_from"] is not None) != was_resetting:
+            await self.save_ems_load_reset()
         load = 0.0 if state["reset_from"] is not None else ems_load_balance(state["latched"])
         entity_name = f"sensor.{self.prefix}_gecloud_{device}".lower()
         self.dashboard_item(entity_name + "_consumption_derived_today", state=round(load, 2), attributes=attribute_table.get("consumption_derived_today", {}), app="gecloud")
+
+    async def save_ems_load_reset(self):
+        """Keep the EMS load resets in progress in storage, the counters each started from and when; an empty map when there are none."""
+        storage = self.storage
+        if not storage:
+            return
+        resets = {device: {"reset_from": state["reset_from"], "reset_since": state["reset_since"].isoformat()} for device, state in self.ems_load_state.items() if state["reset_from"] is not None}
+        await storage.save("gecloud", "ems_load_reset", resets, format="json", expiry=None)
+
+    async def restore_ems_load_reset(self, device, now):
+        """
+        The state of an EMS load reset that was in progress for this device when the component last stopped,
+        or None when there was none, it has run its EMS_LOAD_RESET_WINDOW_MINUTES, or storage holds nothing usable.
+        """
+        storage = self.storage
+        if not storage:
+            return None
+        resets = await storage.load("gecloud", "ems_load_reset")
+        entry = resets.get(device) if isinstance(resets, dict) else None
+        if not isinstance(entry, dict):
+            return None
+        try:
+            reset_since = datetime.fromisoformat(entry["reset_since"])
+            reset_from = {name: float(entry["reset_from"][name]) for name in ("import", "export", "solar", "discharge", "charge")}
+            age = now - reset_since
+        except (KeyError, TypeError, ValueError):
+            return None
+        if age < timedelta(0) or age >= timedelta(minutes=EMS_LOAD_RESET_WINDOW_MINUTES):
+            return None
+        self.log("GECloud: EMS {} restarted part-way through its midnight counter reset (started {}), holding load_today at 0 until it completes".format(device, reset_since))
+        return {"latched": dict(reset_from), "day": reset_since.date(), "reset_from": reset_from, "reset_since": reset_since}
 
     def check_ems_inverter_slots(self, device, registers):
         """

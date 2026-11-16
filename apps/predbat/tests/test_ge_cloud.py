@@ -5181,50 +5181,82 @@ def _test_ems_load_today(my_predbat):
 
     # Grid and solar reset five minutes before the battery counters: the balance never runs away, and the new day starts from 0
     ge_cloud = fresh()
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50)))
     assert load(ge_cloud) == 82.8
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(0, 0, 0, 22.6, 23.4), now=at(13, 23, 55))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0, 0, 0, 22.6, 23.4), now=at(13, 23, 55)))
     assert load(ge_cloud) == 0.0, "partly reset: reads 0 until every counter has reset"
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(0.5, 0, 0, 0.2, 0.3), now=at(14, 0, 0))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.5, 0, 0, 0.2, 0.3), now=at(14, 0, 0)))
     assert load(ge_cloud) == 0.4, "expected the new day's 0.4 got {}".format(load(ge_cloud))
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(3.3, 0, 0, 0.2, 1.7), now=at(14, 0, 20))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.3, 0, 0, 0.2, 1.7), now=at(14, 0, 20)))
     assert load(ge_cloud) == 1.8
 
     # The other way round: the battery counters reset first. A plain balance would jump to 83.8kWh here
     ge_cloud = fresh()
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50))
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 0.0, 0.1), now=at(13, 23, 55))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50)))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 0.0, 0.1), now=at(13, 23, 55)))
     assert load(ge_cloud) == 0.0, "battery counters reset first: must not jump to {}".format(ems_load_balance(ems_today_counters(_ems_today(68.5, 1.3, 16.6, 0.0, 0.1))))
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(0.4, 0, 0, 0.0, 0.2), now=at(14, 0, 0))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.4, 0, 0, 0.0, 0.2), now=at(14, 0, 0)))
     assert load(ge_cloud) == 0.2
 
     # A counter that falls during the day is a glitch, not a reset: each counter keeps its high point
     ge_cloud = fresh()
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(30.0, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 0))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(30.0, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 0)))
     assert load(ge_cloud) == 17.0
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(28.5, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 5))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(28.5, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 5)))
     assert load(ge_cloud) == 17.0, "a midday fall in import must not lower the load"
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(31.0, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 10))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(31.0, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 10)))
     assert load(ge_cloud) == 18.0
 
     # A counter that never resets: after the window the new readings are taken as they are
     ge_cloud = fresh()
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(40.0, 2.0, 5.0, 4.0, 20.0), now=at(13, 23, 50))
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(0.1, 0.0, 0.0, 0.0, 20.0), now=at(14, 0, 0))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(40.0, 2.0, 5.0, 4.0, 20.0), now=at(13, 23, 50)))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.1, 0.0, 0.0, 0.0, 20.0), now=at(14, 0, 0)))
     assert load(ge_cloud) == 0.0
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(1.5, 0.0, 0.0, 0.0, 20.0), now=at(14, 0, 30))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(1.5, 0.0, 0.0, 0.0, 20.0), now=at(14, 0, 30)))
     assert load(ge_cloud) == 0.0, "still inside the window"
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(3.0, 0.0, 0.0, 0.0, 20.5), now=at(14, 1, 0))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.0, 0.0, 0.0, 0.0, 20.5), now=at(14, 1, 0)))
     assert load(ge_cloud) == 0.0, "a stuck counter gives a 0 balance until it moves, never a jump"
     assert ge_cloud.ems_load_state["ems001"]["reset_from"] is None, "the reset ends once the window has passed"
 
+    # A restart part-way through a reset: the hold is kept in storage, so the new process carries on at 0 rather
+    # than publishing the partly reset counters' balance (83.7kWh here), which history would count as a second day's load
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = StorageLocalFiles(tmpdir, print)
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50)))
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 0.0, 0.1), now=at(13, 23, 55)))
+        assert load(ge_cloud) == 0.0
+        assert "ems001" in run_async(storage.load("gecloud", "ems_load_reset")), "a reset in progress is kept in storage"
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 0.0, 0.1), now=at(13, 23, 57)))
+        assert load(ge_cloud) == 0.0, "after a restart mid-reset the sensor must not rise to {}".format(ems_load_balance(ems_today_counters(_ems_today(68.5, 1.3, 16.6, 0.0, 0.1))))
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.4, 0, 0, 0.0, 0.2), now=at(14, 0, 0)))
+        assert load(ge_cloud) == 0.2, "the restored reset completes as it would have"
+        assert run_async(storage.load("gecloud", "ems_load_reset")) == {}, "a completed reset is cleared from storage"
+
+        # A reset kept from long ago has run its window: a restart takes the counters as they are
+        run_async(storage.save("gecloud", "ems_load_reset", {"ems001": {"reset_from": {"import": 68.5, "export": 1.3, "solar": 16.6, "discharge": 22.3, "charge": 23.3}, "reset_since": at(13, 23, 55).isoformat()}}, format="json"))
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.0, 0.0, 0.0, 1.0, 1.5), now=at(14, 9, 0)))
+        assert load(ge_cloud) == 2.5, "a stale reset in storage is ignored, got {}".format(load(ge_cloud))
+
+        # Nothing usable in storage: the counters are taken as they are
+        run_async(storage.save("gecloud", "ems_load_reset", {"ems001": {"reset_from": "bad", "reset_since": "bad"}}, format="json"))
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.0, 0.0, 0.0, 1.0, 1.5), now=at(13, 23, 57)))
+        assert load(ge_cloud) == 2.5
+
     # Polling stalled across midnight: the first reading of the new day is mid-morning, still taken as the reset
     ge_cloud = fresh()
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(40.0, 2.0, 5.0, 4.0, 20.0), now=at(13, 22, 0))
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(4.0, 0.0, 0.0, 1.0, 3.0), now=at(14, 9, 0))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(40.0, 2.0, 5.0, 4.0, 20.0), now=at(13, 22, 0)))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(4.0, 0.0, 0.0, 1.0, 3.0), now=at(14, 9, 0)))
     assert load(ge_cloud) == 2.0, "expected 2.0 got {}".format(load(ge_cloud))
     # ...but a later fall that day is still a glitch
-    ge_cloud.publish_ems_load_today("ems001", _ems_today(2.5, 0.0, 0.0, 1.0, 3.0), now=at(14, 10, 0))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(2.5, 0.0, 0.0, 1.0, 3.0), now=at(14, 10, 0)))
     assert load(ge_cloud) == 2.0
 
     return 0
