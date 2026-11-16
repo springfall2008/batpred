@@ -272,6 +272,46 @@ def test_update_scans_after_midnight_for_yesterday():
     return failed
 
 
+def test_update_restart_reads_two_days():
+    """After a restart the stored last success is used, so the first scan reads the days since then, not the whole history."""
+    storage = FakeStorage([None])
+    test_api, calls = setup(storage, [lambda t: {day(t, 1): record()}])
+    storage.loads = [{"slot_minutes": 5, "days": {}, "last_success": (test_api.mock_base.now_utc - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S%z")}]
+    try:
+        update(test_api)
+        failed = check("restart scan length", calls and calls[0]["days"] == 2, calls)
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_update_rescans_when_clock_moves_back():
+    """A next scan more than a day ahead (the host clock moved back - NTP, a VM restore; not daylight saving) is not waited for."""
+    test_api, calls = setup(FakeStorage([{"slot_minutes": 5, "days": {}}]), [lambda t: {day(t, 1): record()}])
+    try:
+        update(test_api)
+        test_api.solar.pv_calibration_next_scan = test_api.mock_base.now_utc + timedelta(days=3)
+        advance(test_api, 60)
+        update(test_api)
+        failed = check("rescan after clock moved back", len(calls) == 2, calls)
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_update_discarded_store_rebuilds_full_history():
+    """A store saved at another slot length is discarded with its last success too, so the rebuild reads the whole history."""
+    storage = FakeStorage([None])
+    test_api, calls = setup(storage, [lambda t: {day(t, 1): record()}])
+    storage.loads = [{"slot_minutes": 15, "days": {}, "last_success": (test_api.mock_base.now_utc - timedelta(hours=3)).strftime("%Y-%m-%dT%H:%M:%S%z")}]
+    try:
+        update(test_api)
+        failed = check("rebuild reads the whole history", calls and calls[0]["days"] == 28, calls)
+    finally:
+        test_api.cleanup()
+    return failed
+
+
 def run_pv_calibration_update_tests(my_predbat=None):
     """Run the PV calibration evidence store tests."""
     failed = False
@@ -286,6 +326,9 @@ def run_pv_calibration_update_tests(my_predbat=None):
         test_update_without_storage,
         test_update_scan_exception_is_a_failed_scan,
         test_update_scans_after_midnight_for_yesterday,
+        test_update_restart_reads_two_days,
+        test_update_rescans_when_clock_moves_back,
+        test_update_discarded_store_rebuilds_full_history,
     ):
         print("**** {} ****".format(test.__name__))
         failed = test() or failed

@@ -159,6 +159,15 @@ def _standard_error(values):
     return math.sqrt(var / max(n_eff - 1, 1))
 
 
+def _spread(values):
+    """The weighted standard deviation of values [(value, weight)]: how far a single day typically lands from the mean."""
+    sw = sum(w for _, w in values)
+    if sw <= 0:
+        return 0.0
+    mean = sum(v * w for v, w in values) / sw
+    return math.sqrt(sum(w * (v - mean) ** 2 for v, w in values) / sw)
+
+
 def fit_pv_calibration(evidence, today, pv_scaling, half_life, shrink_day, shrink_slot, slot_minutes):
     """
     The day factor and per-slot shape from the evidence, each shrunk toward 1 by its own noise, or None with fewer than
@@ -223,6 +232,7 @@ def fit_pv_calibration(evidence, today, pv_scaling, half_life, shrink_day, shrin
         "total": total,
         "raw_total": raw_total,
         "se_day": _standard_error(day_values),
+        "spread_day": _spread(day_values),
         "adj": adj,
         "raw_adj": raw_adj,
         "days_used": sorted(day for day, _, _, _, _ in days),
@@ -261,10 +271,10 @@ def band_scaling(evidence, today, pv_scaling, band_days, min_days=1):
     return clamp(worst / average, 0.3, 1.0), min(best / average, 2.0), average
 
 
-def evidence_peak_kw(evidence, today, days):
-    """The largest measured peak (kW) over the days aged 1 to days."""
+def evidence_peak_kw(evidence, today, days, pv_scaling):
+    """The largest measured peak (kW) over the days aged 1 to days, leaving out down days as the 7-day calibration did."""
     peak = 0.0
     for day, record in (evidence or {}).items():
-        if 1 <= day_age(day, today) <= days:
+        if 1 <= day_age(day, today) <= days and not _is_down(*_day_totals(record, pv_scaling)):
             peak = max(peak, record.get("peak_kw", 0) or 0)
     return peak
