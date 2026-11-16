@@ -189,6 +189,7 @@ from tests.test_web_discovery import run_web_discovery_tests
 from tests.test_web_components_layout import run_web_components_layout_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
+from tests.test_web_pv_calibration_chart import run_web_pv_calibration_chart_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
 from tests.test_web_entity_unit_resolution import run_web_entity_unit_resolution_tests
 from tests.test_web_attributes_history import run_web_attributes_history_tests
@@ -763,6 +764,7 @@ def main():
         ("web_annual_plan_route", test_web_annual_plan_route, "Annual web tab captured-plan route tests", False),
         ("web_annual_pages", test_web_annual_pages, "Annual web tab config/viewer/compare page split and nav tests", False),
         ("web_history_table", run_web_history_table_tests, "Web /entity history table bucketing tests", False),
+        ("web_pv_calibration_chart", run_web_pv_calibration_chart_tests, "PV Calibration page: status table, slot and day evidence charts", False),
         ("web_charts", run_web_charts_tests, "Web chart rendering tests (percent/special-character units)", False),
         ("web_chart_grouping", run_web_chart_grouping_tests, "Web /entity chart numeric vs timeline grouping tests", False),
         ("web_entity_unit_resolution", run_web_entity_unit_resolution_tests, "Web /entity chart unit/name resolution tests", False),

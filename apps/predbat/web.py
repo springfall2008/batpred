@@ -107,6 +107,7 @@ from const import (
     MANUAL_TIME_MAX_MINUTES,
     BATTERY_RATE_GRID_HALF_LIFE_DAYS,
     BATTERY_RATE_GRID_MAX,
+    PV_CALIBRATION_MIN_DAYS,
     BATTERY_RATE_GRID_MIN_CELLS,
     BATTERY_RATE_GRID_MIN_DAYS,
     BATTERY_RATE_GRID_RUN_MINUTES,
@@ -3497,6 +3498,9 @@ chart.render();
         if chart == "Curves":
             # Needs no plan or history, so it is shown before the first plan too
             return self.get_curves_chart()
+        if chart in ("PVCalibration", "PVAccuracy"):
+            # PVAccuracy is the old name of this page, kept so saved links open it
+            return self.get_pv_calibration_chart()
         now_str = self.now_utc.strftime(TIME_FORMAT)
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
@@ -3674,25 +3678,6 @@ chart.render();
                 {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
-        elif chart == "PVAccuracy":
-            # Get pv_today history once and extract total and remaining attributes per timestamp
-            pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
-            pv_total_raw = history_attribute(pv_today_hist, attributes=True, state_key="totalCL")
-            pv_remaining_raw = history_attribute(pv_today_hist, attributes=True, state_key="remainingCL")
-            # Compute forecast so far = total - remaining per timestamp
-            pv_forecast_sofar_raw = {}
-            for ts, total_val in pv_total_raw.items():
-                remaining_val = pv_remaining_raw.get(ts, 0)
-                pv_forecast_sofar_raw[ts] = dp2(max(total_val - remaining_val, 0))
-            pv_forecast_sofar = prune_today(pv_forecast_sofar_raw, self.now_utc, self.midnight_utc, prune=False)
-            # Get actual PV energy over time
-            pv_actual_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_energy_h0", 7, required=False))
-            pv_actual = prune_today(pv_actual_hist, self.now_utc, self.midnight_utc, prune=False)
-            series_data = [
-                {"name": "PV Forecast (so far)", "data": pv_forecast_sofar, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#a8a8a7"},
-                {"name": "PV Actual", "data": pv_actual, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#f5c43d"},
-            ]
-            text += self.render_chart(series_data, "kWh", "PV Forecast vs Actual", now_str)
         elif chart == "LoadML":
             load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours
@@ -4005,7 +3990,7 @@ chart.render();
         text += f'<a href="./charts?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
         text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
-        text += f'<a href="./charts?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
+        text += f'<a href="./charts?chart=PVCalibration" class="{"active" if chart in ("PVCalibration", "PVAccuracy") else ""}">PVCalibration</a>'
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
@@ -4016,7 +4001,7 @@ chart.render();
             text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
-        if chart not in ("MarginalCosts", "Curves"):
+        if chart not in ("MarginalCosts", "Curves", "PVCalibration", "PVAccuracy"):
             text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
         text += "</body></html>\n"
@@ -4131,6 +4116,145 @@ chart.render();
                 text += "<tr><td style='{}'>{}</td>".format(small, label) + "".join("<td style='{}'>{:.2f}</td>".format(small, value) for value in row) + "</tr>\n"
             text += "</table>\n"
         text += "</div>\n"
+        return text
+
+    def get_pv_calibration_chart(self):
+        """
+        The PV Calibration page: a status table for PV calibration, then each half-hour slot's evidence (actual / forecast for
+        every stored day) against the unshrunk and applied slot factors, the same for whole days, and a short table in
+        two-hour bands.
+        """
+        text = "<style>.pv-calibration-page p { white-space: normal; }</style>\n"
+        text += "<div class='pv-calibration-page' style='max-width:960px;'>\n<br><h2>PV calibration</h2>\n"
+        components = getattr(self.base, "components", None)
+        solar = components.get_component("solar") if components else None
+        if solar is None:
+            text += "<p>Solar forecast component is not running, so there is no PV calibration to show.</p>\n</div>\n"
+            return text
+        model = getattr(solar, "pv_calibration_model", None)
+        evidence = getattr(solar, "pv_calibration_evidence", None) or {}
+        settings = getattr(solar, "pv_calibration_settings_used", None) or {}
+        overridden = settings.get("overridden") or set()
+        switch_on = self.base.get_arg("metric_pv_calibration_enable", True)
+
+        def when(stamp):
+            """A datetime in local time as YYYY-MM-DD HH:MM, or blank."""
+            if not stamp:
+                return ""
+            local_tz = getattr(self.base, "local_tz", None)
+            return (stamp.astimezone(local_tz) if local_tz else stamp).strftime("%Y-%m-%d %H:%M")
+
+        def setting(key, fmt):
+            """A setting formatted, marked when apps.yaml sets it."""
+            value = settings.get(key)
+            if value is None:
+                return ""
+            return fmt.format(value) + (" (apps.yaml)" if key in overridden else "")
+
+        if not switch_on:
+            state, reason = "Off", "switch.{}_metric_pv_calibration_enable is off: the raw forecast is used".format(self.prefix)
+        elif model is None:
+            state, reason = "Waiting", "not enough evidence yet: calibration needs {} valid days".format(PV_CALIBRATION_MIN_DAYS)
+        else:
+            state, reason = "On", ""
+        days_used = (model or {}).get("days_used") or []
+        rows = [
+            ("Calibration", state),
+            ("Reason", reason),
+            ("Days stored", "{} ({} to {})".format(len(evidence), min(evidence), max(evidence)) if evidence else "0"),
+            ("Valid days used", "{} ({} down days skipped)".format(len(days_used), len((model or {}).get("down_days") or [])) if model else ""),
+            ("Day factor applied", "{:.2f}".format(model["total"]) if model else ""),
+            ("Day factor unshrunk", "{:.2f} (standard error {:.2f})".format(model["raw_total"], model["se_day"]) if model else ""),
+            ("Half-life", setting("half_life", "{} days")),
+            ("Shrink (day / half-hour)", "{} / {}".format(setting("shrink", "{:.2f}"), setting("shrink_slot", "{:.2f}")) if settings else ""),
+            ("Days kept / daily scan", "{} / {}".format(setting("history_days", "{}"), setting("scan_days", "{}")) if settings else ""),
+            ("Band (worst / best day)", "{:.2f} / {:.2f}".format(getattr(solar, "pv_calibration_worst_scaling", 1.0), getattr(solar, "pv_calibration_best_scaling", 1.0))),
+            ("Last scan", "{} - {}".format(when(getattr(solar, "pv_calibration_last_scan", None)), getattr(solar, "pv_calibration_scan_status", "")) if getattr(solar, "pv_calibration_last_scan", None) else getattr(solar, "pv_calibration_scan_status", "not run")),
+            ("Next scan", when(getattr(solar, "pv_calibration_next_scan", None))),
+        ]
+        ceiling = solar.pv_clipping_ceiling_kw() if hasattr(solar, "pv_clipping_ceiling_kw") else 0
+        if ceiling:
+            clipped = sum(record.get("clipped_minutes", 0) for record in evidence.values())
+            rows.append(("Clipping ceiling", "{:.2f} kW ({} minutes at the ceiling taken as the forecast)".format(ceiling, clipped)))
+        cell = "padding:6px 12px;border:1px solid #555;"
+        text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n"
+        for label, value in rows:
+            style = cell + ("background:#00B050;color:#fff;" if label == "Calibration" and state == "On" else "")
+            text += "<tr><th style='{}text-align:left;'>{}</th><td style='{}'>{}</td></tr>\n".format(cell, label, style, html_module.escape(str(value)))
+        text += "</table>\n"
+        text += (
+            "<p>Predbat compares each half hour of your actual solar generation with the forecast your provider gave for it, over the last {} days, and calibrates the forecast "
+            "with a day factor and a half-hour shape. Recent days count for more (a day's weight halves every {} days). Each factor only moves as far as the evidence supports: "
+            "when the days scatter either side of the forecast with no consistent direction it stays close to 1, and a consistent difference is corrected. "
+            "The charts show every stored day as a dot - larger for more forecast energy, fainter for older days - against the factor worked out from them before (unshrunk) and after that limit (applied).</p>\n"
+        ).format(settings.get("history_days", ""), settings.get("half_life", ""))
+        if model is None:
+            text += "<p>Not enough evidence to calibrate yet: the charts appear once there are {} valid days.</p>\n</div>\n".format(PV_CALIBRATION_MIN_DAYS)
+            return text
+
+        slot_data = {
+            "points": [[point["minute"], round(point["ratio"], 4), round(point["forecast_kwh"], 4), round(point["weight"], 4)] for point in model["slot_points"]],
+            "raw_adj": {str(minute): round(value, 4) for minute, value in model["raw_adj"].items()},
+            "adj": {str(minute): round(value, 4) for minute, value in model["adj"].items()},
+        }
+        day_data = {
+            "points": [[point["day"], round(point["ratio"], 4) if point["ratio"] is not None else None, round(point["forecast_kwh"], 3), bool(point["down"])] for point in model["day_points"]],
+            "raw_total": round(model["raw_total"], 4),
+            "total": round(model["total"], 4),
+        }
+        text += '<script src="{}"></script>\n'.format(PLOTLY_GL3D_URL)
+        text += "<h3>Half-hour slots</h3>\n<div id='pv_calibration_slots' style='width:100%;height:420px;'></div>\n"
+        text += "<h3>Days</h3>\n<div id='pv_calibration_days' style='width:100%;height:320px;'></div>\n"
+        text += "<script>\nvar pv_calibration_slot_data = {};\nvar pv_calibration_day_data = {};\n".format(json.dumps(slot_data), json.dumps(day_data))
+        text += """(function() {
+  var s = pv_calibration_slot_data, d = pv_calibration_day_data;
+  if (typeof Plotly === 'undefined') { document.getElementById('pv_calibration_slots').innerText = 'The chart library could not be loaded.'; return; }
+  var fg = getComputedStyle(document.body).color || '#888';
+  var axis = function(t, extra) { return Object.assign({title: {text: t, font: {color: fg}}, tickfont: {color: fg}, gridcolor: 'rgba(128,128,128,0.3)', zeroline: false}, extra || {}); };
+  var hhmm = function(m) { return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); };
+  var maxF = Math.max.apply(null, s.points.map(function(p) { return p[2]; }).concat([0.001]));
+  var minutes = Object.keys(s.adj).map(Number).sort(function(a, b) { return a - b; });
+  var layout = function(xt) { return {paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', margin: {l: 50, r: 10, t: 10, b: 40}, legend: {font: {color: fg}, orientation: 'h'},
+    xaxis: axis(xt), yaxis: axis('Actual / forecast', {range: [0, 3]})}; };
+  Plotly.newPlot('pv_calibration_slots', [
+    {type: 'scatter', mode: 'markers', name: 'stored days', x: s.points.map(function(p) { return hhmm(p[0]); }), y: s.points.map(function(p) { return Math.min(p[1], 3); }),
+      marker: {size: s.points.map(function(p) { return 6 + 10 * p[2] / maxF; }), color: '#f5c43d', opacity: s.points.map(function(p) { return Math.max(p[3], 0.15); })}},
+    {type: 'scatter', mode: 'lines', name: 'unshrunk', x: minutes.map(hhmm), y: minutes.map(function(m) { return s.raw_adj[m]; }), line: {color: '#a8a8a7', dash: 'dot'}},
+    {type: 'scatter', mode: 'lines', name: 'applied', x: minutes.map(hhmm), y: minutes.map(function(m) { return s.adj[m]; }), line: {color: '#e90a0a', width: 3}},
+    {type: 'scatter', mode: 'lines', name: 'no correction', x: [minutes.map(hhmm)[0], minutes.map(hhmm)[minutes.length - 1]], y: [1, 1], line: {color: fg, dash: 'dash', width: 1}}
+  ], layout('Time of day'), {responsive: true});
+  var good = d.points.filter(function(p) { return !p[3] && p[1] !== null; }), down = d.points.filter(function(p) { return p[3] && p[1] !== null; });
+  var maxD = Math.max.apply(null, d.points.map(function(p) { return p[2]; }).concat([0.001]));
+  var days = d.points.map(function(p) { return p[0]; });
+  Plotly.newPlot('pv_calibration_days', [
+    {type: 'scatter', mode: 'markers', name: 'days', x: good.map(function(p) { return p[0]; }), y: good.map(function(p) { return Math.min(p[1], 3); }), marker: {size: good.map(function(p) { return 6 + 10 * p[2] / maxD; }), color: '#f5c43d'}},
+    {type: 'scatter', mode: 'markers', name: 'down days (skipped)', x: down.map(function(p) { return p[0]; }), y: down.map(function(p) { return Math.min(p[1], 3); }), marker: {size: 8, color: 'rgba(0,0,0,0)', line: {color: '#888', width: 1}}},
+    {type: 'scatter', mode: 'lines', name: 'unshrunk', x: [days[0], days[days.length - 1]], y: [d.raw_total, d.raw_total], line: {color: '#a8a8a7', dash: 'dot'}},
+    {type: 'scatter', mode: 'lines', name: 'applied', x: [days[0], days[days.length - 1]], y: [d.total, d.total], line: {color: '#e90a0a', width: 3}}
+  ], layout('Day'), {responsive: true});
+})();
+</script>
+"""
+        # Two-hour bands: mean forecast and actual kWh per valid day, the factors at the band's middle slot, and the number of points
+        used = set(days_used)
+        valid_days = max(len(used), 1)
+        small = "padding:4px 8px;border:1px solid #555;"
+        text += "<table style='border-collapse:collapse;margin:8px 0 20px 0;font-size:0.9em;'>\n<tr>"
+        for heading in ("Time", "Forecast kWh", "Actual kWh", "Unshrunk", "Applied", "Points"):
+            text += "<th style='{}'>{}</th>".format(small, heading)
+        text += "</tr>\n"
+        slot_minutes = min((b - a for a, b in zip(sorted(model["adj"]), sorted(model["adj"])[1:])), default=30)
+        for band_start in range(0, 24 * 60, 120):
+            band = [point for point in model["slot_points"] if band_start <= point["minute"] < band_start + 120]
+            forecast = sum(point["forecast_kwh"] for point in band) / valid_days
+            actual = sum(point["actual_kwh"] for point in band) / valid_days
+            if forecast < 0.01 and actual < 0.01:
+                continue
+            middle = band_start + 60 - (60 % slot_minutes)
+            text += "<tr><td style='{0}'>{1:02d}:00-{2:02d}:00</td><td style='{0}'>{3:.2f}</td><td style='{0}'>{4:.2f}</td><td style='{0}'>{5:.2f}</td><td style='{0}'>{6:.2f}</td><td style='{0}'>{7}</td></tr>\n".format(
+                small, band_start // 60, (band_start + 120) // 60, forecast, actual, model["raw_adj"].get(middle, model["raw_total"]), model["adj"].get(middle, model["total"]), len(band)
+            )
+        text += "</table>\n</div>\n"
         return text
 
     def is_editable_value(self, value):
