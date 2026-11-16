@@ -851,6 +851,7 @@ xrtkq
 xtest
 xticks
 xxabcdefyy
+yanchor
 yaxis
 yaxistooltip
 yday
