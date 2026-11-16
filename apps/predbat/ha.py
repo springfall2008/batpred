@@ -35,6 +35,8 @@ from http_sync import http_get, http_post, HttpError, HttpJSONDecodeError, HttpT
 # Maximum days of history fetched per request. Long windows are split so only one chunk's
 # response body, decoded string and parsed objects are resident at a time.
 HISTORY_CHUNK_DAYS = 3
+HA_STARTUP_API_RETRY_INTERVAL = 5
+HA_STARTUP_API_RETRY_TIMEOUT = 10 * 60
 
 # How long Home Assistant may be continuously unreachable before Predbat gives up and stops (#5437).
 # A Home Assistant restart takes minutes to serve its API again, so the limit is a duration,
@@ -50,10 +52,6 @@ HA_OUTAGE_GAP_SECONDS = 10 * 60
 # Not Cloudflare's 525/526 (TLS to the origin failed, a certificate problem waiting will not fix), nor 500 or 501,
 # which a misconfigured proxy or one that cannot do the Web Socket upgrade keeps sending, and Home Assistant itself can send 500.
 HA_RESTARTING_STATUSES = (502, 503, 504, 520, 521, 522, 523, 524, 530)
-
-# Pause between attempts to reach Home Assistant while it is not ready, doubling up to the maximum
-HA_RETRY_SECONDS = 5
-HA_RETRY_MAX_SECONDS = 30
 
 # Request errors that are not Home Assistant being down, so waiting will not fix them: a malformed ha_url or ha_key
 # (e.g. a trailing newline), a redirect loop, or a body that cannot be encoded. http_sync raises these as a plain
@@ -534,6 +532,7 @@ class HAInterface(ComponentBase):
         self.outage = OutageTimer()
         self.auth_rejected = False
         self.auth_failures = 0
+        self.last_api_status = None
         self.last_success_timestamp = None
 
         self.state_data = {}
@@ -569,21 +568,31 @@ class HAInterface(ComponentBase):
                 self.slug = res["data"]["slug"]
                 self.log("Info: App slug is {}".format(self.slug))
 
-            # Home Assistant is often still starting when we are (after a restart of the host or of HA itself),
-            # so keep trying for the outage limit rather than giving up on the first failure (#5437, #5134)
-            retry_seconds = HA_RETRY_SECONDS
-            deadline = time.monotonic() + HA_OUTAGE_LIMIT_SECONDS
-            check = self.api_call("/api/services", track_outage=False)
-            # A rejected ha_key will not start working by waiting, so only the other failures are retried
-            while not check and not self.auth_rejected and time.monotonic() + retry_seconds < deadline:
-                self.log("Warn: Home Assistant is not ready at {} (if this persists check ha_url), retrying in {} seconds".format(self.ha_url, retry_seconds))
-                time.sleep(retry_seconds)
-                retry_seconds = min(retry_seconds * 2, HA_RETRY_MAX_SECONDS)
-                check = self.api_call("/api/services", track_outage=False)
-            if not check:
-                self.log("Warn: Unable to connect directly to Home Assistant at {}, please check your configuration of ha_url/ha_key".format(self.ha_url))
-                self.ha_key = None
-                raise ValueError
+            # Supervisor can start this app before Home Assistant Core is ready. Retry
+            # transient proxy/API failures instead of failing component construction.
+            deadline = time.monotonic() + HA_STARTUP_API_RETRY_TIMEOUT
+            attempts = 0
+            while True:
+                check = self.api_call("/api/services", silent=True, track_outage=False)
+                if isinstance(check, list):
+                    break
+
+                status = self.last_api_status
+                if status is not None and 400 <= status < 500 and status not in (408, 429):
+                    self.log("Error: Home Assistant at {} rejected the startup API request with HTTP {}, please check your configuration of ha_url/ha_key".format(self.ha_url, status))
+                    self.ha_key = None
+                    raise ValueError
+
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self.log("Error: Home Assistant API at {} did not become ready within {} seconds, please check your configuration of ha_url/ha_key".format(self.ha_url, HA_STARTUP_API_RETRY_TIMEOUT))
+                    self.ha_key = None
+                    raise ValueError
+
+                attempts += 1
+                if attempts == 1 or attempts % 6 == 0:
+                    self.log("Warn: Home Assistant API at {} is not ready during startup (HTTP {}); retrying".format(self.ha_url, status if status is not None else "unavailable"))
+                time.sleep(min(HA_STARTUP_API_RETRY_INTERVAL, remaining))
 
         if self.db_enable:
             # Open the SQL Lite database called predbat.db using the DatabaseManager
@@ -1360,6 +1369,7 @@ class HAInterface(ComponentBase):
             "Accept": "application/json",
         }
         track = core and track_outage
+        self.last_api_status = None
         try:
             if post:
                 if data_in:
@@ -1371,6 +1381,7 @@ class HAInterface(ComponentBase):
                     response = http_get(url, headers=headers, params=data_in, timeout=TIMEOUT)
                 else:
                     response = http_get(url, headers=headers, timeout=TIMEOUT)
+            self.last_api_status = response.status_code
             # Home Assistant is up but rejecting our key, which waiting will not fix
             auth_failed = core and response.status_code == 401
             if auth_failed:
@@ -1400,7 +1411,8 @@ class HAInterface(ComponentBase):
                 self.ha_unavailable("bad response from {}".format(endpoint))
             data = None
         except HttpTimeout:
-            self.log("Warn: Timeout from {}".format(url))
+            if not silent:
+                self.log("Warn: Timeout from {}".format(url))
             if track:
                 self.ha_unavailable("timeout from {}".format(endpoint))
             data = None

@@ -29,11 +29,11 @@ import sys
 import weakref
 
 from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPORT_POWER
-from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
+from utils import in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 11
-KERNEL_PARITY_REVISION = 20
+KERNEL_ABI_VERSION = 12
+KERNEL_PARITY_REVISION = 23
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -61,12 +61,12 @@ class PkContext(ctypes.Structure):
         ("load10", ctypes.POINTER(ctypes.c_double)),
         ("pv90", ctypes.POINTER(ctypes.c_double)),
         ("load90", ctypes.POINTER(ctypes.c_double)),
-        ("temp_charge_cap", ctypes.POINTER(ctypes.c_double)),
-        ("temp_discharge_cap", ctypes.POINTER(ctypes.c_double)),
+        ("charge_curve_row", ctypes.POINTER(ctypes.c_int32)),
+        ("discharge_curve_row", ctypes.POINTER(ctypes.c_int32)),
         ("io_flag", ctypes.POINTER(ctypes.c_int32)),
         ("io_credit", ctypes.POINTER(ctypes.c_double)),
-        ("charge_curve", ctypes.POINTER(ctypes.c_double)),
-        ("discharge_curve", ctypes.POINTER(ctypes.c_double)),
+        ("charge_curves", ctypes.POINTER(ctypes.c_double)),
+        ("discharge_curves", ctypes.POINTER(ctypes.c_double)),
         ("carbon", ctypes.POINTER(ctypes.c_double)),
         ("gas_rate", ctypes.POINTER(ctypes.c_double)),
         ("iboost_plan_load", ctypes.POINTER(ctypes.c_double)),
@@ -703,18 +703,22 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     pv = []
     pv10 = []
     pv90 = []
-    temp_charge_cap = []
-    temp_discharge_cap = []
+    charge_curve_row = []
+    discharge_curve_row = []
+    charge_curves = []
+    discharge_curves = []
+    charge_rows = {}
+    discharge_rows = {}
+    step_temperature = None
+    step_rows = None
     carbon = []
     gas_rate = []
     iboost_plan_load = []
     car_load_flat = [0.0] * (num_cars * n_steps)
     car_rate_flat = [0.0] * (num_cars * n_steps)
-    # The temperature rate caps are a pure function of the temperature at that step, and a forecast
-    # normally holds one value for hours at a time, so the two curve walks are memoised per distinct
-    # temperature instead of repeated for every step. On the benchmark that is 17,856 calls per plan
-    # for a handful of answers.
-    temp_cap_memo = {}
+    # The battery ceiling curves are a pure function of the temperature at that step (Prediction.rate_curves, memoised
+    # there per temperature), and a forecast normally holds one value for hours at a time, so each distinct curve
+    # becomes one row of a small table and each step carries its row index.
     for k in range(n_steps):
         minute = k * PREDICT_STEP
         minute_absolute = minute + minutes_now
@@ -728,18 +732,20 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         pv.append(pred.pv_forecast_minute_step[minute])
         pv10.append(pred.pv_forecast_minute10_step[minute])
         pv90.append(pred.pv_forecast_minute90_step[minute])
-        # Pre-compute the temperature rate cap base (before the min against the max rate,
-        # which the kernel applies per lookup) - mirrors utils.py find_battery_temperature_cap
+        # The step's battery ceiling curves - mirrors prediction.py run_prediction()'s rate_curves(battery_temperature)
         battery_temperature = pred.battery_temperature_prediction.get(minute, pred.battery_temperature)
-        caps = temp_cap_memo.get(battery_temperature)
-        if caps is None:
-            caps = (
-                find_battery_temperature_cap(battery_temperature, pred.battery_temperature_charge_curve, pred.soc_max, float("inf")),
-                find_battery_temperature_cap(battery_temperature, pred.battery_temperature_discharge_curve, pred.soc_max, float("inf")),
-            )
-            temp_cap_memo[battery_temperature] = caps
-        temp_charge_cap.append(caps[0])
-        temp_discharge_cap.append(caps[1])
+        if battery_temperature != step_temperature:
+            step_temperature = battery_temperature
+            step_rows = []
+            for curve, rows, table in zip(pred.rate_curves(battery_temperature), (charge_rows, discharge_rows), (charge_curves, discharge_curves)):
+                row = rows.get(curve)
+                if row is None:
+                    row = len(rows)
+                    rows[curve] = row
+                    table.extend(curve)
+                step_rows.append(row)
+        charge_curve_row.append(step_rows[0])
+        discharge_curve_row.append(step_rows[1])
         carbon.append(pred.carbon_intensity.get(minute, 0) if pred.carbon_intensity else 0)
         # Gas rate pre-scaled by iboost_gas_scale - mirrors prediction.py:719/725
         gas_rate.append((pred.rate_gas.get(minute_absolute, 99) * pred.iboost_gas_scale) if pred.rate_gas else 0)
@@ -750,11 +756,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
                 car_load_flat[car_n * n_steps + k] = car_load[car_n]
                 car_rate_flat[car_n * n_steps + k] = car_rate_slot[car_n]
 
-    # Raw power curve multipliers by SoC percent - mirrors utils.py get_curve_value
-    charge_curve = [get_curve_value(pred.battery_charge_power_curve, percent, 1.0) for percent in range(101)]
-    discharge_curve = [get_curve_value(pred.battery_discharge_power_curve, percent, 1.0) for percent in range(101)]
-
-    return (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
+    return (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, charge_curve_row, discharge_curve_row, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curves, discharge_curves)
 
 
 def create_kernel_context(pred, static_cache=None):
@@ -803,7 +805,7 @@ def create_kernel_context(pred, static_cache=None):
             static = (shape, build_static_context_arrays(pred, n_steps, minutes_now, num_cars))
             if static_cache is not None:
                 static_cache["arrays"] = static
-        rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve = static[1]
+        rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, charge_curve_row, discharge_curve_row, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curves, discharge_curves = static[1]
 
         ctx = PkContext()
         ctx.rate_import = double_array(rate_import)
@@ -816,12 +818,12 @@ def create_kernel_context(pred, static_cache=None):
         ctx.load10 = double_array(load10)
         ctx.pv90 = double_array(pv90)
         ctx.load90 = double_array(load90)
-        ctx.temp_charge_cap = double_array(temp_charge_cap)
-        ctx.temp_discharge_cap = double_array(temp_discharge_cap)
+        ctx.charge_curve_row = int32_array(charge_curve_row)
+        ctx.discharge_curve_row = int32_array(discharge_curve_row)
         ctx.io_flag = int32_array(io_flag)
         ctx.io_credit = double_array(io_credit)
-        ctx.charge_curve = double_array(charge_curve)
-        ctx.discharge_curve = double_array(discharge_curve)
+        ctx.charge_curves = double_array(charge_curves)
+        ctx.discharge_curves = double_array(discharge_curves)
         ctx.carbon = double_array(carbon)
         ctx.gas_rate = double_array(gas_rate)
         ctx.iboost_plan_load = double_array(iboost_plan_load)

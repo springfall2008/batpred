@@ -588,8 +588,9 @@ COMPONENT_LIST = {
             "base_url": {"required": False, "default": "https://opencloud.growatt.com/prod-api", "config": "growatt_base_url"},
             "battery_rate_max": {"required": False, "config": "growatt_battery_rate_max"},
             "api_delay": {"required": False, "default": 0.2, "config": "growatt_api_delay"},
-            # Growatt documents one deviceDispatch call per five seconds per device.
-            "min_write_interval": {"required": False, "default": 5, "config": "growatt_min_write_interval"},
+            # Growatt documents one deviceDispatch call per five seconds per device; 6 leaves a
+            # second of margin for clock and network jitter.
+            "min_write_interval": {"required": False, "default": 6, "config": "growatt_min_write_interval"},
         },
         # token_hash alone is enough for OAuthMixin to obtain the current token from the
         # SaaS refresh endpoint after a restart whose embedded access token has expired.

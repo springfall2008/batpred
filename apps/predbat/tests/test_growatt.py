@@ -38,15 +38,22 @@ from growatt_const import (
     GROWATT_BASE_URL,
     GROWATT_ENDPOINTS,
     GROWATT_SET_ENABLE_CONTROL,
+    GROWATT_SET_EXPORT_LIMIT,
+    GROWATT_EXPORT_OPEN_RETRY,
     GROWATT_SET_TIME_SLOTS,
-    GROWATT_CONTROL_OFF,
     GROWATT_CONTROL_ON,
     GROWATT_UNUSED_SLOT,
     GROWATT_READ_ATTEMPTS,
     GROWATT_WRITE_ATTEMPTS,
+    GROWATT_WRITE_BACKOFF_MAX,
+    GROWATT_WRITE_CONFIRMED,
+    GROWATT_WRITE_MISMATCH,
+    GROWATT_WRITE_UNKNOWN,
     dispatch_slot_payload,
+    export_limit_watts,
     local_window_to_utc_slots,
     parse_dispatch_slots,
+    parse_export_limit,
 )
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
 from tests.test_infra import run_async as run_async_local
@@ -102,8 +109,9 @@ class MockGrowatt(GrowattAPI):
     def get_state_wrapper(self, entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         return self.state.get(entity_id, default)
 
-    def set_arg_auto(self, arg, value):
+    def set_arg_auto(self, arg, value, overwrite=True):
         self.base.args[arg] = value
+        self.overwrite_flags = dict(getattr(self, "overwrite_flags", {}), **{arg: overwrite})
 
     def update_success_timestamp(self):
         return None
@@ -133,6 +141,8 @@ def _ready_client(automatic=False, store=None):
     }
     client.device_values[sn] = {"soc": 50.0}
     client.device_energy[sn] = {"load_today": 8.0, "import_today": 2.0, "export_today": 1.0, "pv_today": 10.0}
+    # Read as disabled, so an export does not first raise it; the export limit tests set their own
+    client.export_limit_setting[sn] = (False, 0.0)
     return client, sn
 
 
@@ -419,7 +429,8 @@ def test_growatt_inverter_definition_is_complete():
     assert entry["has_reserve_soc"] is False
     assert entry["support_charge_freeze"] is False
     assert entry["support_discharge_freeze"] is False
-    assert entry["write_and_poll_sleep"] == 5
+    # One dispatch per five seconds per device is documented; 6 leaves a second of margin
+    assert entry["write_and_poll_sleep"] == 6
 
 
 def test_growatt_discovery_matches_definition_and_automatic_config():
@@ -465,12 +476,24 @@ def _recording_dispatch(client, result=True, applies=None, enable=0):
     calls.reads = []
     calls.enable = enable
     calls.table = [dict(GROWATT_UNUSED_SLOT) for _ in range(16)]
+    calls.export_limit = {"exportLimitEnabled": 1, "percentage": 0}
+    calls.refuse_export_limit = False
+    calls.refuse_enable_control = False
+    # Reads that fail as a busy device's do (READ_DEVICE_PARAM_FAIL): every read, or the export limit's
+    calls.fail_reads = False
+    calls.fail_export_limit_read = False
     applies = result if applies is None else applies
 
     async def dispatch(serial, set_type, value):
         """Record a write, and apply it unless the device is set to ignore writes or it is an empty list."""
         calls.append((serial, set_type, value))
         if set_type == GROWATT_SET_TIME_SLOTS and value == []:
+            return False
+        if set_type == GROWATT_SET_EXPORT_LIMIT:
+            if applies and not calls.refuse_export_limit:
+                calls.export_limit = dict(value)
+            return result and not calls.refuse_export_limit
+        if set_type == GROWATT_SET_ENABLE_CONTROL and calls.refuse_enable_control:
             return False
         if applies:
             if set_type == GROWATT_SET_ENABLE_CONTROL:
@@ -483,8 +506,12 @@ def _recording_dispatch(client, result=True, applies=None, enable=0):
     async def read_dispatch(serial, set_type):
         """Answer a read with what the device holds."""
         calls.reads.append(set_type)
+        if calls.fail_reads or (set_type == GROWATT_SET_EXPORT_LIMIT and calls.fail_export_limit_read):
+            return False, None
         if set_type == GROWATT_SET_ENABLE_CONTROL:
             return True, calls.enable
+        if set_type == GROWATT_SET_EXPORT_LIMIT:
+            return True, dict(calls.export_limit)
         return True, [dict(slot) for slot in calls.table]
 
     client.dispatch = dispatch
@@ -527,7 +554,12 @@ def test_growatt_write_never_applied_is_retried_then_fails():
     # A 5 s back-off between the attempts, on top of the pacing waits
     assert 5 in client.slept
     assert sn not in client.applied_slots
-    assert any("could not be confirmed after" in message for message in client.log_messages)
+    # The device read back a different table: a mismatch, so enable_control is sent again first next time
+    assert client.last_write_outcome == GROWATT_WRITE_MISMATCH
+    assert sn not in client.control_enabled
+    assert sn not in client.unverified_slots
+    assert client.write_failures[sn] == 1
+    assert any("not confirmed after" in message and "retrying in 1 minute(s)" in message for message in client.log_messages)
 
 
 def test_growatt_reads_retry_while_the_device_is_busy():
@@ -611,11 +643,56 @@ def test_growatt_control_state_survives_restart():
     calls = _recording_dispatch(second)
     assert run_async_local(second.apply_schedule(sn))
     assert calls == []
-    # A changed plan re-sends enable_control once in the new process, then the table
+    # enable_control was confirmed before the restart and is restored, so a changed plan sends only the table
+    assert second.control_enabled == {sn}
     second.local_schedule[sn] = _idle_schedule()
     with patch("growatt.asyncio.sleep", new=AsyncMock()):
         assert run_async_local(second.apply_schedule(sn))
-    assert [call[1] for call in calls] == [GROWATT_SET_ENABLE_CONTROL, GROWATT_SET_TIME_SLOTS]
+    assert [call[1] for call in calls] == [GROWATT_SET_TIME_SLOTS]
+
+
+def test_growatt_all_control_state_survives_restart():
+    """The export limit, an unconfirmed write and its back-off, the charge hold and the retry clocks all survive a restart."""
+    store = FakeStorage()
+    first, sn = _ready_client(store=store)
+    table = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+    first.export_limit_setting[sn] = (True, 100.0)
+    first.export_limit_read_failed.add(sn)
+    first.unverified_slots[sn] = list(table)
+    first.write_failures[sn] = 3
+    first.failed_slots[sn] = list(table)
+    first.write_retry_at[sn] = time.monotonic() + 240
+    first._charge_hold.add(sn)
+    first.mark_refreshed("export_limit:{}".format(sn))
+    first.mark_refreshed("release:{}".format(sn))
+    first.mark_refreshed("live")
+    run_async_local(first.save_state())
+
+    second, _ = _ready_client(store=store)
+    second.export_limit_setting.pop(sn)
+    run_async_local(second.restore_state())
+    assert second.export_limit_setting[sn] == (True, 100.0)
+    assert second.export_limit_read_failed == {sn}
+    assert second.unverified_slots[sn] == table
+    assert second.write_failures[sn] == 3
+    assert second.failed_slots[sn] == table
+    # The back-off resumes with the time it still had, not a fresh or an expired one
+    assert 200 < second.write_retry_at[sn] - time.monotonic() <= 240
+    assert second._write_backing_off(sn, table)
+    assert second._charge_hold == {sn}
+    assert not second.tier_expired("release:{}".format(sn), 10)
+    assert not second.tier_expired("export_limit:{}".format(sn), 10)
+    # Telemetry is read straight away by a new process
+    assert "live" not in second._tier_refreshed
+
+    # A restart with an exporting plan neither re-reads nor writes the export limit it knows is open
+    second.local_schedule[sn] = _schedule()
+    second.unverified_slots.pop(sn)
+    second._clear_write_failure(sn)
+    calls = _recording_dispatch(second)
+    assert run_async_local(second.apply_schedule(sn))
+    assert GROWATT_SET_EXPORT_LIMIT not in [call[1] for call in calls]
+    assert GROWATT_SET_EXPORT_LIMIT not in calls.reads
 
 
 def test_growatt_restore_without_storage_is_a_no_op():
@@ -717,25 +794,35 @@ def test_growatt_readback_waits_for_dispatch_pacing():
 
 
 def test_growatt_release_control():
-    """Releasing sends enable_control 0 once, forgets the table, and keeps retrying a refused release."""
+    """Releasing clears the slot table once - enable_control 0 is never sent - and backs off a refused release."""
     store = FakeStorage()
     client, sn = _ready_client(store=store)
     client.control_claimed.add(sn)
     client.control_enabled.add(sn)
-    client.applied_slots[sn] = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+    held = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+    client.applied_slots[sn] = list(held)
 
-    # The device refuses and still reads enable_control 1, so the release is not confirmed
+    # The device refuses and still holds its slot, so the release is not confirmed
     calls = _recording_dispatch(client, result=False, enable=1)
+    calls.table = [dict(slot) for slot in held] + [dict(GROWATT_UNUSED_SLOT) for _ in range(15)]
     assert not run_async_local(client.release_control(sn))
     assert client.control_claimed == {sn}
+    # A refused release waits GROWATT_RELEASE_RETRY minutes before trying again
+    attempts = len(calls)
+    client.last_write_time[sn] = 0
+    assert not run_async_local(client.release_control(sn))
+    assert len(calls) == attempts
 
+    client._tier_refreshed.pop("release:{}".format(sn))
     client.last_write_time[sn] = 0
     calls = _recording_dispatch(client)
     assert run_async_local(client.release_control(sn))
-    assert calls == [(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_OFF)]
+    assert calls == [(sn, GROWATT_SET_TIME_SLOTS, [dict(GROWATT_UNUSED_SLOT) for _ in range(16)])]
+    assert not any(call[1] == GROWATT_SET_ENABLE_CONTROL for call in calls)
     assert client.control_claimed == set()
     assert client.control_enabled == set()
-    assert sn not in client.applied_slots
+    # The device is now known to hold no slots
+    assert client.applied_slots[sn] == []
     assert store.data[("growatt", "control")]["control_claimed"] == []
     # Nothing left to release
     assert run_async_local(client.release_control(sn))
@@ -757,18 +844,23 @@ def test_growatt_run_releases_control_when_read_only():
 
     client.state["switch.predbat_set_read_only"] = "on"
     assert run_async_local(client.run(60, False))
-    assert calls == [(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_OFF)]
+    # Released by clearing the slot table
+    assert calls == [(sn, GROWATT_SET_TIME_SLOTS, [dict(GROWATT_UNUSED_SLOT) for _ in range(16)])]
     assert client.control_claimed == set()
     # Still read-only: nothing further is sent
     client.last_write_time[sn] = 0
     assert run_async_local(client.run(60, False))
     assert len(calls) == 1
+    assert client.export_limit_setting[sn] == (True, 0.0)
 
     client.state["switch.predbat_set_read_only"] = "off"
     client.last_write_time[sn] = 0
     with patch("growatt.asyncio.sleep", new=AsyncMock()):
         assert run_async_local(client.run(60, False))
-    assert [call[1] for call in calls[1:]] == [GROWATT_SET_ENABLE_CONTROL, GROWATT_SET_TIME_SLOTS]
+    # The read-only runs read the device's 0% export limit, untouched; back in control, the
+    # exporting table raises it first
+    assert client.export_limit_setting[sn] == (True, 100.0)
+    assert [call[1] for call in calls[1:]] == [GROWATT_SET_ENABLE_CONTROL, GROWATT_SET_EXPORT_LIMIT, GROWATT_SET_TIME_SLOTS]
     assert client.control_claimed == {sn}
 
 
@@ -782,7 +874,7 @@ def test_growatt_monitoring_only_releases_claimed_control():
     client._tier_refreshed = {"static": now, "live": now, "readback:{}".format(sn): now}
     calls = _recording_dispatch(client)
     assert run_async_local(client.run(60, False))
-    assert calls == [(sn, GROWATT_SET_ENABLE_CONTROL, GROWATT_CONTROL_OFF)]
+    assert calls == [(sn, GROWATT_SET_TIME_SLOTS, [dict(GROWATT_UNUSED_SLOT) for _ in range(16)])]
 
 
 def test_growatt_zero_capacity_leaves_soc_max_unset():
@@ -1174,6 +1266,583 @@ def test_growatt_cli_restore_snapshot():
         assert refused
 
 
+def _unreadable_dispatch(client):
+    """A device that takes every write but answers READ_DEVICE_PARAM_FAIL to every read, as a busy live SPH did."""
+    calls = _recording_dispatch(client)
+
+    async def read_dispatch(serial, set_type):
+        """Fail every read."""
+        calls.reads.append(set_type)
+        return False, None
+
+    client.read_dispatch = read_dispatch
+    return calls
+
+
+def test_growatt_write_backoff_doubles_and_caps():
+    """Each consecutive unconfirmed table doubles the wait before the same table is tried again, up to the cap."""
+    client, sn = _ready_client()
+    table = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+    waits = [client._note_write_failure(sn, table) for _ in range(7)]
+    assert waits == [1, 2, 4, 8, GROWATT_WRITE_BACKOFF_MAX, GROWATT_WRITE_BACKOFF_MAX, GROWATT_WRITE_BACKOFF_MAX]
+    assert client._write_backing_off(sn, table)
+    # A different table never waits
+    assert not client._write_backing_off(sn, [{"startTime": "04:00", "endTime": "05:00", "percentage": 50}])
+    client._clear_write_failure(sn)
+    assert not client._write_backing_off(sn, table)
+    assert client._write_backoff_minutes(sn) == 0
+
+
+def test_growatt_unreadable_write_reads_first_then_confirms():
+    """A write whose read-back failed is not re-sent blind: after the back-off the device is read first, and a table it holds is adopted."""
+    client, sn = _ready_client()
+    client.local_schedule[sn] = _schedule()
+    client.control_enabled.add(sn)
+    client.applied_slots[sn] = []
+    calls = _unreadable_dispatch(client)
+    assert not run_async_local(client.apply_schedule(sn))
+    assert client.last_write_outcome == GROWATT_WRITE_UNKNOWN
+    target = client.build_time_slots(sn, client.local_schedule[sn])
+    assert client.unverified_slots[sn] == target
+    # Unknown is not taken as the device dropping control
+    assert sn in client.control_enabled
+    assert any("read-back failed, it may have applied" in message for message in client.log_messages)
+    writes = len(calls)
+
+    # Within the back-off the same plan sends nothing at all
+    client.last_write_time[sn] = 0
+    assert not run_async_local(client.apply_schedule(sn))
+    assert len(calls) == writes
+
+    # Once it expires the device answers reads again and holds the table: confirmed with a read, no write
+    client.write_retry_at[sn] = 0
+    client.last_write_time[sn] = 0
+    reread = _recording_dispatch(client)
+    reread.table = [dict(slot) for slot in target] + [dict(GROWATT_UNUSED_SLOT) for _ in range(16 - len(target))]
+    assert run_async_local(client.apply_schedule(sn))
+    assert reread == []
+    assert reread.reads == [GROWATT_SET_TIME_SLOTS]
+    assert client.applied_slots[sn] == target
+    assert sn not in client.unverified_slots
+    assert sn not in client.write_failures
+    assert any("holds the" in message and "written earlier" in message for message in client.log_messages)
+
+
+def test_growatt_unreadable_write_rewrites_when_the_device_lacks_it():
+    """If the read-first shows the device does not hold the table, it is written again."""
+    client, sn = _ready_client()
+    client.local_schedule[sn] = _schedule()
+    client.control_enabled.add(sn)
+    target = client.build_time_slots(sn, client.local_schedule[sn])
+    client.unverified_slots[sn] = list(target)
+    calls = _recording_dispatch(client)
+    assert run_async_local(client.apply_schedule(sn))
+    # One read (the table is not there), then the write and its confirming read
+    assert calls.reads[0] == GROWATT_SET_TIME_SLOTS
+    assert [call[1] for call in calls] == [GROWATT_SET_TIME_SLOTS]
+    assert client.applied_slots[sn] == target
+    assert client.last_write_outcome == GROWATT_WRITE_CONFIRMED
+
+
+def test_growatt_changed_plan_skips_the_backoff():
+    """A new plan is written straight away even while an older table is backing off."""
+    client, sn = _ready_client()
+    client.local_schedule[sn] = _schedule()
+    client.control_enabled.add(sn)
+    old_table = [{"startTime": "04:00", "endTime": "05:00", "percentage": 10}]
+    for _ in range(3):
+        client._note_write_failure(sn, old_table)
+    calls = _recording_dispatch(client)
+    assert run_async_local(client.apply_schedule(sn))
+    assert [call[1] for call in calls] == [GROWATT_SET_TIME_SLOTS]
+    assert sn not in client.write_failures
+    # force also bypasses the back-off of the same table
+    client.local_schedule[sn] = _schedule()
+    target = client.build_time_slots(sn, client.local_schedule[sn])
+    client._note_write_failure(sn, target)
+    client.applied_slots.pop(sn)
+    client.last_write_time[sn] = 0
+    assert not run_async_local(client.apply_schedule(sn))
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn, force=True))
+
+
+def test_growatt_rate_limit_wait_parsing():
+    """The wait comes from the 105 answer's "retry after Nms", plus half a second, capped; a dispatch interval otherwise."""
+    live = "Endpoint rate limited for clientId=c88737*** deviceSn=EGM4E4N08S, retry after 3551ms"
+    assert abs(GrowattAPI.rate_limit_wait(live) - 4.051) < 1e-6
+    assert GrowattAPI.rate_limit_wait("retry after 60000ms") == 10
+    assert GrowattAPI.rate_limit_wait("") == 6
+    assert GrowattAPI.rate_limit_wait(None) == 6
+
+
+class _ScriptedSession(_RecordingSession):
+    """A session answering each post with the next Growatt answer from a script, recording the bodies."""
+
+    def __init__(self, urls, answers, bodies):
+        """Answer from answers, recording each JSON body into bodies."""
+        super().__init__(urls)
+        self.answers = answers
+        self.bodies = bodies
+
+    def post(self, url, headers=None, json=None):
+        """Record the URL and body, then answer with the next scripted result."""
+        self.urls.append(url)
+        self.bodies.append(dict(json or {}))
+        answer = self.answers.pop(0)
+
+        class _Response(_RecordingResponse):
+            """A response carrying the scripted answer."""
+
+            async def json(self):
+                """Return the scripted answer."""
+                return answer
+
+        return _Response()
+
+
+def test_growatt_rate_limited_request_is_retried_once_with_a_new_request_id():
+    """A 105 is retried once after the wait it gives, under a new requestId; a second 105 is returned."""
+    limited = {"code": 105, "message": "Endpoint rate limited for clientId=x deviceSn=SPH123, retry after 1500ms"}
+    client = MockGrowatt()
+    urls, bodies = [], []
+    answers = [limited, {"code": 0, "data": None}]
+    client.http_session = lambda **kwargs: _ScriptedSession(urls, answers, bodies)
+    body = {"deviceSn": "SPH123", "setType": GROWATT_SET_TIME_SLOTS, "value": [], "requestId": GrowattAPI.request_id()}
+    code, _ = run_async_local(client._request("dispatch", body))
+    assert code == 0
+    assert len(bodies) == 2
+    assert bodies[0]["requestId"] != bodies[1]["requestId"]
+    assert client.slept == [2.0]
+    assert any("rate limited, retrying once" in message for message in client.log_messages)
+
+    client = MockGrowatt()
+    urls, bodies = [], []
+    answers = [limited, limited]
+    client.http_session = lambda **kwargs: _ScriptedSession(urls, answers, bodies)
+    code, _ = run_async_local(client._request("dispatch", dict(body)))
+    assert code == 105
+    assert len(bodies) == 2
+
+    # A wait longer than the cap (getDeviceData: one request a minute) is not worth retrying
+    client = MockGrowatt()
+    urls, bodies = [], []
+    answers = [{"code": 105, "message": "Endpoint rate limited for clientId=x deviceSn=SPH123, retry after 42000ms"}]
+    client.http_session = lambda **kwargs: _ScriptedSession(urls, answers, bodies)
+    code, _ = run_async_local(client._request("device_data", {"deviceSn": "SPH123"}))
+    assert code == 105
+    assert len(bodies) == 1
+    assert not any("rate limited, retrying" in message for message in client.log_messages)
+
+
+def test_growatt_control_event_runs_on_the_component_loop():
+    """A write button pressed from another thread's loop applies the schedule on the loop that owns the write lock.
+
+    Predbat presses the button through ha.py's run_async(), on a throwaway loop of its own. Taking the
+    write lock there failed with "is bound to a different event loop" whenever run() held it.
+    """
+    import asyncio
+    import threading
+
+    client, sn = _ready_client()
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    ran_on = []
+    try:
+        client.component_loop = loop
+
+        async def apply_schedule(serial, force=False):
+            """Record which loop the schedule is applied on, holding the lock as the real one does."""
+            async with client._write_lock:
+                ran_on.append(asyncio.get_running_loop())
+            return True
+
+        client.apply_schedule = apply_schedule
+
+        # Hold the lock on the component's loop, as run() would mid-write, so the press has to wait for it
+        async def hold_lock():
+            """Take the write lock on the component's loop for a moment."""
+            async with client._write_lock:
+                await asyncio.sleep(0.2)
+
+        held = asyncio.run_coroutine_threadsafe(hold_lock(), loop)
+        time.sleep(0.05)
+        # Pressed on a throwaway loop in another thread, as ha.py does; bounded, as a press waiting
+        # on another loop's lock is never woken and would otherwise hang the test
+        press = threading.Thread(target=lambda: asyncio.run(client.switch_event("switch.predbat_growatt_sph123_battery_schedule_charge_write", "turn_on")), daemon=True)
+        press.start()
+        press.join(timeout=5)
+        held.result(timeout=5)
+        assert not press.is_alive(), "the press never completed"
+        assert ran_on == [loop]
+    finally:
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=5)
+        loop.close()
+
+    # With no component loop running, the press still applies in place
+    client.component_loop = None
+    ran_on.clear()
+    run_async_local(client.switch_event("switch.predbat_growatt_sph123_battery_schedule_charge_write", "turn_on"))
+    assert len(ran_on) == 1
+
+
+def test_growatt_export_limit_parsing():
+    """The live answer, its JSON-string form, and anything else as unknown; only an enabled 0..100% is a limit."""
+    assert parse_export_limit({"percentage": 0, "exportLimitEnabled": 1}) == (True, 0.0)
+    assert parse_export_limit(json.dumps({"percentage": 20, "exportLimitEnabled": 0})) == (False, 20.0)
+    # The undocumented envelope is walked the way parse_dispatch_slots() walks it
+    assert parse_export_limit({"value": {"percentage": 30, "exportLimitEnabled": 1}}) == (True, 30.0)
+    assert parse_export_limit({"data": json.dumps({"percentage": 40, "exportLimitEnabled": 1})}) == (True, 40.0)
+    assert parse_export_limit({"a": {"b": {"c": {"d": {"e": {"percentage": 0, "exportLimitEnabled": 1}}}}}}) is None
+    for unknown in (None, "", "not json", [], {"percentage": 0}, {"exportLimitEnabled": 1}, {"percentage": "x", "exportLimitEnabled": 1}):
+        assert parse_export_limit(unknown) is None, unknown
+    assert export_limit_watts(True, 0, 3600) == 0
+    assert export_limit_watts(True, 50, 3600) == 1800
+    assert export_limit_watts(False, 50, 3600) is None
+    assert export_limit_watts(True, -20, 3600) is None
+    assert export_limit_watts(True, 50, 0) is None
+
+
+def _export_limit_client(answer, automatic=True):
+    """A ready client whose device answers export_limit reads with answer (None: the read fails)."""
+    client, sn = _ready_client(automatic=automatic)
+    client.export_limit_setting.pop(sn)
+
+    async def read_dispatch(serial, set_type):
+        """Answer the export limit read."""
+        assert set_type == GROWATT_SET_EXPORT_LIMIT
+        return (answer is not None), answer
+
+    client.read_dispatch = read_dispatch
+    return client, sn
+
+
+def test_growatt_zero_export_limit_is_published_not_bound():
+    """A live SPH's zero export limit becomes a 0 W sensor, but is not bound: Predbat raises it before an export."""
+    client, sn = _export_limit_client({"percentage": 0, "exportLimitEnabled": 1})
+    assert run_async_local(client.refresh_export_limit(sn))
+    assert client.export_limit_w(sn) == 0
+    assert any("export limit is enabled at 0% (0 W)" in message and "raises it to 100%" in message for message in client.log_messages)
+    run_async_local(client.publish_data())
+    sensor = client.published["sensor.predbat_growatt_sph123_export_limit"]
+    assert sensor["state"] == 0
+    assert sensor["attributes"]["unit_of_measurement"] == "W"
+    run_async_local(client.automatic_config())
+    assert "export_limit" not in client.base.args
+    records = validated_inverters(client.build_discovery())
+    captured = capture_automatic_config(client)
+    assert "export_limit" not in records[0]["entities"]
+    assert_record_agrees(records[0], captured)
+    assert_record_binds_nothing_extra(records[0], captured)
+
+
+def test_growatt_partial_export_limit_scales_nominal_power():
+    """An enabled limit of 25% on a 6000 W inverter is 1500 W."""
+    client, sn = _export_limit_client({"percentage": 25, "exportLimitEnabled": 1})
+    assert run_async_local(client.refresh_export_limit(sn))
+    assert client.export_limit_w(sn) == 1500
+
+
+def test_growatt_disabled_or_unknown_export_limit_publishes_no_sensor():
+    """A disabled limit, or one that could not be read, publishes no sensor and binds nothing; a failed read is retried sooner."""
+    client, sn = _export_limit_client({"percentage": 0, "exportLimitEnabled": 0})
+    assert run_async_local(client.refresh_export_limit(sn))
+    assert client.export_limit_w(sn) is None
+    assert any("export limit is disabled" in message for message in client.log_messages)
+    run_async_local(client.publish_data())
+    run_async_local(client.automatic_config())
+    assert "sensor.predbat_growatt_sph123_export_limit" not in client.published
+    assert "export_limit" not in client.base.args
+    assert "export_limit" not in validated_inverters(client.build_discovery())[0]["entities"]
+    # Known, so the next read is hours away
+    assert not client._export_limit_due(sn)
+
+    client, sn = _export_limit_client(None)
+    assert not run_async_local(client.refresh_export_limit(sn))
+    assert sn not in client.export_limit_setting
+    # Unknown: retried after GROWATT_TTL_EXPORT_LIMIT_RETRY minutes, not hours
+    client._tier_refreshed["export_limit:{}".format(sn)] = time.time() - 11 * 60
+    assert client._export_limit_due(sn)
+
+
+def test_growatt_failed_export_limit_read_after_a_good_one_is_retried_sooner():
+    """A failed read keeps the known setting, is retried once in the same run, and is due again in minutes, not hours."""
+    client, sn = _export_limit_client({"percentage": 0, "exportLimitEnabled": 1})
+    assert run_async_local(client.refresh_export_limit(sn))
+    assert not client._export_limit_due(sn)
+
+    reads = []
+
+    async def read_dispatch(serial, set_type):
+        """The device is busy (READ_DEVICE_PARAM_FAIL)."""
+        reads.append(set_type)
+        return False, None
+
+    client.read_dispatch = read_dispatch
+    client.last_write_time[sn] = 0
+    assert not run_async_local(client.refresh_export_limit(sn))
+    assert len(reads) == GROWATT_READ_ATTEMPTS
+    assert client.export_limit_w(sn) == 0
+    assert any("export limit read failed" in message for message in client.log_messages)
+    client._tier_refreshed["export_limit:{}".format(sn)] = time.time() - 11 * 60
+    assert client._export_limit_due(sn)
+
+    # A good read restores the long TTL
+    client.read_dispatch = AsyncMock(return_value=(True, {"percentage": 0, "exportLimitEnabled": 1}))
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.refresh_export_limit(sn))
+    client._tier_refreshed["export_limit:{}".format(sn)] = time.time() - 11 * 60
+    assert not client._export_limit_due(sn)
+
+
+def test_growatt_reclaimed_control_releases_without_waiting_out_an_old_back_off():
+    """A release that failed, then a successful write when read-only was turned off, does not delay the next release."""
+    client, sn = _ready_client()
+    client.control_claimed.add(sn)
+    client.control_enabled.add(sn)
+    held = [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+    client.applied_slots[sn] = list(held)
+    calls = _recording_dispatch(client, result=False, enable=1)
+    calls.table = [dict(slot) for slot in held] + [dict(GROWATT_UNUSED_SLOT) for _ in range(15)]
+    assert not run_async_local(client.release_control(sn))
+    assert not client.tier_expired("release:{}".format(sn), 10)
+
+    # Read-only off: Predbat writes its table again
+    client.local_schedule[sn] = _schedule()
+    _recording_dispatch(client, enable=1)
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+
+    # Read-only back on: released at once, not after the old back-off
+    client.last_write_time[sn] = 0
+    calls = _recording_dispatch(client, enable=1)
+    assert run_async_local(client.release_control(sn))
+    assert calls == [(sn, GROWATT_SET_TIME_SLOTS, [dict(GROWATT_UNUSED_SLOT) for _ in range(16)])]
+    assert client.control_claimed == set()
+
+
+def _closed_export_client():
+    """A ready client in control whose device holds the export limit at 0%, as a live SPH did."""
+    client, sn = _ready_client()
+    client.export_limit_setting[sn] = (True, 0.0)
+    client.local_schedule[sn] = _schedule()
+    calls = _recording_dispatch(client)
+    return client, sn, calls
+
+
+def test_growatt_export_raises_a_closed_export_limit_first():
+    """A table that exports claims control, then raises a 0% export limit to 100%, then writes the table - once, and leaves it there."""
+    client, sn, calls = _closed_export_client()
+    assert run_async_local(client.apply_schedule(sn))
+    assert [call[1] for call in calls] == [GROWATT_SET_ENABLE_CONTROL, GROWATT_SET_EXPORT_LIMIT, GROWATT_SET_TIME_SLOTS]
+    assert calls[1][2] == {"exportLimitEnabled": 1, "percentage": 100}
+    assert calls.export_limit == {"exportLimitEnabled": 1, "percentage": 100}
+    assert client.export_limit_setting[sn] == (True, 100.0)
+    assert any("export limit raised from 0% to 100%" in message for message in client.log_messages)
+    # Open now: the same table sends nothing more, and the limit is never set back
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    assert len(calls) == 3
+
+
+def test_growatt_table_without_export_leaves_the_export_limit():
+    """A charge-only table never touches the export limit; an unread one is read first and written only if closed."""
+    client, sn, calls = _closed_export_client()
+    client.local_schedule[sn]["export"]["enable"] = False
+    assert run_async_local(client.apply_schedule(sn))
+    assert GROWATT_SET_EXPORT_LIMIT not in [call[1] for call in calls]
+    assert GROWATT_SET_EXPORT_LIMIT not in calls.reads
+
+    # Unread and actually disabled: read, found open, left exactly as it is
+    client, sn, calls = _closed_export_client()
+    client.export_limit_setting.pop(sn)
+    calls.export_limit = {"exportLimitEnabled": 0, "percentage": 0}
+    assert run_async_local(client.apply_schedule(sn))
+    assert GROWATT_SET_EXPORT_LIMIT in calls.reads
+    assert GROWATT_SET_EXPORT_LIMIT not in [call[1] for call in calls]
+    assert calls.export_limit == {"exportLimitEnabled": 0, "percentage": 0}
+    assert client.export_limit_setting[sn] == (False, 0.0)
+
+    # Unread and at 0%: read, then raised
+    client, sn, calls = _closed_export_client()
+    client.export_limit_setting.pop(sn)
+    assert run_async_local(client.apply_schedule(sn))
+    assert calls.reads[0] == GROWATT_SET_ENABLE_CONTROL
+    assert GROWATT_SET_EXPORT_LIMIT in calls.reads
+    assert calls.export_limit == {"exportLimitEnabled": 1, "percentage": 100}
+
+
+def test_growatt_unreadable_export_limit_is_never_written_blind():
+    """An unread limit whose read fails is not written; the table still goes out and the raise is retried later, reading first."""
+    client, sn, calls = _closed_export_client()
+    client.export_limit_setting.pop(sn)
+    calls.export_limit = {"exportLimitEnabled": 0, "percentage": 0}
+    calls.fail_export_limit_read = True
+    assert run_async_local(client.apply_schedule(sn))
+    assert GROWATT_SET_EXPORT_LIMIT not in [call[1] for call in calls]
+    assert calls[-1][1] == GROWATT_SET_TIME_SLOTS
+    assert calls.export_limit == {"exportLimitEnabled": 0, "percentage": 0}
+    assert sn in client.export_limit_read_failed
+    assert not client.tier_expired("export_open:{}".format(sn), GROWATT_EXPORT_OPEN_RETRY)
+    assert any("could not read the export limit before raising it" in message for message in client.log_messages)
+
+    # Once the read works, a disabled limit is left exactly as it is
+    calls.fail_export_limit_read = False
+    client._tier_refreshed.pop("export_open:{}".format(sn))
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    assert GROWATT_SET_EXPORT_LIMIT not in [call[1] for call in calls]
+    assert client.export_limit_setting[sn] == (False, 0.0)
+
+
+def test_growatt_repeated_unknown_writes_reclaim_enable_control():
+    """A device that dropped enable_control and refuses reads too is sent enable_control again from the second unknown write."""
+    client, sn, calls = _closed_export_client()
+    client.local_schedule[sn]["export"]["enable"] = False
+    client.control_enabled.add(sn)
+    client.control_claimed.add(sn)
+    calls.fail_reads = True
+    # First unknown outcome: enable_control is still trusted
+    assert not run_async_local(client.apply_schedule(sn))
+    assert GROWATT_SET_ENABLE_CONTROL not in [call[1] for call in calls]
+    assert sn in client.control_enabled
+    # Second: no longer trusted
+    client.write_retry_at[sn] = 0
+    client.last_write_time[sn] = 0
+    assert not run_async_local(client.apply_schedule(sn))
+    assert sn not in client.control_enabled
+    # So the next attempt claims control - even though the read-back now shows the table applied,
+    # since a device at enable_control 0 holds a table without acting on it
+    written = len(calls)
+    calls.fail_reads = False
+    calls.enable = 0
+    client.write_retry_at[sn] = 0
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    assert [call[1] for call in calls[written:]] == [GROWATT_SET_ENABLE_CONTROL]
+    assert calls.enable == 1
+    assert sn in client.control_enabled
+
+
+def test_growatt_corrupt_saved_state_does_not_break_restore():
+    """Fields of the wrong type are skipped, the rest is restored, and a bad file does not fail every run."""
+    store = FakeStorage()
+    store.data[("growatt", "control")] = {
+        "applied_slots": {"SPH123": [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]},
+        "control_claimed": ["SPH123"],
+        "control_enabled": "SPH123",
+        "write_failures": {"SPH123": "nan"},
+        "write_retry_until": {"SPH123": "soon"},
+        "export_limit_setting": {"SPH123": "open", "OTHER": [True]},
+        "unverified_slots": ["not", "a", "dict"],
+        "tiers": {"release:SPH123": "x"},
+    }
+    client, sn = _ready_client(store=store)
+    client.export_limit_setting.pop(sn)
+    run_async_local(client.restore_state())
+    assert client._state_restored
+    assert client.applied_slots[sn] == [{"startTime": "01:00", "endTime": "03:00", "percentage": 50}]
+    assert client.control_claimed == {sn}
+    assert client.control_enabled == set()
+    assert client.write_failures == {}
+    assert client.write_retry_at == {}
+    assert client.export_limit_setting == {}
+    assert client.unverified_slots == {}
+    assert "release:{}".format(sn) not in client._tier_refreshed
+
+    # Something unforeseen still leaves the component restored rather than failing every run
+    client, sn = _ready_client(store=store)
+    client._restore_state_from = MagicMock(side_effect=RuntimeError("bad"))
+    run_async_local(client.restore_state())
+    assert client._state_restored
+    assert any("could not restore part of the saved control state" in message for message in client.log_messages)
+
+
+def test_growatt_export_limit_waits_for_enable_control():
+    """A device that will not take enable_control 1 is sent neither the export limit nor the table; the raise backs off."""
+    client, sn, calls = _closed_export_client()
+    calls.refuse_enable_control = True
+    assert not run_async_local(client.apply_schedule(sn))
+    assert set(call[1] for call in calls) == {GROWATT_SET_ENABLE_CONTROL}
+    assert calls.export_limit == {"exportLimitEnabled": 1, "percentage": 0}
+
+    # Same with a table the device already holds: only the raise was pending, and it backs off
+    client, sn, calls = _closed_export_client()
+    assert run_async_local(client.apply_schedule(sn))
+    client.export_limit_setting[sn] = (True, 0.0)
+    # The device dropped enable_control by itself, as a live SPH did, and now refuses it
+    client.control_enabled.discard(sn)
+    calls.enable = 0
+    calls.refuse_enable_control = True
+    written = len(calls)
+    client.last_write_time[sn] = 0
+    assert not run_async_local(client.apply_schedule(sn))
+    assert set(call[1] for call in calls[written:]) == {GROWATT_SET_ENABLE_CONTROL}
+    assert not client.tier_expired("export_open:{}".format(sn), GROWATT_EXPORT_OPEN_RETRY)
+
+
+def test_growatt_unchanged_table_opens_an_export_limit_found_closed():
+    """A limit set back to 0% (in the Growatt app, say) is raised again without rewriting a table the device holds."""
+    client, sn, calls = _closed_export_client()
+    assert run_async_local(client.apply_schedule(sn))
+    written = len(calls)
+    client.export_limit_setting[sn] = (True, 0.0)
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    assert [call[1] for call in calls[written:]] == [GROWATT_SET_EXPORT_LIMIT]
+
+
+def test_growatt_unconfirmed_export_limit_still_writes_the_table_and_backs_off():
+    """A refused export limit change is logged and retried after GROWATT_EXPORT_OPEN_RETRY minutes; the table goes out regardless."""
+    client, sn, calls = _closed_export_client()
+    calls.refuse_export_limit = True
+    assert run_async_local(client.apply_schedule(sn))
+    assert [call[1] for call in calls].count(GROWATT_SET_EXPORT_LIMIT) == GROWATT_WRITE_ATTEMPTS
+    assert calls[-1][1] == GROWATT_SET_TIME_SLOTS
+    assert client.export_limit_setting[sn] == (True, 0.0)
+    assert any("could not confirm the export limit was raised" in message for message in client.log_messages)
+    # Within the back-off nothing is sent for an unchanged table
+    written = len(calls)
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    assert len(calls) == written
+    # After it, the change is tried again
+    calls.refuse_export_limit = False
+    client._tier_refreshed["export_open:{}".format(sn)] = time.time() - (GROWATT_EXPORT_OPEN_RETRY + 1) * 60
+    client.last_write_time[sn] = 0
+    assert run_async_local(client.apply_schedule(sn))
+    # The refused raise also stopped trusting enable_control, so it is claimed again first
+    assert [call[1] for call in calls[written:]] == [GROWATT_SET_ENABLE_CONTROL, GROWATT_SET_EXPORT_LIMIT]
+    assert client.export_limit_setting[sn] == (True, 100.0)
+
+
+def test_growatt_read_only_never_touches_the_export_limit():
+    """While read-only, an exporting plan neither raises the export limit nor writes a table."""
+    client, sn, calls = _closed_export_client()
+    client.state["switch.predbat_set_read_only"] = "on"
+    assert not run_async_local(client.apply_schedule(sn))
+    assert calls == []
+
+
+def test_growatt_soc_cutoffs_are_published():
+    """The inverter's discharge and backup cut-off SoCs from getDeviceInfo are published as % sensors."""
+    client, sn = _ready_client()
+    client.device_detail[sn].update({"dischargeCutOffSOC": 100, "backupCutOffSOC": 0})
+    run_async_local(client.publish_data())
+    cutoff = client.published["sensor.predbat_growatt_sph123_discharge_cutoff_soc"]
+    assert cutoff["state"] == 100.0
+    assert cutoff["attributes"]["unit_of_measurement"] == "%"
+    assert client.published["sensor.predbat_growatt_sph123_backup_cutoff_soc"]["state"] == 0.0
+    # Not reported: not published
+    client, sn = _ready_client()
+    client.device_detail[sn].pop("dischargeCutOffSOC")
+    run_async_local(client.publish_data())
+    assert "sensor.predbat_growatt_sph123_discharge_cutoff_soc" not in client.published
+    assert "sensor.predbat_growatt_sph123_backup_cutoff_soc" not in client.published
+
+
 def run_growatt_tests(my_predbat):
     """Run the Growatt component tests in Predbat's custom test harness."""
     failed = False
@@ -1202,6 +1871,7 @@ def run_growatt_tests(my_predbat):
         ("reads_retry_busy", test_growatt_reads_retry_while_the_device_is_busy),
         ("dispatch_not_resent", test_growatt_dispatch_is_not_resent_after_a_transport_failure),
         ("state_survives_restart", test_growatt_control_state_survives_restart),
+        ("all_state_survives_restart", test_growatt_all_control_state_survives_restart),
         ("restore_without_storage", test_growatt_restore_without_storage_is_a_no_op),
         ("parse_dispatch_slots", test_growatt_parse_dispatch_slots_shapes),
         ("readback_live_empty_table", test_growatt_readback_live_empty_table),
@@ -1211,6 +1881,29 @@ def run_growatt_tests(my_predbat):
         ("release_control", test_growatt_release_control),
         ("run_read_only_release", test_growatt_run_releases_control_when_read_only),
         ("monitoring_only_release", test_growatt_monitoring_only_releases_claimed_control),
+        ("write_backoff", test_growatt_write_backoff_doubles_and_caps),
+        ("unreadable_write_reads_first", test_growatt_unreadable_write_reads_first_then_confirms),
+        ("unreadable_write_rewrites", test_growatt_unreadable_write_rewrites_when_the_device_lacks_it),
+        ("changed_plan_skips_backoff", test_growatt_changed_plan_skips_the_backoff),
+        ("rate_limit_wait", test_growatt_rate_limit_wait_parsing),
+        ("rate_limit_retry", test_growatt_rate_limited_request_is_retried_once_with_a_new_request_id),
+        ("control_event_component_loop", test_growatt_control_event_runs_on_the_component_loop),
+        ("export_limit_parsing", test_growatt_export_limit_parsing),
+        ("zero_export_limit_not_bound", test_growatt_zero_export_limit_is_published_not_bound),
+        ("partial_export_limit", test_growatt_partial_export_limit_scales_nominal_power),
+        ("export_limit_no_sensor", test_growatt_disabled_or_unknown_export_limit_publishes_no_sensor),
+        ("export_opens_closed_limit", test_growatt_export_raises_a_closed_export_limit_first),
+        ("no_export_leaves_limit", test_growatt_table_without_export_leaves_the_export_limit),
+        ("export_limit_after_enable", test_growatt_export_limit_waits_for_enable_control),
+        ("export_limit_no_blind_write", test_growatt_unreadable_export_limit_is_never_written_blind),
+        ("unknown_writes_reclaim_control", test_growatt_repeated_unknown_writes_reclaim_enable_control),
+        ("corrupt_saved_state", test_growatt_corrupt_saved_state_does_not_break_restore),
+        ("unchanged_table_opens_limit", test_growatt_unchanged_table_opens_an_export_limit_found_closed),
+        ("export_open_backoff", test_growatt_unconfirmed_export_limit_still_writes_the_table_and_backs_off),
+        ("read_only_export_limit", test_growatt_read_only_never_touches_the_export_limit),
+        ("soc_cutoff_sensors", test_growatt_soc_cutoffs_are_published),
+        ("export_limit_failed_reread", test_growatt_failed_export_limit_read_after_a_good_one_is_retried_sooner),
+        ("reclaim_resets_release_backoff", test_growatt_reclaimed_control_releases_without_waiting_out_an_old_back_off),
         ("zero_capacity_soc_max", test_growatt_zero_capacity_leaves_soc_max_unset),
         ("cli_merge_args", test_growatt_cli_merge_args),
         ("cli_single_cycle", test_growatt_cli_single_cycle),

@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock
 from http_sync import HttpConnectionError, HttpError, HttpJSONDecodeError, HttpTimeout
 
 from tests.test_hainterface_common import MockBase, MockDatabaseManager, create_ha_interface, create_mock_requests_response, make_fake_time
-from ha import HAInterface, HA_OUTAGE_LIMIT_SECONDS, HA_RETRY_SECONDS, HA_RETRY_MAX_SECONDS
+from ha import HAInterface, HA_OUTAGE_LIMIT_SECONDS, HA_STARTUP_API_RETRY_INTERVAL, HA_STARTUP_API_RETRY_TIMEOUT
 
 
 def test_hainterface_api_call_get(my_predbat=None):
@@ -420,11 +420,11 @@ def test_hainterface_initialize_retries_until_ready(my_predbat=None):
             failed += 1
             return failed
 
-    if sleeps != [HA_RETRY_SECONDS, HA_RETRY_SECONDS * 2, HA_RETRY_SECONDS * 4]:
-        print(f"ERROR: expected three backed-off pauses, got {sleeps}")
+    if sleeps != [HA_STARTUP_API_RETRY_INTERVAL] * 3:
+        print(f"ERROR: expected three pauses, got {sleeps}")
         failed += 1
     else:
-        print("✓ retried with backoff")
+        print("✓ retried until ready")
 
     if mock_base.ha_interface is not ha_interface:
         print("ERROR: base.ha_interface should be set once Home Assistant answers")
@@ -444,8 +444,8 @@ def test_hainterface_initialize_retries_until_ready(my_predbat=None):
 
 
 def test_hainterface_initialize_gives_up_after_limit(my_predbat=None):
-    """Test initialize() still raises once Home Assistant has been unreachable for the outage limit"""
-    print("\n=== Testing HAInterface initialize() gives up after the outage limit ===")
+    """Test initialize() still raises once Home Assistant has been unreachable for the start-up retry limit"""
+    print("\n=== Testing HAInterface initialize() gives up after the start-up retry limit ===")
     failed = 0
 
     mock_base = MockBase()
@@ -477,11 +477,11 @@ def test_hainterface_initialize_gives_up_after_limit(my_predbat=None):
         print("ERROR: initialize() should raise ValueError when Home Assistant never answers")
         failed += 1
     else:
-        print("✓ raised after the outage limit")
+        print("✓ raised after the start-up retry limit")
 
     waited = clock[0] - 1000.0
-    if waited < HA_OUTAGE_LIMIT_SECONDS - HA_RETRY_MAX_SECONDS or waited > HA_OUTAGE_LIMIT_SECONDS:
-        print(f"ERROR: should wait close to the {HA_OUTAGE_LIMIT_SECONDS}s limit, waited {waited}s")
+    if waited < HA_STARTUP_API_RETRY_TIMEOUT - HA_STARTUP_API_RETRY_INTERVAL or waited > HA_STARTUP_API_RETRY_TIMEOUT:
+        print(f"ERROR: should wait close to the {HA_STARTUP_API_RETRY_TIMEOUT}s limit, waited {waited}s")
         failed += 1
     else:
         print(f"✓ waited {waited:.0f}s before giving up")
@@ -551,7 +551,7 @@ def test_hainterface_api_call_auth_rejected(my_predbat=None):
 
 
 def test_hainterface_initialize_auth_rejected_fails_fast(my_predbat=None):
-    """Test initialize() does not wait 15 minutes for a ha_key that Home Assistant rejects"""
+    """Test initialize() does not wait out the start-up retry limit for a ha_key that Home Assistant rejects"""
     print("\n=== Testing HAInterface initialize() auth rejected ===")
     failed = 0
 
@@ -735,7 +735,7 @@ def test_hainterface_api_call_config_error_not_outage(my_predbat=None):
 
 
 def test_hainterface_initialize_config_error_fails_fast(my_predbat=None):
-    """Test initialize() fails at once on a malformed ha_url rather than retrying it as an outage for 15 minutes"""
+    """Test initialize() fails at once on a malformed ha_url rather than retrying it until the start-up limit"""
     print("\n=== Testing HAInterface initialize() configuration error fails fast ===")
     failed = 0
 
