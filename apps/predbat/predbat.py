@@ -36,7 +36,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.7.11"
+THIS_VERSION = "v9.9.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -687,12 +687,25 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_scaling_dynamic = {}
         self.battery_charge_power_curve = {}
         self.battery_charge_power_curve_default = {}
-        self.battery_charge_power_curve_auto = False
         self.battery_discharge_power_curve = {}
         self.battery_discharge_power_curve_default = {}
-        self.battery_discharge_power_curve_auto = False
-        self.computed_charge_curve = False
-        self.computed_discharge_curve = False
+        self.battery_rate_grid_auto = True  # battery_rate_grid_auto: learn the charge/discharge rate grids from history
+        self.battery_charge_rate_grid = None  # engine grid (battery_rate_grid.py) the plan reads the charge ceiling from
+        self.battery_discharge_rate_grid = None  # ... and the discharge ceiling
+        self.battery_rate_grid_manual = {}  # "charge"/"discharge" -> the grid built from the manual curves (fallback and prior)
+        self.battery_rate_grid_learned = {}  # "charge"/"discharge" -> the learned grid, or None
+        self.battery_rate_grid_samples = {}  # "charge"/"discharge" -> {day: [[soc %, temperature or None, rate], ...]}, kept in storage
+        self.battery_rate_grid_source = {}  # "charge"/"discharge" -> learned, manual or default
+        self.battery_rate_grid_updated = {}  # "charge"/"discharge" -> when the learned grid last changed (TIME_FORMAT string), kept in storage
+        self.battery_rate_grid_last_scan = {}  # "charge"/"discharge" -> time of the last history scan
+        self.battery_rate_grid_loaded = {}  # "charge"/"discharge" -> True once the stored samples have been read
+        self.battery_rate_grid_fit_key = {}  # "charge"/"discharge" -> the manual curves and battery size the learned grid was fitted with
+        self.battery_rate_grid_load_failures = {}  # "charge"/"discharge" -> times of cycles whose store reads all came back empty
+        self.battery_rate_grid_pending_save = {}  # "charge"/"discharge" -> True while a save waits for the store to read back
+        self.battery_rate_grid_last_success = {}  # "charge"/"discharge" -> time of the last scan whose history read succeeded
+        self.battery_rate_grid_last_save = {}  # "charge"/"discharge" -> time of the last successful save of the evidence
+        self.battery_rate_grid_history_days = 28  # battery_rate_grid_history_days: days a scan reads until one has succeeded
+        self.battery_rate_grid_scan_days = 2  # battery_rate_grid_scan_days: days a daily scan reads
         self.isCharging = False
         self.isCharging_Target = 0
         self.isExporting = False
@@ -781,6 +794,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}
         self.battery_temperature_prediction = {}
+        self.battery_temperature_stuck_warned = None  # history sensor already warned as stuck at 0, so it is reported once
         self.alerts = []
         self.alert_active_keep = {}
         self.manual_soc_keep = {}

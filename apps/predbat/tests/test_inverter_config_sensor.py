@@ -161,10 +161,6 @@ def run_inverter_config_checks(my_predbat):
     print("Test: a normal inverter fetch publishes the sensor with the fleet totals")
     my_predbat.args["num_inverters"] = 2
     my_predbat.inverters = [make_stub_inverter(0, 3000), make_stub_inverter(1, 3000)]
-    my_predbat.computed_charge_curve = True
-    my_predbat.computed_discharge_curve = True
-    my_predbat.battery_charge_power_curve_auto = False
-    my_predbat.battery_discharge_power_curve_auto = False
     my_predbat.ha_interface.dummy_items.pop(entity_id, None)
 
     my_predbat.fetch_inverter_data()

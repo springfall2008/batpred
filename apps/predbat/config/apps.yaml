@@ -194,12 +194,12 @@ pred_bat:
   # Battery temperature sensor per inverter, used outside REST mode to get current temperature
   #
   #battery_temperature:
-  # - sensor.givtcp_battery_stack_1_bms_temperature
-  # - sensor.givtcp2_battery_stack_1_bms_temperature
+  # - sensor.givtcp_battery_stack_1_battery_temperature
+  # - sensor.givtcp2_battery_stack_1_battery_temperature
 
   # Battery temperature history, only one for modelling, used to predict future temperature
   #
-  #battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+  #battery_temperature_history: sensor.givtcp_battery_stack_1_battery_temperature
 
   # Battery temperature charge adjustment curve
   # Specific in C which is a multiple of the battery capacity
@@ -253,9 +253,12 @@ pred_bat:
   # the default is 1.0 (full power)
   # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
   #
-  # Predbat can compute this curve automatically if you have enough data, restart the app and look in the logfile for the data
-  # once set here Predbat will no longer re-compute the curve.
-  # Can also be set to 'auto' to just use the calculation curve, not recommended if you are using low power charging mode.
+  # Predbat learns the charge and discharge rate (by SoC and battery temperature) from your history automatically - the rate grids.
+  # A curve set here is used where there is not yet enough evidence; set battery_rate_grid_auto to False to plan with your curves only.
+  #battery_rate_grid_auto: True
+  # Days of history the first scan reads (as much as Home Assistant keeps), and each daily scan after that
+  #battery_rate_grid_history_days: 28
+  #battery_rate_grid_scan_days: 2
   #battery_charge_power_curve:
   #  91 : 0.91
   #  92 : 0.81

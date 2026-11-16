@@ -62,6 +62,7 @@ def build_environment(my_predbat):
     my_predbat.battery_temperature_prediction = {minute: max(20 - minute / (2 * 60.0), -5) for minute in range(0, my_predbat.forecast_minutes, 5)}
     my_predbat.battery_temperature_charge_curve = {20: 1.0, 15: 0.9, 10: 0.7, 5: 0.5, 0: 0.3, -5: 0.2, -10: 0.1}
     my_predbat.battery_temperature_discharge_curve = {20: 1.0, 15: 0.95, 10: 0.85, 5: 0.6, 0: 0.4, -5: 0.25, -10: 0.15}
+    my_predbat.apply_rate_grids()  # the engine reads the curves through the rate grids
 
     # iboost on, with a plan covering part of the horizon, so the cached iboost_plan_load array
     # carries real slot data
