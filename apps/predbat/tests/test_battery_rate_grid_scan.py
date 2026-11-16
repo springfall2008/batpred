@@ -253,4 +253,26 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     block = [("Charging", 1000, -1000, 40, 15.3, -1000) for _ in range(25)]
     _, samples = _scan(block)
     failed |= _check("t8", _segments(samples) == [], samples)
+
+    print("Test 9: site-wide battery_power (0 on inverter 1) keeps the fleet denominator")
+    my_predbat, inv0 = _make()
+    _install(my_predbat, _charge(25))
+    my_predbat.args["num_inverters"] = 2
+    my_predbat.args["soc_percent"] = ["sensor.soc_percent", "sensor.soc_percent_1"]
+    my_predbat.args["charge_rate"] = ["number.charge_rate", "number.charge_rate_1"]
+    my_predbat.args["battery_power"] = ["sensor.battery_power", 0]
+    orig_get_history = my_predbat.ha_interface.get_history
+    my_predbat.ha_interface.get_history = lambda entity_id, now=None, days=30: orig_get_history(entity_id.removesuffix("_1"), now=now, days=days)
+    inv1 = Inverter(my_predbat, 1)
+    inv1.battery_rate_max_charge = RATED_W / 60000
+    inv1.battery_rate_max_discharge = RATED_W / 60000
+    inv1.soc_max = 10.0
+    inv1.battery_scaling = 1.0
+    inv0.curve_fleet = lambda: [inv0, inv1]
+    history = inv0.load_curve_history(False, "battery charge rate grid")
+    failed |= _check(
+        "t9 site-wide fleet",
+        history is not None and history["inverters"] == 2 and history["max_power"] == int(2 * RATED_W),
+        history and (history.get("inverters"), history.get("max_power")),
+    )
     return failed

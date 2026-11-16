@@ -144,19 +144,32 @@ class BatteryCurve:
             rate_sensor = self.base.get_arg(rate_name, indirect=False, index=inverter.id)
             battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=inverter.id)
             battery_power_invert = self.base.get_arg("battery_power_invert", False, index=inverter.id)
-            if not (soc_sensor and rate_sensor and battery_power_sensor):
+            battery_power_args = self.base.args.get("battery_power")
+            site_wide_battery_power = (
+                inverter is not self
+                and bool(per_inverter)
+                and not battery_power_sensor
+                and isinstance(battery_power_args, list)
+                and len(battery_power_args) > inverter.id
+                and battery_power_args[inverter.id] in (0, 0.0, "", False)
+            )
+            if not (soc_sensor and rate_sensor and (battery_power_sensor or site_wide_battery_power)):
                 missing_settings = [setting for setting, entity_id in [(soc_label, soc_sensor), (rate_name, rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
                 if inverter is not self:
                     self.log("Info: Inverter {} {} not set in apps.yaml, learning the {} from inverter {} alone".format(inverter.id, ", ".join(missing_settings), purpose, self.id))
                     return self.load_curve_history(discharge, purpose, fleet=[self], days=days)
                 self.log("Warn: Inverter {} Cannot find {} (settings missing), {} not set in apps.yaml".format(inverter.id, purpose, ", ".join(missing_settings)))
                 return None
-            battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
-            self.log("Inverter {} Looking for {} with sensors {}, {}, {} and {}".format(inverter.id, purpose, soc_sensor, rate_sensor, predbat_status_sensor, battery_power_sensor))
-            soc_data = self.base.get_history_wrapper(entity_id=soc_sensor, days=days, required=False, tracked=tracked)
-            rate_data = self.base.get_history_wrapper(entity_id=rate_sensor, days=days, required=False, tracked=tracked)
-            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=days, required=False, tracked=tracked)
-            history_checks = [(soc_label, soc_sensor, soc_data), (rate_name, rate_sensor, rate_data), ("battery_power", battery_power_sensor, battery_power_data), ("predbat.status", predbat_status_sensor, predbat_status_data)]
+            if site_wide_battery_power:
+                battery_power_data = None
+                history_checks = [(soc_label, soc_sensor, soc_data := self.base.get_history_wrapper(entity_id=soc_sensor, days=days, required=False, tracked=tracked)), (rate_name, rate_sensor, rate_data := self.base.get_history_wrapper(entity_id=rate_sensor, days=days, required=False, tracked=tracked)), ("predbat.status", predbat_status_sensor, predbat_status_data)]
+            else:
+                battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
+                self.log("Inverter {} Looking for {} with sensors {}, {}, {} and {}".format(inverter.id, purpose, soc_sensor, rate_sensor, predbat_status_sensor, battery_power_sensor))
+                soc_data = self.base.get_history_wrapper(entity_id=soc_sensor, days=days, required=False, tracked=tracked)
+                rate_data = self.base.get_history_wrapper(entity_id=rate_sensor, days=days, required=False, tracked=tracked)
+                battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=days, required=False, tracked=tracked)
+                history_checks = [(soc_label, soc_sensor, soc_data), (rate_name, rate_sensor, rate_data), ("battery_power", battery_power_sensor, battery_power_data), ("predbat.status", predbat_status_sensor, predbat_status_data)]
             if not all(data for _, _, data in history_checks):
                 no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
                 if inverter is not self and predbat_status_data:
@@ -170,9 +183,12 @@ class BatteryCurve:
                 soc_kwh = {minute: dp4(value * inverter.soc_max / 100.0) for minute, value in to_minutes(soc_data[0], required_unit="%").items()}
             else:
                 soc_kwh = to_minutes(soc_data[0], scale=inverter.battery_scaling, required_unit="kWh")
-            battery_power = to_minutes(battery_power_data[0], required_unit="W")
-            if battery_power_invert:
-                battery_power = {minute: -value for minute, value in battery_power.items()}
+            if site_wide_battery_power:
+                battery_power = None
+            else:
+                battery_power = to_minutes(battery_power_data[0], required_unit="W")
+                if battery_power_invert:
+                    battery_power = {minute: -value for minute, value in battery_power.items()}
             max_power = (inverter.battery_rate_max_discharge if discharge else inverter.battery_rate_max_charge) * MINUTE_WATT
             per_inverter.append({"soc_kwh": soc_kwh, "rate": to_minutes(rate_data[0], required_unit="W"), "battery_power": battery_power, "max_power": max_power})
 
@@ -184,7 +200,16 @@ class BatteryCurve:
             if "," in status[minute]:
                 # If there are multiple statuses take the first one
                 status[minute] = status[minute].split(",")[0].strip()
-        min_len = min([len(status)] + [min(len(series["soc_kwh"]), len(series["rate"]), len(series["battery_power"])) for series in per_inverter])
+        min_len = min(
+            [len(status)]
+            + [
+                min(
+                    [len(series["soc_kwh"]), len(series["rate"])]
+                    + ([len(series["battery_power"])] if series["battery_power"] is not None else [])
+                )
+                for series in per_inverter
+            ]
+        )
         fleet_max_power = int(sum(series["max_power"] for series in per_inverter))
         if len(per_inverter) == 1:
             series = per_inverter[0]
@@ -194,7 +219,7 @@ class BatteryCurve:
             for minute in range(0, min_len):
                 if all(minute in series["soc_kwh"] for series in per_inverter):
                     soc_kwh[minute] = dp4(sum(series["soc_kwh"][minute] for series in per_inverter))
-                battery_power[minute] = sum(series["battery_power"].get(minute, 0) for series in per_inverter)
+                battery_power[minute] = sum(series["battery_power"].get(minute, 0) for series in per_inverter if series["battery_power"] is not None)
                 rate[minute] = fleet_max_power if all(series["rate"].get(minute, 0) >= series["max_power"] * 0.95 for series in per_inverter) else 0
         export_limits = [inverter.export_limit * MINUTE_WATT for inverter in fleet]
         export_limit_w = EXPORT_LIMIT_DEFAULT_W if any(limit >= EXPORT_LIMIT_DEFAULT_W for limit in export_limits) else sum(export_limits)
