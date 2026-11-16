@@ -23,9 +23,10 @@ in-day load adjustment, the load divergence, the cost so far today and the inver
 the one in the yaml - the log records only its total.
 
 Newer Predbat versions also write "Replay input:" lines carrying what the human-readable lines round or leave out:
-the load and PV forecasts, the plan's starting state at full precision, and the rates and car state whenever
-they change. Where a
-run has them they take precedence.
+the load and PV forecasts, the plan's starting state at full precision, and the rates, car state, learned battery
+rate grids and battery temperature forecast whenever they change. Where a run has them they take precedence. The
+temperature forecast is held in minutes from now, so between lines (and from the yaml's own until the first) it
+is moved on with the clock exactly as the live log assumes (shift_grid_temperatures).
 
 The replay carries on across midnight (roll_over_midnight), so a late-evening yaml replays the whole next day.
 """
@@ -39,6 +40,7 @@ from datetime import date, datetime, timedelta
 
 from const import PREDICT_STEP, EXPORT_MODE_TARGET
 from utils import MinuteArray, pack_export_limit, calc_percent_limit
+from battery_rate_grid import expand_runs, forecast_grid_temperatures, learned_grid_from_log, shift_grid_temperatures
 from prediction import Prediction
 from tests.test_single_debug import load_debug_dump, rebuild_load_pv_models, rescan_rate_windows, apply_overrides, rebuild_battery_value_rates
 
@@ -83,6 +85,10 @@ PV_EXACT_RE = re.compile(r"Replay input: PV forecast changed, per-minute kWh run
 INVERTER_INPUT_RE = re.compile(r"Replay input: inverter changed (\{.*\})$")
 # The car state the plan reads, logged only when it changes, as a dict that reads back with ast.literal_eval
 CARS_INPUT_RE = re.compile(r"Replay input: cars changed (\{.*\})$")
+# The battery temperature forecast as the rate grids read it (whole degrees per step), logged when the last line no longer gives it
+TEMPERATURE_INPUT_RE = re.compile(r"Replay input: battery temperature forecast changed, whole degrees every (\d+) minutes from (\d\d):(\d\d) (\[.*\])$")
+# The learned charge and discharge rate grids, logged only when they change, as a dict that reads back with ast.literal_eval
+RATE_GRIDS_INPUT_RE = re.compile(r"Replay input: rate grids learned changed (\{.*\})$")
 # Human-readable lines older logs carry instead (since v5.1 and v7.0): each car's planned slots, and the planned and
 # charging-now flags. Read only where a run has no exact cars line.
 CAR_PLAN_RE = re.compile(r"Car (\d+) charging plan is: (\[.*\])$")
@@ -181,6 +187,10 @@ def minute_label(minute):
     return "{:02d}:{:02d}{}".format(rest // 60, rest % 60, "+{}d".format(days) if days else "")
 
 
+# Inputs logged only when they change, which a run dropped for having no SoC line hands on to the next kept run
+CARRIED_STORES = ("rates", "sessions", "dispatch", "cars", "inverter", "octopus_slots", "temperature", "rate_grids")
+
+
 def parse_log(path):
     """Split a Predbat log into runs, one per "PredBat - update" line, keeping what the replay needs.
 
@@ -256,6 +266,8 @@ def parse_log(path):
                 (DISPATCH_INPUT_RE, "dispatch"),
                 (CARS_INPUT_RE, "cars"),
                 (INVERTER_INPUT_RE, "inverter"),
+                (TEMPERATURE_INPUT_RE, "temperature"),
+                (RATE_GRIDS_INPUT_RE, "rate_grids"),
                 (FILTERED_RE, "filtered"),
                 (FORCE_RE, "force"),
             ):
@@ -272,8 +284,10 @@ def parse_log(path):
                         run[store] = parse_sessions(found.groups())
                     elif store == "dispatch":
                         run[store] = (int(found.group(1)) * 60 + int(found.group(2)), ast.literal_eval(found.group(3)))
-                    elif store in ("cars", "inverter"):
+                    elif store in ("cars", "inverter", "rate_grids"):
                         run[store] = ast.literal_eval(found.group(1))
+                    elif store == "temperature":
+                        run[store] = (int(found.group(2)) * 60 + int(found.group(3)), int(found.group(1)), expand_runs(ast.literal_eval(found.group(4))))
                     else:
                         run[store] = found.groups() if store in ("soc", "today", "force", "next_limit", "load_input", "load_exact", "pv_input", "pv_exact") else found.group(1)
     kept = []
@@ -281,11 +295,11 @@ def parse_log(path):
     for run in runs:
         # Rates, cars and dispatches are logged only when they change, so a change logged by a dropped run still holds for the
         # runs after it. A logged empty value is a change too - "Octopus slots changed ... to []" is the dispatches withdrawn
-        for store in ("rates", "sessions", "dispatch", "cars", "inverter", "octopus_slots"):
+        for store in CARRIED_STORES:
             if run.get(store) is not None:
                 pending[store] = run[store]
         if run.get("soc"):
-            for store in ("rates", "sessions", "dispatch", "cars", "inverter", "octopus_slots"):
+            for store in CARRIED_STORES:
                 if pending.get(store) is not None and run.get(store) is None:
                     run[store] = pending[store]
             pending = {}
@@ -294,7 +308,7 @@ def parse_log(path):
 
 
 # The parsed "Replay input:" lines; a log with none of them comes from Predbat before they were added
-REPLAY_INPUT_STORES = ("state", "rates", "sessions", "dispatch", "cars", "inverter", "load_exact", "load_input", "pv_exact", "pv_input", "divergence_exact")
+REPLAY_INPUT_STORES = ("state", "rates", "sessions", "dispatch", "cars", "inverter", "load_exact", "load_input", "pv_exact", "pv_input", "divergence_exact", "temperature", "rate_grids")
 
 
 def parse_human_car_lines(run, line):
@@ -565,6 +579,9 @@ def roll_over_midnight(my_predbat, days=1):
         values = getattr(my_predbat, name, None)
         if values:
             setattr(my_predbat, name, [value - minutes for value in values])
+    line = getattr(my_predbat, "replay_temperature_line", None)
+    if line:
+        my_predbat.replay_temperature_line = (line[0] - minutes, line[1], line[2])
     my_predbat.midnight_utc = my_predbat.midnight_utc + timedelta(days=days)
     my_predbat.minutes_now -= minutes
 
@@ -664,6 +681,15 @@ def apply_run(my_predbat, prev, run):
     elif run.get("divergence"):
         my_predbat.replay_load_divergence = round(float(run["divergence"]) / 100.0, 2)
     apply_logged_state(my_predbat, run.get("state"))
+    if run.get("rate_grids") is not None:
+        apply_logged_rate_grids(my_predbat, run["rate_grids"])
+    if run.get("temperature") is not None:
+        start, step, degrees = run["temperature"]
+        # A line carried over from a run before midnight is in that day's minutes, so moves back a day, as rates do
+        if start > my_predbat.minutes_now:
+            start -= 24 * 60
+        my_predbat.replay_temperature_line = (start, step, degrees)
+    apply_temperature_forecast(my_predbat)
     # The window the inverter is holding is the one the previous run programmed; a log that records the inverter's
     # state exactly supersedes this reconstruction from the previous run's lines
     if getattr(my_predbat, "replay_inverter_logged", False):
@@ -722,6 +748,9 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, si
     # The yaml's own day counters stand in for the run before the first one
     yaml_today = (my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now)
     install_logged_load_divergence(my_predbat)
+    # The yaml's battery temperature forecast is minutes from its own moment, so it moves with the clock until the log has a line
+    yaml_degrees = forecast_grid_temperatures(my_predbat.battery_temperature_prediction or {}, PREDICT_STEP)
+    my_predbat.replay_temperature_line = (my_predbat.minutes_now, PREDICT_STEP, yaml_degrees) if yaml_degrees else None
     if not runs:
         raise ValueError("No runs after the yaml's time in {} that this replay can read (a run needs a 'PredBat - update at' line and an inverter SoC line)".format(log_file))
     # A log that records the inverter's state replaces the reconstruction of it from other lines
@@ -736,6 +765,7 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, si
         remove_logged_load_divergence(my_predbat)
         my_predbat.__dict__.pop("replay_inverter_logged", None)
         my_predbat.__dict__.pop("replay_rates_logged", None)
+        my_predbat.__dict__.pop("replay_temperature_line", None)
     return rows
 
 
@@ -1024,6 +1054,30 @@ def apply_logged_pv_forecast(my_predbat, pv_input):
             for offset in range(30):
                 series[start + index * 30 + offset] = kwh / 30.0
         setattr(my_predbat, name, series)
+
+
+def apply_temperature_forecast(my_predbat):
+    """Set the battery temperature forecast for this run from the last logged line (or the yaml's own), moved to now.
+
+    Live rebuilds the forecast every cycle and logs it only when the last line, moved to now the same way
+    (shift_grid_temperatures), would not give it, so this is the forecast live planned with. Left alone with no line.
+    """
+    line = getattr(my_predbat, "replay_temperature_line", None)
+    if line is None:
+        return
+    start, step, degrees = line
+    my_predbat.battery_temperature_prediction = shift_grid_temperatures(degrees, my_predbat.minutes_now - start, my_predbat.forecast_minutes, step)
+
+
+def apply_logged_rate_grids(my_predbat, rate_grids):
+    """Set the learned charge and discharge rate grids from a run's "Replay input: rate grids learned changed" line.
+
+    New grid objects, so rate_grids() rebuilds the engine grids the plan reads from them.
+    """
+    learned = dict(my_predbat.battery_rate_grid_learned or {})
+    for kind, logged in rate_grids.items():
+        learned[kind] = learned_grid_from_log(logged)
+    my_predbat.battery_rate_grid_learned = learned
 
 
 def apply_logged_inverter(my_predbat, inverter):

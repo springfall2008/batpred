@@ -6,6 +6,8 @@ import ast
 import re
 from datetime import timedelta
 
+from battery_rate_grid import learned_grid_from_log
+
 SAVED = (
     "midnight_utc",
     "rate_import_saving_minutes",
@@ -60,6 +62,8 @@ SAVED = (
     "battery_rate_max_charge",
     "battery_rate_max_discharge",
     "battery_temperature",
+    "battery_temperature_prediction",
+    "battery_rate_grid_learned",
 )
 
 
@@ -546,10 +550,94 @@ def test_comparison_runs_not_logged(my_predbat):
     return 0
 
 
+def test_battery_temperature_logged_on_change(my_predbat):
+    """The battery temperature forecast is logged as the whole degrees the rate grids read, only when the last line no longer gives it."""
+    my_predbat.minutes_now = 10 * 60
+    my_predbat.forecast_minutes = 30
+    my_predbat.midnight_utc = my_predbat.midnight_utc or my_predbat.now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    my_predbat.replay_temperature_logged = None
+    failed = 0
+    # No forecast and nothing logged yet: nothing to say
+    my_predbat.battery_temperature_prediction = {}
+    if capture(my_predbat, my_predbat.log_replay_battery_temperature):
+        print("ERROR: no forecast should log nothing until one has been logged")
+        failed += 1
+    # 0.4 degrees is a real reading near freezing (degree 1); an exact 0 is a missing one and stays 0
+    my_predbat.battery_temperature_prediction = {0: 12.7, 5: 12.2, 10: 13.01, 15: 0.4, 20: 0, 25: -3.5}
+    lines = capture(my_predbat, my_predbat.log_replay_battery_temperature)
+    expected = "Replay input: battery temperature forecast changed, whole degrees every 5 minutes from 10:00 [[12, 2], [13, 1], [1, 1], [0, 1], [-3, 1]]"
+    if lines != [expected]:
+        print("ERROR: temperature line wrong:\n  got      {}\n  expected {}".format(lines, expected))
+        failed += 1
+    # Five minutes on, a forecast that is the same moments moved on (the last degree held) is not logged again
+    my_predbat.minutes_now += 5
+    my_predbat.battery_temperature_prediction = {0: 12.9, 5: 13.5, 10: 0.2, 15: 0, 20: -3.9, 25: -3.1}
+    if capture(my_predbat, my_predbat.log_replay_battery_temperature):
+        print("ERROR: a forecast the last line still gives should not be logged")
+        failed += 1
+    # A step whose degree changes is
+    my_predbat.battery_temperature_prediction[25] = -4.2
+    if len(capture(my_predbat, my_predbat.log_replay_battery_temperature)) != 1:
+        print("ERROR: a forecast whose degrees change should be logged")
+        failed += 1
+    # A forecast that goes away is logged once as empty, so the replay drops it too
+    my_predbat.battery_temperature_prediction = {}
+    first = capture(my_predbat, my_predbat.log_replay_battery_temperature)
+    second = capture(my_predbat, my_predbat.log_replay_battery_temperature)
+    if first != ["Replay input: battery temperature forecast changed, whole degrees every 5 minutes from 10:05 []"] or second:
+        print("ERROR: a forecast that empties should be logged once, got {} then {}".format(first, second))
+        failed += 1
+    # A new day logs it again, as the other lines do
+    my_predbat.battery_temperature_prediction = {0: 20.0, 5: 20.0}
+    capture(my_predbat, my_predbat.log_replay_battery_temperature)
+    my_predbat.midnight_utc += timedelta(days=1)
+    if len(capture(my_predbat, my_predbat.log_replay_battery_temperature)) != 1:
+        print("ERROR: an unchanged forecast should be logged again on a new day")
+        failed += 1
+    my_predbat.midnight_utc -= timedelta(days=1)
+    my_predbat.battery_temperature_prediction = {0: "bad"}
+    lines = capture(my_predbat, my_predbat.log_replay_battery_temperature)
+    if len(lines) != 1 or not lines[0].startswith("Warn:"):
+        print("ERROR: a malformed forecast should warn, not raise: {}".format(lines))
+        failed += 1
+    return failed
+
+
+def test_rate_grids_logged_on_change(my_predbat):
+    """The learned rate grids are logged as a dict that reads back to the same grids, and only when they change."""
+    my_predbat.replay_rate_grids_text = None
+    charge = {"temp_low": 10, "rows": [[1.0] * 90 + [0.5] * 11, [1.0] * 95 + [0.6] * 6], "cells": 40, "days": 5, "segments": 300, "temp_range": [10, 11]}
+    charge["zero_row"] = charge["rows"][-1]
+    my_predbat.battery_rate_grid_learned = {"charge": charge, "discharge": None}
+    lines = capture(my_predbat, my_predbat.log_replay_rate_grids)
+    failed = 0
+    if len(lines) != 1 or not lines[0].startswith("Replay input: rate grids learned changed {"):
+        print("ERROR: expected one rate grid line, got {}".format(lines))
+        return 1
+    logged = ast.literal_eval(lines[0].split("learned changed ", 1)[1])
+    if logged["charge"]["rows"][0] != [[1.0, 90], [0.5, 11]] or logged["discharge"] is not None:
+        print("ERROR: rows should be logged as runs: {}".format(logged["charge"]["rows"]))
+        failed += 1
+    if learned_grid_from_log(logged["charge"]) != charge:
+        print("ERROR: the logged grid should read back to the learned one")
+        failed += 1
+    # A refit to the same rows is a new object but not a change
+    my_predbat.battery_rate_grid_learned = {"charge": dict(charge), "discharge": None}
+    if capture(my_predbat, my_predbat.log_replay_rate_grids):
+        print("ERROR: unchanged grids should not be logged again")
+        failed += 1
+    changed = dict(charge, rows=[charge["rows"][0], [1.0] * 101])
+    my_predbat.battery_rate_grid_learned = {"charge": changed, "discharge": None}
+    if len(capture(my_predbat, my_predbat.log_replay_rate_grids)) != 1:
+        print("ERROR: a changed grid should be logged")
+        failed += 1
+    return failed
+
+
 def run_log_replay_inputs_tests(my_predbat):
     """Run the replay-input logging tests, restoring the shared fixture afterwards."""
     missing = object()
-    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature", "replay_rates_signature", "replay_rate_sessions_signature", "replay_dispatch_signature", "replay_cars_text", "replay_inverter_text", "replay_load_empty", "replay_baseline_text")}
+    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature", "replay_rates_signature", "replay_rate_sessions_signature", "replay_dispatch_signature", "replay_cars_text", "replay_inverter_text", "replay_load_empty", "replay_baseline_text", "replay_temperature_logged", "replay_rate_grids_text")}
     failed = 0
     try:
         failed += test_pv_forecast_logged_on_change(my_predbat)
@@ -570,6 +658,8 @@ def run_log_replay_inputs_tests(my_predbat):
         failed += test_empty_load_forecast_logged_on_change(my_predbat)
         failed += test_baseline_logged_on_change(my_predbat)
         failed += test_comparison_runs_not_logged(my_predbat)
+        failed += test_battery_temperature_logged_on_change(my_predbat)
+        failed += test_rate_grids_logged_on_change(my_predbat)
     finally:
         for key, value in saved.items():
             if value is missing:

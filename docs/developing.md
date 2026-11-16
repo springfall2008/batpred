@@ -821,7 +821,7 @@ cd coverage
 
 For each Predbat run in the log it sets the clock, SoC, the load/PV/import/export history and the inverter's programmed export window from the log, then re-plans on the runs where the log shows a re-plan. It prints the first export window the log recorded next to the one it computed, and a summary of how many re-plans matched. The PV forecast is the one in the yaml, because the log records only its total.
 
-Newer Predbat versions also log `Replay input:` lines, and the replay uses them wherever a run has them. They carry the load and PV forecasts, the values each plan starts from (SoC, in-day adjustment, cost so far, the day counters, the charge and discharge rates in force and the battery temperature) at full precision, the exact load divergence, and, whenever they change, the rates, the car state and the inverter's programmed state. Without them, the replay drifts from the live plans as the day goes on.
+Newer Predbat versions also log `Replay input:` lines, and the replay uses them wherever a run has them. They carry the load and PV forecasts, the values each plan starts from (SoC, in-day adjustment, cost so far, the day counters, the charge and discharge rates in force and the battery temperature) at full precision, the exact load divergence, and, whenever they change, the rates, the car state, the inverter's programmed state, the learned battery rate grids and the battery temperature forecast. The temperature forecast is logged as the whole degree the rate grids read at each step, and only when moving the last line on to now would not give the live forecast. Without them, the replay drifts from the live plans as the day goes on.
 
 There are two modes:
 
