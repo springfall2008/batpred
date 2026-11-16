@@ -1070,6 +1070,7 @@ e.g. you are using Intelligent Octopus or you use the car slots in Predbat to co
 
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.
+Like the battery and inverter losses it is limited to between 0 and 0.99, and Predbat logs a warning if it is set above 0.5, as that is usually an efficiency (0.92) entered where the loss (0.08) was meant.
 
 - **switch.predbat_octopus_intelligent_dynamic** (default `true`) - cancels an Octopus Intelligent car's slots, and the dispatch's cheap rate, while the car is inside a dispatch but not actually charging, which releases the battery hold set by **switch.predbat_car_charging_from_battery** - see [Checking Intelligent dispatches against the car](#checking-intelligent-dispatches-against-the-car) above.
 **switch.predbat_metric_dynamic_load_adjust** only adjusts the near-term load prediction from your current load; it does not affect car slots.

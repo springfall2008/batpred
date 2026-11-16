@@ -606,6 +606,7 @@ def test_loss_settings_clamped(my_predbat):
         result, warnings = efficiencies(4, 0.03, 0.04)
         assert round(result[0], 6) == 0.01, "battery_loss 4 should be clamped to efficiency 0.01, got {}".format(result[0])
         assert len(warnings) == 1 and "battery_loss is set to 4" in warnings[0], "battery_loss 4 should warn, got {}".format(warnings)
+        assert "99% loss, 1% efficient" in warnings[0] and "-300%" not in warnings[0], "the clamp warning should quote the clamped efficiency, got {}".format(warnings)
 
         # A negative loss would be an efficiency above 1 (energy from nowhere) - clamped to 0 loss and warned about
         result, warnings = efficiencies(0.03, 0.03, -0.1)
@@ -616,10 +617,22 @@ def test_loss_settings_clamped(my_predbat):
         efficiencies(0.03, 0.03, 0.04)
         result, warnings = efficiencies(0.03, 0.97, 0.04)
         assert len(warnings) == 1 and "battery_loss_discharge" in warnings[0], "0.97 after a sensible value should warn again, got {}".format(warnings)
+
+        # car_charging_loss (read by fetch_sensor_data_cars()) goes through the same helper: 1.0 would divide by zero in the prediction
+        losses["car_charging_loss"] = 1.0
+        logged.clear()
+        efficiency = my_predbat.loss_setting_efficiency("car_charging_loss")
+        assert round(efficiency, 6) == 0.01, "car_charging_loss 1.0 should be clamped to efficiency 0.01, got {}".format(efficiency)
+        assert len(logged) == 1 and "car_charging_loss is set to 1.0, outside 0-0.99 so using 0.99" in logged[0], "car_charging_loss 1.0 should warn with the clamp, got {}".format(logged)
+        losses["car_charging_loss"] = 0.08
+        logged.clear()
+        efficiency = my_predbat.loss_setting_efficiency("car_charging_loss")
+        assert round(efficiency, 6) == 0.92 and logged == [], "car_charging_loss 0.08 should give 0.92 without a warning, got {} {}".format(efficiency, logged)
     finally:
         my_predbat.get_arg = original_get_arg
         my_predbat.log = original_log
         my_predbat.fetch_config_options()
+        my_predbat.loss_setting_warned = {}
 
     print("OK: test_loss_settings_clamped")
     return False

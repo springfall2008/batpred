@@ -138,7 +138,7 @@ BATTERY_SIZE_RETRY_MINUTES = 60  # Gap between retries of a battery size estimat
 BATTERY_TEMPERATURE_CURVE_TEMP_MAX = 30  # Warmest degree battery_temperature_*_curve is looked up (and learned) at; a warmer reading uses this degree. Fox fleet BMS limits still rise up to ~25-30 degrees
 BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK = 20  # A positive degree the curve does not set falls back to this entry (then to uncapped), as it did when 20 was the warmest degree looked up
 BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN = 0.95  # A discharge minute whose grid export is at or above this fraction of export_limit was held back by the export limit, not the battery
-# battery_loss / battery_loss_discharge / inverter_loss are losses, Predbat works with 1 - loss as the efficiency and divides by it
+# battery_loss / battery_loss_discharge / inverter_loss / car_charging_loss are losses, Predbat works with 1 - loss as the efficiency and divides by it
 LOSS_SETTING_MAX = 0.99  # A loss is clamped to 0..this, so the efficiency is never 0 (divide by zero) or above 1 (energy from nowhere)
 LOSS_SETTING_WARN = 0.5  # A loss above this (under 50% efficient) is almost certainly an efficiency typed into a loss setting, so it is warned about (#6235)
 # Battery rate grids (battery_rate_grid.py): achievable charge/discharge rate as a fraction of the rated rate, by SoC % and battery temperature

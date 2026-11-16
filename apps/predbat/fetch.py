@@ -2487,7 +2487,7 @@ class Fetch:
         """
 
         # Work out current car SoC and limit
-        self.car_charging_loss = 1 - float(self.get_arg("car_charging_loss"))
+        self.car_charging_loss = self.loss_setting_efficiency("car_charging_loss")
 
         # Move the manual car SoC on for what happened since the last cycle. Live plan only: it keeps
         # readings across cycles, which compare.py's re-runs would otherwise count a second time
@@ -4935,21 +4935,22 @@ class Fetch:
 
     def loss_setting_efficiency(self, name):
         """
-        Return the efficiency (1 - loss) for the loss setting name (battery_loss, battery_loss_discharge or inverter_loss).
+        Return the efficiency (1 - loss) for the loss setting name (battery_loss, battery_loss_discharge, inverter_loss or car_charging_loss).
 
         The loss is clamped to 0..LOSS_SETTING_MAX so the efficiency the prediction divides by is never 0 and never above 1.
         A loss above LOSS_SETTING_WARN, or one that had to be clamped, is logged once per setting and value, as it is
         almost always an efficiency (0.97) typed into a loss setting (#6235); a sensible value re-arms the warning.
         """
-        loss = self.get_arg(name)
+        loss = float(self.get_arg(name))
         clamped = min(max(loss, 0.0), LOSS_SETTING_MAX)
         if clamped != loss or loss > LOSS_SETTING_WARN:
             if self.loss_setting_warned.get(name) != loss:
                 self.loss_setting_warned[name] = loss
-                message = "Warn: {} is set to {}, which Predbat reads as a {:.0f}% loss ({:.0f}% efficient)".format(name, loss, loss * 100, (1.0 - loss) * 100)
                 if clamped != loss:
-                    message += ", outside 0-{} so using {}".format(LOSS_SETTING_MAX, clamped)
-                message += " - this setting is the loss not the efficiency, typical values are 0.03-0.05"
+                    message = "Warn: {} is set to {}, outside 0-{} so using {} (a {:.0f}% loss, {:.0f}% efficient)".format(name, loss, LOSS_SETTING_MAX, clamped, clamped * 100, (1.0 - clamped) * 100)
+                else:
+                    message = "Warn: {} is set to {}, which Predbat reads as a {:.0f}% loss ({:.0f}% efficient)".format(name, loss, loss * 100, (1.0 - loss) * 100)
+                message += " - this setting is the loss not the efficiency, typical values are below 0.1"
                 self.log(message)
         else:
             self.loss_setting_warned.pop(name, None)
