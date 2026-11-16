@@ -16,6 +16,7 @@ dictionaries, time string parsing, data filtering/pruning, rounding,
 and historical data extraction from incrementing energy counters.
 """
 
+import math
 import re
 import array
 import ctypes
@@ -25,6 +26,9 @@ from email.utils import parsedate_to_datetime
 from io import StringIO
 from functools import lru_cache
 from const import (
+    BALANCE_CEILING_EXPIRY_SECONDS,
+    BALANCE_CEILING_SHORTFALL_W,
+    TEMPERATURE_SCALES,
     MINUTE_WATT,
     PREDICT_STEP,
     TIME_FORMAT,
@@ -40,6 +44,8 @@ from const import (
     FULL_EXPORT_POWER,
     OCTOPUS_API_URL,
     OCTOPUS_LEGACY_API_HOST,
+    BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
+    BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
 )
 import copy
 import pytz
@@ -285,6 +291,8 @@ class MinuteArray:
 # log-repeat bookkeeping. Shared with is_debug_excluded_key(). io_slot_log_gate keys its history by
 # tuples, which a dump writes as YAML sequences that cannot be loaded back as dict keys, so a dump
 # carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
+# The rate grid evidence (a year of samples) and the grids derived from the learned ones are rebuilt on replay
+# (rate_grids()), so only battery_rate_grid_learned is dumped - every debug_history snapshot would otherwise carry them.
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -307,6 +315,11 @@ DEBUG_EXCLUDE_LIST = [
     "secrets",
     "status_lock",
     "io_slot_log_gate",
+    "battery_rate_grid_samples",
+    "battery_rate_grid_cache",
+    "battery_rate_grid_manual",
+    "battery_charge_rate_grid",
+    "battery_discharge_rate_grid",
 ]
 
 
@@ -499,6 +512,42 @@ def secret_yaml_loader(secrets, log):
 
     SecretYamlLoader.add_constructor("!secret", secret_constructor)
     return SecretYamlLoader
+
+
+def describe_apps_yaml_error(exc, apps_file=None, secret_names=()):
+    """
+    Turn an exception raised by load_apps_yaml() into a one-line, actionable log message
+
+    The common case is a mistyped secret reference - 'api_key: !openrouter_api_key' or
+    'api_key: !secrets openrouter_api_key' - which PyYAML reports as an unknown tag, because only
+    !secret has a constructor registered. Startup cannot continue without apps.yaml, so the best
+    Predbat can do is say where the problem is and what was probably meant (GH#5530).
+
+    The tag is only repeated when it names a key in secrets.yaml (secret_names): a raw credential
+    pasted after a '!' is an unknown tag too, and redaction cannot catch it in predbat.log because
+    it was never loaded as a secret.
+    """
+    apps_file = apps_file or os.getenv("PREDBAT_APPS_FILE", "apps.yaml")
+
+    if isinstance(exc, KeyError):
+        return "Error: Unable to load {} - it has no pred_bat section; Predbat's settings must be nested under a top-level 'pred_bat:' key".format(apps_file)
+    if isinstance(exc, OSError):
+        return "Error: Unable to load {} - {}".format(apps_file, exc)
+
+    match = re.match(r"could not determine a constructor for the tag '!([^']*)'", str(getattr(exc, "problem", "") or ""))
+    if match:
+        tag = match.group(1)
+        mark = getattr(exc, "problem_mark", None)
+        where = " at line {} column {}".format(mark.line + 1, mark.column + 1) if mark is not None else ""
+        if tag in secret_names:
+            return "Error: Unable to load {} - unknown tag '!{}'{}; only !secret is supported, did you mean '!secret {}'?".format(apps_file, tag, where, tag)
+        if tag.lower() in ("secret", "secrets"):
+            return "Error: Unable to load {} - unknown tag '!{}'{}; only !secret is supported, did you mean '!secret <name>'?".format(apps_file, tag, where)
+        return "Error: Unable to load {} - unknown tag{} (not shown in case it is a credential); only !secret is supported, did you mean '!secret <name>'?".format(apps_file, where)
+
+    # PyYAML's own text already names the file, line and column, just across several lines
+    detail = " ".join(str(exc).split())
+    return "Error: Unable to load {} - it is not valid YAML: {}".format(apps_file, detail)
 
 
 def mask_secret_args(args):
@@ -914,14 +963,6 @@ def parse_log_timestamp(line):
     return None
 
 
-# Helper to make dict hashable for caching
-def charge_curve_to_tuple(d):
-    """Convert dict to tuple for use as cache key"""
-    if not d:
-        return ()
-    return tuple(sorted(d.items()))
-
-
 def get_now_from_cumulative(data, minutes_now, backwards):
     """
     Get current value from cumulative data
@@ -1309,9 +1350,13 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     return override_time
 
 
-def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None):
+def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None, pad=True):
     """
     Get historical data for state (e.g. predbat status)
+
+    Every minute from the oldest record to now is filled with the state in force then. With pad (the default) the minutes
+    of the window older than the oldest record are filled too, with the newest state; pad=False leaves them out, so the
+    result only covers the history that exists.
     """
     mdata = {}
     last_state = "unknown"
@@ -1362,17 +1407,23 @@ def minute_data_state(history, days, now, state_key, last_updated_key, prev_last
             newest_state = state
 
     state = newest_state
-    for minute in range(0, 60 * 24 * days):
-        rindex = 60 * 24 * days - minute - 1
+    oldest = 60 * 24 * days - 1
+    if not pad:
+        oldest = min(max(mdata), oldest) if mdata else -1
+    for rindex in range(oldest, -1, -1):
         state = mdata.get(rindex, state)
         mdata[rindex] = state
 
     return mdata
 
 
-def history_attribute_to_minute_data(now_utc, data, backwards=True):
+def history_attribute_to_minute_data(now_utc, data, backwards=True, whole_span=False):
     """
     Get historical data for an attribute with history attribute filtering first
+
+    The minute data covers the whole days the history spans, rounded down, so a history 2 days 22 hours long gives 2 days.
+    whole_span=True covers all of it instead, back to the first record and no further (minute_data would otherwise copy the
+    first record back over the minutes before it).
     """
     history = []
     oldest_date = now_utc
@@ -1387,7 +1438,12 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
         history.append({"last_updated": key, "state": value})
     max_age = now_utc - oldest_date
     max_days = max(max_age.days, 1)
+    if whole_span:
+        max_days = max(math.ceil(max_age.total_seconds() / (24 * 60 * 60)), 1)
     mdata, _ = minute_data(history, max_days, now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
+    if whole_span:
+        first_minute = int(max_age.total_seconds() / 60)
+        mdata = {minute: value for minute, value in mdata.items() if minute <= first_minute}
     return [mdata, max_days]
 
 
@@ -1425,6 +1481,40 @@ def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
     return [rate for rate in rates if not isinstance(rate, dict) or rate.get("payment_method") in (preferred, None)]
 
 
+def temperature_scale(unit):
+    """
+    Return which temperature scale a unit names ("C", "F" or "K"), or None if it isn't a temperature unit.
+
+    Hand-written template sensors spell these many ways (c, °c, ºC, degC, Celsius), so marks and case are ignored.
+    """
+    if not unit:
+        return None
+    name = str(unit).strip().lower().replace("℃", "c").replace("℉", "f")
+    for mark in ("degrees", "degree", "deg", "°", "º", "˚", " "):
+        name = name.replace(mark, "")
+    return TEMPERATURE_SCALES.get(name)
+
+
+def convert_temperature(value, unit, required_unit):
+    """Return a temperature converted between °C, °F and K, or None when either unit isn't a temperature unit."""
+    scale_from = temperature_scale(unit)
+    scale_to = temperature_scale(required_unit)
+    if not scale_from or not scale_to:
+        return None
+    if scale_from == scale_to:
+        return value
+    celsius = value
+    if scale_from == "F":
+        celsius = (value - 32) * 5 / 9
+    elif scale_from == "K":
+        celsius = value - 273.15
+    if scale_to == "F":
+        return celsius * 9 / 5 + 32
+    if scale_to == "K":
+        return celsius + 273.15
+    return celsius
+
+
 def minute_data(
     history,
     days,
@@ -1448,10 +1538,15 @@ def minute_data(
     interpolate=False,
     debug=False,
     can_modify_history=False,
+    pad=True,
 ):
     """
     Turns data from HA into a hash of data indexed by minute with the data being the value
     Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
+
+    Backwards history is filled minute by minute between records. With pad (the default) the minutes of the window older
+    than the oldest record are filled too, with that record's value; pad=False leaves them out, so the result only covers
+    the history that exists.
     """
     if accumulate is None:
         accumulate = []
@@ -1532,7 +1627,8 @@ def minute_data(
 
         # Get the numerical key and the timestamp and ignore if in error
         try:
-            state = float(state) * scale
+            raw_state = float(state)
+            state = raw_state * scale
             last_updated_time = str2time(item[last_updated_key])
             # Truncate sub-minute precision: a timestamp of 23:30:04 should land on the 23:30 minute boundary,
             # not be floored to 23:31 due to int() truncation of the elapsed seconds.
@@ -1560,8 +1656,12 @@ def minute_data(
                     elif required_unit in ["kW", "kWh"] and unit in ["MW", "MWh"]:
                         state = state * 1000.0
                     else:
-                        # Ignore data in wrong units if we can't converter
-                        continue
+                        converted = convert_temperature(raw_state, unit, required_unit)
+                        if converted is None:
+                            # Ignore data in wrong units if we can't converter
+                            continue
+                        # Scaled after converting: a temperature's unit has an offset, so the order matters
+                        state = converted * scale
 
         # Divide down the state if required
         if divide_by:
@@ -1739,6 +1839,7 @@ def minute_data(
 
         # Find the first value
         state = 0
+        first_index = None
         for minute in range(60 * 24 * days):
             if backwards:
                 rindex = 60 * 24 * days - minute - 1
@@ -1746,12 +1847,16 @@ def minute_data(
                 rindex = minute
             if rindex in mdata:
                 state = mdata[rindex]
+                first_index = rindex
                 break
 
         # Fill gaps in the middle
         for minute in range(60 * 24 * days):
             if backwards:
                 rindex = 60 * 24 * days - minute - 1
+                if not pad and (first_index is None or rindex > first_index):
+                    # Older than the oldest record: not padded, the history does not reach that far
+                    continue
             else:
                 rindex = minute
             state = mdata.get(rindex, state)
@@ -2565,54 +2670,77 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
     return new_limit_best, new_window_best
 
 
-@lru_cache(maxsize=8192)
-def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple):
+def rate_curve_ceiling(soc, soc_max, rate_max, rate_curve):
     """
-    Cached computation of true charging rate from SoC and charge rate setting
+    The highest rate at this SoC on a path whose own maximum is rate_max.
+
+    rate_curve is battery_rate_grid.rate_grid_curve(): the battery's ceiling by SoC percent in kW per minute (101
+    entries), then the rated rate it was scaled from, then the absolute temperature cap. On a path at or below the rated
+    rate (AC charge, export) the ceiling is absolute - a cold battery's limit is the same kW whichever path asks. History
+    only measures the battery up to its rated rate, so on a path above it (a hybrid's DC charge from PV) the curve scales
+    with the path instead, under the absolute temperature cap (a manual cold curve stays in kW).
     """
-    battery_charge_power_curve = dict(battery_charge_power_curve_tuple) if battery_charge_power_curve_tuple else {}
-    battery_temperature_curve = dict(battery_temperature_curve_tuple) if battery_temperature_curve_tuple else {}
-
-    soc_percent = calc_percent_limit(soc, soc_max)
-    max_charge_rate = battery_rate_max_charge * get_curve_value(battery_charge_power_curve, soc_percent, 1.0)
-
-    # Temperature cap
-    max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_charge)
-    max_charge_rate = min(max_charge_rate, max_rate_cap)
-
-    return max(min(charge_rate_setting, max_charge_rate), battery_rate_min)
+    if not rate_curve:
+        return rate_max
+    soc_percent = max(min(calc_percent_limit(soc, soc_max), 100), 0)
+    rated = rate_curve[101]
+    if rate_max <= rated or rated <= 0:
+        return min(rate_max, rate_curve[soc_percent])
+    return min(rate_curve[soc_percent] * (rate_max / rated), rate_curve[102])
 
 
-def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
+@lru_cache(maxsize=64)
+def rate_curve_function(rate_curve):
+    """
+    A cached rate lookup bound to one battery ceiling curve: lookup(soc, rate_setting, soc_max, rate_max, rate_min).
+
+    The plan's hot path makes millions of these lookups; keying one shared cache on the 101-entry curve would hash it on
+    every call, so each distinct curve gets its own small-keyed cache instead and is hashed once, here. Both caches are
+    bounded (64 curves of 2048 lookups): a new curve appears for each forecast degree each time a grid is refitted. Gives the same
+    answer as get_charge_rate_curve_cached() (charge) and get_discharge_rate_curve_cached() (discharge).
+    """
+
+    @lru_cache(maxsize=2048)
+    def lookup(soc, rate_setting, soc_max, rate_max, rate_min):
+        """The true rate for this SoC and setting under the bound curve."""
+        return max(min(rate_setting, rate_curve_ceiling(soc, soc_max, rate_max, rate_curve)), rate_min)
+
+    return lookup
+
+
+def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_rate_curve, battery_rate_min):
+    """
+    True charging rate from SoC and charge rate setting
+
+    No longer behind an lru_cache: the work is a percent and two comparisons, cheaper than hashing a 101-entry curve
+    for the cache key on every call (the name is kept for its many callers).
+
+    charge_rate_curve is the battery's charge ceiling by SoC percent in kW per minute for the current temperature
+    (battery_rate_grid.rate_grid_curve(grid, temperature, rated=...)), a tuple so it can key the cache; the path's own
+    maximum (battery_rate_max_charge) is a separate limit, and a setting below both is used as it is.
+    """
+    return max(min(charge_rate_setting, rate_curve_ceiling(soc, soc_max, battery_rate_max_charge, charge_rate_curve)), battery_rate_min)
+
+
+def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_rate_curve, battery_rate_min):
     """
     Compute true charging rate from SoC and charge rate setting
     """
-    return get_charge_rate_curve_cached(round(soc, 1), charge_rate_setting, soc_max, battery_rate_max_charge, charge_curve_to_tuple(battery_charge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+    return get_charge_rate_curve_cached(round(soc, 1), charge_rate_setting, soc_max, battery_rate_max_charge, tuple(charge_rate_curve) if charge_rate_curve else (), battery_rate_min)
 
 
-@lru_cache(maxsize=8192)
-def get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple):
+def get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, discharge_rate_curve, battery_rate_min):
     """
-    Cached computation of true discharging rate from SoC and charge rate setting
+    True discharging rate from SoC and discharge rate setting, as get_charge_rate_curve_cached()
     """
-    battery_discharge_power_curve = dict(battery_discharge_power_curve_tuple) if battery_discharge_power_curve_tuple else {}
-    battery_temperature_curve = dict(battery_temperature_curve_tuple) if battery_temperature_curve_tuple else {}
-
-    soc_percent = calc_percent_limit(soc, soc_max)
-    max_discharge_rate = battery_rate_max_discharge * get_curve_value(battery_discharge_power_curve, soc_percent, 1.0)
-    max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_discharge)
-    max_discharge_rate = min(max_discharge_rate, max_rate_cap)
-
-    return max(min(discharge_rate_setting, max_discharge_rate), battery_rate_min)
+    return max(min(discharge_rate_setting, rate_curve_ceiling(soc, soc_max, battery_rate_max_discharge, discharge_rate_curve)), battery_rate_min)
 
 
-def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
+def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, discharge_rate_curve, battery_rate_min):
     """
-    Compute true discharging rate from SoC and charge rate setting
+    Compute true discharging rate from SoC and discharge rate setting
     """
-    return get_discharge_rate_curve_cached(
-        round(soc, 1), discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve)
-    )
+    return get_discharge_rate_curve_cached(round(soc, 1), discharge_rate_setting, soc_max, battery_rate_max_discharge, tuple(discharge_rate_curve) if discharge_rate_curve else (), battery_rate_min)
 
 
 """
@@ -2624,21 +2752,89 @@ def get_curve_value(curve, index, default=1.0):
     return curve.get(index, default)
 
 
+def battery_temperature_entities(value):
+    """
+    The entity ids battery_temperature_history names: one sensor, or a list of them (one per inverter). Literals and
+    blanks are left out, as minute_data_import_export() leaves them out.
+    """
+    if not isinstance(value, list):
+        value = [value]
+    return [entity_id for entity_id in value if is_entity_id(entity_id)]
+
+
+def average_temperature_minutes(series_list):
+    """
+    The per-minute average of several battery temperature series, one per sensor, for the one combined battery the
+    plan models (summing them, as an energy total would be, reads two 15 degree batteries as 30 degrees).
+
+    A reading of exactly 0 is how several integrations report a missing one, so it is left out of a minute's average
+    when another sensor has a real reading there. A minute every sensor reads 0 stays 0, so the stuck-sensor check
+    still sees a dead sensor. A single series is returned as it is.
+
+    Args:
+        series_list: {minute: temperature} dicts
+
+    Returns:
+        {minute: average temperature} over every minute any series has
+    """
+    series_list = [series for series in series_list if series]
+    if len(series_list) <= 1:
+        return series_list[0] if series_list else {}
+    average = {}
+    for minute in sorted(set().union(*series_list)):
+        readings = [series[minute] for series in series_list if minute in series and series[minute] != 0]
+        average[minute] = sum(readings) / len(readings) if readings else 0
+    return average
+
+
+def battery_temperature_index(battery_temperature, temp_max=BATTERY_TEMPERATURE_CURVE_TEMP_MAX):
+    """
+    The whole degree a battery temperature reading is looked up (and learned) at.
+
+    The reading is clamped to -20..temp_max (BATTERY_TEMPERATURE_CURVE_TEMP_MAX unless given) and truncated, except that a
+    reading between -1 and 1 that is not exactly 0 goes to 1 (or -1): an exact 0 is how several integrations report a
+    missing reading, so only it keeps the 0 entry, and a real reading just either side of freezing is capped like its neighbours.
+    """
+    temperature = max(min(battery_temperature, temp_max), -20)
+    index = int(temperature)
+    if index == 0 and temperature != 0:
+        index = 1 if temperature > 0 else -1
+    return index
+
+
 def find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, max_rate):
     """
     Find the battery temperature cap
+
+    The reading is looked up by whole degree (battery_temperature_index()) between -20 and
+    BATTERY_TEMPERATURE_CURVE_TEMP_MAX (30); a warmer reading uses the warmest degree. A positive degree the curve does
+    not set falls back to the 20 entry (then to uncapped), as it did when 20 was the warmest degree looked up, so a curve
+    that sets 20 still caps every warmer reading it does not set and a curve without one leaves them uncapped.
+
+    A reading of exactly 0 (often a missing reading) uses the 0 entry, else is uncapped. Any other reading below 1 degree
+    whose degree the curve does not set uses the 0 entry, else the coldest degree the curve sets: a battery below
+    freezing is never expected to charge faster than the coldest rate given, and was planned uncapped when the curve had
+    no 0 entry.
     """
-    battery_temperature_idx = min(battery_temperature, 20)
-    battery_temperature_idx = max(battery_temperature_idx, -20)
-    battery_temperature_idx = int(battery_temperature_idx)  # Convert to int for proper key matching
-    # Try to get the temperature adjustment from the curve (handles both int and string keys)
+    battery_temperature_idx = battery_temperature_index(battery_temperature)
     battery_temperature_adjust = get_curve_value(battery_temperature_curve, battery_temperature_idx, None)
     if battery_temperature_adjust is None:
         # If not found, try fallback values
-        if battery_temperature_idx > 0:
-            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 20, 1.0)
-        else:
+        if battery_temperature_idx == 0:
             battery_temperature_adjust = get_curve_value(battery_temperature_curve, 0, 1.0)
+        elif battery_temperature >= 1:
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK, 1.0)
+        else:
+            battery_temperature_adjust = get_curve_value(battery_temperature_curve, 0, None)
+            if battery_temperature_adjust is None:
+                coldest = None
+                for key, value in (battery_temperature_curve or {}).items():
+                    try:
+                        if coldest is None or int(key) < coldest[0]:
+                            coldest = (int(key), value)
+                    except (TypeError, ValueError):
+                        continue
+                battery_temperature_adjust = coldest[1] if coldest else 1.0
     battery_temperature_rate_cap = soc_max * battery_temperature_adjust / 60.0
 
     return min(battery_temperature_rate_cap, max_rate)
@@ -2651,15 +2847,13 @@ def find_charge_rate(
     target_soc,
     max_rate,
     soc_max,
-    battery_charge_power_curve,
+    charge_rate_curve,
     set_charge_low_power,
     charge_low_power_margin,
     battery_rate_min,
     battery_rate_max_scaling,
     battery_loss,
     log_to,
-    battery_temperature=20,
-    battery_temperature_curve=None,
     current_charge_rate=None,
     pv_window_kwh=0.0,
     low_power_pv_threshold_w=0.0,
@@ -2681,9 +2875,11 @@ def find_charge_rate(
     forecast can answer - a user charging in a free or very cheap daytime window loses nothing by
     throttling, while on a normal tariff the exported surplus has to be bought back later. Defaults to
     True, the behaviour of #4373.
+
+    charge_rate_curve is the battery's charge ceiling by SoC percent for the window's temperature
+    (battery_rate_grid.rate_grid_curve), as get_charge_rate_curve_cached() takes it.
     """
-    if battery_temperature_curve is None:
-        battery_temperature_curve = {}
+    charge_rate_curve = tuple(charge_rate_curve) if charge_rate_curve else ()
     margin = charge_low_power_margin
     target_soc = round(target_soc, 2)
 
@@ -2691,11 +2887,8 @@ def find_charge_rate(
     if current_charge_rate is None:
         current_charge_rate = max_rate
 
-    battery_temperature_curve_tuple = charge_curve_to_tuple(battery_temperature_curve)
-    battery_charge_power_curve_tuple = charge_curve_to_tuple(battery_charge_power_curve)
-
     # Real achieved max rate
-    max_rate_real = get_charge_rate_curve_cached(round(soc, 1), max_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
+    max_rate_real = get_charge_rate_curve_cached(round(soc, 1), max_rate, soc_max, max_rate, charge_rate_curve, battery_rate_min) * battery_rate_max_scaling
 
     min_battery_rate = max(400, int(round(battery_rate_min * MINUTE_WATT)))
     if set_charge_low_power:
@@ -2762,7 +2955,7 @@ def find_charge_rate(
                 rate_scale_max = 0
                 # Compute over the time period, include the completion time
                 for _minute in range(0, minutes_left, PREDICT_STEP):
-                    rate_scale = get_charge_rate_curve_cached(round(charge_now, 1), rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple)
+                    rate_scale = get_charge_rate_curve_cached(round(charge_now, 1), rate, soc_max, max_rate, charge_rate_curve, battery_rate_min)
                     highest_achievable_rate = max(highest_achievable_rate, rate_scale)
                     rate_scale *= battery_rate_max_scaling
                     rate_scale_max = max(rate_scale_max, rate_scale)
@@ -2789,11 +2982,11 @@ def find_charge_rate(
                     )
                 )
 
-        best_rate_real = get_charge_rate_curve_cached(round(soc, 1), best_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
+        best_rate_real = get_charge_rate_curve_cached(round(soc, 1), best_rate, soc_max, max_rate, charge_rate_curve, battery_rate_min) * battery_rate_max_scaling
         if log_to:
             log_to(
-                "Low Power mode: minutes left: {}, absolute: {}, SoC: {}kW, Target SoC: {}kW, Charge left: {}kW, Max rate: {}W, Min rate: {}W, Best rate: {}W, Best rate real: {}W, Battery temp {}°C".format(
-                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, dp0(max_rate * MINUTE_WATT), dp0(min_rate * MINUTE_WATT), dp0(best_rate * MINUTE_WATT), dp0(best_rate_real * MINUTE_WATT), battery_temperature
+                "Low Power mode: minutes left: {}, absolute: {}, SoC: {}kW, Target SoC: {}kW, Charge left: {}kW, Max rate: {}W, Min rate: {}W, Best rate: {}W, Best rate real: {}W".format(
+                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, dp0(max_rate * MINUTE_WATT), dp0(min_rate * MINUTE_WATT), dp0(best_rate * MINUTE_WATT), dp0(best_rate_real * MINUTE_WATT)
                 )
             )
         return best_rate, best_rate_real
@@ -3068,6 +3261,12 @@ def limit_malloc_arenas(max_arenas=MALLOC_ARENA_LIMIT):
 # Matches the +-50W floor already used to decide whether an inverter is doing anything at all.
 PV_SURPLUS_THRESHOLD = 50.0
 
+# A discharge hold latched while the fleet soaks up PV surplus is kept only while that surplus is at least this
+# large (W). Under broken cloud a smaller surplus turns into a deficit long before the next pass, and a battery
+# still held from discharging then leaves it to the grid: in the CT simulator, latching on any surplus added
+# about 0.1 kWh/h of import with PV close to the house load, more than the cross-charging it saved.
+BALANCE_LATCH_SURPLUS_W = 1000.0
+
 
 def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balance_crosscharge, threshold_charge, threshold_discharge, log_to=None):
     """
@@ -3084,10 +3283,20 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     ANY other inverter qualifies, and the rate guards consult no partner at all - SoC is never used
     as a proxy for rate capability, because a fleet's fullest battery may be its weakest inverter.
 
-    A pass only ever holds in ONE direction. The inverters share an AC bus, so holding a charger
-    and a discharger together leaves the remaining units absorbing or supplying the difference,
-    against guards that were each evaluated as though its own hold were the only change. Holds
-    within the chosen direction are therefore applied cumulatively as well.
+    SoC holds are only ever taken in the fleet's own direction, and applied cumulatively: the inverters
+    share an AC bus, so each guard has to account for the holds already taken this pass. The one hold
+    taken against that direction is the cross-charge correction, which only ever stops an inverter
+    working AGAINST the fleet - removing draw while the fleet discharges, or supply while it charges -
+    so it can only make the SoC guards' job easier, and the two are applied together.
+
+    A cross-charge hold is latched: an inverter held from charging while the fleet should discharge
+    reads back a charge rate of 0, and keeps that hold for as long as the fleet is still visibly
+    discharging. Without the latch the hold went with the next pass - the held battery reads 0W, so it no
+    longer looks like a cross-charger - and inverters whose loops disagree about the shared CT wound
+    straight back into charging from their neighbours until caught again, a write every minute or two.
+    The mirror, a discharge hold while the fleet soaks up PV, is latched only while the surplus is at
+    least BALANCE_LATCH_SURPLUS_W, because a passing cloud turns a small surplus into a deficit that a
+    battery held from discharging cannot help cover until the next pass.
 
     Args:
         intent (dict): inverter id -> rate intent, mutated in place
@@ -3098,15 +3307,25 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
         threshold_charge (float): minimum SoC% divergence to act on during charge
         threshold_discharge (float): minimum SoC% divergence to act on during discharge
         log_to (callable): optional logger, called with a single string
+
+    Returns:
+    - dict: what this pass decided, for the balance sensor. "status" is "single" or "calibrating" when nothing was
+      considered, else "considered"; "direction" is "discharge" or "charge" (the way the fleet should be going);
+      "spare_pv_w" and "spread_percent" are what that was judged on; "holds" maps each inverter id to
+      {"charge": reason, "discharge": reason}, a reason being None (not held by balancing), "soc",
+      "cross_charge" (caught working against the fleet this pass) or "cross_charge_latched" (kept from before).
     """
     num_inverters = len(snapshot)
+    decisions = {"status": "considered", "direction": None, "spare_pv_w": None, "spread_percent": None, "holds": {id: {"charge": None, "discharge": None} for id in range(num_inverters)}}
     if num_inverters < 2:
-        return
+        decisions["status"] = "single"
+        return decisions
     for entry in snapshot:
         if entry["in_calibration"]:
             if log_to:
                 log_to("BALANCE: an inverter is in calibration, not balancing")
-            return
+            decisions["status"] = "calibrating"
+            return decisions
 
     socs = [entry["soc_percent"] for entry in snapshot]
     reserves = [entry["reserve_percent"] for entry in snapshot]
@@ -3125,8 +3344,12 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
         if id in intent:
             claimed_charge = intent[id].get("charge_rate", None)
             claimed_discharge = intent[id].get("discharge_rate", None)
-            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else claimed_charge)
-            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else claimed_discharge)
+            # A claimed rate is what will be written, but the inverter can still deliver no more than the
+            # snapshot's ceiling - which carries any rate learn_rate_ceilings() has seen it really manage. A charge
+            # or export window claims every inverter's rate, so without the min() a derated peer would be counted
+            # on for its claim and the guard would let a hold leave the house short.
+            effective_charge_rates.append(snapshot[id]["battery_rate_max_charge"] if claimed_charge is None else min(claimed_charge, snapshot[id]["battery_rate_max_charge"]))
+            effective_discharge_rates.append(snapshot[id]["battery_rate_max_discharge"] if claimed_discharge is None else min(claimed_discharge, snapshot[id]["battery_rate_max_discharge"]))
         else:
             # Not being written this pass (read-only, or skipped for calibration), so whatever it
             # reads now is what it will keep
@@ -3204,32 +3427,56 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
     else:
         fleet_should_discharge = during_discharge and spare_pv <= PV_SURPLUS_THRESHOLD
 
+    # Inverters already held against the fleet direction read that rate back as 0 (the snapshot keeps a
+    # true zero through the prediction rate floor). Such a hold is kept while the fleet's direction is
+    # unchanged - a held battery reads 0W, so on power alone it would be released every other pass and
+    # wind straight back into cross-charging. It ends when the direction flips, as the rate the latch
+    # reads is then the other one, or when the fleet stops visibly moving power that way. A latched
+    # discharge hold also needs a comfortable PV surplus - see BALANCE_LATCH_SURPLUS_W.
     if fleet_should_discharge:
-        against_fleet = [id for id in range(num_inverters) if power_enough_charge[id] and id in intent]
+        # The charge latch also needs the fleet to be visibly discharging. A fleet sitting idle - every battery
+        # at 0W, nothing on the meter because grid_power is not configured or the site curtails PV to zero export
+        # - would otherwise keep a charge rate of 0 (left by a freeze-export slot, say) all day and take no PV.
+        fleet_discharging = total_battery_power >= 50.0
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_charge[id] or (charge_rates[id] == 0 and fleet_discharging))]
     else:
-        against_fleet = [id for id in range(num_inverters) if power_enough_discharge[id] and id in intent]
+        against_fleet = [id for id in range(num_inverters) if id in intent and (power_enough_discharge[id] or (discharge_rates[id] == 0 and spare_pv >= BALANCE_LATCH_SURPLUS_W))]
 
-    if against_fleet and balance_crosscharge:
+    decisions["direction"] = "discharge" if fleet_should_discharge else "charge"
+    decisions["spare_pv_w"] = spare_pv
+    decisions["spread_percent"] = soc_max - soc_min
+
+    if balance_crosscharge:
         for id in against_fleet:
-            if log_to:
+            caught = power_enough_charge[id] if fleet_should_discharge else power_enough_discharge[id]
+            if log_to and caught:
                 log_to("BALANCE: Inverter {} is working against the fleet, holding it".format(id))
             if fleet_should_discharge:
                 intent[id]["charge_rate"] = 0
             else:
                 intent[id]["discharge_rate"] = 0
-        # This pass is done: SoC balancing on top would be the second direction of hold that the
-        # coupling between inverters rules out. When the correction is switched OFF we hold nothing
-        # here, so a same-direction SoC hold below is still a single-direction pass and is allowed.
-        return
+            decisions["holds"][id]["charge" if fleet_should_discharge else "discharge"] = "cross_charge" if caught else "cross_charge_latched"
+        # SoC balancing still runs. An inverter held here can no longer help in the direction it was held in,
+        # so the SoC guard below that needs that direction leaves it out of the capacity it counts on: one held
+        # from discharging into a surplus cannot take over the house, and one held from charging while the fleet
+        # discharges cannot soak up surplus.
+
+    cross_held_discharge = set(against_fleet) if (balance_crosscharge and not fleet_should_discharge) else set()
+    cross_held_charge = set(against_fleet) if (balance_crosscharge and fleet_should_discharge) else set()
 
     if not out_of_balance:
-        return
+        return decisions
 
     # SoC balancing, in the fleet's own direction only. Holds are applied cumulatively - the rate
     # guard asks "if I stop this one, can the rest cover?", so each hold has to account for the
     # ones already taken this pass or two holds each pass a check computed for one.
     if during_discharge and balance_discharge and total_discharge_rates > 0:
         held = set()
+        # Charging the cross-charge holds above have just stopped was being supplied by the rest of the
+        # fleet, so it no longer nets off against the house: the batteries left discharging must now cover
+        # the measured net power plus that charging. Counting only the net would let a hold pass a check
+        # that the very next second fails.
+        stopped_charging = sum(-battery_powers[other] for other in against_fleet if battery_powers[other] < 0) if (balance_crosscharge and fleet_should_discharge) else 0.0
         for id in sorted((id for id in range(num_inverters) if id in intent), key=lambda id: socs[id]):
             if not soc_low[id]:
                 continue
@@ -3242,12 +3489,13 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # headroom" separately lets two different inverters answer them - a peer with energy
             # but no rate, and a peer with rate but sitting on its reserve - and holding this one
             # then leaves only unusable capacity behind, with the shortfall coming off the grid.
-            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held)
-            if (usable - 200) < total_battery_power:
+            usable = sum(effective_discharge_rates[other] for other in range(num_inverters) if other != id and above_reserve[other] and other not in held and other not in cross_held_discharge)
+            if (usable - 200) < total_battery_power + stopped_charging:
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is low at {}% against {}%, holding its discharge".format(id, socs[id], soc_max))
             intent[id]["discharge_rate"] = 0
+            decisions["holds"][id]["discharge"] = "soc"
             held.add(id)
     elif during_charge and balance_charge and total_charge_rates > 0:
         held = set()
@@ -3263,13 +3511,66 @@ def balance_inverters(intent, snapshot, balance_charge, balance_discharge, balan
             # of the fleet it is implied, so it is not restated.
             # Same on the charge side: a battery already at 100% absorbs nothing, so its rate must
             # not be counted towards what is left to soak up the surplus.
-            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held)
+            usable = sum(effective_charge_rates[other] for other in range(num_inverters) if other != id and below_full[other] and other not in held and other not in cross_held_charge)
             if spare_pv > usable:
                 continue
             if log_to:
                 log_to("BALANCE: Inverter {} is high at {}% against {}%, holding its charge".format(id, socs[id], soc_min))
             intent[id]["charge_rate"] = 0
+            decisions["holds"][id]["charge"] = "soc"
             held.add(id)
+    return decisions
+
+
+def learn_rate_ceilings(snapshot, now):
+    """
+    Learn the rate each inverter can really deliver from the grid meter, and cap its rate in the snapshot at it.
+
+    balance_inverters() decides whether the rest of the fleet can carry a held inverter's share from the peers'
+    CONFIGURED rates. A peer that delivers less - a cold battery, a BMS derate, an AC limit lower than Predbat
+    was told, none of which Predbat necessarily knows about - passes that check, and the house sits on the grid
+    for as long as the hold lasts. With a badly derated peer that is until SoC converges, which can be hours.
+
+    The grid meter shows it. If the site is short in a direction - importing while the batteries discharge,
+    exporting surplus while they charge - by more than BALANCE_CEILING_SHORTFALL_W while an inverter reads a
+    rate of 0 that way, every peer still moving power that way is already giving all it can, or the shortfall
+    would not be there. Each such peer's measured power becomes its learned ceiling, recorded only where it is
+    clearly below the configured rate, and caps that rate in the snapshot. The capacity guard then sees the
+    shortfall itself and lets the hold go, and does not take it again while the peer cannot cover it.
+
+    A ceiling is forgotten as soon as the peer delivers more than it, or after BALANCE_CEILING_EXPIRY_SECONDS, so
+    a battery that has warmed up is trusted with its full rate again. Learning from a moment when a peer was
+    still ramping up only records a ceiling that is too low, which makes balancing hold less, never puts more
+    on the grid, and is corrected the next time that peer is seen delivering more.
+
+    Each snapshot entry carries learned_charge_ceiling and learned_discharge_ceiling, None or [watts, seen_at],
+    as stored after the previous pass. They are updated in place, along with battery_rate_max_charge and
+    battery_rate_max_discharge.
+
+    Args:
+        snapshot (list): per-inverter readings from Execute.build_inverter_snapshot()
+        now (float): the current time in seconds, on the same clock as the stored seen_at
+    """
+    total_grid = sum(entry.get("grid_power", 0.0) for entry in snapshot)
+    # Predbat's grid convention is +ve export and battery_power is +ve discharging, so the shortfall while
+    # discharging is import (-grid) and while charging it is export (+grid); sign turns battery power into
+    # power moved in that direction.
+    for kind, sign, shortfall in (("discharge", 1.0, -total_grid), ("charge", -1.0, total_grid)):
+        rate_key = kind + "_rate_now"
+        max_key = "battery_rate_max_" + kind
+        learned_key = "learned_" + kind + "_ceiling"
+        held = {index for index, entry in enumerate(snapshot) if entry[rate_key] == 0}
+        short = bool(held) and shortfall > BALANCE_CEILING_SHORTFALL_W
+        for index, entry in enumerate(snapshot):
+            power = sign * entry["battery_power"]
+            learned = entry.get(learned_key)
+            if learned is not None and (power > learned[0] + BALANCE_CEILING_SHORTFALL_W or now - learned[1] > BALANCE_CEILING_EXPIRY_SECONDS):
+                learned = None
+            if short and index not in held and 0.0 < power < entry[max_key] * 0.95:
+                learned = [power, now]
+            entry[learned_key] = learned
+            if learned is not None:
+                entry[max_key] = min(entry[max_key], learned[0])
 
 
 def allocate_export_rates(needs, max_rates, p_fleet):

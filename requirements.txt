@@ -7,6 +7,5 @@ numpy==2.3.5
 pre-commit
 prometheus-client
 protobuf
-pyjwt
 pytz
 ruamel.yaml

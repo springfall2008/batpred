@@ -226,11 +226,11 @@ This is used only for the plan; it is never added as a car charging slot, so it 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example, a value of 0.95 would be 95% and indicate charging at 5% slower than reported.
 For GivEnergy inverters the charge rate reports the max AC rate and thus needs to be reduced by inverter losses.
-You can try [computing your charge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
+The [charge rate grid](apps-yaml.md#battery-rate-grids) divides this scaling out of what it learns, so changing it does not invalidate the learned grid.
 The default is 1.0, i.e. no scaling.
 
 **input_number.predbat_battery_rate_max_scaling_discharge** is a percentage factor to adjust your maximum discharge rate from that reported by the inverter.
-You can try [computing your discharge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
+The [discharge rate grid](apps-yaml.md#battery-rate-grids) divides this scaling out of what it learns.
 The default is 1.05, i.e. battery discharges at 5% more power than the inverter reports.
 
 **input_number.predbat_charge_scaling10** (_expert mode_) is a percentage factor applied to the battery charge rate specifically for the pessimistic (PV10%) scenario.
@@ -313,9 +313,14 @@ If `pv_metric10_weight` and `pv_metric90_weight` together exceed 1.0 they are sc
 
 **switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
 This can be useful to adjust for your systems real performance.<BR>
+Predbat keeps up to 28 days of evidence - each half hour's forecast and actual generation - in its cache, adding the latest days once a day, and calibrates from it:
+a day factor (how much of the forecast your system really produces) and a half-hour shape (for example morning shading). Recent days count for more: a day's weight halves every 3.5 days.
+Each factor only moves as far as the evidence supports. When your actual generation scatters either side of the forecast with no consistent direction, as it does when your forecast provider already calibrates for your site,
+the factor stays close to 1 and the forecast is left almost alone. A consistent difference, such as shading, a misconfigured array or inverter losses, is corrected.
+A few dull days in a row therefore no longer pull down the forecast for the next sunny day. The settings are described under PV calibration in [apps.yaml](apps-yaml.md#pv-calibration), and the **PVCalibration** chart in the web interface shows the evidence against the calibration.<BR>
 The comparison is made against the forecast your solar provider gave, recorded in `sensor.predbat_pv_forecast_h0_uncalibrated`, rather than against Predbat's own calibrated figure,
-so the scaling factor settles on the full measured ratio of actual to forecast generation.<BR>
-Until that sensor has a week of history, for example just after upgrading, the older days are read from `sensor.predbat_pv_forecast_h0` instead.<BR>
+so the scaling factor settles on the measured ratio of actual to forecast generation.<BR>
+Where that sensor's history does not reach back far enough, for example just after upgrading, the older days are read from `sensor.predbat_pv_forecast_h0` instead.<BR>
 The history is scaled by `pv_scaling` before the comparison, so both sides are on the same basis - to sanity-check the calibration factor by hand, divide your actual generation by the raw provider forecast **multiplied by** `pv_scaling`
 (equivalently, divide your actual-over-raw ratio by `pv_scaling`); comparing against the raw figure on its own leaves your answer out by a factor of `pv_scaling`.<BR>
 When your forecast provider supplies its own 10% and 90% figures (Solcast, or Open-Meteo's ensemble), they are scaled by the same calibration as the central forecast, so they keep the provider's spread around it.<BR>
@@ -376,7 +381,7 @@ The default of 24 hours is the recommended value (to match energy rate cycles). 
 When turned Off, any forced export that occurs while solar power is being generated will be scored against `metric_keep` (as if that solar energy had to be re-imported), making those export slots far less attractive to the optimiser.
 This prevents Predbat from planning unnecessary forced exports during sunny periods, since the PV output would be exported anyway without requiring the battery to discharge.
 
-**switch.predbat_set_discharge_during_charge** - When turned On disables inverter discharge during charge slots, useful for multi-inverter setups to avoid cross-charging when batteries are out of balance. Default is On.
+**switch.predbat_set_discharge_during_charge** - When turned On the battery may discharge to cover the house during a charge slot while it is above the slot's target. When turned Off, discharge is disabled during charge slots, which is useful for multi-inverter setups to avoid cross-charging when batteries are out of balance. Default is On.
 
 **switch.predbat_inverter_set_charge_before** - (_expert_mode_) When turned On (the default), charge slots will be programmed before their start time, when Off they will only be configured when the charging time starts.
 
@@ -537,7 +542,7 @@ Set the list of [devices to notify](apps-yaml.md#notify_devices) in `apps.yaml`.
 
 **switch.predbat_set_charge_low_power** Enables low-power charging mode where the max charge rate will be automatically determined by Predbat to be the
 lowest possible rate to meet the charge target. This is only really effective for charge windows longer than a single slot.
-If this setting is turned on, it is strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#battery-chargedischarge-curves)
+If this setting is turned on, it is strongly recommended that you create a [charge rate grid](apps-yaml.md#battery-rate-grids) (learned automatically, or set a battery_charge_power_curve in apps.yaml)
 as otherwise the low power charge may not reach the charge target in time.
 The minimum requested charge rate used in this mode is 400 watts (subject to inverter/battery minimum rate limits).
 This setting is off by default.
@@ -633,6 +638,28 @@ Turn On **switch.predbat_balance_inverters_enable** to enable this feature. It i
 
 Equal SoC across the batteries is not in itself worth much, which is why the two SoC balancing switches are
 off by default. They remain fully functional if you want them.
+
+Once the cross-charge correction has stopped a battery charging from the others, it keeps that battery's charge
+held while the batteries are still discharging, so you may see its charge rate stay at 0 through the evening.
+Releasing it every minute would only let the battery's own control loop wind straight back into charging from
+its neighbours. The hold ends as soon as the batteries should be charging again (spare solar, or a charge slot) or
+stop discharging. The same applies the other way round, while the batteries soak up a solar surplus of at least
+1kW.
+
+If you turn on either SoC balancing switch, leave **switch.predbat_balance_inverters_crosscharge** on as well. SoC
+balancing holds one battery's charge (or discharge) back while the others carry on. Under broken cloud, when your
+solar is close to your house load, the site keeps tipping between surplus and deficit faster than Predbat's
+once-a-minute balancing pass. A battery held from charging then discharges into the others' charging whenever a
+cloud passes. The cross-charge correction is what stops that.
+
+Balancing only holds a battery back when the others can cover for it. It judges that from each inverter's
+charge and discharge rate, but a battery can deliver much less than its rate: when it is cold, when its BMS
+limits it, or when its inverter's AC limit is lower than Predbat was told. If a hold leaves the house importing
+(or leaves PV surplus going to the grid while charging), the batteries still running must already be giving all
+they can. Predbat records what each of them was delivering at that moment and uses it in place of its rate,
+so it releases the hold on the next pass and does not take it again while that battery cannot cover the house.
+A recorded limit is forgotten as soon as the battery delivers more, or after 30 minutes, so a battery that has
+warmed up gets its full rate back.
 
 ## Freeze Export during Demand
 

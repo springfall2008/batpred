@@ -115,6 +115,8 @@ SCENARIO_STATE_ATTRS = [
     "battery_temperature_prediction",
     "battery_temperature_charge_curve",
     "battery_temperature_discharge_curve",
+    "battery_charge_rate_grid",
+    "battery_discharge_rate_grid",
     "rate_max",
     "rate_import_tariff_max",
     "rate_import",
@@ -261,6 +263,7 @@ def apply_random_scenario(my_predbat, rng):
         my_predbat.battery_discharge_power_curve = {percent: round(rng.uniform(0.05, 1.0), 2) for percent in range(rng.randint(90, 100), 101)}
     else:
         my_predbat.battery_discharge_power_curve = {}
+    my_predbat.apply_rate_grids()  # the engine reads the curves through the rate grids
 
     # Battery temperature model
     my_predbat.battery_temperature = rng.choice([20, 15, 8, 3, 0, -5])
@@ -492,6 +495,18 @@ def run_marshalling_tests():
     return failed
 
 
+def crossing_rate_grid(discharge):
+    """A learned-style rate grid whose taper moves with temperature: 10..20 C, the taper starting 4% earlier per degree colder."""
+    rows = []
+    for degree in range(10, 21):
+        knee = 50 + 4 * (degree - 10)
+        if discharge:
+            rows.append([0.4 if percent < 100 - knee else 1.0 for percent in range(101)])
+        else:
+            rows.append([1.0 if percent < knee else 0.35 for percent in range(101)])
+    return {"temp_low": 10, "rows": rows, "zero_row": rows[-1]}
+
+
 def run_edge_case_tests(my_predbat):
     """Deterministic scenarios pinning each kernel branch, returns True on failure"""
     failed = False
@@ -507,8 +522,54 @@ def run_edge_case_tests(my_predbat):
         ("pv_only", {}, [], [], [], [], 2.0, 0, forecast_minutes),
         ("pv_load_battery", {"soc_kw": 50.0}, [], [], [], [], 2.0, 1.0, forecast_minutes),
         ("charge_full", {}, [100.0], full_window, [], [], 0, 0.5, forecast_minutes),
+        # Learned rate grids with a forecast that cools through their rows, so each step must pick its own curve row
+        (
+            "rate_grid_charge_cooling",
+            {
+                "battery_charge_rate_grid": crossing_rate_grid(False),
+                "battery_discharge_rate_grid": crossing_rate_grid(True),
+                "battery_temperature": 21,
+                "battery_temperature_prediction": {minute: 21 - minute / 180.0 for minute in range(0, forecast_minutes, 5)},
+            },
+            [100.0],
+            full_window,
+            [],
+            [],
+            0,
+            0.5,
+            forecast_minutes,
+        ),
+        (
+            "rate_grid_export_cooling",
+            {
+                "soc_kw": 100.0,
+                "battery_charge_rate_grid": crossing_rate_grid(False),
+                "battery_discharge_rate_grid": crossing_rate_grid(True),
+                "battery_temperature": 21,
+                "battery_temperature_prediction": {minute: 21 - minute / 180.0 for minute in range(0, forecast_minutes, 5)},
+            },
+            [],
+            [],
+            half_window,
+            [0.0],
+            0,
+            0.5,
+            forecast_minutes,
+        ),
         ("charge_freeze", {"soc_kw": 50.0, "reserve": 4.0, "set_charge_freeze": True}, [4.0], full_window, [], [], 1.0, 0.5, forecast_minutes),
         ("charge_hybrid_pv", {"inverter_hybrid": True, "battery_rate_max_charge_dc": 2 / 60.0}, [100.0], full_window, [], [], 3.0, 0.5, forecast_minutes),
+        # A manual cold cap stays absolute on a hybrid's DC path above the rated rate (entry 102 of the curve row)
+        (
+            "rate_grid_hybrid_dc_cold_cap",
+            {"inverter_hybrid": True, "battery_rate_max_charge_dc": 6 / 60.0, "battery_temperature_charge_curve": {5: 0.02, 20: 1.0}, "battery_temperature": 5, "battery_temperature_prediction": {}},
+            [100.0],
+            full_window,
+            [],
+            [],
+            5.0,
+            0.5,
+            forecast_minutes,
+        ),
         ("export_full", {"soc_kw": 100.0}, [], [], half_window, [0.0], 0, 0.5, forecast_minutes),
         ("export_freeze", {"soc_kw": 100.0, "set_export_freeze": True}, [], [], half_window, [99.0], 1.0, 0.5, forecast_minutes),
         ("export_low_power", {"soc_kw": 100.0, "set_export_low_power": True}, [], [], half_window, [49.5], 0, 0.5, forecast_minutes),

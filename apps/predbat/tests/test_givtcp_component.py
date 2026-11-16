@@ -3256,6 +3256,130 @@ def test_export_limit_mismatch_noted_in_a_mixed_fleet(my_predbat=None):
     return 0
 
 
+TEMPLATE_TEMPERATURE_HISTORY = "sensor.givtcp_battery_stack_1_bms_temperature"
+
+
+def _with_template_temperature_history(base):
+    """Give base the GivTCP template's battery_temperature_history, as apps.yaml would."""
+    base.args_from_apps_yaml = {"battery_temperature_history": TEMPLATE_TEMPERATURE_HISTORY}
+    base.apps_yaml_override_warned = set()
+    base.args["battery_temperature_history"] = TEMPLATE_TEMPERATURE_HISTORY
+
+
+def _with_temperature_capture(component, n):
+    """Load the real rest_v2.json capture, which reports a battery temperature, into endpoint n."""
+    with open("cases/rest_v2.json", "r") as handle:
+        component.rest[n].inverter.rest_data = json.load(handle)
+
+
+def test_battery_temperature_history_follows_battery_temperature(my_predbat=None):
+    """
+    battery_temperature_history is pointed at the sensor battery_temperature reads, over apps.yaml (#6193).
+
+    The template's battery stack BMS sensor read a flat 0 on a reporter's system while the live
+    battery_temperature, claimed here, read 17-24 C. The prediction is built from the history, so
+    every planned charge ran at the charge curve's 0 C rate. History is site-wide, so it is one entity.
+    """
+    base, component = _rest_from_fixture("cases/rest_v2.json")
+    _with_template_temperature_history(base)
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+
+    assert base.args["battery_temperature"] == ["sensor.predbat_givtcp_0_battery_temperature"], base.args.get("battery_temperature")
+    assert base.args["battery_temperature_history"] == "sensor.predbat_givtcp_0_battery_temperature", base.args.get("battery_temperature_history")
+    print("PASS: battery_temperature_history follows battery_temperature")
+    return 0
+
+
+def test_battery_temperature_history_left_alone_when_unreported(my_predbat=None):
+    """With no battery temperature published, battery_temperature is not claimed and neither is its history."""
+    base, component = _make_component()
+    _with_template_temperature_history(base)
+    _mark_discovered(component)
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    run_async(component.publish_data())
+    assert "sensor.predbat_givtcp_0_battery_temperature" not in base.entities, "fixture should publish no battery temperature"
+    run_async(component.automatic_config())
+
+    assert base.args["battery_temperature_history"] == TEMPLATE_TEMPERATURE_HISTORY, base.args.get("battery_temperature_history")
+    print("PASS: battery_temperature_history left to apps.yaml when no temperature is reported")
+    return 0
+
+
+def test_battery_temperature_history_from_the_first_answering_endpoint(my_predbat=None):
+    """
+    With endpoint 0 down, history comes from endpoint 1, the lowest that answered - not slot 0's unpublished sensor.
+
+    When endpoint 0 is then adopted without a temperature, battery_temperature loses its fleet-wide
+    claim and the history is handed back to apps.yaml with it.
+    """
+    base, component = _make_component(rest_urls=["http://givtcp0:6345", "http://givtcp1:6345"])
+    _with_template_temperature_history(base)
+    _with_temperature_capture(component, 1)
+    _mark_discovered(component, [1])
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+    assert base.args["battery_temperature_history"] == "sensor.predbat_givtcp_1_battery_temperature", base.args.get("battery_temperature_history")
+
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component, [0, 1])
+    run_async(component.publish_data())
+    run_async(component.automatic_config())
+    assert base.args["battery_temperature_history"] == TEMPLATE_TEMPERATURE_HISTORY, base.args.get("battery_temperature_history")
+    print("PASS: history from the first answering endpoint, handed back when the claim lapses")
+    return 0
+
+
+def test_build_discovery_temperature_history_on_the_first_record_only(my_predbat=None):
+    """Spec D15: the site-wide history is on the first device's record only, agreeing with automatic_config() both ways."""
+    base, component = _make_component(rest_urls=["http://a:6345", "http://b:6345"])
+    _with_temperature_capture(component, 0)
+    _with_temperature_capture(component, 1)
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    first, second = validated_inverters(component.build_discovery())
+    assert first["entities"]["battery_temperature_history"]["entity_id"] == "sensor.predbat_givtcp_0_battery_temperature", first["entities"].get("battery_temperature_history")
+    assert "battery_temperature_history" not in second["entities"], sorted(second["entities"])
+    captured = capture_automatic_config(component)
+    assert captured["battery_temperature_history"] == "sensor.predbat_givtcp_0_battery_temperature", captured.get("battery_temperature_history")
+    for index, record in enumerate((first, second)):
+        assert_record_agrees(record, captured, index=index)
+        assert_record_binds_nothing_extra(record, captured, index=index)
+    print("PASS: temperature history on the first record only")
+    return 0
+
+
+def test_build_discovery_temperature_history_mixed_fleet(my_predbat=None):
+    """
+    Spec D10: in a fleet where only endpoint 0 reports a temperature, record 0 still carries battery_temperature and its history.
+
+    automatic_config() claims battery_temperature only when every discovered inverter publishes it,
+    and the history only with it, so here it binds neither. The record describes the device alone and
+    the coordinator applies the fleet gate, so the history follows battery_temperature onto record 0
+    as an allowed extra - the same per-device rule test_build_discovery_mixed_fleet_is_described_per_device
+    pins for the v3-only controls.
+    """
+    temperature_keys = ("battery_temperature", "battery_temperature_history")
+    base, component = _make_component(rest_urls=["http://a:6345", "http://b:6345"])
+    component.rest[0].inverter.rest_data = _rest_data_blob()
+    component.rest[0].inverter.rest_data["Battery_Details"] = {"Battery_Stack_1": {"BMS_Temperature": 15.3}}
+    component.rest[1].inverter.rest_data = _rest_data_blob()
+    _mark_discovered(component)
+    run_async(component.publish_data())
+    with_temperature, without_temperature = validated_inverters(component.build_discovery())
+    captured = capture_automatic_config(component)
+    assert not any(name in captured for name in temperature_keys), sorted(captured)
+    assert with_temperature["entities"]["battery_temperature_history"]["entity_id"] == "sensor.predbat_givtcp_0_battery_temperature", with_temperature["entities"].get("battery_temperature_history")
+    assert not any(name in without_temperature["entities"] for name in temperature_keys), sorted(without_temperature["entities"])
+    assert_record_agrees(with_temperature, captured, index=0)
+    assert_record_agrees(without_temperature, captured, index=1)
+    assert_record_binds_nothing_extra(with_temperature, captured, index=0, allowed_extra=temperature_keys)
+    assert_record_binds_nothing_extra(without_temperature, captured, index=1)
+    print("PASS: temperature history follows battery_temperature per device in a mixed fleet")
+    return 0
+
+
 def test_givtcp_component(my_predbat=None):
     """
     ======================================================================
@@ -3393,6 +3517,11 @@ def test_givtcp_component(my_predbat=None):
         ("export_limit_user_wins", test_export_limit_apps_yaml_value_wins, "apps.yaml export_limit wins, mismatch noted"),
         ("export_limit_no_note", test_export_limit_no_mismatch_note_when_values_agree, "no mismatch note when values agree"),
         ("export_limit_mixed_fleet", test_export_limit_mismatch_noted_in_a_mixed_fleet, "stale export_limit noted in a mixed fleet, advice holds there"),
+        ("temperature_history_follows", test_battery_temperature_history_follows_battery_temperature, "battery_temperature_history follows battery_temperature (#6193)"),
+        ("temperature_history_unreported", test_battery_temperature_history_left_alone_when_unreported, "battery_temperature_history left to apps.yaml when unreported"),
+        ("temperature_history_first_endpoint", test_battery_temperature_history_from_the_first_answering_endpoint, "history from the first answering endpoint, handed back on lapse"),
+        ("discovery_temperature_history", test_build_discovery_temperature_history_on_the_first_record_only, "site-wide temperature history on the first record only"),
+        ("discovery_temperature_mixed_fleet", test_build_discovery_temperature_history_mixed_fleet, "temperature history follows battery_temperature per device in a mixed fleet"),
     ]
 
     sub_tests.append(("client_on_event_loop", test_client_calls_run_on_the_event_loop, "client calls awaited on the event loop, component sessions"))
