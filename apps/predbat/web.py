@@ -20,12 +20,16 @@ endpoints. Includes 50+ HTTP routes for monitoring and control.
 
 from aiohttp import web
 import asyncio
+import base64
 import os
 import os.path
+import secrets
 import sys
 import re
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
+import math
+from collections import Counter
 import shutil
 import html as html_module
 import urllib.parse
@@ -58,6 +62,7 @@ from web_helper import (
     get_component_edit_modal_css,
     get_entity_modal_js,
     get_component_edit_modal_js,
+    get_discovery_modal_js,
     get_logfile_js,
     get_entity_toggle_js,
     get_entity_control_css,
@@ -84,6 +89,8 @@ from utils import (
     format_time_ago,
     get_override_time_from_string,
     history_attribute,
+    is_entity_id,
+    minute_data,
     prune_today,
     mask_secret_args,
     mask_secret_yaml_text,
@@ -94,10 +101,35 @@ from utils import (
     is_secret_key,
 )
 from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
-from const import TIME_FORMAT, TIME_FORMAT_DAILY, TIME_FORMAT_HA, MANUAL_RATE_MAX_MINUTES, MANUAL_TIME_MAX_MINUTES
+from const import (
+    TIME_FORMAT,
+    TIME_FORMAT_DAILY,
+    TIME_FORMAT_HA,
+    MANUAL_RATE_MAX_MINUTES,
+    MANUAL_TIME_MAX_MINUTES,
+    BATTERY_RATE_GRID_HALF_LIFE_DAYS,
+    BATTERY_RATE_GRID_MAX,
+    PV_CALIBRATION_MIN_DAYS,
+    PV_CALIBRATION_HALF_LIFE_DAYS,
+    PV_CALIBRATION_HISTORY_DAYS,
+    PV_CALIBRATION_MIN_SLOT_POINTS,
+    BATTERY_RATE_GRID_MIN_CELLS,
+    BATTERY_RATE_GRID_MIN_DAYS,
+    BATTERY_RATE_GRID_RUN_MINUTES,
+    BATTERY_RATE_GRID_SEGMENT_MINUTES,
+    BATTERY_RATE_GRID_TEMP_MAX,
+    BATTERY_RATE_GRID_TEMP_MIN,
+    BATTERY_RATE_GRID_UNKNOWN_TEMP,
+)
+
+CURVE_EVIDENCE_DAYS = 90  # Curves page: evidence segments up to this old are drawn on the grids
+CURVE_TEMPERATURE_MARGIN = 5  # Curves page: the grids are drawn this many degrees either side of the evidence
+PLOTLY_GL3D_URL = "https://cdn.jsdelivr.net/npm/plotly.js-gl3d-dist-min@2.35.2/plotly-gl3d.min.js"  # loaded on the Curves page only
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
+from battery_curve import charge_day
+from battery_rate_grid import rate_grid_curve, rate_grid_table
 from compare import check_compare_list
 import debug_history
 from web_annual import AnnualPage
@@ -112,119 +144,231 @@ from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, 
 DEBUG_HISTORY_DOWNLOAD_MAX = 16
 
 
-def state_as_of_slots(records, slots):
+# The /entity history table has a row per half hour, each expanding to the 5-minute slots inside it
+HISTORY_TABLE_ROW_MINUTES = 30
+HISTORY_TABLE_SLOT_MINUTES = 5
+
+# Where the Components page's discovery pop-up shows each record container (coordinator.CONTAINER_SPEC)
+# and sub-record (SECTION_SPEC): in the at-a-glance summary, in this order, or only in the folded full
+# record. Fields inside a container need no entry here - the summary renders whatever a container holds.
+# A container this page has never been told about still reaches the summary (see
+# _discovery_glance_html), but test_component_discovery_places_every_container fails until it is placed.
+DISCOVERY_GLANCE_CONTAINERS = ("hardware_ids", "account_ids", "info", "ratings", "coverage", "tariff", "capabilities")
+DISCOVERY_FOLDED_CONTAINERS = ("entities",)
+
+# Status-map entries (Coordinator._component_status) for a component with nothing to show, in words:
+# the short form for a card's Discovery line, and a sentence for the pop-up. A load_error entry is filed
+# whether or not the component ever had a reporter - there is no instance left to ask - so its sentence
+# must not claim one was expected (storage, web and db can fail to load too).
+DISCOVERY_STATUS_TEXT = {"no_report": "has not reported yet", "not_started": "not started", "load_error": "failed to load"}
+DISCOVERY_STATUS_SENTENCE = {
+    "no_report": "This component has not reported yet.",
+    "not_started": "This component has not started, so it has not reported yet.",
+    "load_error": "This component failed to load.",
+}
+
+
+def history_value_at(records, stamps, when):
     """
-    Resolve each slot to the state in effect at it - the most recent record at or before the slot.
+    Return the value an entity held at an instant - its most recent record at or before it - or "-" before its first.
 
-    records must be a list of (timestamp, value) ordered oldest first. Returns
-    {slot: (value, changed, prev_value)} where value is "-" for slots preceding the first record and
-    changed marks a slot whose value differs from the one shown at the previous slot.
+    records is a list of (timestamp, value) ordered oldest first, stamps the same timestamps alone, for bisecting.
     """
-    filled = {}
-    last_value = None
-    previous = None
-    index = 0
-
-    for slot in sorted(slots):
-        while index < len(records) and records[index][0] <= slot:
-            last_value = records[index][1]
-            index += 1
-        value = last_value if last_value is not None else "-"
-        filled[slot] = (value, value != "-" and value != previous, previous)
-        previous = value
-
-    return filled
+    index = bisect.bisect_right(stamps, when)
+    return records[index - 1][1] if index else "-"
 
 
-def build_entity_history_table_data(entity_selections, entity_data_fetch):
+def history_period_kind(records, stamps, start, end):
     """
-    Resolve the /entity history table's 30-minute rows and their 5-minute detail slots.
+    Classify what an entity did over the period (start, end].
+
+    Returns "changed" when it left the period on a different value from the one it entered with, "reverted"
+    when it left on the same value but held another somewhere inside, and None when it held one value
+    throughout. An entity's first record is where its history starts, not a change.
+    """
+    first = bisect.bisect_right(stamps, start)
+    last = bisect.bisect_right(stamps, end)
+    if first == last:
+        return None
+    entered = records[first - 1][1] if first else records[first][1]
+    if records[last - 1][1] != entered:
+        return "changed"
+    if any(value != entered for _, value in records[first:last]):
+        return "reverted"
+    return None
+
+
+def floor_to_history_slot(when):
+    """Round a UTC instant down to its 5-minute slot. Every UTC offset is a multiple of 15 minutes, so this is a local 5-minute mark too."""
+    return when.replace(minute=when.minute - when.minute % HISTORY_TABLE_SLOT_MINUTES, second=0, microsecond=0)
+
+
+def floor_to_local_half_hour(when, local_tz):
+    """Round an instant down to the start of its half hour on the local clock, returned in UTC (so UTC+05:45 rows start on :00 and :30 too)."""
+    local = when.astimezone(local_tz)
+    return local.replace(minute=local.minute - local.minute % HISTORY_TABLE_ROW_MINUTES, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def build_entity_history_table_data(entity_selections, entity_data_fetch, local_tz=timezone.utc):
+    """
+    Build the /entity history table: 30-minute rows, newest first, each expanding to its 5-minute slots.
 
     entity_selections: list of {"entity_id": ..., "attribute": ...} (attribute may be None for state)
     entity_data_fetch: dict of entity_id -> history as returned by get_history_with_now(), i.e. [[record, ...]]
+    local_tz: the timezone rows are laid out on and labelled in - HA/DB history is UTC
 
-    Every slot reports the state as of its own timestamp. Summarising a window by the last sample
-    taken inside it instead let a momentary blip stand for the whole window - one stray "Lost"
-    record at 21:57 made the entire 21:30 row read "Lost" - and that value then carried forward
-    into every later slot that had no sample of its own, turning a blip into hours of downtime.
+    Every cell shows the value at the time on its left, never a sample taken inside its period: summarising
+    a window by its last sample let one stray "Lost" record at 21:57 make a whole row read "Lost", and that
+    carried forward into every later row. A cell's colour says what happened since the slot before it, so a
+    row covers its own line and the detail slots it expands to: "changed" (pink) when the value moved and
+    stayed moved, "reverted" (blue) when it moved and came back. A change therefore marks the row it
+    happened in, and expanding that row shows the 5-minute slot it happened at.
 
-    Returns (entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min):
-      entity_filled_30min / entity_filled_5min: one dict per selection, {slot: (value, changed, prev_value)}
-      sorted_timestamps_30min: the 30-min row timestamps, newest first
-      all_display_slots_5min: the 5-min slots covering each 30-min row's own window (offsets 0 to +25)
+    A row is headed by the newest slot of its half hour - the half-hour mark that ends it, or for the
+    newest row the newest record's own time - and expands to the slots before it within that half hour. Heading
+    rows by their oldest slot hid the latest value under the top row and made an expanded table read
+    17:30, 17:55, 17:50 ... rather than newest to oldest all the way down.
+
+    Rows run without gaps from the first record to the newest across all selections, and never past it -
+    the newest is normally the current state get_history_with_now() appends, so nothing in the future shows.
+
+    Returns a list of rows, newest first:
+      {"time": datetime, "cells": [(value, kind), ...], "details": [{"time": datetime, "cells": [...]}, ...]}
+    with a cell per selection, kind being "changed", "reverted" or None, and details newest first.
     """
+    slot = timedelta(minutes=HISTORY_TABLE_SLOT_MINUTES)
+    row_length = timedelta(minutes=HISTORY_TABLE_ROW_MINUTES)
     entity_records = []
-    all_timestamps_30min = set()
-    following_timestamps_30min = set()
+    all_stamps = []
 
     for selection in entity_selections:
-        entity_id = selection["entity_id"]
         attribute = selection["attribute"]
-        history = entity_data_fetch[entity_id]
+        history = entity_data_fetch.get(selection["entity_id"])
         records = []
+        for item in (history[0] if history else None) or []:
+            if "last_updated" not in item:
+                continue
+            try:
+                last_updated_stamp = str2time(item["last_updated"]).astimezone(timezone.utc)
+            except (ValueError, TypeError):
+                continue
+            all_stamps.append(last_updated_stamp)
 
-        if history and len(history) >= 1:
-            history = history[0]
-            if history:
-                for item in history:
-                    if "last_updated" not in item:
-                        continue
-                    try:
-                        last_updated_stamp = str2time(item["last_updated"])
-                    except (ValueError, TypeError):
-                        continue
+            if attribute:
+                attributes = item.get("attributes")
+                # A record with no attributes at all says nothing about this one, rather than that it became None
+                if not isinstance(attributes, dict):
+                    continue
+                state = attributes.get(attribute, None)
+            else:
+                state = item.get("state", None)
 
-                    # Get state or attribute value
-                    if attribute:
-                        state = item.get("attributes", {}).get(attribute, None)
-                    else:
-                        state = item.get("state", None)
+            if state is None:
+                state = "None"
+            records.append((last_updated_stamp, state))
 
-                    if state is None:
-                        state = "None"
-
-                    records.append((last_updated_stamp, state))
-
-                    # A record makes the window it landed in a row, so activity is always on screen
-                    minutes = last_updated_stamp.hour * 60 + last_updated_stamp.minute
-                    rounded_minutes_30 = (minutes // 30) * 30
-                    window_start = last_updated_stamp.replace(minute=rounded_minutes_30 % 60, hour=rounded_minutes_30 // 60, second=0, microsecond=0)
-                    all_timestamps_30min.add(window_start)
-
-                    # A row reports the state at its own start, so a change part way through a window
-                    # first shows in the NEXT row. An entity that only records on a change leaves that
-                    # window empty, and without a row there the change was hidden as "unchanged" until
-                    # the next record - which was then flagged as the change, hours late.
-                    following_timestamps_30min.add(window_start + timedelta(minutes=30))
-
-        # str2time is only reliable for ordering once parsed - the raw strings mix UTC history with
-        # the local-time "now" record get_history_with_now() appends
+        # The raw strings mix UTC history with the local-time "now" record get_history_with_now() appends
         records.sort(key=lambda record: record[0])
-        entity_records.append(records)
+        entity_records.append((records, [record[0] for record in records]))
 
-    # Never add a row beyond the newest record, that would be a row in the future
-    newest_record = max((records[-1][0] for records in entity_records if records), default=None)
-    for following in following_timestamps_30min:
-        if following <= newest_record:
-            all_timestamps_30min.add(following)
+    if not all_stamps:
+        return []
 
-    # Sort timestamps in reverse chronological order
-    sorted_timestamps_30min = sorted(all_timestamps_30min, reverse=True)
+    def cells_for(when, period_start, period_end):
+        """Each selection's value at when, and what it did over (period_start, period_end]."""
+        return [(history_value_at(records, stamps, when), history_period_kind(records, stamps, period_start, period_end)) for records, stamps in entity_records]
 
-    # Detail slots are the 5-min marks INSIDE each row's own half hour, so expanding a row explains
-    # that row rather than describing the preceding half hour
-    all_display_slots_5min = set()
-    for ts_30 in sorted_timestamps_30min:
-        for offset in range(0, 30, 5):
-            all_display_slots_5min.add(ts_30 + timedelta(minutes=offset))
+    # A record shows from the first slot at or after it. The table ends on the newest record's own time rather
+    # than the slot before it: that record is normally the current state, and waiting for the next 5-minute
+    # mark left it off the table for up to 5 minutes.
+    oldest = min(all_stamps)
+    newest = max(all_stamps)
+    first_slot = floor_to_history_slot(oldest)
+    if first_slot < oldest:
+        first_slot += slot
+    first_slot = min(first_slot, newest)
 
-    entity_filled_30min = []
-    entity_filled_5min = []
-    for records in entity_records:
-        entity_filled_30min.append(state_as_of_slots(records, sorted_timestamps_30min))
-        entity_filled_5min.append(state_as_of_slots(records, all_display_slots_5min))
+    # Each row covers the half hour (row_end - row_length, row_end], the first being the one holding first_slot
+    rows = []
+    row_end = floor_to_local_half_hour(first_slot, local_tz)
+    if row_end < first_slot:
+        row_end += row_length
+    while row_end - row_length < newest:
+        row_start = row_end - row_length
+        row_time = min(row_end, newest)
+        details = []
+        detail_time = floor_to_history_slot(row_time)
+        if detail_time == row_time:
+            detail_time -= slot
+        while detail_time > row_start and detail_time >= first_slot:
+            details.append({"time": detail_time.astimezone(local_tz), "cells": cells_for(detail_time, detail_time - slot, detail_time)})
+            detail_time -= slot
+        rows.append({"time": row_time.astimezone(local_tz), "cells": cells_for(row_time, row_start, row_time), "details": details})
+        row_end += row_length
 
-    return entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, all_display_slots_5min
+    rows.reverse()
+    return rows
+
+
+def history_row_shown(rows, index):
+    """
+    Decide whether a build_entity_history_table_data() row is shown in the /entity table and its CSV.
+
+    Only a pure duplicate is hidden: a row holding the same values as the row before it, with nothing
+    changing during it. The newest and oldest rows are always kept. A row that merely reads differently
+    from the one before it is kept even though nothing changed inside its own half hour - hiding it left
+    "N unchanged slots" holding a value the row beneath them never showed, and lost the value from the
+    CSV, which has no detail rows to find it in.
+    """
+    if index == 0 or index == len(rows) - 1:
+        return True
+    row = rows[index]
+    if any(kind for _, kind in row["cells"]):
+        return True
+    return [value for value, _ in row["cells"]] != [value for value, _ in rows[index + 1]["cells"]]
+
+
+def render_entity_history_rows(rows, num_cols):
+    """
+    Render the /entity history table body from build_entity_history_table_data() rows.
+
+    Each 30-minute row is clickable and followed by its hidden 5-minute detail rows. Pure duplicate rows
+    (see history_row_shown()) are folded into an "N unchanged slots hidden" separator, so the table
+    opens on its changes.
+    """
+    cell_classes = {"changed": ' class="changed-cell"', "reverted": ' class="reverted-cell"'}
+    text = ""
+    row_index = 0
+    skipped_count = 0
+
+    for i, row in enumerate(rows):
+        if not history_row_shown(rows, i):
+            skipped_count += 1
+            continue
+
+        if skipped_count > 0:
+            col_span = 1 + num_cols
+            text += f'<tr class="gap-row"><td colspan="{col_span}" style="text-align:center; font-style:italic; font-size:0.85em; color:var(--text-secondary,#888); border-top:2px dashed #aaa; border-bottom:2px dashed #aaa; padding:4px;">— {skipped_count} unchanged slot{"s" if skipped_count != 1 else ""} hidden —</td></tr>\n'
+            skipped_count = 0
+
+        # Main 30-minute row (clickable)
+        text += f'<tr class="history-row" onclick="toggleDetailRow({row_index})" id="row_{row_index}">'
+        text += f"<td>▶ {row['time'].strftime(TIME_FORMAT)}</td>"
+        for value, kind in row["cells"]:
+            text += f"<td{cell_classes.get(kind, '')}>{html_module.escape(str(value))}</td>"
+        text += "</tr>\n"
+
+        # Detail rows: the earlier 5-minute slots of the half hour leading up to this row, newest first
+        for detail in row["details"]:
+            text += f'<tr class="detail-row" id="detail_{row_index}">'
+            text += f"<td>  {detail['time'].strftime(TIME_FORMAT)}</td>"
+            for value, kind in detail["cells"]:
+                text += f"<td{cell_classes.get(kind, '')}>{html_module.escape(str(value))}</td>"
+            text += "</tr>\n"
+
+        row_index += 1
+
+    return text
 
 
 def split_entities_for_charting(entities, entity_data_fetch):
@@ -344,6 +488,27 @@ def subtract_series(base, subtract, max_gap_seconds=300):
     return result
 
 
+# Pages that can change settings or expose configuration, which ask for the web login when web_username and
+# web_password are set (GH#6103): the WhatIf, Chat, Settings and Advanced menus plus their data/download endpoints.
+# Every write (POST etc.) is protected as well, whatever its path, so the data-viewing pages stay open.
+WEB_AUTH_PROTECTED_PREFIXES = (
+    "/annual",
+    "/chat",
+    "/apps",
+    "/config",
+    "/component",
+    "/discovery",
+    "/browse",
+    "/internals",
+    "/api/internals",
+    "/kraken_key",
+    "/download",
+    "/debug_",
+)
+# POST /api/login only hands a token to a reverse proxy as a cookie and checks nothing, so it needs no login
+WEB_AUTH_EXEMPT_PATHS = ("/api/login",)
+
+
 class WebInterface(ComponentBase):
     """Built-in web dashboard server using aiohttp.
 
@@ -352,16 +517,58 @@ class WebInterface(ComponentBase):
     endpoints. Supports plugin endpoint registration.
     """
 
-    def initialize(self, web_port):
+    def initialize(self, web_port, web_username=None, web_password=None, web_enable=True):
         self.default_page = "./dash"
         self.web_port = web_port
         self.default_log = "warnings"
+
+        # Optional HTTP Basic login for the pages that change settings (GH#6103). YAML can hand us an int
+        # for an all-digit password, so both are stringified; an empty value counts as not set.
+        self.web_username = str(web_username) if web_username not in (None, "") else ""
+        self.web_password = str(web_password) if web_password not in (None, "") else ""
 
         # Plugin registration system
         self.registered_endpoints = []
 
         self.annual_page = AnnualPage(self)
         self.chat_page = WebChat(self)
+
+    def web_auth_enabled(self):
+        """Return True when a web username or password is configured, so the login gate is active."""
+        return bool(self.web_username or self.web_password)
+
+    def web_auth_required(self, request):
+        """Return True if this request must carry the web login: any write, or a read of a settings/advanced page."""
+        if request.path in WEB_AUTH_EXEMPT_PATHS:
+            return False
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            return True
+        return request.path.startswith(WEB_AUTH_PROTECTED_PREFIXES)
+
+    def web_auth_valid(self, request):
+        """Check the request's HTTP Basic credentials against web_username and web_password in constant time."""
+        if not (self.web_username and self.web_password):
+            # Half configured: fail closed rather than quietly leaving the pages open
+            return False
+        header = request.headers.get("Authorization", "")
+        scheme, _, encoded = header.partition(" ")
+        if scheme.lower() != "basic":
+            return False
+        try:
+            username, _, password = base64.b64decode(encoded.strip(), validate=True).decode("utf-8").partition(":")
+        except (ValueError, UnicodeDecodeError):
+            return False
+        # Evaluate both comparisons so a wrong username takes as long to reject as a wrong password
+        username_ok = secrets.compare_digest(username.encode(), self.web_username.encode())
+        password_ok = secrets.compare_digest(password.encode(), self.web_password.encode())
+        return username_ok and password_ok
+
+    @web.middleware
+    async def auth_middleware(self, request, handler):
+        """Ask for the web login on protected requests, and pass everything else straight through."""
+        if self.web_auth_enabled() and self.web_auth_required(request) and not self.web_auth_valid(request):
+            return web.Response(status=401, text="Login required", headers={"WWW-Authenticate": 'Basic realm="Predbat", charset="UTF-8"'})
+        return await handler(request)
 
     def register_endpoint(self, path, handler, method="GET"):
         """
@@ -525,7 +732,12 @@ class WebInterface(ComponentBase):
 
     async def start(self):
         # Start the web server
-        app = web.Application()
+        if self.web_auth_enabled():
+            app = web.Application(middlewares=[self.auth_middleware])
+            if not (self.web_username and self.web_password):
+                self.log("Warn: web_username and web_password must both be set, until then the Web Interface refuses every protected request")
+        else:
+            app = web.Application()
         app.router.add_get("/", self.html_default)
         app.router.add_get("/plan", self.html_plan)
         app.router.add_get("/log", self.html_log)
@@ -542,6 +754,7 @@ class WebInterface(ComponentBase):
         app.router.add_get("/dash_content", self.html_dash_content)
         app.router.add_get("/components", self.html_components)
         app.router.add_get("/discovery", self.html_discovery)
+        app.router.add_get("/component_discovery", self.html_component_discovery)
         app.router.add_get("/component_entities", self.html_component_entities)
         app.router.add_post("/component_restart", self.html_component_restart)
         app.router.add_get("/component_config", self.html_component_config)
@@ -570,6 +783,7 @@ class WebInterface(ComponentBase):
         app.router.add_post("/api/state", self.html_api_post_state)
         app.router.add_post("/api/service", self.html_api_post_service)
         app.router.add_get("/api/plan_data", self.html_api_plan_data)
+        app.router.add_get("/api/plan_history", self.html_api_plan_history)
         app.router.add_get("/api/log", self.html_api_get_log)
         app.router.add_get("/api/entities", self.html_api_get_entities)
         app.router.add_post("/api/login", self.html_api_login)
@@ -630,7 +844,8 @@ class WebInterface(ComponentBase):
         text = ""
         attributes = {}
         if from_db:
-            history = self.get_history_wrapper(entity, 1, required=False)
+            # Untracked: a tracked entity is re-read every 2 minutes until restart, and the entity pages call this for every entity they list
+            history = self.get_history_wrapper(entity, 1, required=False, tracked=False)
             if history and len(history) >= 1:
                 history = history[0]
                 if history:
@@ -760,9 +975,7 @@ class WebInterface(ComponentBase):
                     <!-- House to Grid path -->
                     <path id="house-grid-path" d="M342,228 L391,261" stroke="transparent" fill="none" />
                 </defs>
-        """.format(
-            battery_icon, dp0(house_power)
-        )
+        """.format(battery_icon, dp0(house_power))
 
         # Car charging arm - drawn top right, the corner left free by PV/battery/grid. It runs from
         # whichever node is actually feeding the charger: the House when the charger is behind the
@@ -794,9 +1007,7 @@ class WebInterface(ComponentBase):
                     <polygon points="0 0, 10 3.5, 0 7" fill="#E53935"/>
                     </marker>
                 </defs>
-            """.format(
-                source=car_source, source_id=car_source.lower(), path=car_path
-            )
+            """.format(source=car_source, source_id=car_source.lower(), path=car_path)
             if car_charging:
                 # Calculate animation speed based on power flow - faster for higher power
                 car_speed = max(0.5, min(3.0, 2.0 - (abs(car_power) / 3000)))
@@ -816,18 +1027,14 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#E53935" opacity="0.4">
                     <animateMotion dur="{speed}s" repeatCount="indefinite" begin="1.0s" path="{path}" />
                 </circle>
-                """.format(
-                    source=car_source, line=car_line, label=car_label, power=dp0(car_power), speed=car_speed, path=car_path
-                )
+                """.format(source=car_source, line=car_line, label=car_label, power=dp0(car_power), speed=car_speed, path=car_path)
             else:
                 html += """
                 <!-- {source} to Car Arrow (dashed) -->
                 <line {line} stroke="#E53935" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#car-arrow)" />
                 <text {label} text-anchor="middle" fill="#E53935">{power} W</text>
                 <!-- No moving dot when the car is not charging -->
-                """.format(
-                    source=car_source, line=car_line, label=car_label, power=dp0(car_power)
-                )
+                """.format(source=car_source, line=car_line, label=car_label, power=dp0(car_power))
 
         # Draw arrows and labels
         if pv_generating:
@@ -849,9 +1056,7 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#F9A825" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,128 L241,161" />
                 </circle>
-            """.format(
-                dp0(pv_power), pv_speed, pv_speed, pv_speed
-            )
+            """.format(dp0(pv_power), pv_speed, pv_speed, pv_speed)
         else:
             # Make the PV to House line dashed if not generating
             html += """
@@ -859,9 +1064,7 @@ class WebInterface(ComponentBase):
                 <line x1="192" y1="128" x2="241" y2="161" stroke="#F9A825" stroke-width="2" stroke-dasharray="5,5" marker-end="url(#pv-arrow)" />
                 <text x="244" y="122" text-anchor="middle" fill="#F9A825">{} W</text>
                 <!-- No moving dot when PV is not generating -->
-            """.format(
-                dp0(pv_power)
-            )
+            """.format(dp0(pv_power))
         if battery_to_house:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
@@ -881,9 +1084,7 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#43A047" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M192,272 L241,239" />
                 </circle>
-            """.format(
-                dp0(battery_power), battery_speed, battery_speed, battery_speed
-            )
+            """.format(dp0(battery_power), battery_speed, battery_speed, battery_speed)
         else:
             # Calculate animation speed based on power flow - faster for higher power
             battery_speed = max(0.5, min(3.0, 2.0 - (abs(battery_power) / 3000)))
@@ -903,9 +1104,7 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#43A047" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M258,228 L209,261" />
                 </circle>
-            """.format(
-                dp0(battery_power), battery_speed, battery_speed, battery_speed
-            )
+            """.format(dp0(battery_power), battery_speed, battery_speed, battery_speed)
 
         if grid_importing:
             # Calculate animation speed based on power flow - faster for higher power
@@ -926,9 +1125,7 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#757575" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M408,272 L359,239" />
                 </circle>
-            """.format(
-                dp0(grid_power), grid_speed, grid_speed, grid_speed
-            )
+            """.format(dp0(grid_power), grid_speed, grid_speed, grid_speed)
         else:
             # Calculate animation speed based on power flow - faster for higher power
             grid_speed = max(0.5, min(3.0, 2.0 - (abs(grid_power) / 3000)))
@@ -948,9 +1145,7 @@ class WebInterface(ComponentBase):
                 <circle r="2" fill="#757575" opacity="0.4">
                     <animateMotion dur="{}s" repeatCount="indefinite" begin="1.0s" path="M342,228 L391,261" />
                 </circle>
-            """.format(
-                dp0(grid_power), grid_speed, grid_speed, grid_speed
-            )
+            """.format(dp0(grid_power), grid_speed, grid_speed, grid_speed)
         html += """
                 <!-- Arrowhead Marker -->
                 <defs>
@@ -1271,20 +1466,26 @@ class WebInterface(ComponentBase):
     async def get_history_with_now(self, entity_id, days, attribute=None):
         """
         Get history for an entity including the current state
+
+        The current state is stamped at the real time, not now_utc - that is the start of the 5-minute
+        cycle, so it could land before records HA had already made since. Asked for the whole state
+        (attribute=None) it carries the current attributes too, so an attribute read from it is current
+        rather than missing.
         """
         history = copy.deepcopy(self.get_history_wrapper(entity_id, days, required=False, tracked=False))  # Copy to avoid modifying original history
         current_value = self.get_state_wrapper(entity_id=entity_id, attribute=attribute)
         if current_value is not None:
-            if not history:
-                history = [[]]
-                if attribute:
-                    history[0].append({"attributes": {attribute: current_value}, "last_updated": (self.now_now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
-                else:
-                    history[0].append({"state": current_value, "last_updated": (self.now_utc - timedelta(days=days)).strftime(TIME_FORMAT_HA)})
             if attribute:
-                history[0].append({"attributes": {attribute: current_value}, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
+                current = {"attributes": {attribute: current_value}}
             else:
-                history[0].append({"state": current_value, "last_updated": self.now_utc.strftime(TIME_FORMAT_HA)})
+                current = {"state": current_value}
+                current_state = self.get_state_wrapper(entity_id, raw=True)
+                if isinstance(current_state, dict) and isinstance(current_state.get("attributes"), dict):
+                    current["attributes"] = current_state["attributes"]
+            now = self.now_utc_exact
+            if not history:
+                history = [[dict(current, last_updated=(now - timedelta(days=days)).strftime(TIME_FORMAT_HA))]]
+            history[0].append(dict(current, last_updated=now.strftime(TIME_FORMAT_HA)))
 
         return history
 
@@ -1369,9 +1570,7 @@ class WebInterface(ComponentBase):
             <button onclick="location.reload()" style="display: inline-block; margin-left: 10px; padding: 8px 15px; background-color: #2196F3; color: white; border: none; text-decoration: none; border-radius: 4px; font-weight: bold; cursor: pointer;">
                 <span class="mdi mdi-refresh" style="margin-right: 5px;"></span>Reload
             </button>
-        </div>""".format(
-            self.default_page
-        )
+        </div>""".format(self.default_page)
 
         # Collect available attributes for all selected entities
         entity_attributes_map = {}
@@ -1420,9 +1619,7 @@ class WebInterface(ComponentBase):
                 <input type="hidden" name="days" value="{}" />
                 <button type="submit" style="margin-top: 10px; padding: 8px 16px; background-color: #4CAF50; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">Update Chart</button>
             </form>
-        </div>""".format(
-            days
-        )
+        </div>""".format(days)
 
         # Add days selector
         text += """<div style="margin-bottom: 20px;">
@@ -1543,6 +1740,7 @@ class WebInterface(ComponentBase):
                 body.dark-mode .reverted-cell { background-color: #0d2e4a; color: #90caff; }
                 </style>
                 """
+                text += '<p style="font-size:0.9em;">Each row shows the value at its time. <span class="changed-cell" style="padding:0 4px;">Changed</span> during the half hour up to it, <span class="reverted-cell" style="padding:0 4px;">changed and changed back</span>. Click a row to see the 5-minute slots before it.</p>\n'
                 text += '<button onclick="downloadEntityCSV()" style="margin-bottom: 10px; padding: 7px 14px; background-color: #2196F3; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">&#11015; Download CSV</button>\n'
                 text += "<table>\n"
 
@@ -1559,83 +1757,13 @@ class WebInterface(ComponentBase):
                     text += f"<th>{friendly_name}{attr_display}{unit_display}</th>"
                 text += "</tr>\n"
 
-                # Collect and bucket history data for all entities (both 30-min summary and 5-min detail)
-                entity_filled_30min, entity_filled_5min, sorted_timestamps_30min, _ = build_entity_history_table_data(entity_selections, entity_data_fetch)
-
-                # Pre-compute per-row cell classes so we can decide which rows to show
-                num_cols = len(entity_selections)
-                row_data = []  # list of (timestamp_30, [(value, cell_class), ...], has_highlight)
-                for timestamp_30 in sorted_timestamps_30min:
-                    cells = []
-                    has_highlight = False
-                    for filled_30, filled_5 in zip(entity_filled_30min, entity_filled_5min):
-                        value, is_changed, prev_value = filled_30.get(timestamp_30, ("-", False, None))
-                        if is_changed:
-                            cell_class = ' class="changed-cell"'
-                            has_highlight = True
-                        else:
-                            # Flag a row that held its value at both ends but moved somewhere inside its own half hour
-                            sub_vals = [filled_5.get(timestamp_30 + timedelta(minutes=off), ("-", False, None))[0] for off in range(5, 30, 5)]
-                            if any(v != value for v in sub_vals):
-                                cell_class = ' class="reverted-cell"'
-                                has_highlight = True
-                            else:
-                                cell_class = ""
-                        cells.append((value, cell_class))
-                    row_data.append((timestamp_30, cells, has_highlight))
-
-                # Build table rows — skip unchanged rows (except the oldest), inserting gap rows on skips
-                row_index = 0
-                oldest_idx = len(row_data) - 1
-                skipped_count = 0
-                prev_row_ts = None  # Previous row_data entry (visible or skipped) — for detecting history gaps
-                for i, (timestamp_30, cells, has_highlight) in enumerate(row_data):
-                    is_oldest = i == oldest_idx
-
-                    # Count slots absent from history entirely (gap between consecutive row_data entries).
-                    # Using prev_row_ts (not prev visible ts) avoids double-counting rows already
-                    # incremented via skipped_count += 1 below.
-                    if prev_row_ts is not None:
-                        gap_minutes = int((prev_row_ts - timestamp_30).total_seconds() / 60)
-                        missing_slots = max(0, (gap_minutes // 30) - 1)
-                        skipped_count += missing_slots
-
-                    prev_row_ts = timestamp_30
-
-                    if not has_highlight and not is_oldest:
-                        skipped_count += 1
-                        continue
-
-                    # If we skipped rows (present-but-unchanged OR absent from history), emit a gap separator
-                    if skipped_count > 0:
-                        col_span = 1 + num_cols
-                        text += f'<tr class="gap-row"><td colspan="{col_span}" style="text-align:center; font-style:italic; font-size:0.85em; color:var(--text-secondary,#888); border-top:2px dashed #aaa; border-bottom:2px dashed #aaa; padding:4px;">— {skipped_count} unchanged slot{"s" if skipped_count != 1 else ""} hidden —</td></tr>\n'
-                        skipped_count = 0
-
-                    # Main 30-minute row (clickable)
-                    text += f'<tr class="history-row" onclick="toggleDetailRow({row_index})" id="row_{row_index}">'
-                    text += f"<td>▶ {timestamp_30.strftime(TIME_FORMAT)}</td>"
-                    for value, cell_class in cells:
-                        text += f"<td{cell_class}>{value}</td>"
-                    text += "</tr>\n"
-
-                    # Detail rows: the remaining 5-minute slots inside this row's own half hour,
-                    # newest first to match the table's ordering (the row itself covers offset 0)
-                    for offset in range(25, 0, -5):
-                        detail_time = timestamp_30 + timedelta(minutes=offset)
-                        text += f'<tr class="detail-row" id="detail_{row_index}">'
-                        text += f"<td>  {detail_time.strftime(TIME_FORMAT)}</td>"
-                        for filled in entity_filled_5min:
-                            value, is_changed, prev_value = filled.get(detail_time, ("-", False, None))
-                            cell_class = ' class="changed-cell"' if is_changed else ""
-                            text += f"<td{cell_class}>{value}</td>"
-                        text += "</tr>\n"
-
-                    row_index += 1
+                # 30-minute rows with their 5-minute detail slots, laid out on the local clock
+                history_rows = build_entity_history_table_data(entity_selections, entity_data_fetch, local_tz=self.local_tz)
+                text += render_entity_history_rows(history_rows, len(entity_selections))
 
                 text += "</table><br>\n"
 
-                # Build CSV data for download (all 30-min slots, unfiltered, with carry-forward values)
+                # Build CSV data for download - the same rows the table shows, without the pure duplicates
                 csv_col_headers = ["Time"]
                 for sel in entity_selections:
                     sel_eid = sel["entity_id"]
@@ -1647,12 +1775,9 @@ class WebInterface(ComponentBase):
                     sel_attr_disp = f" - {sel_attr}" if sel_attr else ""
                     csv_col_headers.append(f"{sel_friendly}{sel_attr_disp}{sel_unit_disp}")
                 csv_all_rows = []
-                for ts in sorted_timestamps_30min:
-                    row_vals = [ts.strftime(TIME_FORMAT)]
-                    for filled_30 in entity_filled_30min:
-                        val, _, _ = filled_30.get(ts, ("-", False, None))
-                        row_vals.append(str(val))
-                    csv_all_rows.append(row_vals)
+                for index, history_row in enumerate(history_rows):
+                    if history_row_shown(history_rows, index):
+                        csv_all_rows.append([history_row["time"].strftime(TIME_FORMAT)] + [str(value) for value, _ in history_row["cells"]])
                 csv_data_json = json.dumps({"headers": csv_col_headers, "rows": csv_all_rows})
                 text += f"<script>var csvData = {csv_data_json};\n"
                 text += """function downloadEntityCSV() {
@@ -1825,9 +1950,11 @@ class WebInterface(ComponentBase):
         self.update_success_timestamp()
         return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
 
-    def get_chart_series(self, name, results, chart_type, color):
+    def get_chart_series(self, name, results, chart_type, color, hidden=False):
         """
         Return HTML for a chart series
+
+        hidden: start the series switched off; clicking its legend entry shows it.
         """
         text = ""
         text += "   {\n"
@@ -1835,6 +1962,8 @@ class WebInterface(ComponentBase):
         text += "    type: '{}',\n".format(chart_type)
         if color:
             text += "    color: '{}',\n".format(color)
+        if hidden:
+            text += "    hidden: true,\n"
         text += "    data: [\n"
         first = True
         for key in results:
@@ -1933,12 +2062,13 @@ var options = {
             chart_type = series.get("chart_type", "line")
             color = series.get("color", "")
             unit_name = series.get("unit", yaxis_name) or ""
+            hidden = series.get("hidden", False)
 
             if results:
                 if not first:
                     text += ","
                 first = False
-                text += self.get_chart_series(name, results, chart_type, color)
+                text += self.get_chart_series(name, results, chart_type, color, hidden=hidden)
                 opacity.append(opacity_value)
                 stroke_width.append(stroke_width_value)
                 stroke_curve.append("'{}'".format(stroke_curve_value))
@@ -2009,6 +2139,10 @@ var options = {
                 axis_parts.append("      decimalsInFloat: {}".format(decimals))
                 if opposite:
                     axis_parts.append("      opposite: true")
+                if "min" in axis:
+                    axis_parts.append("      min: {}".format(axis["min"]))
+                if "max" in axis:
+                    axis_parts.append("      max: {}".format(axis["max"]))
                 if labels_formatter:
                     axis_parts.append("      labels: {{ formatter: function(val) {{ {} }} }}".format(labels_formatter))
 
@@ -2020,15 +2154,16 @@ var options = {
             text += "    title: {{ text: '{}' }},\n".format(yaxis_name)
             text += "    decimalsInFloat: 2\n"
             text += "  },\n"
-        text += "  title: {\n"
-        text += "    text: '{}'\n".format(chart_name)
-        text += "  },\n"
         text += "  legend: {\n"
         text += "    position: 'top',\n"
         text += "    formatter: function(seriesName, opts) {\n"
         text += "        var units = [{}];\n".format(units_array)
         text += "        var unit = units[opts.seriesIndex] !== undefined ? units[opts.seriesIndex] : '{}';\n".format(yaxis_name)
-        text += "        return [opts.w.globals.series[opts.seriesIndex].at(-1), ' ', unit, ' <br> ', seriesName]\n"
+        text += "        var last = opts.w.globals.series[opts.seriesIndex].at(-1);\n"
+        text += "        if (last === null || typeof last === 'undefined') {\n"
+        text += "            return seriesName;\n"
+        text += "        }\n"
+        text += "        return [last, ' ', unit, ' <br> ', seriesName]\n"
         text += "    }\n"
         text += "  },\n"
         text += "  annotations: {\n"
@@ -2051,7 +2186,24 @@ var options = {
         text += "    }\n"
         text += "   ]\n"
         text += "  }\n"
-        text += "}\n"
+        # The semicolon is required: the title script below starts with '(', and without it the browser parses
+        # 'var options = {...}(function() {...})()' as one statement calling the options object, which throws
+        # 'TypeError: ... is not a function' and leaves every chart blank (#6015).
+        text += "};\n"
+        # The title is an HTML heading above the chart, not an ApexCharts title: ApexCharts binds drag-to-zoom to the
+        # whole chart SVG, so a drag (or a touch-scroll on mobile) anywhere in a title band inside it - including the
+        # gap between the title text and the toolbar - zoomed the chart (#5979). Outside the SVG it cannot start a zoom,
+        # and it picks up the page's own heading style. The wrapper div keeps it on its own line, as h2 is inline here.
+        # The title goes in via a JSON string and textContent, so a friendly name with a quote or markup in it is safe.
+        chart_title_js = json.dumps(str(chart_name)).replace("<", "\\u003c")
+        text += "(function() {\n"
+        text += "  var container = document.getElementById('{}');\n".format(tagname)
+        text += "  var heading = document.createElement('h2');\n"
+        text += "  heading.textContent = {};\n".format(chart_title_js)
+        text += "  var wrapper = document.createElement('div');\n"
+        text += "  wrapper.appendChild(heading);\n"
+        text += "  container.parentNode.insertBefore(wrapper, container);\n"
+        text += "})();\n"
         # getElementById (not a '#id' CSS selector) - tagname can be unit-derived (e.g. "chart_%")
         # and '%' is not a valid unescaped CSS identifier character, which would throw in querySelector
         text += "var chart = new ApexCharts(document.getElementById('{}'), options);\n".format(tagname)
@@ -2645,9 +2797,40 @@ chart.render();
             return web.json_response({"unchanged": True, "overrides_hash": overrides_hash})
 
         # Build full response with data
-        response_data = {"unchanged": False, "plan": plan_json, "yesterday": yesterday_json, "baseline": baseline_json, "overrides": overrides, "overrides_hash": overrides_hash}
+        response_data = {
+            "unchanged": False,
+            "plan": plan_json,
+            "yesterday": yesterday_json,
+            "baseline": baseline_json,
+            "overrides": overrides,
+            "overrides_hash": overrides_hash,
+            "history_days": self.history_day_names(),
+            "history_day_events": self.history_day_events(),
+        }
 
         return web.json_response(response_data)
+
+    def history_day_names(self):
+        """The dates (YYYY-MM-DD, oldest first) the History view's day picker can show, from predbat.plan_history."""
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        return sorted(days) if isinstance(days, dict) else []
+
+    def history_day_events(self):
+        """The recorded events (saving session, free electricity, Axle) on each older History day that had any, as {date: [labels]}."""
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        if not isinstance(days, dict):
+            return {}
+        return {day: plan["history_events"] for day, plan in days.items() if isinstance(plan, dict) and plan.get("history_events")}
+
+    async def html_api_plan_history(self, request):
+        """
+        JSON API - Return the History view's plan JSON for one older day (?date=YYYY-MM-DD), or 404
+        """
+        day = request.rel_url.query.get("date", "")
+        days = self.get_state_wrapper(entity_id=self.prefix + ".plan_history", attribute="days", default=None)
+        if not isinstance(days, dict) or day not in days:
+            return web.json_response({"error": "no history for date"}, status=404)
+        return web.json_response(days[day])
 
     async def html_plan(self, request):
         """
@@ -2673,6 +2856,9 @@ chart.render();
         text += '<span id="planTimestamp" style="margin-left: 16px; font-size: 13px; color: #666;"></span>'
         text += '<label id="debugToggleLabel" style="margin-left: auto;"><input type="checkbox" id="debugToggle" onchange="onDebugToggleChange()"> Show Debug</label>'
         text += "</div>"
+
+        # Day picker for the History view, filled in by renderHistoryPicker()
+        text += '<div id="historyPicker" style="display:none; margin-bottom: 10px; gap: 6px; flex-wrap: wrap;"></div>'
 
         # Add plan container
         text += '<div id="planContainer"></div>'
@@ -2728,6 +2914,8 @@ chart.render();
         text += f"window.baselineData = {json.dumps(baseline_json)};"
         text += f"window.overridesData = {json.dumps(overrides)};"
         text += f"window.overridesHash = {json.dumps(overrides_hash)};"
+        text += f"window.historyDays = {json.dumps(self.history_day_names())};"
+        text += f"window.historyDayEvents = {json.dumps(self.history_day_events())};"
         text += "</script>"
 
         # Include renderer JavaScript (which declares newestDataTimestamp variable)
@@ -3254,10 +3442,70 @@ chart.render();
         # Redirect back to dashboard
         raise web.HTTPFound("./dash")
 
+    def get_inverter_soc_history(self):
+        """
+        Today's actual SoC of each inverter as a percentage of its own capacity, for the Battery chart,
+        as a list of (inverter id, {stamp: %}).
+
+        Each battery is on its own scale, so one can reach 100% while the fleet total is still short of full.
+        Empty for a single-inverter install, whose one line is already the chart's Actual.
+        Read from each inverter's own soc_percent sensor, or its soc_kw sensor converted to kWh and scaled
+        the way Inverter.update_status() scales it, and sampled on the same grid as the chart's Actual line.
+        There is no predicted SoC per inverter: the plan treats the batteries as one.
+        """
+        inverters = self.base.inverters
+        if len(inverters) <= 1:
+            return []
+        use_percent = "soc_percent" in self.base.args
+        now_str = self.now_utc.strftime(TIME_FORMAT)
+        results = []
+        for inverter in inverters:
+            sensor = self.base.get_arg("soc_percent" if use_percent else "soc_kw", indirect=False, index=inverter.id)
+            if not is_entity_id(sensor):
+                continue
+            if use_percent:
+                scale = 1.0
+            else:
+                if not inverter.soc_max:
+                    continue
+                scale = (inverter.battery_scaling or 1.0) * 100.0 / inverter.soc_max
+            history = self.get_history_wrapper(sensor, 1, required=False, tracked=False)
+            data = {}
+            if history:
+                # Keyed by minutes ago, like soc_kwh_history; required_unit converts a Wh sensor the way update_status() does
+                soc_history, _ = minute_data(
+                    history[0],
+                    1,
+                    self.now_utc,
+                    "state",
+                    "last_updated",
+                    backwards=True,
+                    clean_increment=False,
+                    smoothing=False,
+                    divide_by=1.0,
+                    scale=1.0,
+                    required_unit=None if use_percent else "kWh",
+                )
+                for minute in range(0, self.minutes_now, self.plan_interval_minutes):
+                    minutes_ago = self.minutes_now - minute
+                    if minutes_ago in soc_history:
+                        stamp = (self.midnight_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT)
+                        data[stamp] = dp2(soc_history[minutes_ago] * scale)
+            if inverter.soc_percent is not None:
+                data[now_str] = inverter.soc_percent
+            results.append((inverter.id, data))
+        return results
+
     def get_chart(self, chart):
         """
         Return the HTML for a chart
         """
+        if chart == "Curves":
+            # Needs no plan or history, so it is shown before the first plan too
+            return self.get_curves_chart()
+        if chart in ("PVCalibration", "PVAccuracy"):
+            # PVAccuracy is the old name of this page, kept so saved links open it
+            return self.get_pv_calibration_chart()
         now_str = self.now_utc.strftime(TIME_FORMAT)
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
@@ -3324,7 +3572,31 @@ chart.render();
                 {"name": "Best Export Limit", "data": best_export_limit_kw, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#15eb1c"},
                 {"name": "Record", "data": record, "opacity": "0.5", "stroke_width": "4", "stroke_curve": "stepline", "color": "#000000", "chart_type": "area"},
             ]
-            text += self.render_chart(series_data, "kWh", "Battery SoC Prediction", now_str)
+            # Multi-inverter installs: each battery's actual SoC in % of its own capacity, on a 0-100% axis
+            # of their own, off until picked in the legend
+            inverter_colors = ["#2ca02c", "#ff7f0e", "#17becf", "#8c564b", "#e377c2", "#bcbd22", "#7f7f7f", "#393b79"]
+            inverter_series_names = []
+            for inv_id, inv_soc in self.get_inverter_soc_history():
+                if not inv_soc:
+                    continue
+                name = "Actual Inverter {}".format(inv_id)
+                inverter_series_names.append(name)
+                series_data.append(
+                    {
+                        "name": name,
+                        "data": inv_soc,
+                        "opacity": "1.0",
+                        "stroke_width": "2",
+                        "stroke_curve": "smooth",
+                        "color": inverter_colors[inv_id % len(inverter_colors)],
+                        "unit": "%",
+                        "hidden": True,
+                    }
+                )
+            extra_yaxis = None
+            if inverter_series_names:
+                extra_yaxis = {"title": "Inverter SoC (%)", "series_names": inverter_series_names, "decimals": 0, "opposite": True, "min": 0, "max": 100}
+            text += self.render_chart(series_data, "kWh", "Battery SoC Prediction", now_str, extra_yaxis=extra_yaxis)
         elif chart == "Power":
             series_data = [
                 {"name": "battery", "data": battery_power_best, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "smooth"},
@@ -3411,25 +3683,6 @@ chart.render();
                 {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
-        elif chart == "PVAccuracy":
-            # Get pv_today history once and extract total and remaining attributes per timestamp
-            pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
-            pv_total_raw = history_attribute(pv_today_hist, attributes=True, state_key="totalCL")
-            pv_remaining_raw = history_attribute(pv_today_hist, attributes=True, state_key="remainingCL")
-            # Compute forecast so far = total - remaining per timestamp
-            pv_forecast_sofar_raw = {}
-            for ts, total_val in pv_total_raw.items():
-                remaining_val = pv_remaining_raw.get(ts, 0)
-                pv_forecast_sofar_raw[ts] = dp2(max(total_val - remaining_val, 0))
-            pv_forecast_sofar = prune_today(pv_forecast_sofar_raw, self.now_utc, self.midnight_utc, prune=False)
-            # Get actual PV energy over time
-            pv_actual_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_energy_h0", 7, required=False))
-            pv_actual = prune_today(pv_actual_hist, self.now_utc, self.midnight_utc, prune=False)
-            series_data = [
-                {"name": "PV Forecast (so far)", "data": pv_forecast_sofar, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#a8a8a7"},
-                {"name": "PV Actual", "data": pv_actual, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#f5c43d"},
-            ]
-            text += self.render_chart(series_data, "kWh", "PV Forecast vs Actual", now_str)
         elif chart == "LoadML":
             load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours
@@ -3742,21 +3995,291 @@ chart.render();
         text += f'<a href="./charts?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
         text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
-        text += f'<a href="./charts?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
+        text += f'<a href="./charts?chart=PVCalibration" class="{"active" if chart in ("PVCalibration", "PVAccuracy") else ""}">PVCalibration</a>'
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
+        text += f'<a href="./charts?chart=Curves" class="{"active" if chart == "Curves" else ""}">Curves</a>'
         # Only show LoadML chart if ML is enabled
         if self.base.get_arg("load_ml_enable", False):
             text += f'<a href="./charts?chart=LoadML" class="{"active" if chart == "LoadML" else ""}">LoadML</a>'
             text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
-        if chart != "MarginalCosts":
+        if chart not in ("MarginalCosts", "Curves", "PVCalibration", "PVAccuracy"):
             text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    def get_curves_chart(self):
+        """
+        The Curves page: a status table for the charge and discharge rate grids, then each grid drawn in 3D (SoC x battery
+        temperature x rate as a fraction of the rated rate) with its recent evidence as dots, and a short table of it.
+        """
+        dashboard_values = getattr(self.base, "dashboard_values", {}) or {}
+        charge_grid, discharge_grid = self.base.rate_grids()
+        cell = "padding:6px 12px;border:1px solid #555;"
+        # The shared header sets p { white-space: nowrap }, a rule on the paragraphs themselves, so the page's container
+        # cannot override it by inheritance: a scoped rule for its paragraphs lets the captions wrap
+        text = "<style>.curves-page p { white-space: normal; }</style>\n"
+        text += "<div class='curves-page' style='max-width:960px;'>\n<br><h2>Battery rate grids</h2>\n"
+        text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n<tr>"
+        for heading in ("Grid", "Learned grid in use", "Source", "Cells", "Evidence days", "Temperatures", "Learned at", "Last scan"):
+            text += "<th style='{}text-align:left;'>{}</th>".format(cell, heading)
+        text += "</tr>\n"
+        for title, kind in (("Charge", "charge"), ("Discharge", "discharge")):
+            item = dashboard_values.get("binary_sensor.{}_battery_{}_rate_grid".format(self.prefix, kind), {})
+            attributes = item.get("attributes", {}) or {}
+            learned = item.get("state") == "on"
+            temperature_range = attributes.get("temperature_range")
+            cells = [
+                title,
+                "Yes" if learned else ("No" if item else "Not yet run"),
+                attributes.get("source", ""),
+                attributes.get("cells", ""),
+                attributes.get("days", ""),
+                "{} to {} C".format(temperature_range[0], temperature_range[1]) if isinstance(temperature_range, list) and len(temperature_range) == 2 else "",
+                attributes.get("updated") or "",
+                attributes.get("last_scan") or "",
+            ]
+            text += "<tr>"
+            for index, value in enumerate(cells):
+                style = cell + ("background:#00B050;color:#fff;" if index == 1 and learned else "")
+                text += "<td style='{}'>{}</td>".format(style, html_module.escape(str(value)))
+            text += "</tr>\n"
+        text += "</table>\n"
+        text += "<p>Each grid is the rate the battery reaches, as a fraction of its rated rate, at each SoC and battery temperature. It is learned from runs of {} minutes or more at the full rate (cut into {}-minute segments), and the plan uses it once it has {} cells from {} days; until then, and wherever the evidence does not reach, the curves set in <code>apps.yaml</code> are used. The rate never rises with SoC (charge) or as SoC falls (discharge), or as the temperature falls. Older evidence counts for less, half every {} days.</p>\n".format(
+            BATTERY_RATE_GRID_RUN_MINUTES, BATTERY_RATE_GRID_SEGMENT_MINUTES, BATTERY_RATE_GRID_MIN_CELLS, BATTERY_RATE_GRID_MIN_DAYS, BATTERY_RATE_GRID_HALF_LIFE_DAYS
+        )
+        text += '<script src="{}"></script>\n'.format(PLOTLY_GL3D_URL)
+        today = datetime.strptime(charge_day(self.now_utc, 0, getattr(self.base, "local_tz", None)), "%Y-%m-%d").date()
+        samples_by_kind = getattr(self.base, "battery_rate_grid_samples", {}) or {}
+        learned_by_kind = getattr(self.base, "battery_rate_grid_learned", {}) or {}
+        for title, kind, grid in (("Charge", "charge", charge_grid), ("Discharge", "discharge", discharge_grid)):
+            evidence = []
+            for day, entries in (samples_by_kind.get(kind) or {}).items():
+                try:
+                    age = (today - datetime.strptime(day, "%Y-%m-%d").date()).days
+                except (TypeError, ValueError):
+                    continue
+                if age <= CURVE_EVIDENCE_DAYS:
+                    evidence.extend(entries)
+            temperatures = [entry[1] for entry in evidence if entry[1] is not None]
+            learned = learned_by_kind.get(kind)
+            if learned and learned.get("temp_range"):
+                temperatures += learned["temp_range"]
+            if temperatures:
+                low = max(int(min(temperatures)) - CURVE_TEMPERATURE_MARGIN, BATTERY_RATE_GRID_TEMP_MIN)
+                high = min(int(max(temperatures)) + CURVE_TEMPERATURE_MARGIN, BATTERY_RATE_GRID_TEMP_MAX)
+            else:
+                low, high = -10, 30
+            degrees = list(range(low, high + 1))
+            # An exact 0 reading means a missing one, so the 0 row is drawn as a real reading just above freezing
+            data = {
+                "soc": list(range(101)),
+                "temperature": degrees,
+                "z": [[round(value, 3) for value in rate_grid_curve(grid, degree if degree != 0 else 0.5)[:101]] for degree in degrees],
+                "ex": [entry[0] for entry in evidence],
+                "ey": [entry[1] if entry[1] is not None else BATTERY_RATE_GRID_UNKNOWN_TEMP for entry in evidence],
+                "ez": [entry[2] for entry in evidence],
+            }
+            text += "<h3>{} rate grid</h3>\n".format(title)
+            text += "<div id='curve_grid_{}' style='width:100%;height:560px;'></div>\n".format(kind)
+            text += "<script>\nvar curve_grid_{}_data = {};\n".format(kind, json.dumps(data))
+            text += """(function() {{
+  var d = curve_grid_{kind}_data;
+  var fg = getComputedStyle(document.body).color || '#888';
+  var axis = function(t) {{ return {{title: {{text: t, font: {{color: fg}}}}, tickfont: {{color: fg}}, gridcolor: 'rgba(128,128,128,0.3)', backgroundcolor: 'rgba(0,0,0,0)'}}; }};
+  var traces = [{{type: 'surface', x: d.soc, y: d.temperature, z: d.z, cmin: 0, cmax: {cmax}, colorscale: 'Viridis', opacity: 0.85, name: '{title} grid', showlegend: true,
+    colorbar: {{title: {{text: 'rate', font: {{color: fg}}}}, tickfont: {{color: fg}}, thickness: 14, len: 0.6, x: 0.98}}, hovertemplate: 'SoC %{{x}}%<br>%{{y}} C<br>rate %{{z:.2f}}<extra></extra>'}}];
+  if (d.ex.length) {{
+    traces.push({{type: 'scatter3d', mode: 'markers', x: d.ex, y: d.ey, z: d.ez, name: 'evidence (last {days} days)', marker: {{size: 3, color: '#e4572e', opacity: 0.85}},
+      hovertemplate: 'SoC %{{x:.0f}}%<br>%{{y:.1f}} C<br>rate %{{z:.2f}}<extra>evidence</extra>'}});
+  }}
+  if (typeof Plotly === 'undefined') {{ document.getElementById('curve_grid_{kind}').innerText = 'The 3D chart library could not be loaded.'; return; }}
+  Plotly.newPlot('curve_grid_{kind}', traces, {{paper_bgcolor: 'rgba(0,0,0,0)', margin: {{l: 0, r: 0, t: 0, b: 0}}, legend: {{font: {{color: fg}}, orientation: 'h', x: 0, y: 0}},
+    scene: {{xaxis: axis('SoC %'), yaxis: axis('Battery temperature C'), zaxis: Object.assign(axis('Rate / rated'), {{range: [0, {cmax}]}}), aspectmode: 'manual', aspectratio: {{x: 1.3, y: 1.3, z: 0.8}}, camera: {{eye: {{x: 1.45, y: -1.45, z: 0.85}}}}}}}}, {{responsive: true}});
+}})();
+</script>
+""".format(kind=kind, title=title, cmax=BATTERY_RATE_GRID_MAX, days=CURVE_EVIDENCE_DAYS)
+            if not evidence:
+                text += "<p>No {} evidence yet: the grid shown is from the curves in <code>apps.yaml</code> (or the full rated rate where none is set).</p>\n".format(kind)
+            table = rate_grid_table(grid)
+            small = "padding:4px 8px;border:1px solid #555;"
+            text += "<table style='border-collapse:collapse;margin:8px 0 20px 0;font-size:0.9em;'>\n<tr><th style='{}'>C \\ SoC %</th>".format(small)
+            for soc in table["soc"]:
+                text += "<th style='{}'>{}</th>".format(small, soc)
+            text += "</tr>\n"
+            if table["temperature"] is None:
+                labels, rows = ["All"], table["rows"]
+            else:
+                labels, rows = [], []
+                for degree, row in zip(table["temperature"], table["rows"]):
+                    if low <= degree <= high:
+                        labels.append(degree)
+                        rows.append(row)
+            for label, row in zip(labels, rows):
+                text += "<tr><td style='{}'>{}</td>".format(small, label) + "".join("<td style='{}'>{:.2f}</td>".format(small, value) for value in row) + "</tr>\n"
+            text += "</table>\n"
+        text += "</div>\n"
+        return text
+
+    def get_pv_calibration_chart(self):
+        """
+        The PV Calibration page: a status table for PV calibration, then each half-hour slot's evidence (actual / forecast for
+        every stored day) against the unshrunk and applied slot factors, the same for whole days, and a short table in
+        two-hour bands.
+        """
+        text = "<style>.pv-calibration-page p { white-space: normal; }</style>\n"
+        text += "<div class='pv-calibration-page' style='max-width:960px;'>\n<br><h2>PV calibration</h2>\n"
+        components = getattr(self.base, "components", None)
+        solar = components.get_component("solar") if components else None
+        if solar is None:
+            text += "<p>Solar forecast component is not running, so there is no PV calibration to show.</p>\n</div>\n"
+            return text
+        # Always a solcast.SolarAPI, whose initialize() sets all of these; evidence and settings are None until it first runs
+        model = solar.pv_calibration_model
+        evidence = solar.pv_calibration_evidence or {}
+        settings = solar.pv_calibration_settings_used or {}
+        overridden = settings.get("overridden") or set()
+        switch_on = self.base.get_arg("metric_pv_calibration_enable", True)
+
+        def when(stamp):
+            """A datetime in local time as YYYY-MM-DD HH:MM, or blank."""
+            if not stamp:
+                return ""
+            return stamp.astimezone(self.local_tz).strftime("%Y-%m-%d %H:%M")
+
+        def setting(key, fmt):
+            """A setting formatted, marked when apps.yaml sets it."""
+            value = settings.get(key)
+            if value is None:
+                return ""
+            return fmt.format(value) + (" (apps.yaml)" if key in overridden else "")
+
+        # The daily scan, or the one just after local midnight that adds yesterday, whichever comes first
+        # (only while that midnight is still ahead: after a failed scan the last success can be days old, and the retry is next)
+        next_scan = solar.pv_calibration_next_scan
+        if next_scan and solar.pv_calibration_last_success:
+            last_local = solar.pv_calibration_last_success.astimezone(self.local_tz)
+            # localize() rather than replace() + normalize(): across a clock change normalize keeps the instant and lands on 23:00 or 01:00
+            next_midnight = self.local_tz.localize(datetime.combine(last_local.date() + timedelta(days=1), datetime.min.time()))
+            if next_midnight > self.now_utc:
+                next_scan = min(next_scan, next_midnight)
+
+        if not switch_on:
+            state, reason = "Off", "switch.{}_metric_pv_calibration_enable is off: the raw forecast is used".format(self.prefix)
+        elif model is None:
+            state, reason = "Waiting", "not enough evidence yet: calibration needs {} valid days".format(PV_CALIBRATION_MIN_DAYS)
+        else:
+            state, reason = "On", ""
+        days_used = (model or {}).get("days_used") or []
+        rows = [
+            ("Calibration", state),
+            ("Reason", reason),
+            ("Days stored", "{} ({} to {})".format(len(evidence), min(evidence), max(evidence)) if evidence else "0"),
+            ("Valid days used", "{} ({} down days skipped)".format(len(days_used), len((model or {}).get("down_days") or [])) if model else ""),
+            ("Day factor applied", "{:.2f}".format(model["total"]) if model else ""),
+            ("Day factor unshrunk", "{:.2f} (days typically within \u00b1{:.0f}% of it)".format(model["raw_total"], 100 * (math.exp(model["spread_day"]) - 1)) if model else ""),
+            ("Half-life", setting("half_life", "{} days")),
+            ("Shrink (day / half-hour)", "{} / {}".format(setting("shrink", "{:.2f}"), setting("shrink_slot", "{:.2f}")) if settings else ""),
+            ("Days kept / daily scan", "{} / {}".format(setting("history_days", "{}"), setting("scan_days", "{}")) if settings else ""),
+            ("Band (worst / best day)", "{:.2f} / {:.2f}".format(solar.pv_calibration_worst_scaling, solar.pv_calibration_best_scaling)),
+            (
+                "Last scan",
+                "{} - {}".format(when(solar.pv_calibration_last_scan), solar.pv_calibration_scan_status) if solar.pv_calibration_last_scan else solar.pv_calibration_scan_status,
+            ),
+            ("Next scan", when(next_scan)),
+        ]
+        ceiling = solar.pv_clipping_ceiling_kw()
+        if ceiling:
+            clipped = sum(record.get("clipped_minutes", 0) for record in evidence.values())
+            rows.append(("Clipping ceiling", "{:.2f} kW ({} minutes at the ceiling taken as the forecast)".format(ceiling, clipped)))
+        cell = "padding:6px 12px;border:1px solid #555;"
+        text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n"
+        for label, value in rows:
+            style = cell + ("background:#00B050;color:#fff;" if label == "Calibration" and state == "On" else "")
+            text += "<tr><th style='{}text-align:left;'>{}</th><td style='{}'>{}</td></tr>\n".format(cell, label, style, html_module.escape(str(value)))
+        text += "</table>\n"
+        text += (
+            "<p>Predbat compares each half hour of your actual solar generation with the forecast your provider gave for it, over the last {} days, and calibrates the forecast "
+            "with a day factor and a half-hour shape. Recent days count for more (a day's weight halves every {} days). Each factor only moves as far as the evidence supports: "
+            "when the days scatter either side of the forecast with no consistent direction it stays close to 1, and a consistent difference is corrected. "
+            "The charts show every stored day as a dot - larger for more forecast energy, fainter for older days - against the factor worked out from them before (unshrunk) and after that limit (applied).</p>\n"
+        ).format(settings.get("history_days", PV_CALIBRATION_HISTORY_DAYS), settings.get("half_life", PV_CALIBRATION_HALF_LIFE_DAYS))
+        if model is None:
+            text += "<p>Not enough evidence to calibrate yet: the charts appear once there are {} valid days.</p>\n</div>\n".format(PV_CALIBRATION_MIN_DAYS)
+            return text
+
+        slot_data = {
+            "points": [[point["minute"], round(point["ratio"], 4), round(point["forecast_kwh"], 4), round(point["weight"], 4)] for point in model["slot_points"]],
+            "raw_adj": {str(minute): round(value, 4) for minute, value in model["raw_adj"].items()},
+            "adj": {str(minute): round(value, 4) for minute, value in model["adj"].items()},
+            # Slots with their own evidence: elsewhere the factor is just the day factor, so the lines are not drawn there
+            "evidence_minutes": sorted(minute for minute, count in Counter(point["minute"] for point in model["slot_points"]).items() if count >= PV_CALIBRATION_MIN_SLOT_POINTS),
+        }
+        day_data = {
+            "points": [[point["day"], round(point["ratio"], 4) if point["ratio"] is not None else None, round(point["forecast_kwh"], 3), bool(point["down"])] for point in model["day_points"]],
+            "raw_total": round(model["raw_total"], 4),
+            "total": round(model["total"], 4),
+        }
+        text += '<script src="{}"></script>\n'.format(PLOTLY_GL3D_URL)
+        text += "<h3>Half-hour slots</h3>\n<div id='pv_calibration_slots' style='width:100%;height:420px;'></div>\n"
+        text += "<h3>Days</h3>\n<div id='pv_calibration_days' style='width:100%;height:320px;'></div>\n"
+        text += "<script>\nvar pv_calibration_slot_data = {};\nvar pv_calibration_day_data = {};\n".format(json.dumps(slot_data), json.dumps(day_data))
+        text += """(function() {
+  var s = pv_calibration_slot_data, d = pv_calibration_day_data;
+  if (typeof Plotly === 'undefined') { document.getElementById('pv_calibration_slots').innerText = 'The chart library could not be loaded.'; return; }
+  var fg = getComputedStyle(document.body).color || '#888';
+  var axis = function(t, extra) { return Object.assign({title: {text: t, font: {color: fg}}, tickfont: {color: fg}, gridcolor: 'rgba(128,128,128,0.3)', zeroline: false}, extra || {}); };
+  var hhmm = function(m) { return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); };
+  var maxF = Math.max.apply(null, s.points.map(function(p) { return p[2]; }).concat([0.001]));
+  var minutes = Object.keys(s.adj).map(Number).sort(function(a, b) { return a - b; });
+  var shown = {}; s.evidence_minutes.forEach(function(m) { shown[m] = true; });
+  var layout = function(xt) { return {paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', margin: {l: 50, r: 10, t: 40, b: 40}, legend: {font: {color: fg}, orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom'},
+    xaxis: axis(xt), yaxis: axis('Actual / forecast', {range: [0, 3]})}; };
+  Plotly.newPlot('pv_calibration_slots', [
+    {type: 'scatter', mode: 'markers', name: 'stored days', x: s.points.map(function(p) { return p[0] / 60; }), text: s.points.map(function(p) { return hhmm(p[0]); }), y: s.points.map(function(p) { return Math.min(p[1], 3); }),
+      marker: {size: s.points.map(function(p) { return 6 + 10 * p[2] / maxF; }), color: '#f5c43d', opacity: s.points.map(function(p) { return Math.max(p[3], 0.15); })}},
+    {type: 'scatter', mode: 'lines', name: 'unshrunk', x: minutes.map(function(m) { return m / 60; }), y: minutes.map(function(m) { return shown[m] ? s.raw_adj[m] : null; }), line: {color: '#a8a8a7', dash: 'dot'}},
+    {type: 'scatter', mode: 'lines', name: 'applied', x: minutes.map(function(m) { return m / 60; }), y: minutes.map(function(m) { return shown[m] ? s.adj[m] : null; }), line: {color: '#e90a0a', width: 3}},
+    {type: 'scatter', mode: 'lines', name: 'no correction', x: [0, 24], y: [1, 1], line: {color: fg, dash: 'dash', width: 1}}
+  ], (function() { var l = layout('Time of day'); var ticks = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24];
+    l.xaxis = Object.assign(l.xaxis, {range: [0, 24], tickvals: ticks, ticktext: ticks.map(function(h) { return hhmm(h * 60); })}); return l; })(), {responsive: true});
+  var good = d.points.filter(function(p) { return !p[3] && p[1] !== null; }), down = d.points.filter(function(p) { return p[3] && p[1] !== null; });
+  var maxD = Math.max.apply(null, d.points.map(function(p) { return p[2]; }).concat([0.001]));
+  var days = d.points.map(function(p) { return p[0]; });
+  Plotly.newPlot('pv_calibration_days', [
+    {type: 'scatter', mode: 'markers', name: 'days', x: good.map(function(p) { return p[0]; }), y: good.map(function(p) { return Math.min(p[1], 3); }), marker: {size: good.map(function(p) { return 6 + 10 * p[2] / maxD; }), color: '#f5c43d'}},
+    {type: 'scatter', mode: 'markers', name: 'down days (skipped)', x: down.map(function(p) { return p[0]; }), y: down.map(function(p) { return Math.min(p[1], 3); }), marker: {size: 8, color: 'rgba(0,0,0,0)', line: {color: '#888', width: 1}}},
+    {type: 'scatter', mode: 'lines', name: 'unshrunk', x: [days[0], days[days.length - 1]], y: [d.raw_total, d.raw_total], line: {color: '#a8a8a7', dash: 'dot'}},
+    {type: 'scatter', mode: 'lines', name: 'applied', x: [days[0], days[days.length - 1]], y: [d.total, d.total], line: {color: '#e90a0a', width: 3}}
+  ], layout('Day'), {responsive: true});
+})();
+</script>
+"""
+        # Two-hour bands: mean forecast and actual kWh per valid day, the factors at the band's middle slot, and the number of points
+        used = set(days_used)
+        valid_days = max(len(used), 1)
+        small = "padding:4px 8px;border:1px solid #555;"
+        text += "<table style='border-collapse:collapse;margin:8px 0 20px 0;font-size:0.9em;'>\n<tr>"
+        for heading in ("Time", "Forecast kWh", "Actual kWh", "Unshrunk", "Applied", "Points"):
+            text += "<th style='{}'>{}</th>".format(small, heading)
+        text += "</tr>\n"
+        slot_minutes = min((b - a for a, b in zip(sorted(model["adj"]), sorted(model["adj"])[1:])), default=30)
+        for band_start in range(0, 24 * 60, 120):
+            band = [point for point in model["slot_points"] if band_start <= point["minute"] < band_start + 120]
+            forecast = sum(point["forecast_kwh"] for point in band) / valid_days
+            actual = sum(point["actual_kwh"] for point in band) / valid_days
+            if forecast < 0.01 and actual < 0.01:
+                continue
+            middle = band_start + 60 - (60 % slot_minutes)
+            text += "<tr><td style='{0}'>{1:02d}:00-{2:02d}:00</td><td style='{0}'>{3:.2f}</td><td style='{0}'>{4:.2f}</td><td style='{0}'>{5:.2f}</td><td style='{0}'>{6:.2f}</td><td style='{0}'>{7}</td></tr>\n".format(
+                small, band_start // 60, (band_start + 120) // 60, forecast, actual, model["raw_adj"].get(middle, model["raw_total"]), model["adj"].get(middle, model["total"]), len(band)
+            )
+        text += "</table>\n</div>\n"
+        return text
 
     def is_editable_value(self, value):
         """
@@ -5133,7 +5656,8 @@ chart.render();
         """
         Return the discovery catalogue as an HTML page
 
-        Redacted by default - what a debug dump would carry - with ?raw=1 for the unredacted view.
+        The published catalogue by default - what a debug dump would carry, email addresses scrubbed -
+        with ?raw=1 for the view with email addresses left in. Identifiers are published in both.
         Reads the coordinator directly rather than parsing sensor.predbat_discovery's attributes
         back out: that entity deliberately carries only a summary, and the coordinator is the
         better coupling anyway (see Coordinator.publish()).
@@ -5177,7 +5701,7 @@ chart.render();
         text += "</div>\n"
 
         if raw:
-            text += "<div class='discovery-warning'><strong>Raw view.</strong> Serial numbers, MPANs and account identifiers are shown unredacted - this view is <strong>not safe to share</strong>. Use the redacted view for anything you post in a bug report.</div>\n"
+            text += "<div class='discovery-warning'><strong>Raw view.</strong> Email addresses are shown unredacted - this view is <strong>not safe to share</strong>. Use the default view for anything you post in a bug report.</div>\n"
 
         conflicts = catalogue.get("observations", {}).get("conflicts", [])
         if conflicts:
@@ -5214,6 +5738,155 @@ chart.render();
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 
+    def _discovery_status_map(self):
+        """The catalogue's per-component status map, or {} when there is no catalogue to read."""
+        coordinator = self._coordinator()
+        if coordinator is None:
+            return {}
+        try:
+            return coordinator.catalogue().get("components", {})
+        except Exception as e:
+            self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+            return {}
+
+    def _discovery_status_text(self, status):
+        """One component's status-map entry in words: what it reported, or why it has nothing to show."""
+        if status.get("status") != "ok":
+            return DISCOVERY_STATUS_TEXT.get(status.get("status"), str(status.get("status")))
+        counts = status.get("counts") or {}
+        parts = ["{} {}".format(count, section[:-1] if count == 1 and section.endswith("s") else section) for section, count in counts.items()]
+        return ", ".join(parts) if parts else "nothing reported"
+
+    def _discovery_label(self, key):
+        """A field name as a label: underscores become spaces, and the name is otherwise as reported."""
+        return html_module.escape(str(key).replace("_", " "))
+
+    def _discovery_chips_html(self, items, off=()):
+        """Render values as chips, struck through for any in `off`. Values are escaped."""
+        return "".join("<span class='discovery-chip{}'>{}</span>".format(" discovery-chip-off" if item in off else "", html_module.escape(str(item))) for item in items)
+
+    def _discovery_glance_value_html(self, value):
+        """Render one summary value: a list as chips, a mapping as labelled rows, anything else as plain text."""
+        if isinstance(value, dict):
+            return self._discovery_fields_html(value)
+        if isinstance(value, list):
+            if all(not isinstance(item, (dict, list)) for item in value):
+                return self._discovery_chips_html(value)
+            return self._discovery_value_html(value)
+        return html_module.escape(str(value))
+
+    def _discovery_glance_html(self, record):
+        """Render one record's at-a-glance summary: what it is, how big it is, and what it does.
+
+        Built by rule from the record's own shape, never from a list of field names, so a field a
+        reporter adds later appears here with no change to this page. Identity containers come
+        first (serial, account ids, model, firmware), then the record's own top-level facts and
+        lists (type, composition, functions, flags), then its sizes and the rest of the summary
+        containers in DISCOVERY_GLANCE_CONTAINERS order, then any container this page has never
+        been told about, and finally "Predbat controls": the entities it can write to. Field names
+        are shown with underscores as spaces; values are shown as reported.
+        """
+        placed = set(DISCOVERY_GLANCE_CONTAINERS) | set(DISCOVERY_FOLDED_CONTAINERS)
+        identity = ("hardware_ids", "account_ids", "info")
+        rows = []
+
+        def add_container(container):
+            """Add one summary row per key of a mapping-valued container."""
+            for key, value in container.items():
+                rows.append((self._discovery_label(key), self._discovery_glance_value_html(value)))
+
+        for name in identity:
+            if isinstance(record.get(name), dict):
+                add_container(record[name])
+        for key, value in record.items():
+            if key in ("device_id", "source") or key in placed or isinstance(value, dict):
+                continue
+            rows.append((self._discovery_label(key), self._discovery_glance_value_html(value)))
+        for name in DISCOVERY_GLANCE_CONTAINERS:
+            value = record.get(name)
+            if name in identity or not isinstance(value, dict):
+                continue
+            if name == "capabilities":
+                rows.append((self._discovery_label(name), self._discovery_chips_html([str(key).replace("_", " ") for key in value], off={str(key).replace("_", " ") for key, flag in value.items() if not flag})))
+            else:
+                add_container(value)
+        for key, value in record.items():
+            if key not in placed and isinstance(value, dict):
+                add_container(value)
+        entities = record.get("entities")
+        if isinstance(entities, dict):
+            controls = [str(key).replace("_", " ") for key, descriptor in entities.items() if isinstance(descriptor, dict) and descriptor.get("access") == "rw"]
+            if controls:
+                rows.append(("Predbat controls", self._discovery_chips_html(controls)))
+
+        text = "<table class='discovery-glance'>\n"
+        for label, value in rows:
+            text += "<tr><td>{}</td><td>{}</td></tr>\n".format(label, value)
+        text += "</table>\n"
+        return text
+
+    def _discovery_component_html(self, catalogue, name):
+        """Render the Components page pop-up body for one component: its status, then each record it reported.
+
+        Each record gets the at-a-glance summary, with the full record (entities included) folded
+        beneath it. Reads the published catalogue, so this shows what a debug dump would carry.
+        """
+        from components import COMPONENT_LIST
+
+        display_name = COMPONENT_LIST.get(name, {}).get("name", name)
+        text = "<h2 class='discovery-modal-title'>{} · discovery</h2>\n".format(html_module.escape(str(display_name)))
+
+        status = catalogue.get("components", {}).get(name)
+        if status is None:
+            text += "<div class='discovery-meta'>This component has no discovery reporter.</div>\n"
+        elif status.get("status") == "ok":
+            meta = []
+            reported_at = status.get("reported_at")
+            if reported_at:
+                try:
+                    meta.append("Reported {}".format(format_time_ago(datetime.fromisoformat(reported_at)).lower()))
+                except (TypeError, ValueError):
+                    meta.append("Reported {}".format(reported_at))
+            if "automatic" in status:
+                meta.append("automatic: {}".format("yes" if status["automatic"] else "no"))
+            meta.append(self._discovery_status_text(status))
+            text += "<div class='discovery-meta'>{}</div>\n".format(html_module.escape(" · ".join(meta)))
+        else:
+            sentence = DISCOVERY_STATUS_SENTENCE.get(status.get("status"), "This component's discovery status is {}.".format(status.get("status")))
+            text += "<div class='discovery-meta'>{}</div>\n".format(html_module.escape(sentence))
+
+        meta_keys = ("schema_version", "generated", "components", "observations")
+        for section, records in catalogue.items():
+            if section in meta_keys or not isinstance(records, list):
+                continue
+            for record in records:
+                if not isinstance(record, dict) or record.get("source") != name:
+                    continue
+                text += "<div class='discovery-card'>\n"
+                text += "<div class='discovery-card-title'>{}<span class='discovery-source'>{}</span></div>\n".format(
+                    html_module.escape(str(record.get("device_id", "(no device_id)"))), html_module.escape(section[:-1] if section.endswith("s") else section)
+                )
+                text += self._discovery_glance_html(record)
+                text += "<details><summary>Full record</summary>\n{}</details>\n".format(self._discovery_record_html(record))
+                text += "</div>\n"
+
+        text += "<p><a href='./discovery'>Open the full discovery page &rarr;</a></p>\n"
+        return text
+
+    async def html_component_discovery(self, request):
+        """Return one component's discovery info as an HTML fragment, for the Components page pop-up."""
+        name = str(request.query.get("name", ""))
+        coordinator = self._coordinator()
+        catalogue = None
+        if coordinator is not None:
+            try:
+                catalogue = coordinator.catalogue()
+            except Exception as e:
+                self.log("Warn: Web: failed to read the discovery catalogue: {}".format(e))
+        if catalogue is None:
+            return web.Response(content_type="text/html", text="<div class='discovery-empty'>Discovery is not available - no component coordinator is running yet.</div>\n")
+        return web.Response(content_type="text/html", text=self._discovery_component_html(catalogue, name))
+
     async def html_components(self, request):
         """
         Return the Components view as an HTML page showing status of all components
@@ -5226,6 +5899,11 @@ chart.render();
         text += get_component_edit_modal_css()
         text += get_entity_modal_js()
         text += get_component_edit_modal_js()
+        text += get_discovery_css()
+        text += get_discovery_modal_js()
+
+        # Discovery status per component: the ones listed here get an info button (see html_component_discovery)
+        discovery_status = self._discovery_status_map()
 
         # Get all component information
         all_components = self.base.components.get_all()
@@ -5248,7 +5926,7 @@ chart.render();
                 disabled_components.append(component_name)
 
         # Add heading with checkbox and totals on the same line
-        text += "<div style='display: flex; align-items: center; margin-bottom: 15px;'>\n"
+        text += "<div style='display: flex; flex-wrap: wrap; align-items: center; gap: 8px 0; margin-bottom: 15px;'>\n"
         text += "<h2 style='margin: 0; margin-right: 20px;'>Component Status</h2>\n"
         text += "<label style='cursor: pointer; margin-right: 20px; white-space: nowrap;'>\n"
         text += "<input type='checkbox' id='showDisabledCheckbox' onclick='toggleDisabledComponents()' style='margin-right: 8px;'>\n"
@@ -5313,6 +5991,10 @@ chart.render();
             # Add edit button for all components
             text += f'<button class="edit-button" onclick="showComponentEditModal(\'{component_name}\')" title="Edit component configuration">&#9998;</button>\n'
 
+            # Add a discovery info button for every component the catalogue has a status for
+            if component_name in discovery_status:
+                text += f'<button class="info-button" onclick="showDiscoveryModal(\'{component_name}\')" title="Show what this component discovered">&#9432;</button>\n'
+
             text += f"</div>\n"
 
             # Component details
@@ -5330,6 +6012,11 @@ chart.render();
             if error_count is not None:
                 error_class = "error-count-high" if error_count > 0 else "error-count-none"
                 text += f'<p><strong>Error Count:</strong> <span class="{error_class}">{error_count}</span></p>\n'
+
+            # Summarise what the component discovered; the summary opens the same pop-up as the info button
+            if component_name in discovery_status:
+                discovery_text = html_module.escape(self._discovery_status_text(discovery_status[component_name]))
+                text += f'<p><strong>Discovery:</strong> <span class="discovery-summary-link" onclick="showDiscoveryModal(\'{component_name}\')">{discovery_text}</span></p>\n'
 
             # Show args and their current values
             args_info = component_info.get("args", {})
@@ -5414,6 +6101,14 @@ chart.render();
             </table>
         </div>
         <div id="entityEmptyState" class="entity-empty-state" style="display: none;">No entities found</div>
+    </div>
+</div>
+
+<!-- Discovery Modal -->
+<div id="discoveryModal" class="entity-modal">
+    <div class="entity-modal-content">
+        <span class="entity-modal-close" onclick="closeDiscoveryModal()">&times;</span>
+        <div id="discoveryModalBody"></div>
     </div>
 </div>
 
@@ -6088,9 +6783,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
         action = data.get("action")
         if action == "check":
-            result = await kraken_key.check_kraken_key(base_url, token)
+            result = await kraken_key.check_kraken_key(base_url, token, session_factory=self.http_session)
         elif action == "generate":
-            result = await kraken_key.generate_kraken_key(base_url, token)
+            result = await kraken_key.generate_kraken_key(base_url, token, session_factory=self.http_session)
         else:
             return web.json_response({"status": "error", "error": "Unknown action"}, status=400, headers=headers)
 

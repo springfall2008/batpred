@@ -22,6 +22,8 @@ import tempfile
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import aiohttp
 
@@ -941,6 +943,107 @@ def test_dispatch_strips_chat_omit_properties(my_predbat):
         print("ERROR: get_apps reported masked={} despite the model asking for masked: False through chat".format(result.get("masked")))
         failed = True
 
+    return failed
+
+
+class _ToolSession:
+    """A session whose every GET answers 200 with a fixed text body, recording the URLs asked for."""
+
+    def __init__(self, body, content_type="text/plain"):
+        self.body = body
+        self.content_type = content_type
+        self.urls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
+    def get(self, url, **kwargs):
+        self.urls.append(url)
+        response = SimpleNamespace(status=200, headers={"Content-Type": self.content_type})
+
+        async def text():
+            return self.body
+
+        async def read(limit):
+            return self.body.encode("utf-8")[:limit]
+
+        response.text = text
+        response.content = SimpleNamespace(read=read)
+
+        class _Context:
+            async def __aenter__(self_inner):
+                return response
+
+            async def __aexit__(self_inner, *exc):
+                return None
+
+        return _Context()
+
+
+class _FetchingStorage:
+    """Stands in for Storage: always calls the fetch function, so the docs index is downloaded each time."""
+
+    async def fetch_cached(self, module, filename, fetch_fn, **kwargs):
+        return await fetch_fn()
+
+
+def test_chat_tools_use_the_base_session_factory(my_predbat):
+    """search_docs, read_docs and fetch_url reach the network on a session from the base's http_session_factory.
+
+    Driven through ChatAgent._dispatch(), the call the model's tool use makes, with a global factory
+    installed as a trap and the default aiohttp session made fatal.
+
+    Mutation checks: reverting any of the three session builders in chat_tools.py to
+    new_http_session(), or dropping session_factory=self.http_session from a call in chat.py, fails below.
+    """
+    from component_base import set_http_session_factory
+    from tests.test_chat_tools import DOCS_FIXTURE
+
+    failed = False
+    print("**** Testing chat tools build their sessions from the base factory ****")
+    agent = _make_agent(my_predbat)
+    docs_session = _ToolSession(json.dumps(DOCS_FIXTURE))
+    page_session = _ToolSession("hello from the page")
+    queue = [docs_session, docs_session, page_session]
+    trap_made = []
+
+    def trap_factory(**kwargs):
+        trap_made.append(kwargs)
+        return _ToolSession(json.dumps(DOCS_FIXTURE))
+
+    made = []
+
+    def base_factory(**kwargs):
+        made.append(kwargs)
+        return queue.pop(0)
+
+    my_predbat.http_session_factory = base_factory
+    set_http_session_factory(trap_factory)
+    try:
+        with patch("aiohttp.ClientSession", side_effect=AssertionError("the default session must not be built")), patch("chat_tools._default_resolver", return_value=["93.184.216.34"]), patch.object(chat.ChatAgent, "storage", new=_FetchingStorage()):
+            searched = asyncio.run(agent._dispatch(None, "search_docs", {"query": "solcast"}))
+            read = asyncio.run(agent._dispatch(None, "read_docs", {"section": "apps-yaml/#solcast"}))
+            fetched = asyncio.run(agent._dispatch(None, "fetch_url", {"url": "https://github.com/x"}))
+    finally:
+        set_http_session_factory(None)
+        del my_predbat.http_session_factory
+
+    if trap_made:
+        print("ERROR: the global factory supplied a chat tool session instead of the base factory")
+        failed = True
+    if len(made) != 3:
+        print("ERROR: expected the base factory to supply three sessions, got {}".format(len(made)))
+        failed = True
+    for name, result in (("search_docs", searched), ("read_docs", read), ("fetch_url", fetched)):
+        if not result.get("success"):
+            print("ERROR: {} did not succeed through the base factory session: {}".format(name, result))
+            failed = True
+    if fetched.get("success") and fetched["data"]["text"] != "hello from the page":
+        print("ERROR: fetch_url returned {!r}".format(fetched["data"]["text"]))
+        failed = True
     return failed
 
 
@@ -4353,6 +4456,7 @@ def run_chat_tests(my_predbat):
     failed |= test_plain_answer(my_predbat)
     failed |= test_tool_call_round_trip(my_predbat)
     failed |= test_dispatch_strips_chat_omit_properties(my_predbat)
+    failed |= test_chat_tools_use_the_base_session_factory(my_predbat)
     failed |= test_tool_call_ids_are_normalised_when_the_provider_omits_them(my_predbat)
     failed |= test_tool_round_cap(my_predbat)
     failed |= test_deadline_checked_between_tool_calls_within_a_round(my_predbat)

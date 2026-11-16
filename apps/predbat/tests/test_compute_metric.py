@@ -20,6 +20,7 @@ VALUE_RATE_STATE = (
     "rate_export_min",
     "rate_export_max",
     "rate_export_max_forward",
+    "rate_export_min_base",
     "metric_battery_cycle",
     "metric_battery_value_export_scaling",
 )
@@ -82,6 +83,8 @@ def compute_metric_test(
     my_predbat.rate_max_base = rate_max
     # Empty means "no forward export data", which sends battery_value_rate back to rate_export_max
     my_predbat.rate_export_max_forward = {}
+    # None means "no base export minimum", which sends the export floor back to rate_export_min
+    my_predbat.rate_export_min_base = None
     if not end_record:
         end_record = my_predbat.forecast_minutes
 
@@ -140,6 +143,7 @@ def save_state(my_predbat):
         "carbon_metric",
         "rate_min_forward",
         "rate_export_max_forward",
+        "rate_export_min_base",
     ]
     for item in save_items:
         state_dict[item] = getattr(my_predbat, item)
@@ -365,6 +369,57 @@ def battery_value_export_forward_test(my_predbat):
     return failed
 
 
+def battery_value_export_min_base_test(my_predbat):
+    """Pin the export floor to the export tariff's own minimum, not one a saving session has moved.
+
+    rate_export_min is scanned after the saving/Axle sessions go on, so a session over the tariff's
+    cheapest export minute lifts it, and the floor then values a stored kWh at a sale price the tariff
+    never offers. rate_export_min_base comes from the same pre-session tariff as rate_export_max_forward.
+    """
+    failed = False
+    saved = {name: getattr(my_predbat, name) for name in VALUE_RATE_STATE}
+    try:
+        my_predbat.inverter_loss = 0.96
+        my_predbat.battery_loss = 0.97
+        my_predbat.battery_loss_discharge = 0.97
+        my_predbat.metric_battery_cycle = 0.0
+        my_predbat.metric_battery_value_export_scaling = 1.0
+        my_predbat.rate_min = 1.0
+        my_predbat.rate_max = my_predbat.rate_max_base = 28.85
+        my_predbat.rate_min_forward = {10: 1.0}
+        my_predbat.rate_export_max = 300.0
+        my_predbat.rate_export_max_forward = {10: 20.0}
+        replacement = 1.0 / 0.96 / 0.97
+
+        # The session lifted the scanned minimum to 20p, but the tariff's own minimum is 5p
+        my_predbat.rate_export_min = 20.0
+        my_predbat.rate_export_min_base = 5.0
+        expected = 5.0 * 0.96 * 0.97 - replacement
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - expected) > 1e-6:
+            print("ERROR: battery_value_rate is {} with a saving session lifting rate_export_min, expected the base-tariff export floor {}".format(got, expected))
+            failed = True
+
+        # No base minimum (an older debug file being replayed) falls back to rate_export_min
+        my_predbat.rate_export_min_base = None
+        expected = 20.0 * 0.96 * 0.97 - replacement
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - expected) > 1e-6:
+            print("ERROR: battery_value_rate is {} with no base export minimum, expected the rate_export_min fallback {}".format(got, expected))
+            failed = True
+
+        # A 0p base export minimum is a real tariff value, not missing data, so the floor drops away
+        my_predbat.rate_export_min_base = 0.0
+        got = my_predbat.battery_value_rate(10)
+        if abs(got - replacement) > 1e-6:
+            print("ERROR: battery_value_rate is {} with a 0p base export minimum, expected the replacement cost {}".format(got, replacement))
+            failed = True
+    finally:
+        for name, value in saved.items():
+            setattr(my_predbat, name, value)
+    return failed
+
+
 def run_compute_metric_tests(my_predbat):
     """
     Test the compute metric function
@@ -375,6 +430,7 @@ def run_compute_metric_tests(my_predbat):
     failed |= battery_value_rate_ceiling_base_test(my_predbat)
     failed |= battery_value_export_scaling_test(my_predbat)
     failed |= battery_value_export_forward_test(my_predbat)
+    failed |= battery_value_export_min_base_test(my_predbat)
     state_dict = save_state(my_predbat)
     failed |= compute_metric_test(my_predbat, "zero", assert_metric=0)
     failed |= compute_metric_test(my_predbat, "cost", cost=10.0, assert_metric=10)

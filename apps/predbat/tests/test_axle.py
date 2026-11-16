@@ -157,6 +157,12 @@ def test_axle(my_predbat=None):
         ("managed_token", _test_axle_managed_get_partner_token, "Managed mode partner token auth"),
         ("managed_fetch_e2e", _test_axle_managed_fetch_end_to_end, "Managed mode end-to-end fetch"),
         ("managed_token_retry", _test_axle_managed_token_retry, "Managed mode token invalidation and retry"),
+        ("discovery_none_when_disabled", _test_axle_discovery_none_when_disabled, "No programme without a configured Axle account"),
+        ("discovery_byok_programme", _test_axle_discovery_byok_programme, "BYOK account reported as a vpp programme"),
+        ("discovery_managed_programme", _test_axle_discovery_managed_programme, "Managed site reported with its site id"),
+        ("discovery_forces_read_only_effect", _test_axle_discovery_forces_read_only_effect, "forces_read_only only with axle_control"),
+        ("discovery_round_trip", _test_axle_discovery_round_trip, "Programme round-trips through the Coordinator"),
+        ("discovery_run_files_report", _test_axle_discovery_run_files_report, "run() files the report every cycle"),
     ]
 
     # Run all sub-tests
@@ -903,7 +909,7 @@ def _test_axle_history_loading(my_predbat=None):
 
 
 def _test_axle_history_cleanup(my_predbat=None):
-    """Test cleanup of events older than 7 days"""
+    """Test cleanup of events older than AXLE_HISTORY_DAYS"""
     print("Test: Axle API history cleanup")
 
     axle = MockAxleAPI()
@@ -929,9 +935,19 @@ def _test_axle_history_cleanup(my_predbat=None):
     # Run cleanup
     axle.cleanup_event_history()
 
-    # Should only keep events within 7 days
-    assert len(axle.event_history) == 1, "Should remove events older than 7 days"
+    # Should only keep events within AXLE_HISTORY_DAYS (9) days
+    assert len(axle.event_history) == 1, "Should remove events older than 9 days"
     assert axle.event_history[0]["import_export"] == "export"
+
+    # An event 8.5 days old is kept: the History view's billing comparison reaches back 7 whole local days
+    week_old_event = {
+        "start_time": "2025-12-12T03:00:00+0000",
+        "end_time": "2025-12-12T05:00:00+0000",
+        "import_export": "export",
+    }
+    axle.event_history = [week_old_event]
+    axle.cleanup_event_history()
+    assert len(axle.event_history) == 1, "Should keep an event 8.5 days old for the History view's oldest billed day"
 
     print("  ✓ History cleanup removes old events correctly")
     return False
@@ -1801,3 +1817,88 @@ def _test_axle_managed_token_retry(my_predbat=None):
     print("  ✓ Complete failure after retry records failure correctly")
 
     return False
+
+
+def _axle_discovery_api(managed=False):
+    """An AxleAPI with its event sensor published, in BYOK or managed mode."""
+    api = MockAxleAPI()
+    api.automatic = True
+    if managed:
+        api.managed_mode = True
+        api.site_id = "site-4471"
+        api.partner_username = "partner@example.com"
+        api.partner_password = "partner-secret"
+        api.partner_token = "eyJhbGciOiJIUzI1NiJ9.partner"
+    api.publish_axle_event()
+    return api
+
+
+def _test_axle_discovery_none_when_disabled(my_predbat=None):
+    """With no API key and no managed site Axle is disabled, so there is no programme to describe."""
+    api = MockAxleAPI()
+    api.api_key = None
+    assert api.build_discovery() is None
+    return 0
+
+
+def _test_axle_discovery_byok_programme(my_predbat=None):
+    """A BYOK account is a vpp programme that rewrites rates through the axle_session sensor, with no meter it can name."""
+    report = _axle_discovery_api().build_discovery()
+    assert report["automatic"] is True
+    programme = report["programmes"][0]
+    assert programme["device_id"] == "axle:vpp", programme
+    assert programme["kind"] == "vpp"
+    assert "meter" not in programme, "Axle does not know which supply point it is enrolled on"
+    assert programme["info"] == {"vendor": "Axle Energy", "mode": "byok"}, programme
+    assert programme["effects"] == ["rate_override"], programme
+    assert programme["entities"] == {"axle_session": {"entity_id": "binary_sensor.predbat_axle_event", "domain": "binary_sensor", "access": "r"}}, programme
+    assert "test_api_key" not in str(report), "the API key never reaches the report"
+    return 0
+
+
+def _test_axle_discovery_managed_programme(my_predbat=None):
+    """A managed site is keyed by its site id; the partner login, password and token never reach the report."""
+    report = _axle_discovery_api(managed=True).build_discovery()
+    programme = report["programmes"][0]
+    assert programme["device_id"] == "axle:site:site-4471", programme
+    assert programme["account_ids"] == {"site_id": "site-4471"}, programme
+    assert programme["info"]["mode"] == "managed"
+    for secret in ("partner@example.com", "partner-secret", "eyJhbGciOiJIUzI1NiJ9"):
+        assert secret not in str(report), secret
+    return 0
+
+
+def _test_axle_discovery_forces_read_only_effect(my_predbat=None):
+    """With axle_control on, an active session puts Predbat in read-only mode, so the programme says so."""
+    api = _axle_discovery_api()
+    api.config_args["axle_control"] = True
+    assert api.build_discovery()["programmes"][0]["effects"] == ["rate_override", "forces_read_only"]
+    return 0
+
+
+def _test_axle_discovery_round_trip(my_predbat=None):
+    """Through the real Coordinator: no warnings, and kind, effects and the entity survive validation."""
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("axle", _axle_discovery_api(managed=True).build_discovery())
+    programme = coordinator.catalogue()["programmes"][0]
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    assert programme["kind"] == "vpp" and programme["effects"] == ["rate_override"], programme
+    assert programme["account_ids"] == {"site_id": "site-4471"}, programme
+    assert "axle_session" in programme["entities"], programme
+    return 0
+
+
+def _test_axle_discovery_run_files_report(my_predbat=None):
+    """run() files the report after publishing, on every cycle."""
+    api = MockAxleAPI()
+    api.updated_at = api.now_utc.isoformat()  # fresh, so run() does not fetch
+    filed = []
+    api.report_discovery = filed.append
+    assert run_async(api.run(60, False)) is True
+    assert len(filed) == 1 and filed[0]["programmes"][0]["kind"] == "vpp", filed
+    return 0

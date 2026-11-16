@@ -4,9 +4,11 @@
 # This is the NATIVE Predbat cloud integration - Predbat talks to the Hanchu cloud
 # directly and needs no Home Assistant integration and no bridge script.
 #
-# If you would rather drive the inverter through the hanchu-ess-ha HACS integration
-# and a Home Assistant script, use templates/hanchu_cloud.yaml instead; that is a
-# different, service-API setup and the two are alternatives, not layers.
+# The older setup that drove the inverter through the hanchu-ess-ha integration and
+# a Home Assistant bridge script is a different, service-API setup; its guide and
+# template now live in that integration's repository
+# (https://github.com/upton68/hanchu-ess-ha/blob/main/docs/predbat-bridge.md).
+# The two are alternatives, not layers.
 # ------------------------------------------------------------------
 ---
 pred_bat:
@@ -90,6 +92,7 @@ pred_bat:
   # published rate limit, so this default is deliberately mild.
   #hanchu_api_delay: 1
   #hanchu_min_write_interval: 60
+  #hanchu_write_debounce: 10
 
   # Every API request and response is logged by default, because that is what is needed
   # to look into a problem with your inverter. It writes thousands of long lines a day:
@@ -206,6 +209,13 @@ pred_bat:
     - 'locked'
     - 'plugged in'
     - 'waiting'
+
+  # car_charging_plugged can be set to a sensor that says only whether the car is plugged in - staying on after
+  # its charge has finished - matched against car_charging_planned_response. Predbat resets the manual car SoC
+  # (input_number.predbat_car_charging_manual_soc_kwh) to 0 when it reads unplugged, and with car_charging_energy
+  # set it tracks the SoC of a car that has no car_charging_soc sensor. One entry per car - e.g. for a myenergi Zappi:
+  #car_charging_plugged:
+  #  - 're:(sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
 
   # car_charging_now can be set to a sensor that shows the car is charging right now, so that
   # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
@@ -461,7 +471,4 @@ pred_bat:
   #  - '{octopus_intelligent_slot}'
   #  - '{octopus_ready_time}'
   #  - '{octopus_charge_limit}'
-  #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
-  #  - '+[car_charging_soc]'
-  #  - '{car_charging_now}'
