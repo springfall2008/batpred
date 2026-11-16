@@ -1511,9 +1511,7 @@ class SolarAPI(ComponentBase):
             best_day_scaling = 1.3
         max_pv_power_hist = evidence_peak_kw(evidence, today, PV_CALIBRATION_BAND_DAYS)
         self.log(
-            "SolarAPI: PV Calibration: Worst day scaling factor {}, best day scaling factor {} average day scaling factor {} max historical power {}".format(
-                dp2(worst_day_scaling), dp2(best_day_scaling), dp2(average_day_scaling), dp2(max_pv_power_hist)
-            )
+            "SolarAPI: PV Calibration: Worst day scaling factor {}, best day scaling factor {} average day scaling factor {} max historical power {}".format(dp2(worst_day_scaling), dp2(best_day_scaling), dp2(average_day_scaling), dp2(max_pv_power_hist))
         )
         self.pv_calibration_worst_scaling = worst_day_scaling
         self.pv_calibration_best_scaling = best_day_scaling

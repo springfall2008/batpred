@@ -4169,7 +4169,10 @@ chart.render();
             ("Shrink (day / half-hour)", "{} / {}".format(setting("shrink", "{:.2f}"), setting("shrink_slot", "{:.2f}")) if settings else ""),
             ("Days kept / daily scan", "{} / {}".format(setting("history_days", "{}"), setting("scan_days", "{}")) if settings else ""),
             ("Band (worst / best day)", "{:.2f} / {:.2f}".format(getattr(solar, "pv_calibration_worst_scaling", 1.0), getattr(solar, "pv_calibration_best_scaling", 1.0))),
-            ("Last scan", "{} - {}".format(when(getattr(solar, "pv_calibration_last_scan", None)), getattr(solar, "pv_calibration_scan_status", "")) if getattr(solar, "pv_calibration_last_scan", None) else getattr(solar, "pv_calibration_scan_status", "not run")),
+            (
+                "Last scan",
+                "{} - {}".format(when(getattr(solar, "pv_calibration_last_scan", None)), getattr(solar, "pv_calibration_scan_status", "")) if getattr(solar, "pv_calibration_last_scan", None) else getattr(solar, "pv_calibration_scan_status", "not run"),
+            ),
             ("Next scan", when(getattr(solar, "pv_calibration_next_scan", None))),
         ]
         ceiling = solar.pv_clipping_ceiling_kw() if hasattr(solar, "pv_clipping_ceiling_kw") else 0

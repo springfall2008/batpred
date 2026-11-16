@@ -861,5 +861,6 @@ zappi
 zappis
 zaxis
 zcat
+zeroline
 zigbee
 zoneinfo
