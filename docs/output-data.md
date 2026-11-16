@@ -768,6 +768,20 @@ Nothing is checked in read-only mode, while an inverter is calibrating, after th
 Common causes are an inverter app or schedule overriding Predbat's mode, a battery management system limiting the charge or discharge rate, a command that never reached the inverter, or a cloud integration that reports battery power several minutes late.
 The same data is shown in the Control Failures section of the [Metrics view](web-interface.md#metrics-view).
 
+## Inverter balancing data
+
+With two or more inverters, Predbat publishes what [inverter balancing](customisation.md#balance-inverters) is doing each time it runs. That is once a minute while it is switched on, and with each plan run otherwise. There is no sensor for a single inverter.
+
+- **sensor.predbat_balance_inverters** - the number of inverters balancing is holding right now (holding back their charge or discharge rate). Attributes:
+    - `status` - `off` (balancing switched off), `read_only`, `calibrating`, `balanced` (running, nothing held) or `holding`.
+    - `fleet_direction` - whether the batteries should be `discharge`ing (covering the house) or `charge`ing (soaking up spare solar), as balancing judged it, together with the `spread_percent` between the fullest and emptiest battery and the `spare_pv_w` it judged on.
+    - `inverters` - one entry per inverter with its `soc_percent`, `charge_hold` and `discharge_hold`, and any rate it has learned that inverter can really deliver (`charge_ceiling_w` / `discharge_ceiling_w`, with their age in minutes). A hold is `soc` (SoC balancing), `cross_charge` (caught charging from, or discharging into, the other batteries) or `cross_charge_latched` (kept from an earlier pass while the batteries keep their direction).
+    - `holds_24h`, `releases_24h`, `cross_charges_caught_24h` and `ceilings_learned_24h` - what balancing has done in the last 24 hours, counted by the hour.
+    - `events` - the ten most recent holds, releases and learned ceilings, with their times.
+    - `history` - the hourly counts behind those totals. After a restart, Predbat reads `history` and `events` back from this sensor (from Home Assistant's history if Home Assistant restarted too) and carries on counting, so the totals survive a restart.
+
+A steady stream of holds and releases in the same direction is balancing flapping, and each one is a register write. A high `cross_charges_caught_24h` usually means the inverters disagree with each other about the grid reading, so one keeps charging from another. A learned ceiling well below the battery's rate is usually a cold battery or a BMS limit.
+
 ## Predbat Logfile
 
 Predbat writes detailed logging, status and progress activity information to a logfile as it runs and so this file should be checked if **predbat.status** reports an error,

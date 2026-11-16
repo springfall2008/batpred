@@ -32,6 +32,7 @@ clipped week calibrate the same as the same week without an inverter limit, whic
 check. The day totals behind the worst and best day factors (the PV10/PV90 band) need the same treatment as
 the slot averages behind P50.
 """
+
 from datetime import timedelta
 import math
 

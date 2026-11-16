@@ -517,8 +517,10 @@ def load_scenarios(filepath):
     Returns:
         list of scenario dicts
     """
+    # libyaml's loader when PyYAML has it: the same result, about 8x faster on the 2MB scenarios file, which
+    # several tests load
     with open(filepath, "r") as f:
-        data = yaml.safe_load(f)
+        data = yaml.load(f, Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))
     return data["scenarios"]
 
 

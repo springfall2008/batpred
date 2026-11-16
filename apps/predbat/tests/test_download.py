@@ -219,7 +219,7 @@ def _test_get_github_directory_listing_success(my_predbat):
         {"name": "tests", "path": "apps/predbat/tests", "type": "dir"},  # Should be filtered out
     ]
 
-    with patch("requests.get") as mock_get:
+    with patch("download.http_get") as mock_get:
         mock_get.return_value.ok = True
         mock_get.return_value.json.return_value = mock_response
 
@@ -238,7 +238,7 @@ def _test_get_github_directory_listing_failure(my_predbat):
     """
     Test GitHub API failure
     """
-    with patch("requests.get") as mock_get:
+    with patch("download.http_get") as mock_get:
         mock_get.return_value.ok = False
         mock_get.return_value.status_code = 404
 
@@ -252,7 +252,7 @@ def _test_get_github_directory_listing_exception(my_predbat):
     """
     Test GitHub API exception handling
     """
-    with patch("requests.get") as mock_get:
+    with patch("download.http_get") as mock_get:
         mock_get.side_effect = Exception("Network error")
 
         result = get_github_directory_listing("v8.30.8")
@@ -267,7 +267,7 @@ def _test_get_github_directory_listing_uses_env_repository(my_predbat):
     env_repo = "example/forked-batpred"
 
     with patch.dict("download.os.environ", {"PREDBAT_REPOSITORY": env_repo}, clear=True):
-        with patch("requests.get") as mock_get:
+        with patch("download.http_get") as mock_get:
             mock_get.return_value.ok = True
             mock_get.return_value.json.return_value = mock_response
 
@@ -286,7 +286,7 @@ def _test_get_github_directory_listing_explicit_repository(my_predbat):
     explicit_repo = "springfall2008/batpred"
 
     with patch.dict("download.os.environ", {"PREDBAT_REPOSITORY": env_repo}, clear=True):
-        with patch("requests.get") as mock_get:
+        with patch("download.http_get") as mock_get:
             mock_get.return_value.ok = True
             mock_get.return_value.json.return_value = mock_response
 
@@ -578,7 +578,7 @@ def _test_download_predbat_file_success(my_predbat):
         # the prediction kernel .so binaries round-trip byte-for-byte)
         mock_response = type("MockResponse", (), {"ok": True, "content": b'print("test file content")\n'})()
 
-        with patch("download.requests.get", return_value=mock_response):
+        with patch("download.http_get", return_value=mock_response):
             result = download_predbat_file_from_github("v8.30.8", "test.py", output_file)
 
             # Verify file was written byte-for-byte
@@ -606,7 +606,7 @@ def _test_download_predbat_file_binary(my_predbat):
         binary_data = bytes([0x7F, 0x45, 0x4C, 0x46, 0x00, 0x0A, 0x0D, 0xFF, 0xFE, 0x80])
         mock_response = type("MockResponse", (), {"ok": True, "content": binary_data})()
 
-        with patch("download.requests.get", return_value=mock_response):
+        with patch("download.http_get", return_value=mock_response):
             result = download_predbat_file_from_github("v8.30.8", "prediction_kernel_lib_x86_64.so", output_file)
 
             assert os.path.exists(output_file)
@@ -632,7 +632,7 @@ def _test_download_predbat_file_failure(my_predbat):
         # Mock failed HTTP response
         mock_response = type("MockResponse", (), {"ok": False, "status_code": 404})()
 
-        with patch("download.requests.get", return_value=mock_response):
+        with patch("download.http_get", return_value=mock_response):
             result = download_predbat_file_from_github("v8.30.8", "test.py", output_file)
 
             # Verify file was not created
@@ -651,7 +651,7 @@ def _test_download_predbat_file_no_filename(my_predbat):
     # Mock successful HTTP response
     mock_response = type("MockResponse", (), {"ok": True, "content": b'print("test file content")\n'})()
 
-    with patch("download.requests.get", return_value=mock_response):
+    with patch("download.http_get", return_value=mock_response):
         result = download_predbat_file_from_github("v8.30.8", "test.py", None)
         assert result == b'print("test file content")\n'
     return 0
@@ -1006,7 +1006,7 @@ def _test_download_file_verifies_sha(my_predbat):
         output_file = os.path.join(temp_dir, "test.py.v8.30.8")
         mock_response = type("MockResponse", (), {"ok": True, "content": content})()
 
-        with patch("download.requests.get", return_value=mock_response) as mock_get:
+        with patch("download.http_get", return_value=mock_response) as mock_get:
             result = download_predbat_file_from_github("v8.30.8", "test.py", output_file, expected_sha=compute_data_sha1(content))
 
             assert result == content
@@ -1030,7 +1030,7 @@ def _test_download_file_sha_mismatch_aborts(my_predbat):
         output_file = os.path.join(temp_dir, "test.py.v8.30.8")
         mock_response = type("MockResponse", (), {"ok": True, "content": b"corrupted content\n"})()
 
-        with patch("download.requests.get", return_value=mock_response) as mock_get:
+        with patch("download.http_get", return_value=mock_response) as mock_get:
             result = download_predbat_file_from_github("v8.30.8", "test.py", output_file, expected_sha=compute_data_sha1(b"the real content\n"))
 
             assert result is None, "A file that fails verification must not be returned"
@@ -1056,7 +1056,7 @@ def _test_download_file_sha_retry_succeeds(my_predbat):
             type("MockResponse", (), {"ok": True, "content": good})(),
         ]
 
-        with patch("download.requests.get", side_effect=responses) as mock_get:
+        with patch("download.http_get", side_effect=responses) as mock_get:
             result = download_predbat_file_from_github("v8.30.8", "test.py", output_file, expected_sha=compute_data_sha1(good))
 
             assert result == good
@@ -1078,7 +1078,7 @@ def _test_download_release_archive_success(my_predbat):
     temp_dir = tempfile.mkdtemp()
 
     try:
-        with patch("download.requests.get", return_value=response) as mock_get:
+        with patch("download.http_get", return_value=response) as mock_get:
             archive_path = download_predbat_release_archive("v8.30.8", repository="owner/repo", target_dir=temp_dir)
 
             assert archive_path is not None
@@ -1106,16 +1106,16 @@ def _test_download_release_archive_failure(my_predbat):
     try:
         response = _MockStreamResponse([], ok=False, status_code=404)
 
-        with patch("download.requests.get", return_value=response):
+        with patch("download.http_get", return_value=response):
             assert download_predbat_release_archive("v8.30.8", target_dir=temp_dir) is None
         assert response.closed is True, "A non-OK response must still be closed, its body is never read"
 
-        with patch("download.requests.get", side_effect=Exception("Network error")):
+        with patch("download.http_get", side_effect=Exception("Network error")):
             assert download_predbat_release_archive("v8.30.8", target_dir=temp_dir) is None
 
         # A response object that has no close() at all must not break the download
         unclosable = _MockUnclosableResponse([b"archive-bytes"])
-        with patch("download.requests.get", return_value=unclosable):
+        with patch("download.http_get", return_value=unclosable):
             archive_path = download_predbat_release_archive("v8.30.8", target_dir=temp_dir)
             assert archive_path is not None
             os.remove(archive_path)
@@ -1139,7 +1139,7 @@ def _test_download_release_archive_too_large(my_predbat):
         # One chunk larger than the cap, so the very first write trips the limit
         response = _MockStreamResponse([b"x" * 16])
 
-        with patch("download.requests.get", return_value=response):
+        with patch("download.http_get", return_value=response):
             with patch("download.tempfile.mkstemp", return_value=(handle, temp_path)):
                 with patch("download.MAX_ARCHIVE_BYTES", 8):
                     result = download_predbat_release_archive("v8.30.8", target_dir=temp_dir)

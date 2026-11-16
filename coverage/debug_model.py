@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Debug script to analyze what the model is learning"""
+
 import json
 import sys
 

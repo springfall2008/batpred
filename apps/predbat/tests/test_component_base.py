@@ -32,7 +32,6 @@ from solis import SolisAPI
 from teslemetry import TeslemetryAPI
 from wallbox import WallboxAPI
 
-
 # Save original sleep before any patching
 _original_sleep = asyncio.sleep
 
@@ -853,6 +852,143 @@ def test_component_base_request_replan(my_predbat):
     return False
 
 
+class _LoopThread:
+    """An event loop running on a thread of its own, standing in for a started component's loop."""
+
+    def __init__(self):
+        """Start the loop and wait until it is running."""
+        import threading
+
+        self.loop = asyncio.new_event_loop()
+        self.thread = threading.Thread(target=self.loop.run_forever, daemon=True)
+        self.thread.start()
+        while not self.loop.is_running():
+            time.sleep(0.01)
+
+    def stop(self):
+        """Stop the loop and its thread, leaving the loop closed."""
+        self.loop.call_soon_threadsafe(self.loop.stop)
+        self.thread.join(5)
+        if not self.loop.is_closed():
+            self.loop.close()
+
+
+def test_component_base_on_component_loop(my_predbat):
+    """
+    on_component_loop() runs a coroutine on the loop the component's start() is running on, however
+    the caller got here. Entity write events are awaited from other event loops, and anything bound
+    to the component's loop (an HTTP session, a lock) only works on that one.
+    """
+    print("\n*** Test: ComponentBase.on_component_loop hands work over to the component's loop ***")
+    import threading
+
+    base = MockBase()
+    component = TestComponent(base)
+
+    async def where(value):
+        """Report the thread this ran on."""
+        return value, threading.get_ident()
+
+    async def boom():
+        """Fail on whichever loop runs this."""
+        raise ValueError("boom")
+
+    # Not started: there is no component loop, so the work runs where it was called
+    assert component.component_loop is None, "a component that has not started has no loop"
+    assert asyncio.run(component.on_component_loop(where(1), timeout=5)) == (1, threading.get_ident()), "with no component loop the coroutine runs in place"
+
+    worker = _LoopThread()
+    try:
+        component.component_loop = worker.loop
+
+        # From another loop: handed over, result returned, exception propagated
+        value, ident = asyncio.run(component.on_component_loop(where(3), timeout=5))
+        assert value == 3 and ident == worker.thread.ident, "the coroutine must run on the component's loop thread, ran on {}".format(ident)
+        try:
+            asyncio.run(component.on_component_loop(boom(), timeout=5))
+            raise AssertionError("an exception on the component's loop must reach the caller")
+        except ValueError:
+            pass
+
+        # The work's own TimeoutError is its exception, not the hand-over's wait running out: it reaches
+        # the caller at once, rather than being retried in a busy loop until the deadline (Python 3.11
+        # made asyncio.TimeoutError the built-in TimeoutError, so the two are the same class)
+        async def times_out():
+            """Fail with a TimeoutError of its own, as a request inside the work might."""
+            raise TimeoutError("the work's own timeout")
+
+        base.log_messages.clear()
+        started = time.monotonic()
+        cpu_started = time.process_time()
+        try:
+            asyncio.run(component.on_component_loop(times_out(), timeout=2, poll=0.5))
+            raise AssertionError("a TimeoutError raised by the work must reach the caller")
+        except TimeoutError as error:
+            assert "the work's own timeout" in str(error), "the caller must get the work's own exception, got {!r}".format(error)
+        waited = time.monotonic() - started
+        assert waited < 0.5, "the work's TimeoutError must be raised at once, not after the wait ran out: {:.2f}s".format(waited)
+        assert time.process_time() - cpu_started < 0.5, "the caller must not spin while the work's exception is pending"
+        assert not any("still running" in msg for msg in base.log_messages), "a finished piece of work must not be reported as still running: {}".format(base.log_messages)
+
+        # Already on the component's loop: awaited directly, not posted to itself (which would deadlock)
+        value, ident = asyncio.run_coroutine_threadsafe(component.on_component_loop(where(4), timeout=5), worker.loop).result(5)
+        assert value == 4 and ident == worker.thread.ident, "on its own loop the coroutine is awaited in place"
+
+        # Slower than the caller will wait: the caller gets False, the work is not cancelled
+        finished = threading.Event()
+
+        async def slow():
+            """Outlast the caller's wait, then record that it still completed."""
+            await asyncio.sleep(0.3)
+            finished.set()
+            return "late"
+
+        base.log_messages.clear()
+        result = asyncio.run(component.on_component_loop(slow(), timeout=0.05, what="GivTCP write"))
+        assert result is False, "a hand-over that outlasts the timeout returns False, got {}".format(result)
+        assert any("GivTCP write" in msg for msg in base.log_messages), "the abandoned wait is logged with what it was, got {}".format(base.log_messages)
+        assert finished.wait(5), "giving up the wait must not cancel the work on the component's loop"
+
+        # The loop stops under a waiting caller: the wait is abandoned rather than sat out
+        async def never():
+            """Wait far longer than the test will."""
+            await asyncio.sleep(60)
+
+        async def stop_under_caller():
+            """Start a hand-over, then stop the component's loop while it is waited for."""
+            waiter = asyncio.ensure_future(component.on_component_loop(never(), timeout=30, poll=0.05))
+            await asyncio.sleep(0.1)
+            worker.loop.call_soon_threadsafe(worker.loop.stop)
+            return await asyncio.wait_for(waiter, timeout=5)
+
+        assert asyncio.run(stop_under_caller()) is False, "a hand-over whose loop stopped returns False"
+    finally:
+        worker.stop()
+
+    # A stopped (closed) loop is not handed to: the work runs in place again
+    assert asyncio.run(component.on_component_loop(where(5), timeout=5)) == (5, threading.get_ident()), "with the component's loop closed the coroutine runs in place"
+
+    # start() records the loop it runs on
+    started = TestComponent(MockBase())
+
+    async def run_briefly():
+        """Run start() until its first tick, then stop it."""
+        task = asyncio.ensure_future(started.start())
+        await asyncio.sleep(0.05)
+        loop = started.component_loop
+        started.api_stop = True
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return loop is asyncio.get_running_loop()
+
+    assert asyncio.run(run_briefly()), "start() must record the loop it is running on as component_loop"
+    print("PASS: on_component_loop runs in place or hands over, and survives timeouts and a stopped loop")
+    return False
+
+
 def test_component_base_http_session_default(my_predbat):
     """
     With no factory installed, http_session() returns a new aiohttp.ClientSession built from the
@@ -1516,6 +1652,27 @@ def test_component_base_override_on_mock_base(my_predbat):
     return False
 
 
+def test_component_base_import_skips_unittest_mock(my_predbat):
+    """
+    Importing Predbat must not load unittest.mock: it costs about 6 MB of idle memory on every
+    install, and _base_override() only needs it when a test has already imported it.
+    """
+    print("\n*** Test: importing Predbat does not load unittest.mock ***")
+    import os
+    import subprocess
+
+    import component_base
+
+    source_dir = os.path.dirname(os.path.abspath(component_base.__file__))
+    code = "import sys; sys.path.insert(0, {!r}); import predbat; print('MOCK_LOADED' if 'unittest.mock' in sys.modules else 'MOCK_ABSENT')".format(source_dir)
+    result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=120, cwd=source_dir)
+    if "MOCK_ABSENT" not in result.stdout:
+        print("ERROR: unittest.mock was loaded by importing predbat (rc {}): {}".format(result.returncode, (result.stdout + result.stderr)[-800:]))
+        return True
+    print("PASS: predbat imports without unittest.mock")
+    return False
+
+
 def test_component_base_write_methods(my_predbat):
     """
     @writes only marks a method: it returns the same function, which behaves exactly as before.
@@ -1583,6 +1740,106 @@ def test_component_base_write_methods_components(my_predbat):
             assert hasattr(cls, name), "{}.{} should exist for this check to mean anything".format(cls.__name__, name)
             assert name not in listed, "{}.{} only reads and should not be listed".format(cls.__name__, name)
     print("PASS: writer methods listed, readers not")
+    return False
+
+
+# Constructors that must only be called through ComponentBase.http_session() / mqtt_client(), so a
+# host or a test can inject the client for one component instance.
+CLIENT_CONSTRUCTORS = {("aiohttp", "ClientSession"): "self.http_session()", ("aiomqtt", "Client"): "self.mqtt_client()"}
+
+# Modules that may construct the clients directly, and why.
+CONSTRUCTION_ALLOWED = {
+    "component_base": "it holds the default factories the components fall back to",
+    # The web page imports the annual tool's config and validation, but runs the tool itself as a
+    # separate annual_cli.py process, so these fetches never run inside a component.
+    "annual_http": "annual tool fetch helper, runs in the annual_cli.py process",
+    "annual_load": "annual tool fetch helper, runs in the annual_cli.py process",
+    "http_sync": "the synchronous HTTP helper: it uses new_http_session() once component_base is loaded, and builds its own session only before that (download.py repairing an install)",
+}
+
+
+def component_module_closure(source_dir):
+    """Module names of every registered component plus every apps/predbat module they import, transitively."""
+    import ast
+    import os
+
+    from components import COMPONENT_LIST
+
+    def local_imports(name):
+        with open(os.path.join(source_dir, name + ".py")) as handle:
+            tree = ast.parse(handle.read())
+        found = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                found.update(alias.name.split(".")[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                found.add(node.module.split(".")[0])
+        return {module for module in found if os.path.isfile(os.path.join(source_dir, module + ".py"))}
+
+    pending = [entry["class"].split(".")[0] for entry in COMPONENT_LIST.values()]
+    seen = set()
+    while pending:
+        name = pending.pop()
+        if name not in seen:
+            seen.add(name)
+            pending.extend(local_imports(name) - seen)
+    return seen
+
+
+def direct_client_constructions(source):
+    """(line, constructor) for every direct aiohttp.ClientSession / aiomqtt.Client call in the source, however imported."""
+    import ast
+
+    tree = ast.parse(source)
+    module_alias = {}
+    name_alias = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name in ("aiohttp", "aiomqtt"):
+                    module_alias[alias.asname or alias.name] = alias.name
+        elif isinstance(node, ast.ImportFrom) and node.module in ("aiohttp", "aiomqtt"):
+            for alias in node.names:
+                if (node.module, alias.name) in CLIENT_CONSTRUCTORS:
+                    name_alias[alias.asname or alias.name] = (node.module, alias.name)
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        target = None
+        if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name) and func.value.id in module_alias:
+            target = (module_alias[func.value.id], func.attr)
+        elif isinstance(func, ast.Name) and func.id in name_alias:
+            target = name_alias[func.id]
+        if target in CLIENT_CONSTRUCTORS:
+            found.append((node.lineno, "{}.{}".format(*target)))
+    return found
+
+
+def test_component_base_no_direct_client_construction(my_predbat):
+    """Components and the clients they own build HTTP sessions and MQTT clients only through the ComponentBase factories"""
+    import os
+
+    import component_base
+
+    source_dir = os.path.dirname(os.path.abspath(component_base.__file__))
+    modules = component_module_closure(source_dir)
+    assert len(modules) > 20, "the component closure looks wrong: {}".format(sorted(modules))
+    for name in ("fox", "sigenergy", "gateway", "octopus", "ohme"):
+        assert name in modules, "{} should be in the component closure".format(name)
+
+    offenders = []
+    for name in sorted(modules - set(CONSTRUCTION_ALLOWED)):
+        with open(os.path.join(source_dir, name + ".py")) as handle:
+            for line, constructor in direct_client_constructions(handle.read()):
+                offenders.append("{}.py:{} calls {} directly".format(name, line, constructor))
+    assert not offenders, "use {} instead:\n{}".format(" / ".join(CLIENT_CONSTRUCTORS.values()), "\n".join(offenders))
+
+    # The scanner itself must see every import style, or a clean result means nothing.
+    probe = "import aiohttp\nimport aiomqtt as mq\nfrom aiohttp import ClientSession as CS\nfrom aiomqtt import Client\n" "aiohttp.ClientSession()\nmq.Client(hostname='h')\nCS()\nClient(hostname='h')\naiohttp.ClientTimeout(total=1)\n"
+    assert [line for line, _ in direct_client_constructions(probe)] == [5, 6, 7, 8], direct_client_constructions(probe)
+    print("PASS: {} component modules build clients only through the factories".format(len(modules)))
     return False
 
 
@@ -1690,6 +1947,7 @@ def test_component_base_all(my_predbat):
         ("discovery_refresh_live_state", test_component_base_refresh_discovery_refiles_when_live_state_behind_inverter_record_grows, "a report built from live state is re-filed when that state grows"),
         ("discovery_entities_filter", test_component_base_discovery_entities_keeps_only_what_exists, "discovery_entities keeps only entities that exist"),
         ("request_replan", test_component_base_request_replan, "request_replan sets update_pending without invalidating the plan"),
+        ("on_component_loop", test_component_base_on_component_loop, "on_component_loop runs work on the component's own event loop from any caller"),
         ("http_session_default", test_component_base_http_session_default, "http_session defaults to a new caller-owned aiohttp.ClientSession"),
         ("http_session_factory", test_component_base_http_session_factory, "an installed HTTP session factory is used, None restores the default"),
         ("http_session_order", test_component_base_http_session_resolution_order, "http_session prefers the base factory, then the global factory, then aiohttp"),
@@ -1706,8 +1964,10 @@ def test_component_base_all(my_predbat):
         ("clock_unrelated", test_component_base_ignores_unrelated_clock_attribute, "a base with its own unrelated clock attribute is ignored and real time is used"),
         ("clock_isolated", test_component_base_clock_isolated_per_instance, "two instances' clocks are separate"),
         ("override_on_mock_base", test_component_base_override_on_mock_base, "an explicitly set override on a mock base is used, a made-up one is ignored"),
+        ("import_skips_unittest_mock", test_component_base_import_skips_unittest_mock, "importing predbat does not load unittest.mock"),
         ("write_methods", test_component_base_write_methods, "@writes marks a method and write_methods lists exactly the marked ones"),
         ("write_methods_components", test_component_base_write_methods_components, "component writer methods are listed and readers are not"),
+        ("no_direct_clients", test_component_base_no_direct_client_construction, "components and their clients build HTTP sessions and MQTT clients only through the factories"),
     ]
 
     failed = []

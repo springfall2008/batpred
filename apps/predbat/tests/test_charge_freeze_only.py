@@ -12,6 +12,7 @@ Tests for set_charge_freeze_only, the charge side counterpart of set_export_free
 switch is On Predbat may freeze charge (hold the current SoC) but must never charge the battery
 from the grid, so no charge window may ever be planned or executed at a target above the reserve.
 """
+
 from config import CONFIG_ITEMS
 from predbat import PredBat
 from prediction import Prediction
@@ -234,7 +235,7 @@ def run_prefill(my_predbat, set_charge_freeze_only):
         my_predbat.prefill_charge_limit_best()
         return my_predbat.charge_limit_best
     finally:
-        (my_predbat.soc_max, my_predbat.reserve, my_predbat.current_charge_limit, my_predbat.charge_window_best, my_predbat.charge_limit_best, my_predbat.set_charge_freeze_only) = saved
+        my_predbat.soc_max, my_predbat.reserve, my_predbat.current_charge_limit, my_predbat.charge_window_best, my_predbat.charge_limit_best, my_predbat.set_charge_freeze_only = saved
 
 
 def test_prefill_charge_limit_uses_inverter_limit_when_switch_off(my_predbat):
@@ -289,7 +290,7 @@ def test_clip_does_not_promote_freeze_to_charge_when_switch_on(my_predbat):
             return True
         return False
     finally:
-        (my_predbat.soc_max, my_predbat.reserve, my_predbat.set_charge_freeze_only, my_predbat.debug_enable) = saved
+        my_predbat.soc_max, my_predbat.reserve, my_predbat.set_charge_freeze_only, my_predbat.debug_enable = saved
 
 
 def test_windows_beyond_record_not_set_to_full_charge_when_switch_on(my_predbat):
@@ -319,7 +320,7 @@ def test_windows_beyond_record_not_set_to_full_charge_when_switch_on(my_predbat)
             return True
         return False
     finally:
-        (my_predbat.soc_max, my_predbat.reserve, my_predbat.set_charge_freeze_only, my_predbat.charge_window_best, my_predbat.charge_limit_best, my_predbat.export_window_best, my_predbat.end_record, my_predbat.calculate_best_charge) = saved
+        my_predbat.soc_max, my_predbat.reserve, my_predbat.set_charge_freeze_only, my_predbat.charge_window_best, my_predbat.charge_limit_best, my_predbat.export_window_best, my_predbat.end_record, my_predbat.calculate_best_charge = saved
 
 
 def test_freeze_only_search_drops_an_incoming_grid_charge(my_predbat):

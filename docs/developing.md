@@ -770,6 +770,10 @@ Tips for writing good tests:
 - Each test gets its own `PredBat`, so you can change settings and attributes on `my_predbat` freely: the changes don't reach other tests.
   State that is *not* rebuilt for each test is different - module-level variables, class attributes, and anything you monkey patch. If a test changes one of those,
   restore it afterwards, using `try`/`finally` so that it is restored even if the test fails (see [finding test order dependencies](#finding-test-order-dependencies)).
+- Tests may not use the network. The test runner blocks every DNS lookup and connection to anything other than the loopback address, and fails a
+  test that tries, with a message naming the host and the line that asked for it (`tests/network_guard.py`). If a test drives a component's
+  `run()` or a fetch, stub each call that would go to a cloud API: patch the method, or mark the data it would fetch as already read.
+  Otherwise the fake credentials go to the vendor's real service, and the test waits for the reply.
 - Some config items are only published to Home Assistant when another setting is on (for example `expert_mode`).
   If a test reads an entity that isn't there, check for an `enable` condition on the item in `config.py`.
 - The test messages and comments are spell checked like the rest of the code (see [enforced standards](#enforced-standards)).
@@ -805,6 +809,57 @@ It lists every config item that differs from its default, recalculates the plan,
 Example dumps are kept in `coverage/cases/*.yaml`, and they are replayed as regression tests by `./run_all --test debug_cases`.
 The dumps are recorded data: the saved settings are loaded back in, but not the display attributes of config items (such as their icons).
 There is no need to update them when you change how entities are presented.
+
+### Replaying a log forwards from a debug yaml
+
+A debug yaml is one moment in time. When a bug report also attaches the log from the following hours, the replay can step through that log from the yaml and re-plan wherever the real Predbat did:
+
+```bash
+cd coverage
+./run_all --debug_file <predbat_debug.yaml> --replay_log <predbat.log> [--replay_until HH:MM]
+```
+
+For each Predbat run in the log it sets the clock, SoC, the load/PV/import/export history and the inverter's programmed export window from the log, then re-plans on the runs where the log shows a re-plan. It prints the first export window the log recorded next to the one it computed, and a summary of how many re-plans matched. The PV forecast is the one in the yaml, because the log records only its total.
+
+Newer Predbat versions also log `Replay input:` lines, and the replay uses them wherever a run has them. They carry the load and PV forecasts, the values each plan starts from (SoC, in-day adjustment, cost so far, the day counters, the charge and discharge rates in force and the battery temperature) at full precision, the exact load divergence, and, whenever they change, the rates, the car state and the inverter's programmed state. Without them, the replay drifts from the live plans as the day goes on.
+
+There are two modes:
+
+- **Exact replay** (the default) takes the battery SoC from the log at every run, so each re-plan starts from exactly what the live system saw. Use it to check the replay reproduces the live plans before changing anything.
+- **Simulated** (`--replay_simulate`) steps the battery forward itself under the replayed plan, using the actual PV and load from the log and Predbat's own battery and inverter model (rate curves, losses, reserve, the inverter and export limits). Use it once the code is changed: the SoC then follows the changed plan instead of being pinned to what the unchanged code did.
+
+`--override name=value` (repeatable) changes a setting after the yaml is restored, for what-if replays - for example `--override pv_metric90_weight=0.25`. It works for a plain `--debug_file` replay as well.
+
+`--replay_json <file.json>` writes the comparison as one JSON document, one element per line, for a script or an AI to read: `meta` (what was replayed and how), then `summary`, then `runs` with one record per live run. A run that matches is one short record (time, whether it re-planned, SoC). A run that differs also gives the live and replayed plans that differ (`adopted`, `candidate`, `charge`), the plan's prediction summaries that differ (`base`, `best` and their PV10/PV90 scenarios), and `first_difference`, the first optimiser line where the two logs part. The summary counts the matches and groups the differing runs into `clusters`, each with its first difference, so the place to start looking is the summary at the top.
+
+`--replay_chart <file.png>` draws the actual SoC (and the simulated SoC, when simulating) against the export targets of the live and replayed plans, and a timeline of what each plan says at every run in the web plan's terms (Chrg, HoldChrg, FrzChrg, Exp, HoldExp, FrzExp, car), with a lane for the car's planned charging.
+
+In simulated mode the replay also prints the RMS difference between its simulated SoC and the logged SoC, a single number for how faithfully it is tracking the real battery.
+
+The replay carries on across midnight, so a yaml from late evening can be replayed through the whole of the next day. At midnight it moves everything held as minutes from midnight (rates, forecasts, plan windows) back a day, and the start-of-day re-plan happens as it does live. Rates the live system fetched after the yaml was written, such as the next day-ahead prices, are not in the yaml. The replay takes them from the log's `Replay input: rates changed` lines; a log without those lines plans on rates that run out early. `--replay_until HH:MM` stops at the first such time after the yaml.
+
+Where the replay matches the log it can be used for what-if experiments; where it does not, the first run that diverges shows what the log carries that the yaml did not. The log should come from a similar Predbat version; a version change part way through is marked, and the plans after it are counted separately.
+
+### The dummy inverter
+
+For a demo, or to run Predbat end to end without real hardware, the `dummy_inverter` component simulates a hybrid inverter and battery. Add a block to `apps.yaml` and it publishes its own sensors and controls and points Predbat's inverter settings at them:
+
+```yaml
+dummy_inverter:
+  battery_size: 10          # kWh usable
+  battery_rate_max: 3600    # W, charge and discharge
+  inverter_limit: 5000      # W, AC output shared by PV and battery
+  export_limit: 5000        # W
+  battery_loss: 0.96
+  battery_loss_discharge: 0.96
+  inverter_loss: 0.96
+  reserve: 4                # %
+  soc_initial: 50           # %
+  pv_peak: 4.0              # kW, clear-sky curve used when there is no PV forecast
+  load: 0.4                 # kW, or a list of 24 hourly values
+```
+
+Every setting is optional. The model steps once a minute: the battery charges and discharges within its rate and losses, PV and battery share the inverter limit with PV first, export is capped at the export limit, and PV with nowhere to go is clipped (published as `sensor.predbat_dummy_clipped_power` and `_clipped_lifetime`). Predbat's charge and export windows are obeyed, a zero-rate window freezes the battery, and outside a window it runs self-consumption. PV comes from Predbat's forecast when one is configured. The simulation state is not saved, so a restart starts again from `soc_initial`.
 
 ### Random scenario benchmarking
 
@@ -1045,7 +1100,7 @@ on Predbat.
 
 ## The C++ prediction kernel
 
-Predbat has a compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast, bit-for-bit-identical mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), On by default; it automatically falls back to the Python engine if the binary for your architecture can't be loaded.
+Predbat has a compiled C++ "kernel" (`apps/predbat/prediction_kernel.cpp`) that is a fast mirror of the Python simulation engine (`Prediction.run_prediction()` in `apps/predbat/prediction.py`). The simulation itself is bit-for-bit identical; the one deliberate difference is that the kernel rounds its ten scalar results (metric, import/export kWh, minimum and final SoC, cycles, metric keep, iBoost and carbon) to 4 decimal places with a fast scale-and-round, so a value that falls exactly on a halfway point can land one unit in the 4th decimal place away from Python's `round(x, 4)`. It's used to speed up the huge number of scenario evaluations run during planning. It's controlled by the `prediction_kernel_enable` `apps.yaml` setting (see [apps-yaml.md](apps-yaml.md#prediction_kernel_enable)), On by default; it automatically falls back to the Python engine if the binary for your architecture can't be loaded.
 
 ### Building the C++ kernel locally
 
@@ -1071,7 +1126,7 @@ A GitHub Actions job (`kernel-binaries` in `.github/workflows/code-quality.yml`)
 
 Three test targets exercise the kernel:
 
-- `./run_all --test kernel_parity` - dual-runs a large set of deterministic edge cases and seeded random scenarios through both engines and asserts the results match to within `1e-6`
+- `./run_all --test kernel_parity` - dual-runs a large set of deterministic edge cases and seeded random scenarios through both engines and asserts the SoC series and `soc_min_minute` match to within `1e-6`, and the ten rounded scalar results to within one unit in the 4th decimal place (`ROUNDED_RESULT_TOLERANCE`)
 - `./run_all --test model_kernel` - runs the standard model test suite (`./run_all --test model`) with the kernel enabled
 - `./run_all --test optimise_windows_kernel` - runs the optimiser test suite with and without the kernel, checking results match and reporting the speedup
 
@@ -1180,3 +1235,38 @@ that will be built before merging it in.
 
 The Predbat repository contains a `CLAUDE.md` file, which gives the same guidance (how to run the tests, the coding standards, and the architecture)
 to AI coding assistants such as Claude Code. If you change how the tests are run or the standards that are enforced, keep that file and this guide consistent.
+
+## Embedding the engine
+
+A host that supplies its own state, storage and component adapters can use the same
+startup stages as `initialize()` without starting the normal components or timers:
+
+1. Construct `PredBat`, populate its `args` configuration dictionary and provide a working
+   `log()` function, then call `initialize_state()` once for the new engine. These are
+   prerequisites for state initialisation, before the remaining adapters are attached.
+2. Attach the host's HA interface, storage, components and optional plugin adapter.
+3. Call `initialize_config()`, then complete the host's component discovery.
+4. Call `finalize_config(schedule_retry=False)`. An optional `before_validate(engine)`
+   callback applies discovered settings after registration and before final validation.
+   The return value is the normal `validate_config()` result.
+5. Restore the plan with `load_plan()` after applying the host's configuration policy.
+
+For each run, refresh the adapter's input state and call
+`update_pred(scheduled=True, plan_at=instant)`. Use `scheduled=False` to force a new
+plan. Do not repeat startup between warm cycles: the engine retains its current plan
+and native history cache. Rebuild an engine when its configuration changes; the host
+owns adapter resources and must close them when retiring it. These helpers do not
+make an engine safe for concurrent calls.
+
+`update_pred()` owns planning, execution, late replanning and bookkeeping. It returns
+`None` when planning is refused, otherwise a dictionary containing `recomputed` and
+`executed`. A failed execution skips bookkeeping. An optional `timings` dictionary
+accumulates `plan_s` and `execute_s`, including time spent in failed stages. `plan_s`
+includes plan persistence; `execute_s` includes post-run bookkeeping (plugin hooks,
+savings, status recording and cleanup), as well as physical execution.
+
+`scheduled_bookkeeping` defaults to `scheduled`. A host that reseeds accounting values
+from an external snapshot can set it to `False` to avoid advancing scheduled totals
+while retaining the normal plan reuse policy. It does not disable controls or replace
+the normal read-only switch. Set `plan_random_delay` to zero if the host schedules work
+centrally and must avoid sleeping a worker during late replanning.

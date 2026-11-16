@@ -93,7 +93,6 @@ from alphaess_const import (
     ALPHAESS_TTL_ENERGY,
 )
 
-
 _HOLD_NOT_EVALUATED = object()
 
 # The behaviour an AlphaESSCloud inverter has, stated for the discovery record's capabilities. A

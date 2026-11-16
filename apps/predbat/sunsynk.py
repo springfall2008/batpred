@@ -48,6 +48,8 @@ from sunsynk_const import (
     SUNSYNK_TELEMETRY,
     SUNSYNK_ENERGY,
     SUNSYNK_TELEMETRY_NEGATE,
+    SUNSYNK_GRID_POWER_CT_FIELD,
+    SUNSYNK_GRID_POWER_FALLBACK_FIELD,
     SUNSYNK_CAPACITY_AH_FIELD,
     SUNSYNK_CHARGE_VOLT_FIELD,
     SUNSYNK_CHARGE_CURRENT_FIELDS,
@@ -168,6 +170,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.device_values = {}
         self.device_settings = {}
         self.device_energy = {}
+        # {sn: "ct" | "pac"} - which field sourced that unit's grid_power this poll
+        self.grid_power_source = {}
         self.device_rated_power = {}
         # {sn: {"amps", "seen"}} - the highest BMS charge limit seen; the live one tapers as the bank fills
         self.bms_charge_limit_max = {}
@@ -585,6 +589,39 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 value = -value
             # Preserve integers as integers so SOC publishes as 62 rather than 62.0.
             values[leaf] = int(value) if float(value).is_integer() and leaf in ("soc",) else value
+
+        # grid_power reads the external CT (limiterTotalPower, GH#6068), not pac: on
+        # export pac is the inverter's own grid-port reading and overstates export by
+        # the grid-side house load. Fall back to pac when the CT field is missing, or
+        # reads 0 while pac is live - a site with no CT/limiter fitted. The telemetry
+        # loop above already mapped grid_power from the CT, so only those two cases
+        # need fixing here; both fields share the sign convention (negative on export),
+        # so the negation applies to whichever one sourced the value.
+        grid_payload = responses.get("grid") or {}
+        ct_raw = grid_payload.get(SUNSYNK_GRID_POWER_CT_FIELD)
+        pac_raw = grid_payload.get(SUNSYNK_GRID_POWER_FALLBACK_FIELD)
+        pac = self._as_float(pac_raw) if pac_raw is not None else None
+        falls_back_to_pac = pac is not None and (ct_raw is None or (self._as_float(ct_raw) == 0 and pac != 0))
+        if falls_back_to_pac:
+            values["grid_power"] = -pac
+            if ct_raw is not None:
+                # A zero CT reading is ambiguous: no CT/limiter fitted, or the net
+                # flow is zero at this poll because the grid-side load absorbs the
+                # port export. Say so once rather than silently reintroducing the
+                # over-read for that poll.
+                self._warn_parallel_once(
+                    ("grid_ct_zero_fallback", sn),
+                    f"Warn: Sunsynk {sn} limiterTotalPower reads 0 while pac is live, so grid_power falls back to pac - either no CT/limiter is fitted, or the net flow is zero at this poll",
+                )
+
+        # Which field sourced grid_power decides how a parallel group combines it
+        # (see _group_grid_power): a CT reading already is the site flow, while a
+        # pac reading is only that unit's share.
+        if "grid_power" in values:
+            self.grid_power_source[sn] = "pac" if falls_back_to_pac else "ct"
+        else:
+            self.grid_power_source.pop(sn, None)
+
         # Ratings inputs are kept raw on device_values so the derivations below can read them.
         battery = responses.get("battery") or {}
         for field in (SUNSYNK_CAPACITY_AH_FIELD, SUNSYNK_CHARGE_VOLT_FIELD, SUNSYNK_BMS_CURRENT_FIELD) + SUNSYNK_CHARGE_CURRENT_FIELDS + SUNSYNK_BMS_LINK_FIELDS:
@@ -720,13 +757,33 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             return None
         return round(sum(readings), 3)
 
+    def _group_grid_power(self, members):
+        """Return a parallel group's grid_power, or None when it must be withheld.
+
+        A CT-sourced reading (limiterTotalPower) already is the whole site's flow,
+        so the first unit reporting one - the master, members being master-first -
+        supplies it and it is never summed. A pac reading is only that unit's own
+        share, so when every reporting member fell back to pac the shares are
+        summed, like PV and load; a share one member did not report withholds the
+        total rather than publishing the master's share. A unit whose source was
+        never recorded (values set without a poll, as in tests) reads as CT, the
+        primary mapping.
+        """
+        ct_members = [member for member in members if "grid_power" in self.device_values.get(member, {}) and self.grid_power_source.get(member, "ct") == "ct"]
+        if ct_members:
+            return self.device_values[ct_members[0]]["grid_power"]
+        return self._sum_members(members, self.device_values, "grid_power")
+
     def group_values(self, sn):
         """Return the telemetry Predbat sees for inverter sn - for a group master, the whole group's.
 
-        SoC, voltage and temperature are the master's (the slave mirrors them); grid, PV and load
-        are summed, a value one unit did not report being withheld rather than published as the
-        master's share. Battery power is the whole bank from the master's BMS, -bmsCurrent x
-        voltage: the master's own power is only its share, and the slave's is garbage.
+        SoC, voltage and temperature are the master's (the slave mirrors them); PV and load
+        are summed, a value one unit did not report being withheld rather than published as
+        the master's share. Grid is the master's site-wide CT reading when it came from
+        the CT (GH#6068), never summed; when every member fell back to pac the per-unit
+        shares are summed instead (see _group_grid_power). Battery power is the
+        whole bank from the master's BMS, -bmsCurrent x voltage: the master's own power is
+        only its share, and the slave's is garbage.
         """
         values = self.device_values.get(sn, {})
         members = self._group_members(sn)
@@ -737,6 +794,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             total = self._sum_members(members, self.device_values, leaf)
             if total is not None:
                 group[leaf] = total
+        grid_power = self._group_grid_power(members)
+        if grid_power is not None:
+            group["grid_power"] = grid_power
+        else:
+            group.pop("grid_power", None)
         volts = self._as_float(values.get("battery_voltage"))
         if self._has_bms_link(sn) and values.get(SUNSYNK_BMS_CURRENT_FIELD) is not None and volts > 0:
             group["battery_power"] = round(-self._as_float(values.get(SUNSYNK_BMS_CURRENT_FIELD)) * volts)

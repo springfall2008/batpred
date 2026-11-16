@@ -21,6 +21,7 @@ Manual car SoC tracking (car_charging_manual_soc).
 Each car's record is published as sensor.predbat_car_manual_soc_tracked[_N], which a restart reads back, so tracking
 picks up where it left off. No entity's last_changed is used.
 """
+
 import copy
 from datetime import timedelta
 
