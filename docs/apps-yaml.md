@@ -2998,7 +2998,9 @@ Your battery's maximum charge and discharge rate can be impacted by cold weather
 you can also describe it in `apps.yaml`, as the fallback where there is no evidence (or what Predbat plans with when **battery_rate_grid_auto** is off).
 
 - You must make sure battery_temperature is defined (one per inverter).
-- Set **battery_temperature_history** to a sensor with history, this will be used to predict future temperatures based on past changes
+- Set **battery_temperature_history** to a sensor with history, this will be used to predict future temperatures based on past changes.
+  With more than one inverter you can give a list of sensors, one per battery: Predbat plans with their average, minute by minute,
+  leaving out any that read exactly 0 (a missing reading), and the rate grids learn from the same average
 - Set **battery_temperature_charge_curve** to define the maximum charge rate in C which is a percentage of your battery capacity.
 - Set **battery_temperature_discharge_curve** to define the maximum discharge rate in C which is a percentage of your battery capacity.
 

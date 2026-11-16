@@ -19,7 +19,24 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import clock_change_minutes, minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
+from utils import (
+    average_temperature_minutes,
+    battery_temperature_entities,
+    clock_change_minutes,
+    minutes_to_time,
+    str2time,
+    dp1,
+    dp2,
+    dp3,
+    dp4,
+    time_string_to_stamp,
+    minute_data,
+    get_now_from_cumulative,
+    MinuteArray,
+    strptime_aware,
+    is_entity_id,
+    intelligent_device_is_charger,
+)
 from battery_rate_grid import clean_rate_grid_samples, combine_rate_grid, fit_rate_grid, manual_rate_grid, merge_rate_grid_samples, rate_grid_table
 from battery_curve import charge_day
 from const import (
@@ -2853,7 +2870,10 @@ class Fetch:
         Only BATTERY_TEMPERATURE_HISTORY_DAYS are fetched, not max_days_previous: the prediction looks
         back at most 24 hours plus one step, so a longer per-minute window is only held in memory.
         """
-        self.battery_temperature_history = self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
+        # One sensor per inverter is averaged, not summed as minute_data_import_export() sums an energy total: the plan
+        # models one combined battery, and the rate grid learner reads the same average (average_temperature_minutes)
+        entity_ids = battery_temperature_entities(self.get_arg("battery_temperature_history", indirect=False))
+        self.battery_temperature_history = average_temperature_minutes([self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, entity_id, scale=1.0, increment=False, smoothing=False) for entity_id in entity_ids])
         self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
         self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
         self.check_battery_temperature_history_stuck(self.battery_temperature_history)

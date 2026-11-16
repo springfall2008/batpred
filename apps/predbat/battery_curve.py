@@ -27,7 +27,7 @@ from const import (
     EXPORT_LIMIT_DEFAULT_W,
     MINUTE_WATT,
 )
-from utils import dp0, dp2, dp4, is_entity_id, minute_data, minute_data_state
+from utils import average_temperature_minutes, battery_temperature_entities, dp0, dp2, dp4, is_entity_id, minute_data, minute_data_state
 
 
 def charge_day(now_utc, minutes_ago, local_tz=None):
@@ -299,26 +299,29 @@ class BatteryCurve:
         The battery temperature history by minute before now, or None when battery_temperature_history is not set, has
         no history, or only ever reads exactly 0 (how several integrations report a missing reading).
         """
-        temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
-        if not temperature_sensor:
-            return None
-        temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=days, required=False, tracked=days <= self.base.max_days_previous)
-        if not temperature_data:
-            return None
-        temperature, _ = minute_data(
-            temperature_data[0],
-            days,
-            self.base.now_utc,
-            "state",
-            "last_updated",
-            backwards=True,
-            clean_increment=False,
-            smoothing=False,
-            divide_by=1.0,
-            scale=1.0,
-            can_modify_history=True,  # history is not accessed after this point
-            pad=False,  # only the history that exists, so the scan stops where it does
-        )
+        series = []
+        # One sensor or a list of them (one per inverter): the combined battery's temperature is their average, the same
+        # one the plan reads (fetch_battery_temperature)
+        for temperature_sensor in battery_temperature_entities(self.base.get_arg("battery_temperature_history", indirect=False)):
+            temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=days, required=False, tracked=days <= self.base.max_days_previous)
+            if not temperature_data:
+                continue
+            temperature, _ = minute_data(
+                temperature_data[0],
+                days,
+                self.base.now_utc,
+                "state",
+                "last_updated",
+                backwards=True,
+                clean_increment=False,
+                smoothing=False,
+                divide_by=1.0,
+                scale=1.0,
+                can_modify_history=True,  # history is not accessed after this point
+                pad=False,  # only the history that exists, so the scan stops where it does
+            )
+            series.append(temperature)
+        temperature = average_temperature_minutes(series)
         if not any(value != 0 for value in temperature.values()):
             return None
         return temperature

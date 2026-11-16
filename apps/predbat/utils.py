@@ -2728,6 +2728,41 @@ def get_curve_value(curve, index, default=1.0):
     return curve.get(index, default)
 
 
+def battery_temperature_entities(value):
+    """
+    The entity ids battery_temperature_history names: one sensor, or a list of them (one per inverter). Literals and
+    blanks are left out, as minute_data_import_export() leaves them out.
+    """
+    if not isinstance(value, list):
+        value = [value]
+    return [entity_id for entity_id in value if is_entity_id(entity_id)]
+
+
+def average_temperature_minutes(series_list):
+    """
+    The per-minute average of several battery temperature series, one per sensor, for the one combined battery the
+    plan models (summing them, as an energy total would be, reads two 15 degree batteries as 30 degrees).
+
+    A reading of exactly 0 is how several integrations report a missing one, so it is left out of a minute's average
+    when another sensor has a real reading there. A minute every sensor reads 0 stays 0, so the stuck-sensor check
+    still sees a dead sensor. A single series is returned as it is.
+
+    Args:
+        series_list: {minute: temperature} dicts
+
+    Returns:
+        {minute: average temperature} over every minute any series has
+    """
+    series_list = [series for series in series_list if series]
+    if len(series_list) <= 1:
+        return series_list[0] if series_list else {}
+    average = {}
+    for minute in sorted(set().union(*series_list)):
+        readings = [series[minute] for series in series_list if minute in series and series[minute] != 0]
+        average[minute] = sum(readings) / len(readings) if readings else 0
+    return average
+
+
 def battery_temperature_index(battery_temperature, temp_max=BATTERY_TEMPERATURE_CURVE_TEMP_MAX):
     """
     The whole degree a battery temperature reading is looked up (and learned) at.
