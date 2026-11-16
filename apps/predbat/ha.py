@@ -1212,6 +1212,25 @@ class HAInterface(ComponentBase):
             self.api_call("/api/states/{}".format(entity_id), data, post=True)
             self.update_state(entity_id)
 
+    def _is_owned_virtual_control(self, domain, data):
+        """
+        Return True if this service call targets only Predbat-owned virtual GivTCP controls
+        (published into HA state without a registered select/number/switch platform).
+        """
+        if domain not in ("select", "number", "switch"):
+            return False
+        entities = data.get("entity_id")
+        if not entities:
+            return False
+        if isinstance(entities, str):
+            entities = [entities]
+        elif not isinstance(entities, (list, tuple, set)):
+            return False
+        app_map = getattr(self.base, "dashboard_index_app", None)
+        if not isinstance(app_map, dict):
+            return False
+        return all(app_map.get(entity_id) == "givtcp" for entity_id in entities)
+
     def call_service(self, service, **kwargs):
         """
         Call a service in Home Assistant via Websocket
@@ -1227,10 +1246,10 @@ class HAInterface(ComponentBase):
         else:
             domain = ""
 
-        if self.websocket_active:
+        if self.websocket_active and not self._is_owned_virtual_control(domain, data):
             return self.call_service_websocket_command(domain, service, data)
         else:
-            # Loopback with no home assistant
+            # Loopback with no home assistant or Predbat-owned virtual GivTCP control
             data_frame = {"domain": domain, "service": service, "service_data": data}
             return run_async(self.base.trigger_callback(data_frame))
 
