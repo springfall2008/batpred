@@ -4147,8 +4147,7 @@ chart.render();
             """A datetime in local time as YYYY-MM-DD HH:MM, or blank."""
             if not stamp:
                 return ""
-            local_tz = getattr(self.base, "local_tz", None)
-            return (stamp.astimezone(local_tz) if local_tz else stamp).strftime("%Y-%m-%d %H:%M")
+            return stamp.astimezone(self.local_tz).strftime("%Y-%m-%d %H:%M")
 
         def setting(key, fmt):
             """A setting formatted, marked when apps.yaml sets it."""
@@ -4158,13 +4157,14 @@ chart.render();
             return fmt.format(value) + (" (apps.yaml)" if key in overridden else "")
 
         # The daily scan, or the one just after local midnight that adds yesterday, whichever comes first
+        # (only while that midnight is still ahead: after a failed scan the last success can be days old, and the retry is next)
         next_scan = solar.pv_calibration_next_scan
         if next_scan and solar.pv_calibration_last_success:
-            local_tz = getattr(self.base, "local_tz", None)
-            last_local = solar.pv_calibration_last_success.astimezone(local_tz) if local_tz else solar.pv_calibration_last_success
-            next_midnight = (last_local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-            next_midnight = local_tz.localize(next_midnight.replace(tzinfo=None)) if hasattr(local_tz, "localize") else next_midnight
-            next_scan = min(next_scan, next_midnight)
+            last_local = solar.pv_calibration_last_success.astimezone(self.local_tz)
+            # localize() rather than replace() + normalize(): across a clock change normalize keeps the instant and lands on 23:00 or 01:00
+            next_midnight = self.local_tz.localize(datetime.combine(last_local.date() + timedelta(days=1), datetime.min.time()))
+            if next_midnight > self.now_utc:
+                next_scan = min(next_scan, next_midnight)
 
         if not switch_on:
             state, reason = "Off", "switch.{}_metric_pv_calibration_enable is off: the raw forecast is used".format(self.prefix)
@@ -4179,7 +4179,7 @@ chart.render();
             ("Days stored", "{} ({} to {})".format(len(evidence), min(evidence), max(evidence)) if evidence else "0"),
             ("Valid days used", "{} ({} down days skipped)".format(len(days_used), len((model or {}).get("down_days") or [])) if model else ""),
             ("Day factor applied", "{:.2f}".format(model["total"]) if model else ""),
-            ("Day factor unshrunk", "{:.2f} (day-to-day spread about \u00b1{:.0f}%)".format(model["raw_total"], 100 * (math.exp(model["se_day"]) - 1)) if model else ""),
+            ("Day factor unshrunk", "{:.2f} (days typically within \u00b1{:.0f}% of it)".format(model["raw_total"], 100 * (math.exp(model["spread_day"]) - 1)) if model else ""),
             ("Half-life", setting("half_life", "{} days")),
             ("Shrink (day / half-hour)", "{} / {}".format(setting("shrink", "{:.2f}"), setting("shrink_slot", "{:.2f}")) if settings else ""),
             ("Days kept / daily scan", "{} / {}".format(setting("history_days", "{}"), setting("scan_days", "{}")) if settings else ""),

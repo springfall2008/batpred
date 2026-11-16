@@ -10,6 +10,7 @@
 """Tests for the PV Calibration page (WebInterface.get_chart("PVCalibration")): the status table and the slot and day evidence charts."""
 
 import json
+import math
 import re
 from datetime import datetime, timezone
 
@@ -56,6 +57,7 @@ def _make_web(my_predbat):
     web.base = my_predbat
     web.log = my_predbat.log
     web.prefix = my_predbat.prefix
+    web.local_tz = my_predbat.local_tz
     return web
 
 
@@ -138,7 +140,16 @@ def run_web_pv_calibration_chart_tests(my_predbat):
         print("Test 10: next scan shows the after-midnight scan, and the spread is a percentage of the factor")
         html = web.get_chart("PVCalibration")
         failed |= _check("t10 next scan", "2026-11-17 00:00" in html, re.findall(r"Next scan.*?</tr>", html))
-        failed |= _check("t10 spread", "spread" in html and "standard error" not in html, re.findall(r"Day factor unshrunk.*?</tr>", html))
+        failed |= _check("t10 spread", "\u00b1{:.0f}%".format(100 * (math.exp(model["spread_day"]) - 1)) in html, re.findall(r"Day factor unshrunk.*?</tr>", html))
+
+        print("Test 12: after a failed scan the next scan is the retry, not a midnight already past")
+        failing = StubSolar(model, evidence)
+        failing.pv_calibration_last_success = datetime(2026, 11, 14, 3, 0, tzinfo=timezone.utc)
+        failing.pv_calibration_next_scan = datetime(2099, 1, 1, 11, 0, tzinfo=timezone.utc)
+        my_predbat.components = StubComponents(failing)
+        html = web.get_chart("PVCalibration")
+        failed |= _check("t12 no past midnight", "2026-11-15 00:00" not in html and "2099-01-01 11:00" in html, re.findall(r"Next scan.*?</tr>", html))
+        my_predbat.components = StubComponents(StubSolar(model, evidence))
 
         print("Test 11: before the first run the text gives the default days, not blanks")
         quiet = StubSolar(None, {})

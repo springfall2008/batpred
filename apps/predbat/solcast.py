@@ -1255,7 +1255,8 @@ class SolarAPI(ComponentBase):
     def pv_calibration_scan(self, days, tracked=True):
         """
         The last `days` complete days of history as calibration evidence, {local date: {"slots": {minute of day: [forecast kWh,
-        actual kWh]}, "peak_kw", "clipped_minutes"}}, or None when the pv_today history could not be read.
+        actual kWh]}, "peak_kw", "clipped_minutes"}}, or None when the forecast history or the pv_today history could not be read
+        (the forecast is read first, so a site whose forecast sensor is not recorded never pays for the long pv_today read).
 
         The forecast is the uncalibrated one with pv_scaling taken back out, so a later pv_scaling change applies to the whole
         store at once. The actual is as measured; a slot with minutes at the inverter's clipping ceiling also carries those
@@ -1315,6 +1316,20 @@ class SolarAPI(ComponentBase):
                 offset_cache[hour] = int((offset_then - offset_now).total_seconds() // 60)
             return offset_cache[hour]
 
+        def local_midnight_minutes_ago(days_prev):
+            """
+            Minutes ago of the local midnight that started the day days_prev days ago, on the same minutes_now basis as the
+            slots above, with the UTC offset taken at that midnight itself - not at a point an hour either side of it, which
+            on a clock-change day can fall on the wrong side of the change.
+            """
+            minutes_ago = self.minutes_now + days_prev * 24 * 60
+            if offset_now is None:
+                return minutes_ago
+            local_date = self.now_utc.astimezone(self.local_tz).date() - timedelta(days=days_prev)
+            naive = datetime.combine(local_date, datetime.min.time())
+            midnight = self.local_tz.localize(naive) if hasattr(self.local_tz, "localize") else naive.replace(tzinfo=self.local_tz)
+            return minutes_ago + int((midnight.utcoffset() - offset_now).total_seconds() // 60)
+
         for source, field in ((pv_forecast, "forecast"), (pv_power_hist_calibrate, "actual")):
             for minute, value in source.items():
                 minute_absolute = self.minutes_now - minute + clock_shift(minute)
@@ -1342,8 +1357,7 @@ class SolarAPI(ComponentBase):
 
         evidence = {}
         for days_prev, record in per_day.items():
-            day_start_minutes_ago = self.minutes_now + days_prev * 24 * 60
-            day_start_minutes_ago += clock_shift(day_start_minutes_ago)
+            day_start_minutes_ago = local_midnight_minutes_ago(days_prev)
             # The pv_today history must reach the start of the day (a partly recorded day would read as forecast error), and the
             # forecast history must span it; the forecast itself may leave out zero periods, so its slots are not counted
             if oldest_minute < day_start_minutes_ago or days_prev > pv_forecast_days:
@@ -1372,8 +1386,13 @@ class SolarAPI(ComponentBase):
     async def pv_calibration_update_evidence(self):
         """
         Keep the calibration evidence (pv_calibration_evidence) up to date: read the store, scan the history when due and
-        merge it in, and save. Until a scan has succeeded it reads pv_calibration_history_days; after that once a day it
-        reads pv_calibration_scan_days (more after a gap); a failed read is tried again after PV_CALIBRATION_RETRY_MINUTES.
+        merge it in, and save. Until a scan has succeeded it reads pv_calibration_history_days; after that it reads the days
+        since the last success (at least pv_calibration_scan_days). The last success is saved with the evidence, so a
+        restart carries on from it rather than reading the whole history again (unless the store was discarded).
+
+        A scan is due a day after the last success; an hour after a failed read (PV_CALIBRATION_RETRY_MINUTES); just after
+        local midnight when yesterday is not stored yet; and at once when the next scan is more than a day ahead, which
+        only a host clock moving backwards can cause (daylight saving changes neither now_utc nor the schedule).
 
         An empty store and a failed read both come back as None, so a store that has never read back is only treated as
         empty once its reads have failed PV_CALIBRATION_LOAD_ATTEMPTS times over PV_CALIBRATION_LOAD_WAIT_MINUTES: until
@@ -1402,7 +1421,8 @@ class SolarAPI(ComponentBase):
             if not isinstance(data, dict):
                 return False
             self.pv_calibration_loaded = True
-            if data.get("slot_minutes") != slot_minutes:
+            discarded = data.get("slot_minutes") != slot_minutes
+            if discarded:
                 self.log("SolarAPI: PV Calibration: the stored evidence was recorded in {} minute slots, not {}, so it is discarded and rebuilt from history".format(data.get("slot_minutes"), slot_minutes))
                 stored = {}
                 merged_on_load = True
@@ -1414,7 +1434,8 @@ class SolarAPI(ComponentBase):
                 merged_on_load = True
             self.pv_calibration_evidence = merge_pv_calibration_evidence(stored, {}, today, history_days)
             # The last successful scan, so the first scan after a restart reads only the days since then
-            if self.pv_calibration_last_success is None and isinstance(data.get("last_success"), str):
+            # (not for a discarded store: its last success describes evidence that is gone, and the rebuild must read it all)
+            if not discarded and self.pv_calibration_last_success is None and isinstance(data.get("last_success"), str):
                 try:
                     self.pv_calibration_last_success = strptime_aware(data["last_success"], TIME_FORMAT)
                 except ValueError:
@@ -1430,7 +1451,8 @@ class SolarAPI(ComponentBase):
         # is not stored yet, so a completed day is calibrated from that morning rather than whenever the daily scan falls
         yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
         new_day = self.pv_calibration_last_success is not None and pv_day(self.pv_calibration_last_success, 0, self.local_tz) < today and yesterday not in self.pv_calibration_evidence
-        # A next scan more than a day ahead means the clock moved back since it was set: don't wait for it
+        # A next scan more than a day ahead means the host clock moved back since it was set (NTP on a container with no RTC,
+        # a VM restore - not daylight saving, which moves neither now_utc nor the schedule): don't wait for it
         clock_moved_back = self.pv_calibration_next_scan is not None and self.pv_calibration_next_scan - self.now_utc > timedelta(minutes=PV_CALIBRATION_SCAN_MINUTES)
         if self.pv_calibration_next_scan is None or self.now_utc >= self.pv_calibration_next_scan or new_day or clock_moved_back:
             self.pv_calibration_last_scan = self.now_utc
