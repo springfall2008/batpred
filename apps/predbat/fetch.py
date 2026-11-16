@@ -71,6 +71,8 @@ from const import (
     BATTERY_RATE_GRID_RETRY_MINUTES,
     BATTERY_RATE_GRID_SCAN_MINUTES,
     BATTERY_RATE_GRID_STORE_EXPIRY_DAYS,
+    LOSS_SETTING_MAX,
+    LOSS_SETTING_WARN,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -4931,6 +4933,28 @@ class Fetch:
             self.log("Warn: export_more_solar is enabled but has no effect, as it works by enabling Freeze Export on idle solar slots and " + reason)
         self.export_more_solar_warned_reason = reason
 
+    def loss_setting_efficiency(self, name):
+        """
+        Return the efficiency (1 - loss) for the loss setting name (battery_loss, battery_loss_discharge or inverter_loss).
+
+        The loss is clamped to 0..LOSS_SETTING_MAX so the efficiency the prediction divides by is never 0 and never above 1.
+        A loss above LOSS_SETTING_WARN, or one that had to be clamped, is logged once per setting and value, as it is
+        almost always an efficiency (0.97) typed into a loss setting (#6235); a sensible value re-arms the warning.
+        """
+        loss = self.get_arg(name)
+        clamped = min(max(loss, 0.0), LOSS_SETTING_MAX)
+        if clamped != loss or loss > LOSS_SETTING_WARN:
+            if self.loss_setting_warned.get(name) != loss:
+                self.loss_setting_warned[name] = loss
+                message = "Warn: {} is set to {}, which Predbat reads as a {:.0f}% loss ({:.0f}% efficient)".format(name, loss, loss * 100, (1.0 - loss) * 100)
+                if clamped != loss:
+                    message += ", outside 0-{} so using {}".format(LOSS_SETTING_MAX, clamped)
+                message += " - this setting is the loss not the efficiency, typical values are 0.03-0.05"
+                self.log(message)
+        else:
+            self.loss_setting_warned.pop(name, None)
+        return 1.0 - clamped
+
     def fetch_config_options(self):
         """
         Fetch all the configuration options
@@ -5053,9 +5077,9 @@ class Fetch:
         # Battery charging options
         self.battery_capacity_nominal = self.get_arg("battery_capacity_nominal")
         self.battery_scaling_auto = self.get_arg("battery_scaling_auto", default=False)
-        self.battery_loss = 1.0 - self.get_arg("battery_loss")
-        self.battery_loss_discharge = 1.0 - self.get_arg("battery_loss_discharge")
-        self.inverter_loss = 1.0 - self.get_arg("inverter_loss")
+        self.battery_loss = self.loss_setting_efficiency("battery_loss")
+        self.battery_loss_discharge = self.loss_setting_efficiency("battery_loss_discharge")
+        self.inverter_loss = self.loss_setting_efficiency("inverter_loss")
         self.inverter_hybrid = self.get_arg("inverter_hybrid")
         self.pv_ac_limit = self.get_arg("pv_ac_limit", 0.0) / MINUTE_WATT
         self.inverter_freeze_export_discharge_rate = max(self.get_arg("inverter_freeze_export_discharge_rate", 0.0), 0.0) / MINUTE_WATT
