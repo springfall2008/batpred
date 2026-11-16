@@ -32,8 +32,8 @@ from solar_model import convert_azimuth, gti_hourly_to_period_kwh, pvwatts_cell_
 Solcast class deals with fetching solar predictions, processing the data and publishing the results.
 """
 
-PV_CALIBRATION_LOWEST = 0.20
-PV_CALIBRATION_HIGHEST = 4.0
+from const import PV_CALIBRATION_LOWEST, PV_CALIBRATION_HIGHEST  # noqa: E402,F401 - defined in const.py so pv_calibration.py shares them; re-exported for the tests
+
 # A history sample at this fraction of the clipping ceiling or above is treated as clipped by calibration
 PV_CALIBRATION_CLIP_MARGIN = 0.95
 # Ceiling on the Open-Meteo ensemble's P90:median ratio. Near dawn and dusk the median is a few

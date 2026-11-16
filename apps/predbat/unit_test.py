@@ -110,6 +110,7 @@ from tests.test_plan_preclip import run_plan_preclip_tests
 from tests.test_replay_manual_times import run_replay_manual_times_tests
 from tests.test_plan_version_replace import run_plan_version_replace_tests
 from tests.test_plan_charge_keep import run_plan_charge_keep_tests
+from tests.test_pv_calibration import run_pv_calibration_tests
 from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
 from tests.test_pv_calibration_day_scaling import run_pv_calibration_day_scaling_tests
 from tests.test_export_commitment import run_export_commitment_tests
@@ -1007,6 +1008,7 @@ def main():
         ("replay_manual_times", run_replay_manual_times_tests, "manual_all_times is derived from the manual time lists, including in a debug replay", False),
         ("plan_version_replace", run_plan_version_replace_tests, "A plan made by another Predbat version is always replaced", False),
         ("plan_charge_keep", run_plan_charge_keep_tests, "calculate_plan works out the running charge once for optimise_charge_limit to keep", False),
+        ("pv_calibration", run_pv_calibration_tests, "PV calibration: shrunk fit, band, evidence merge", False),
         ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),
         ("pv_calibration_day_scaling", run_pv_calibration_day_scaling_tests, "PV calibration per-day scaling keeps dull days at raw x adjustment", False),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),
