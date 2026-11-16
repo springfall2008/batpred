@@ -82,6 +82,7 @@ from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_battery_rate_grid import run_battery_rate_grid_tests
 from tests.test_battery_rate_grid_scan import run_battery_rate_grid_scan_tests
 from tests.test_battery_rate_grid_update import run_battery_rate_grid_update_tests
+from tests.test_battery_thermal import run_battery_thermal_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
 from tests.test_optimise_solar import run_optimise_solar_tests
@@ -824,6 +825,7 @@ def main():
         ("battery_rate_grid", run_battery_rate_grid_tests, "Battery rate grids: manual grid, isotonic fit, lookup", False),
         ("battery_rate_grid_scan", run_battery_rate_grid_scan_tests, "Battery rate grids: full-rate runs scanned into segments", False),
         ("battery_rate_grid_update", run_battery_rate_grid_update_tests, "Battery rate grids: storage, fallback to manual curves, sensors", False),
+        ("battery_thermal", run_battery_thermal_tests, "Battery thermal model: fit and forecast of battery temperature (GH#5919)", False),
         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
