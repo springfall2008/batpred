@@ -264,9 +264,12 @@ def _test_fetch_only_checks_live_plan():
             print("ERROR: t13 {} gave (check calls, warnings, warned flag) {}, expected {}".format(name, result, (calls, warnings, warned)))
             failed = True
 
-    with patch.object(fresh, "minute_data_load", side_effect=minute_data_load), patch.object(fresh, "minute_data_import_export", side_effect=minute_data_import_export), patch.object(
-        fresh, "log", side_effect=lambda message, *args, **kwargs: logged.append(message)
-    ), patch.object(fresh, "check_car_energy_reported_load", wraps=fresh.check_car_energy_reported_load) as checked:
+    with (
+        patch.object(fresh, "minute_data_load", side_effect=minute_data_load),
+        patch.object(fresh, "minute_data_import_export", side_effect=minute_data_import_export),
+        patch.object(fresh, "log", side_effect=lambda message, *args, **kwargs: logged.append(message)),
+        patch.object(fresh, "check_car_energy_reported_load", wraps=fresh.check_car_energy_reported_load) as checked,
+    ):
         fresh.car_energy_reported_load_warned = False
         step("live cycle", save=True, switch=True, calls=1, warnings=1, warned=True)
         # A comparison tariff whose config turns the switch Off
