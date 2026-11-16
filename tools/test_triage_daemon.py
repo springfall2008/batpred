@@ -524,6 +524,14 @@ class PermissionModelTests(unittest.TestCase):
         """Sanity check that the refactor didn't drop the base allowlist's core entry."""
         self.assertIn("Bash(gh *)", triage_daemon.ALLOWED_TOOLS.split(","))
 
+    def test_every_investigating_flow_may_run_the_forward_replay_wrapper(self):
+        """The skills tell triage, follow-up, PR, review and cleanup runs to use tools/triage_replay.py; it is
+        allowed today only by the broad Bash(python3 *) rule, so narrowing that rule must not drop it silently."""
+        command = "python3 tools/triage_replay.py --yaml /s/predbat_debug.yaml --log /s/predbat.log --out /s/replay"
+        for name in ("ALLOWED_TOOLS", "ALLOWED_TOOLS_PR", "ALLOWED_TOOLS_REVIEW", "ALLOWED_TOOLS_CLEANUP"):
+            rules = getattr(triage_daemon, name).split(",")
+            self.assertTrue(any(rule.startswith("Bash(") and bash_rule_matches(rule, command) for rule in rules), name)
+
     def test_pr_disallowed_tools_still_blocks_dangerous_gh_subcommands(self):
         """Everything dangerous stays denied for the PR flow too."""
         still_denied = [
@@ -1105,6 +1113,13 @@ class OllamaContextWindowTests(unittest.TestCase):
         """--ollama_review is how the daemon is actually run, so the window has to follow that
         path as well as --ollama."""
         with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "glm-5.3-flash:cloud"):
+            env = triage_daemon.claude_env(review_only=True)
+        self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000")
+
+    def test_deepseek_flash_gets_its_real_window(self):
+        """deepseek-v4.1-flash:cloud is a 1M-token model the daemon runs under --ollama_review;
+        unlisted, Claude Code warned it did not recognise the model and assumed 200k."""
+        with patch.object(triage_daemon, "OLLAMA_REVIEW_MODEL", "deepseek-v4.1-flash:cloud"):
             env = triage_daemon.claude_env(review_only=True)
         self.assertEqual(env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"], "1000000")
 
@@ -2190,6 +2205,12 @@ class IsBotCommentTests(unittest.TestCase):
         ):
             with self.subTest(body=body):
                 self.assertTrue(triage_daemon.is_bot_comment({"body": body}))
+
+    def test_recognises_the_attachment_nudge(self):
+        """The nudge from the issue-attachment-nudge workflow is long and mentions .log and .yaml, so it must not be taken for a me-too post."""
+        import issue_attachment_nudge
+
+        self.assertTrue(triage_daemon.is_bot_comment({"body": issue_attachment_nudge.render(issue_attachment_nudge.REASON_OFFER)}))
 
     def test_an_ordinary_comment_is_not_the_bots(self):
         self.assertFalse(triage_daemon.is_bot_comment({"body": "Same here, my battery stopped charging too."}))

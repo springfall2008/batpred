@@ -16,6 +16,7 @@ cost stepped up after each half hour of car charging and fell back later. A half
 the car not cancelled by slot confirmation (octopus_intelligent_dynamic), now keeps the dispatch rate
 until a completed dispatch covers it or OCTOPUS_DISPATCH_HOLD_MINUTES have passed.
 """
+
 import copy
 from datetime import timedelta
 

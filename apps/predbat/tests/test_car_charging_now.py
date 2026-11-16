@@ -16,6 +16,7 @@ published car plan or an Octopus Intelligent dispatch. Those come only from the 
 or from Octopus. A slot added from car_charging_now drove binary_sensor.predbat_car_charging_slot,
 which an automation uses to start the charger, so the charge kept itself going into peak rates.
 """
+
 import copy
 
 from const import CAR_CHARGING_LIMIT_UNCAPPED, PREDICT_STEP

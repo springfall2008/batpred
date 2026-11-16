@@ -28,10 +28,11 @@ from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_s
 class MockHanchu(HanchuAPI):
     """Test double: build a HanchuAPI without the full component lifecycle."""
 
-    def __init__(self, account="tester@example.com", password="hunter2", inverter_sn=None, control_enable=True, automatic=False, automatic_ignore_pv=False, work_mode_control=True, min_write_interval=0):
+    def __init__(self, account="tester@example.com", password="hunter2", inverter_sn=None, control_enable=True, automatic=False, automatic_ignore_pv=False, work_mode_control=True, min_write_interval=0, write_debounce=0):
         """Set up a minimal HanchuAPI instance for tests, bypassing ComponentBase.__init__."""
         self.prefix = "predbat"
         self.log_messages = []
+        self.component_loop = None  # set by ComponentBase.__init__, which this skips
         self.local_tz = pytz.timezone("Europe/London")
         self.base = MagicMock()
         self.base.args = {"user_id": "test-hanchu-1"}
@@ -66,6 +67,9 @@ class MockHanchu(HanchuAPI):
             # its trace, which the log assertions in these tests do not want to wade through. A test about the
             # trace turns it on itself; test_hanchu_api_trace_is_on_unless_turned_off pins the real default.
             api_debug=False,
+            # 0 so a write-button press writes at once, as every existing test expects; the debounce
+            # tests set their own short value on a running component loop.
+            write_debounce=write_debounce,
         )
         # The write-retry pause is a real 5s wait against a real cloud. Nothing here talks to one,
         # so it is zeroed - a test that wants to prove the retry happens counts the requests, which
