@@ -28,6 +28,7 @@ import sys
 import re
 from datetime import datetime, timedelta, timezone
 import json
+import math
 from collections import Counter
 import shutil
 import html as html_module
@@ -109,6 +110,8 @@ from const import (
     BATTERY_RATE_GRID_HALF_LIFE_DAYS,
     BATTERY_RATE_GRID_MAX,
     PV_CALIBRATION_MIN_DAYS,
+    PV_CALIBRATION_HALF_LIFE_DAYS,
+    PV_CALIBRATION_HISTORY_DAYS,
     PV_CALIBRATION_MIN_SLOT_POINTS,
     BATTERY_RATE_GRID_MIN_CELLS,
     BATTERY_RATE_GRID_MIN_DAYS,
@@ -4154,6 +4157,15 @@ chart.render();
                 return ""
             return fmt.format(value) + (" (apps.yaml)" if key in overridden else "")
 
+        # The daily scan, or the one just after local midnight that adds yesterday, whichever comes first
+        next_scan = solar.pv_calibration_next_scan
+        if next_scan and solar.pv_calibration_last_success:
+            local_tz = getattr(self.base, "local_tz", None)
+            last_local = solar.pv_calibration_last_success.astimezone(local_tz) if local_tz else solar.pv_calibration_last_success
+            next_midnight = (last_local + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            next_midnight = local_tz.localize(next_midnight.replace(tzinfo=None)) if hasattr(local_tz, "localize") else next_midnight
+            next_scan = min(next_scan, next_midnight)
+
         if not switch_on:
             state, reason = "Off", "switch.{}_metric_pv_calibration_enable is off: the raw forecast is used".format(self.prefix)
         elif model is None:
@@ -4167,7 +4179,7 @@ chart.render();
             ("Days stored", "{} ({} to {})".format(len(evidence), min(evidence), max(evidence)) if evidence else "0"),
             ("Valid days used", "{} ({} down days skipped)".format(len(days_used), len((model or {}).get("down_days") or [])) if model else ""),
             ("Day factor applied", "{:.2f}".format(model["total"]) if model else ""),
-            ("Day factor unshrunk", "{:.2f} (standard error {:.2f})".format(model["raw_total"], model["se_day"]) if model else ""),
+            ("Day factor unshrunk", "{:.2f} (day-to-day spread about \u00b1{:.0f}%)".format(model["raw_total"], 100 * (math.exp(model["se_day"]) - 1)) if model else ""),
             ("Half-life", setting("half_life", "{} days")),
             ("Shrink (day / half-hour)", "{} / {}".format(setting("shrink", "{:.2f}"), setting("shrink_slot", "{:.2f}")) if settings else ""),
             ("Days kept / daily scan", "{} / {}".format(setting("history_days", "{}"), setting("scan_days", "{}")) if settings else ""),
@@ -4176,7 +4188,7 @@ chart.render();
                 "Last scan",
                 "{} - {}".format(when(solar.pv_calibration_last_scan), solar.pv_calibration_scan_status) if solar.pv_calibration_last_scan else solar.pv_calibration_scan_status,
             ),
-            ("Next scan", when(solar.pv_calibration_next_scan)),
+            ("Next scan", when(next_scan)),
         ]
         ceiling = solar.pv_clipping_ceiling_kw()
         if ceiling:
@@ -4193,7 +4205,7 @@ chart.render();
             "with a day factor and a half-hour shape. Recent days count for more (a day's weight halves every {} days). Each factor only moves as far as the evidence supports: "
             "when the days scatter either side of the forecast with no consistent direction it stays close to 1, and a consistent difference is corrected. "
             "The charts show every stored day as a dot - larger for more forecast energy, fainter for older days - against the factor worked out from them before (unshrunk) and after that limit (applied).</p>\n"
-        ).format(settings.get("history_days", ""), settings.get("half_life", ""))
+        ).format(settings.get("history_days", PV_CALIBRATION_HISTORY_DAYS), settings.get("half_life", PV_CALIBRATION_HALF_LIFE_DAYS))
         if model is None:
             text += "<p>Not enough evidence to calibrate yet: the charts appear once there are {} valid days.</p>\n</div>\n".format(PV_CALIBRATION_MIN_DAYS)
             return text

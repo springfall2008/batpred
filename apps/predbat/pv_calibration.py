@@ -261,10 +261,10 @@ def band_scaling(evidence, today, pv_scaling, band_days, min_days=1):
     return clamp(worst / average, 0.3, 1.0), min(best / average, 2.0), average
 
 
-def evidence_peak_kw(evidence, today, days):
-    """The largest measured peak (kW) over the days aged 1 to days."""
+def evidence_peak_kw(evidence, today, days, pv_scaling=1.0):
+    """The largest measured peak (kW) over the days aged 1 to days, leaving out down days as the 7-day calibration did."""
     peak = 0.0
     for day, record in (evidence or {}).items():
-        if 1 <= day_age(day, today) <= days:
+        if 1 <= day_age(day, today) <= days and not _is_down(*_day_totals(record, pv_scaling)):
             peak = max(peak, record.get("peak_kw", 0) or 0)
     return peak

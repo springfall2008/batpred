@@ -145,6 +145,12 @@ def test_peak():
     return check("peak", evidence_peak_kw(evidence, TODAY, 7) == 3.2, evidence_peak_kw(evidence, TODAY, 7))
 
 
+def test_peak_skips_down_days():
+    """A down day's measured peak is not evidence of what the array produces, as before the store."""
+    evidence = {day_before(2): make_day(0.9, peak=3.0), day_before(3): make_day(0.05, peak=4.5)}
+    return check("peak down day", evidence_peak_kw(evidence, TODAY, 7, 1.0) == 3.0, evidence_peak_kw(evidence, TODAY, 7, 1.0))
+
+
 def test_merge_replaces_and_ages():
     """A scanned day replaces the stored copy; days past max age are dropped."""
     stored = {day_before(30): make_day(0.9), day_before(5): make_day(0.9)}
@@ -211,6 +217,7 @@ def run_pv_calibration_tests(my_predbat=None):
         test_fit_clamps,
         test_band_matches_old_arithmetic,
         test_peak,
+        test_peak_skips_down_days,
         test_merge_replaces_and_ages,
         test_merge_drops_today_and_future,
         test_clean_drops_malformed,

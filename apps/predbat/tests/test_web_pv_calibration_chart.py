@@ -27,6 +27,7 @@ class StubSolar:
         self.pv_calibration_evidence = evidence
         self.pv_calibration_last_scan = datetime(2026, 11, 16, 3, 0, tzinfo=timezone.utc)
         self.pv_calibration_next_scan = datetime(2026, 11, 17, 3, 0, tzinfo=timezone.utc)
+        self.pv_calibration_last_success = self.pv_calibration_last_scan
         self.pv_calibration_scan_status = "ok: 2 days scanned, 28 stored"
         self.pv_calibration_settings_used = {"history_days": 28, "scan_days": 2, "half_life": 3.5, "shrink": 0.2, "shrink_slot": 0.2, "overridden": set(overridden)}
         self.pv_calibration_worst_scaling = 0.62
@@ -133,6 +134,19 @@ def run_web_pv_calibration_chart_tests(my_predbat):
         print("Test 9: the slot chart plots time as numbers, so the axis runs in time order")
         html = web.get_chart("PVCalibration")
         failed |= _check("t9 numeric x", "tickvals" in html and "x: s.points.map(function(p) { return p[0] / 60; })" in html)
+
+        print("Test 10: next scan shows the after-midnight scan, and the spread is a percentage of the factor")
+        html = web.get_chart("PVCalibration")
+        failed |= _check("t10 next scan", "2026-11-17 00:00" in html, re.findall(r"Next scan.*?</tr>", html))
+        failed |= _check("t10 spread", "spread" in html and "standard error" not in html, re.findall(r"Day factor unshrunk.*?</tr>", html))
+
+        print("Test 11: before the first run the text gives the default days, not blanks")
+        quiet = StubSolar(None, {})
+        quiet.pv_calibration_settings_used = None
+        my_predbat.components = StubComponents(quiet)
+        html = web.get_chart("PVCalibration")
+        failed |= _check("t11 text", "over the last 28 days" in html and "every 3.5 days" in html, html[-1500:])
+        my_predbat.components = StubComponents(StubSolar(model, evidence))
 
         print("Test 8: the text wraps and the page is width-capped")
         html = web.get_chart("PVCalibration")
