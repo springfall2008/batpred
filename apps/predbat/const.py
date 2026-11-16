@@ -181,6 +181,7 @@ PV_CALIBRATION_RETRY_MINUTES = 60  # A scan whose history read failed is tried a
 PV_CALIBRATION_RESAVE_MINUTES = 24 * 60  # The evidence is saved at least this often even when unchanged, so its expiry keeps moving
 PV_CALIBRATION_LOAD_ATTEMPTS = 3  # A store that never reads back is treated as empty after this many failed loads ...
 PV_CALIBRATION_LOAD_WAIT_MINUTES = 10  # ... spanning at least this long, so a storage outage cannot let one scan replace the evidence
+PV_CALIBRATION_STORE_KEY = "pv_calibration_evidence"  # Storage key (namespace "solcast") for the calibration evidence
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
 BALANCE_CEILING_SHORTFALL_W = 100  # Grid shortfall (W) during a balancing hold that shows the peers are already giving all they can

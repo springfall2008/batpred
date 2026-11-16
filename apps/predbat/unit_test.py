@@ -113,6 +113,7 @@ from tests.test_plan_charge_keep import run_plan_charge_keep_tests
 from tests.test_pv_calibration import run_pv_calibration_tests
 from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
 from tests.test_pv_calibration_scan import run_pv_calibration_scan_tests
+from tests.test_pv_calibration_update import run_pv_calibration_update_tests
 from tests.test_pv_calibration_day_scaling import run_pv_calibration_day_scaling_tests
 from tests.test_export_commitment import run_export_commitment_tests
 from tests.test_export_threshold_per_step import run_export_threshold_per_step_tests
@@ -1011,6 +1012,7 @@ def main():
         ("plan_charge_keep", run_plan_charge_keep_tests, "calculate_plan works out the running charge once for optimise_charge_limit to keep", False),
         ("pv_calibration", run_pv_calibration_tests, "PV calibration: shrunk fit, band, evidence merge", False),
         ("pv_calibration_scan", run_pv_calibration_scan_tests, "PV calibration: history scanned into per-slot day evidence", False),
+        ("pv_calibration_update", run_pv_calibration_update_tests, "PV calibration: evidence storage, scan schedule and save guards", False),
         ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),
         ("pv_calibration_day_scaling", run_pv_calibration_day_scaling_tests, "PV calibration per-day scaling keeps dull days at raw x adjustment", False),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),

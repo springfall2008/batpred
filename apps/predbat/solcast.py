@@ -31,8 +31,15 @@ from const import (
     PV_CALIBRATION_SHRINK,
     PV_CALIBRATION_SHRINK_SLOT,
     PV_CALIBRATION_MIN_DAYS,
+    PV_CALIBRATION_STORE_KEY,
+    PV_CALIBRATION_STORE_EXPIRY_DAYS,
+    PV_CALIBRATION_SCAN_MINUTES,
+    PV_CALIBRATION_RETRY_MINUTES,
+    PV_CALIBRATION_RESAVE_MINUTES,
+    PV_CALIBRATION_LOAD_ATTEMPTS,
+    PV_CALIBRATION_LOAD_WAIT_MINUTES,
 )
-from pv_calibration import pv_day
+from pv_calibration import clean_pv_calibration_evidence, merge_pv_calibration_evidence, pv_calibration_scan_length, pv_day
 from utils import dp2, dp4, history_attribute_to_minute_data, minute_data, history_attribute, prune_today, str2time, strptime_aware
 from predbat_metrics import record_api_call, metrics
 from component_base import ComponentBase
@@ -106,6 +113,18 @@ class SolarAPI(ComponentBase):
         self.pv_forecast_d3 = pv_forecast_d3
         self.pv_forecast_d4 = pv_forecast_d4
         self.pv_scaling = pv_scaling
+        # PV calibration evidence store (pv_calibration_update_evidence); None until the first update has run
+        self.pv_calibration_evidence = None
+        self.pv_calibration_loaded = False
+        self.pv_calibration_load_failures = []
+        self.pv_calibration_pending_save = False
+        self.pv_calibration_last_save = None
+        self.pv_calibration_last_scan = None
+        self.pv_calibration_last_success = None
+        self.pv_calibration_next_scan = None
+        self.pv_calibration_scan_status = "not run"
+        self.pv_calibration_model = None
+        self.pv_calibration_settings_used = None
         self.open_meteo_forecast = open_meteo_forecast
         self.open_meteo_forecast_max_age = open_meteo_forecast_max_age
         # Set by download_open_meteo_data(): True when the last download carried a real ensemble spread
@@ -1283,6 +1302,111 @@ class SolarAPI(ComponentBase):
             evidence[day] = {"slots": slots, "peak_kw": dp4(record["peak"]), "clipped_minutes": record["clipped"]}
         return evidence
 
+    async def pv_calibration_update_evidence(self):
+        """
+        Keep the calibration evidence (pv_calibration_evidence) up to date: read the store, scan the history when due and
+        merge it in, and save. Until a scan has succeeded it reads pv_calibration_history_days; after that once a day it
+        reads pv_calibration_scan_days (more after a gap); a failed read is tried again after PV_CALIBRATION_RETRY_MINUTES.
+
+        An empty store and a failed read both come back as None, so a store that has never read back is only treated as
+        empty once its reads have failed PV_CALIBRATION_LOAD_ATTEMPTS times over PV_CALIBRATION_LOAD_WAIT_MINUTES: until
+        then a save waits, so a storage outage cannot replace the evidence with one scan. It is saved at least daily even
+        when unchanged, so its expiry keeps moving.
+        """
+        settings = self.pv_calibration_settings()
+        history_days = settings["history_days"]
+        today = pv_day(self.now_utc, 0, self.local_tz)
+        slot_minutes = self.plan_interval_minutes
+        storage = self.storage
+        save = self.pv_calibration_pending_save
+        merged_on_load = False
+
+        async def load_store():
+            """Read the stored evidence into pv_calibration_evidence; True when a read returned data."""
+            nonlocal merged_on_load
+            if not storage:
+                self.pv_calibration_loaded = True
+                return False
+            data = None
+            try:
+                data = await storage.load("solcast", PV_CALIBRATION_STORE_KEY)
+            except Exception as e:
+                self.log("Warn: SolarAPI: PV Calibration: failed to load the stored evidence: {}".format(e))
+            if not isinstance(data, dict):
+                return False
+            self.pv_calibration_loaded = True
+            if data.get("slot_minutes") != slot_minutes:
+                self.log("SolarAPI: PV Calibration: the stored evidence was recorded in {} minute slots, not {}, so it is discarded and rebuilt from history".format(data.get("slot_minutes"), slot_minutes))
+                stored = {}
+                merged_on_load = True
+            else:
+                stored = clean_pv_calibration_evidence(data.get("days"))
+            if self.pv_calibration_evidence:
+                # Days scanned while the store could not be read are kept, the stored days merged under them, and saved
+                stored = merge_pv_calibration_evidence(stored, self.pv_calibration_evidence, today, history_days)
+                merged_on_load = True
+            self.pv_calibration_evidence = merge_pv_calibration_evidence(stored, {}, today, history_days)
+            return True
+
+        if not self.pv_calibration_loaded:
+            await load_store()
+        if self.pv_calibration_evidence is None:
+            self.pv_calibration_evidence = {}
+
+        if self.pv_calibration_next_scan is None or self.now_utc >= self.pv_calibration_next_scan:
+            self.pv_calibration_last_scan = self.now_utc
+            days = pv_calibration_scan_length(self.pv_calibration_last_success, self.now_utc, history_days, settings["scan_days"])
+            try:
+                scanned = self.pv_calibration_scan(days, tracked=False)
+            except Exception as e:
+                self.log("Warn: SolarAPI: PV Calibration: the history scan failed: {}".format(e))
+                scanned = None
+            if scanned is None:
+                # The stored evidence is left alone
+                self.pv_calibration_next_scan = self.now_utc + timedelta(minutes=PV_CALIBRATION_RETRY_MINUTES)
+                self.pv_calibration_scan_status = "history unavailable, retry at {}".format(self.pv_calibration_next_scan.astimezone(self.local_tz).strftime("%H:%M") if self.local_tz else self.pv_calibration_next_scan.strftime("%H:%M"))
+            else:
+                self.pv_calibration_last_success = self.now_utc
+                self.pv_calibration_next_scan = self.now_utc + timedelta(minutes=PV_CALIBRATION_SCAN_MINUTES)
+                merged = merge_pv_calibration_evidence(self.pv_calibration_evidence, scanned, today, history_days)
+                save = save or merged != self.pv_calibration_evidence
+                self.pv_calibration_evidence = merged
+                self.pv_calibration_scan_status = "ok: {} days scanned, {} stored".format(len(scanned), len(merged))
+                self.log("SolarAPI: PV Calibration: scanned {} days of history ({} usable), {} days of evidence stored".format(days, len(scanned), len(merged)))
+        else:
+            # Age out days past the retention even between scans
+            self.pv_calibration_evidence = merge_pv_calibration_evidence(self.pv_calibration_evidence, {}, today, history_days)
+        save = save or merged_on_load
+
+        failures = self.pv_calibration_load_failures
+        if self.pv_calibration_loaded:
+            failures.clear()
+        else:
+            failures.append(self.now_utc)
+        last_save = self.pv_calibration_last_save
+        if self.pv_calibration_loaded and self.pv_calibration_evidence and (last_save is None or (self.now_utc - last_save) >= timedelta(minutes=PV_CALIBRATION_RESAVE_MINUTES)):
+            save = True
+        store_ready = self.pv_calibration_loaded or (len(failures) >= PV_CALIBRATION_LOAD_ATTEMPTS and (self.now_utc - failures[0]) >= timedelta(minutes=PV_CALIBRATION_LOAD_WAIT_MINUTES))
+        self.pv_calibration_pending_save = bool(save and storage and not store_ready)
+        if save and storage and store_ready:
+            if not self.pv_calibration_loaded:
+                self.log("Info: SolarAPI: PV Calibration: the stored evidence has not read back for {} cycles, treating the store as empty".format(len(failures)))
+                self.pv_calibration_loaded = True
+                failures.clear()
+            document = {
+                "slot_minutes": slot_minutes,
+                "days": {day: {"slots": {str(minute): pair for minute, pair in record["slots"].items()}, "peak_kw": record.get("peak_kw", 0), "clipped_minutes": record.get("clipped_minutes", 0)} for day, record in self.pv_calibration_evidence.items()},
+                "updated": self.now_utc.strftime(TIME_FORMAT),
+                "last_scan": self.pv_calibration_last_scan.strftime(TIME_FORMAT) if self.pv_calibration_last_scan else None,
+            }
+            try:
+                if await storage.save("solcast", PV_CALIBRATION_STORE_KEY, document, format="json", expiry=self.now_utc + timedelta(days=PV_CALIBRATION_STORE_EXPIRY_DAYS)):
+                    self.pv_calibration_last_save = self.now_utc
+                else:
+                    self.log("Warn: SolarAPI: PV Calibration: failed to save the evidence")
+            except Exception as e:
+                self.log("Warn: SolarAPI: PV Calibration: failed to save the evidence: {}".format(e))
+
     def pv_clipping_ceiling_kw(self):
         """
         Return the power in kW above which this system's PV generation is clipped, or 0 if it is not known.
@@ -2075,7 +2199,8 @@ class SolarAPI(ComponentBase):
             # band it had already scaled and scaled it again - P90 doubled per fetch (#6049).
             pv_forecast_data = [dict(entry) for entry in pv_forecast_data]
 
-            # Run calibration on the data
+            # Bring the stored calibration evidence up to date (a history scan at most daily), then run calibration on the data
+            await self.pv_calibration_update_evidence()
             pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data = self.pv_calibration(
                 pv_forecast_minute, pv_forecast_minute10, pv_forecast_minute90, pv_forecast_data, create_pv10, divide_by / period, max_kwh, self.forecast_days, period, calibrate_band=calibrate_band
             )
