@@ -28,6 +28,7 @@ import sys
 import re
 from datetime import datetime, timedelta, timezone
 import json
+from collections import Counter
 import shutil
 import html as html_module
 import urllib.parse
@@ -108,6 +109,7 @@ from const import (
     BATTERY_RATE_GRID_HALF_LIFE_DAYS,
     BATTERY_RATE_GRID_MAX,
     PV_CALIBRATION_MIN_DAYS,
+    PV_CALIBRATION_MIN_SLOT_POINTS,
     BATTERY_RATE_GRID_MIN_CELLS,
     BATTERY_RATE_GRID_MIN_DAYS,
     BATTERY_RATE_GRID_RUN_MINUTES,
@@ -4199,6 +4201,8 @@ chart.render();
             "points": [[point["minute"], round(point["ratio"], 4), round(point["forecast_kwh"], 4), round(point["weight"], 4)] for point in model["slot_points"]],
             "raw_adj": {str(minute): round(value, 4) for minute, value in model["raw_adj"].items()},
             "adj": {str(minute): round(value, 4) for minute, value in model["adj"].items()},
+            # Slots with their own evidence: elsewhere the factor is just the day factor, so the lines are not drawn there
+            "evidence_minutes": sorted(minute for minute, count in Counter(point["minute"] for point in model["slot_points"]).items() if count >= PV_CALIBRATION_MIN_SLOT_POINTS),
         }
         day_data = {
             "points": [[point["day"], round(point["ratio"], 4) if point["ratio"] is not None else None, round(point["forecast_kwh"], 3), bool(point["down"])] for point in model["day_points"]],
@@ -4217,13 +4221,14 @@ chart.render();
   var hhmm = function(m) { return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); };
   var maxF = Math.max.apply(null, s.points.map(function(p) { return p[2]; }).concat([0.001]));
   var minutes = Object.keys(s.adj).map(Number).sort(function(a, b) { return a - b; });
-  var layout = function(xt) { return {paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', margin: {l: 50, r: 10, t: 10, b: 40}, legend: {font: {color: fg}, orientation: 'h'},
+  var shown = {}; s.evidence_minutes.forEach(function(m) { shown[m] = true; });
+  var layout = function(xt) { return {paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', margin: {l: 50, r: 10, t: 40, b: 40}, legend: {font: {color: fg}, orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom'},
     xaxis: axis(xt), yaxis: axis('Actual / forecast', {range: [0, 3]})}; };
   Plotly.newPlot('pv_calibration_slots', [
     {type: 'scatter', mode: 'markers', name: 'stored days', x: s.points.map(function(p) { return p[0] / 60; }), text: s.points.map(function(p) { return hhmm(p[0]); }), y: s.points.map(function(p) { return Math.min(p[1], 3); }),
       marker: {size: s.points.map(function(p) { return 6 + 10 * p[2] / maxF; }), color: '#f5c43d', opacity: s.points.map(function(p) { return Math.max(p[3], 0.15); })}},
-    {type: 'scatter', mode: 'lines', name: 'unshrunk', x: minutes.map(function(m) { return m / 60; }), y: minutes.map(function(m) { return s.raw_adj[m]; }), line: {color: '#a8a8a7', dash: 'dot'}},
-    {type: 'scatter', mode: 'lines', name: 'applied', x: minutes.map(function(m) { return m / 60; }), y: minutes.map(function(m) { return s.adj[m]; }), line: {color: '#e90a0a', width: 3}},
+    {type: 'scatter', mode: 'lines', name: 'unshrunk', x: minutes.map(function(m) { return m / 60; }), y: minutes.map(function(m) { return shown[m] ? s.raw_adj[m] : null; }), line: {color: '#a8a8a7', dash: 'dot'}},
+    {type: 'scatter', mode: 'lines', name: 'applied', x: minutes.map(function(m) { return m / 60; }), y: minutes.map(function(m) { return shown[m] ? s.adj[m] : null; }), line: {color: '#e90a0a', width: 3}},
     {type: 'scatter', mode: 'lines', name: 'no correction', x: [0, 24], y: [1, 1], line: {color: fg, dash: 'dash', width: 1}}
   ], (function() { var l = layout('Time of day'); var ticks = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24];
     l.xaxis = Object.assign(l.xaxis, {range: [0, 24], tickvals: ticks, ticktext: ticks.map(function(h) { return hhmm(h * 60); })}); return l; })(), {responsive: true});
