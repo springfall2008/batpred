@@ -4293,7 +4293,8 @@ class Fetch:
                 self.battery_rate_grid_loaded[kind] = True
                 failures.clear()
             try:
-                if not run_async(storage.save("predbat", key, {"samples": self.battery_rate_grid_samples.get(kind, {}), "updated": self.battery_rate_grid_updated.get(kind)}, format="json")):
+                expiry = self.now_utc + timedelta(days=BATTERY_RATE_GRID_MAX_AGE_DAYS + 30)
+                if not run_async(storage.save("predbat", key, {"samples": self.battery_rate_grid_samples.get(kind, {}), "updated": self.battery_rate_grid_updated.get(kind)}, format="json", expiry=expiry)):
                     self.log("Warn: {}: failed to save the evidence".format(key))
             except Exception as e:
                 self.log("Warn: {}: failed to save the evidence: {}".format(key, e))

@@ -58,9 +58,9 @@ class FlakyStorage:
             return None
         return await self.storage.load(module, filename)
 
-    async def save(self, module, filename, data, format="yaml"):
+    async def save(self, module, filename, data, format="yaml", **kwargs):
         """Saves go through."""
-        return await self.storage.save(module, filename, data, format=format)
+        return await self.storage.save(module, filename, data, format=format, **kwargs)
 
 
 def _check(name, condition, detail=""):
@@ -291,6 +291,32 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         print("Test 7: the options")
         failed |= _check("t7 new option", "battery_rate_grid_auto" in APPS_SCHEMA and "battery_rate_grid_history_days" in APPS_SCHEMA and "battery_rate_grid_scan_days" in APPS_SCHEMA)
         failed |= _check("t7 removed option", "battery_temperature_charge_curve_auto" not in APPS_SCHEMA)
+
+        print("Test 12: rate-grid evidence is saved with an explicit expiry beyond BATTERY_RATE_GRID_MAX_AGE_DAYS")
+        my_predbat = _make()
+        base_storage = make_test_storage(my_predbat, tmpdir + "/t12")
+        saved_expiries = []
+
+        class RecordingStorage:
+            async def load(self, *args, **kwargs):
+                return await base_storage.load(*args, **kwargs)
+
+            async def save(self, app, key, value, format="json", expiry=None):
+                saved_expiries.append((key, expiry))
+                return await base_storage.save(app, key, value, format=format, expiry=expiry)
+
+        my_predbat.components = MockStorageComponents(RecordingStorage())
+        inv = FakeInverter()
+        inv.scan[False] = _samples(my_predbat)
+        my_predbat.battery_rate_grid_update(inv, False)
+        for _ in range(4):
+            my_predbat.now_utc += timedelta(minutes=6)
+            my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check(
+            "t12 expiry set",
+            bool(saved_expiries) and all(exp is not None and exp >= my_predbat.now_utc + timedelta(days=365) for _, exp in saved_expiries),
+            saved_expiries,
+        )
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
     return failed
