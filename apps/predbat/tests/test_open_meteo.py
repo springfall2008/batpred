@@ -206,25 +206,28 @@ def test_download_open_meteo_data_basic(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             sorted_data, max_kwh = run_async(test_api.solar.download_open_meteo_data())
 
-        if len(sorted_data) != 2:
-            print(f"ERROR: Expected 2 data points (12:00 and 13:00), got {len(sorted_data)}")
+        # Open-Meteo radiation is the mean over the preceding hour, so the samples at 12:00, 13:00
+        # and 14:00 are the hours starting 11:00, 12:00 and 13:00.
+        if len(sorted_data) != 3:
+            print(f"ERROR: Expected 3 data points (the hours starting 11:00, 12:00 and 13:00), got {len(sorted_data)}")
             failed = True
 
         if abs(max_kwh - 3.0) > 0.001:
             print(f"ERROR: max_kwh expected 3.0, got {max_kwh}")
             failed = True
 
-        # With trapezoidal integration, the 12:00 slot = 0.5*(pv50_at_12 + pv50_at_13).
-        # pv50 = (GTI/1000) * kwp * eta_temp where eta_temp uses cell temperature from SAPM model
+        # The hour starting 11:00 is the 12:00 sample alone: pv50 = (GTI/1000) * kwp * eta_temp,
+        # with eta_temp from the SAPM cell temperature model
         if sorted_data:
+            if not sorted_data[0].get("period_start", "").startswith("2025-06-15T11:00"):
+                print(f"ERROR: first period should start at 11:00, got {sorted_data[0].get('period_start')}")
+                failed = True
             pv50 = sorted_data[0].get("pv_estimate", 0)
             t_cell_12 = pvwatts_cell_temperature(500.0, 25.0, 1.0)
             eta_temp_12 = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell_12 - 25.0)))
-            t_cell_13 = pvwatts_cell_temperature(600.0, 25.0, 1.0)
-            eta_temp_13 = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell_13 - 25.0)))
-            expected_pv50 = round(0.5 * ((500.0 / 1000.0) * 3.0 * eta_temp_12 + (600.0 / 1000.0) * 3.0 * eta_temp_13), 4)
+            expected_pv50 = round((500.0 / 1000.0) * 3.0 * eta_temp_12, 4)
             if abs(pv50 - expected_pv50) > 0.001:
-                print(f"ERROR: pv_estimate at 12:00 expected {expected_pv50}, got {pv50}")
+                print(f"ERROR: pv_estimate for 11:00-12:00 expected {expected_pv50}, got {pv50}")
                 failed = True
 
             # pv_estimate10 should be from ensemble P10
