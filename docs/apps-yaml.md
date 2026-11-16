@@ -3094,6 +3094,26 @@ any other reading between -1 and 1 degrees uses the 1 (or -1) degree entry, and 
 
 `battery_temperature_charge_curve_auto` has been replaced by the rate grids, which learn the charge and discharge rate by SoC and temperature together; remove it from `apps.yaml`.
 
+### Battery temperature forecast
+
+By default Predbat forecasts the battery temperature by repeating the changes it saw over the same hours yesterday.
+Set **battery_temperature_model** to `True` (experimental, off by default) to forecast it with a thermal model instead. The model treats the battery as one mass
+that drifts towards the outdoor temperature and is warmed by its own charging and discharging, so a battery that charges hard overnight is forecast warmer
+than one that sits idle.
+
+- It needs **battery_temperature_history** and the [Temperature component](components.md#temperature-api-temperature) (`temperature_enable: true`) for the outdoor temperature.
+- Predbat fits the model to your last week of battery temperature, battery level (`predbat.soc_kw_h0`) and outdoor temperature once a day,
+  so your Home Assistant recorder must keep `predbat.soc_kw_h0`. The fit is logged as `Battery thermal model fitted ...`,
+  giving how quickly the battery follows the outdoor temperature (tau, in hours), how much it warms per kW of charging or discharging, and an offset
+  for a battery sited indoors or against a warm wall.
+- Each forecast starts from the current temperature and uses the battery power of the plan from the previous cycle.
+- Until a fit succeeds, or without an outdoor temperature forecast, the forecast falls back to repeating yesterday's changes.
+  The `model` attribute of `predbat.battery_temperature` shows which forecast is in use (`thermal` or `history`).
+
+```yaml
+  battery_temperature_model: True
+```
+
 ## Weather Alert System
 
 Predbat can take data directly from the Meteo-Alarm feed and use it to trigger keeping your battery charged so you have power in the event of a power cut.

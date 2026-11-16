@@ -13,7 +13,8 @@ import math
 from datetime import datetime, timedelta, timezone
 
 from battery_thermal import ambient_from_results, battery_power_from_soc, plan_power_minutes, solve_linear_3, thermal_fit, thermal_forecast
-from const import TIME_FORMAT
+from const import PREDICT_STEP, TIME_FORMAT
+from fetch import BATTERY_THERMAL_FIT_DAYS, BATTERY_THERMAL_RETRY_MINUTES
 
 NOW = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
 STEP = 5
@@ -181,6 +182,115 @@ def test_battery_power_from_soc():
     return failed
 
 
+TEMP_SENSOR = "sensor.battery_temperature_thermal_test"
+
+
+def records_from_minutes(series, now_utc, unit=None):
+    """HA-style history records, oldest first, from a series keyed by minutes ago."""
+    attributes = {"unit_of_measurement": unit} if unit else {}
+    return [[{"state": str(series[minute]), "last_updated": (now_utc - timedelta(minutes=minute)).strftime(TIME_FORMAT), "attributes": attributes} for minute in sorted(series, reverse=True)]]
+
+
+def test_fetch_integration(my_predbat):
+    """
+    fetch_battery_temperature() with battery_temperature_model fits the model from history, forecasts from the outdoor
+    temperature and the previous best plan, refits only daily, and falls back to the look back without a fit.
+    """
+    failed = False
+    now_utc = my_predbat.now_utc
+    days = BATTERY_THERMAL_FIT_DAYS
+    temperature, soc_kwh, _ = simulate_history(MODEL, days=days)
+    total = days * 24 * 60
+    # The outdoor temperature sensor, hourly, from the start of the history to 2 days ahead (minute_absolute counts from the start)
+    results = {}
+    for hour in range(0, days * 24 + 49):
+        results[(now_utc - timedelta(minutes=total) + timedelta(hours=hour)).strftime(TIME_FORMAT)] = round(ambient_at(hour * 60), 3)
+    reads = []
+    state = {"results": results}
+
+    def fake_history(entity_id, days=30, required=True, tracked=True):
+        """Serve the simulated temperature and battery level history, recording each read."""
+        reads.append((entity_id, days, tracked))
+        if entity_id == TEMP_SENSOR:
+            return records_from_minutes({m: round(v, 2) for m, v in temperature.items() if m <= days * 24 * 60}, now_utc)
+        if entity_id == my_predbat.prefix + ".soc_kw_h0":
+            return records_from_minutes({m: round(v, 4) for m, v in soc_kwh.items() if m <= days * 24 * 60}, now_utc, unit="kWh")
+        return None
+
+    saved_history = my_predbat.get_history_wrapper
+    saved_state = my_predbat.get_state_wrapper
+
+    def fake_state(entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
+        """Serve the outdoor temperature results; everything else from the real wrapper."""
+        if entity_id == "sensor." + my_predbat.prefix + "_temperature" and attribute == "results":
+            return state["results"]
+        return saved_state(entity_id, default=default, attribute=attribute, refresh=refresh, required_unit=required_unit, raw=raw)
+
+    saved_arg = my_predbat.args.get("battery_temperature_history", None)
+    saved = (my_predbat.battery_temperature_model, my_predbat.battery_thermal_model, my_predbat.battery_thermal_last_fit, my_predbat.battery_thermal_last_success, my_predbat.battery_power_plan_best, my_predbat.max_days_previous)
+    my_predbat.get_history_wrapper = fake_history
+    my_predbat.get_state_wrapper = fake_state
+    my_predbat.args["battery_temperature_history"] = TEMP_SENSOR
+    my_predbat.max_days_previous = 2
+    my_predbat.battery_thermal_model = None
+    my_predbat.battery_thermal_last_fit = None
+    my_predbat.battery_thermal_last_success = None
+    my_predbat.battery_power_plan_best = {}
+    try:
+        # Off (the default): no fit, the look back as before
+        my_predbat.battery_temperature_model = False
+        my_predbat.fetch_battery_temperature()
+        lookback = my_predbat.predict_battery_temperature(my_predbat.battery_temperature_history, step=PREDICT_STEP)
+        failed = check(failed, my_predbat.battery_thermal_model is None, "model off should not fit")
+        failed = check(failed, my_predbat.battery_temperature_prediction == lookback, "model off should give the look back forecast")
+        failed = check(failed, all(read[0] == TEMP_SENSOR and read[1] != days for read in reads), "model off should not read the fit history, read {}".format(reads))
+        failed = check(failed, saved_state(my_predbat.prefix + ".battery_temperature", attribute="model") == "history", "model off should publish model history")
+
+        # On: fitted from a week of history, read untracked as it is longer than max_days_previous
+        my_predbat.battery_temperature_model = True
+        reads.clear()
+        my_predbat.fetch_battery_temperature()
+        model = my_predbat.battery_thermal_model
+        failed = check(failed, model is not None, "model on should fit")
+        if model:
+            failed = check(failed, abs(model["tau_hours"] - MODEL["tau_hours"]) / MODEL["tau_hours"] < 0.1, "fitted tau {} expected about {}".format(model["tau_hours"], MODEL["tau_hours"]))
+            failed = check(failed, abs(model["heat_rate"] - MODEL["heat_rate"]) / MODEL["heat_rate"] < 0.1, "fitted heat rate {} expected about {}".format(model["heat_rate"], MODEL["heat_rate"]))
+        failed = check(failed, (TEMP_SENSOR, days, False) in reads and (my_predbat.prefix + ".soc_kw_h0", days, False) in reads, "fit should read {} days untracked, read {}".format(days, reads))
+        idle = dict(my_predbat.battery_temperature_prediction)
+        failed = check(failed, idle != lookback and idle.get(0) == round(my_predbat.battery_temperature_history.get(0), 2), "model on should forecast from the current temperature")
+        failed = check(failed, saved_state(my_predbat.prefix + ".battery_temperature", attribute="model") == "thermal", "model on should publish model thermal")
+
+        # A plan that charges at 5 kW for the next 3 hours warms the forecast; no refit within the day
+        my_predbat.battery_power_plan_best = {(now_utc + timedelta(minutes=m)).strftime(TIME_FORMAT): (-5.0 if m < 180 else 0.0) for m in range(0, 24 * 60, PREDICT_STEP)}
+        reads.clear()
+        my_predbat.fetch_battery_temperature()
+        charging = my_predbat.battery_temperature_prediction
+        failed = check(failed, charging[180] - idle[180] > 3.0, "a 3 hour charge should warm the forecast, {} vs idle {}".format(charging.get(180), idle.get(180)))
+        failed = check(failed, all(read[1] != days for read in reads), "should not refit within the day, read {}".format(reads))
+
+        # No outdoor temperature: no fit, the look back is used, and the fit is retried within the hour
+        my_predbat.battery_thermal_model = None
+        my_predbat.battery_thermal_last_fit = None
+        my_predbat.battery_thermal_last_success = None
+        state["results"] = None
+        my_predbat.fetch_battery_temperature()
+        failed = check(failed, my_predbat.battery_thermal_model is None, "no outdoor temperature should not fit")
+        failed = check(failed, my_predbat.battery_temperature_prediction == lookback, "no fit should fall back to the look back")
+        state["results"] = results
+        my_predbat.battery_thermal_last_fit = now_utc - timedelta(minutes=BATTERY_THERMAL_RETRY_MINUTES)
+        my_predbat.fetch_battery_temperature()
+        failed = check(failed, my_predbat.battery_thermal_model is not None, "a failed fit should be retried after {} minutes".format(BATTERY_THERMAL_RETRY_MINUTES))
+    finally:
+        my_predbat.get_history_wrapper = saved_history
+        my_predbat.get_state_wrapper = saved_state
+        my_predbat.battery_temperature_model, my_predbat.battery_thermal_model, my_predbat.battery_thermal_last_fit, my_predbat.battery_thermal_last_success, my_predbat.battery_power_plan_best, my_predbat.max_days_previous = saved
+        if saved_arg is None:
+            my_predbat.args.pop("battery_temperature_history", None)
+        else:
+            my_predbat.args["battery_temperature_history"] = saved_arg
+    return failed
+
+
 def run_battery_thermal_tests(my_predbat=None):
     """Run the battery thermal model tests; returns True on failure."""
     failed = False
@@ -191,4 +301,6 @@ def run_battery_thermal_tests(my_predbat=None):
     failed |= test_ambient_from_results()
     failed |= test_plan_power_minutes()
     failed |= test_battery_power_from_soc()
+    if my_predbat is not None:
+        failed |= test_fetch_integration(my_predbat)
     return failed

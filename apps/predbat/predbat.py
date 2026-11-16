@@ -807,6 +807,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_temperature_history = {}
         self.battery_temperature_prediction = {}
         self.battery_temperature_stuck_warned = None  # history sensor already warned as stuck at 0, so it is reported once
+        self.battery_temperature_model = False  # battery_temperature_model: forecast the battery temperature with the fitted thermal model (GH#5919)
+        self.battery_thermal_model = None  # the fitted thermal model (battery_thermal.thermal_fit), or None
+        self.battery_thermal_last_fit = None  # time of the last thermal model fit attempt
+        self.battery_thermal_last_success = None  # time of the last fit attempt that produced a model
+        self.battery_power_plan_best = {}  # the best plan's battery power in kW by timestamp, for the next cycle's temperature forecast
         self.alerts = []
         self.alert_active_keep = {}
         self.manual_soc_keep = {}

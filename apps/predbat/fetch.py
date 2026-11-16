@@ -37,6 +37,7 @@ from utils import (
     is_entity_id,
     intelligent_device_is_charger,
 )
+from battery_thermal import ambient_from_results, battery_power_from_soc, plan_power_minutes, thermal_fit, thermal_forecast
 from battery_rate_grid import clean_rate_grid_samples, combine_rate_grid, fit_rate_grid, manual_rate_grid, merge_rate_grid_samples, rate_grid_table
 from battery_curve import charge_day
 from const import (
@@ -87,6 +88,10 @@ import re
 BATTERY_TEMPERATURE_HISTORY_DAYS = 2
 # A battery temperature history reading exactly 0 for this long is taken as a dead sensor (GH#6193)
 BATTERY_TEMPERATURE_STUCK_MINUTES = 24 * 60
+# Battery thermal model (GH#5919): days of history it is fitted on, and how often it is refitted (or retried after a failed fit)
+BATTERY_THERMAL_FIT_DAYS = 7
+BATTERY_THERMAL_FIT_MINUTES = 24 * 60
+BATTERY_THERMAL_RETRY_MINUTES = 60
 
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
@@ -2964,6 +2969,7 @@ class Fetch:
         # models one combined battery, and the rate grid learner reads the same average (average_temperature_minutes)
         entity_ids = battery_temperature_entities(self.get_arg("battery_temperature_history", indirect=False))
         self.battery_temperature_history = average_temperature_minutes([self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, entity_id, scale=1.0, increment=False, smoothing=False) for entity_id in entity_ids])
+        self.battery_thermal_update()
         self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
         self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
         self.check_battery_temperature_history_stuck(self.battery_temperature_history)
@@ -3027,6 +3033,14 @@ class Fetch:
             current_temp += change
             current_temp = max(min(current_temp, 30), -20)
 
+        # With the thermal model on and fitted, its forecast replaces the look back (GH#5919)
+        model_attributes = {"model": "history"}
+        thermal = self.battery_thermal_forecast(battery_temperature_history.get(0, 20), step)
+        if thermal:
+            predicted_temp = thermal
+            predict_timestamps = {(self.now_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT): value for minute, value in thermal.items()}
+            model_attributes = {"model": "thermal", "thermal_tau_hours": self.battery_thermal_model["tau_hours"], "thermal_heat_rate": self.battery_thermal_model["heat_rate"], "thermal_offset": self.battery_thermal_model["offset"]}
+
         self.dashboard_item(
             self.prefix + ".battery_temperature",
             state=dp2(battery_temperature_history.get(0, 20)),
@@ -3035,6 +3049,7 @@ class Fetch:
                 "temperature_h1": battery_temperature_history.get(60, 20),
                 "temperature_h2": battery_temperature_history.get(60 * 2, 20),
                 "temperature_h8": battery_temperature_history.get(60 * 8, 20),
+                **model_attributes,
                 "friendly_name": "Battery temperature",
                 "state_class": "measurement",
                 "unit_of_measurement": "°C",
@@ -3043,6 +3058,84 @@ class Fetch:
             },
         )
         return predicted_temp
+
+    def battery_thermal_ambient(self, minutes_back, minutes_forward):
+        """
+        The outdoor temperature from the temperature component's sensor, past and forecast.
+
+        Returns:
+            (past, future): degrees C keyed by minutes ago and by minutes ahead; both empty without the sensor
+        """
+        results = self.get_state_wrapper("sensor." + self.prefix + "_temperature", attribute="results")
+        if not isinstance(results, dict):
+            return {}, {}
+        return ambient_from_results(results, self.now_utc, minutes_back, minutes_forward, PREDICT_STEP)
+
+    def battery_thermal_history(self, entity_id, days, required_unit=None):
+        """
+        Read one sensor's history for the thermal model fit, keyed by minutes ago.
+
+        The minutes before the oldest record are left out (pad=False), and a read longer than max_days_previous is not
+        tracked, so the history cache does not keep a week of the sensor afterwards.
+        """
+        history = self.get_history_wrapper(entity_id=entity_id, days=days, required=False, tracked=days <= self.max_days_previous)
+        if not history or not history[0]:
+            return {}
+        data, _ = minute_data(history[0], days, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0, required_unit=required_unit, pad=False)
+        return data
+
+    def battery_thermal_update(self):
+        """
+        Fit the battery thermal model (GH#5919) once a day, or within the hour after a fit that failed.
+
+        It is fitted on BATTERY_THERMAL_FIT_DAYS of the battery temperature history, the battery power derived from the
+        battery level history (soc_kw_h0) and the outdoor temperature from the temperature component. A failed fit keeps
+        the previous model. Only runs with battery_temperature_model on.
+        """
+        if not self.battery_temperature_model:
+            self.battery_thermal_model = None
+            return
+        last_fit = self.battery_thermal_last_fit
+        succeeded = last_fit is not None and self.battery_thermal_last_success is not None and self.battery_thermal_last_success >= last_fit
+        interval = BATTERY_THERMAL_FIT_MINUTES if succeeded else BATTERY_THERMAL_RETRY_MINUTES
+        if last_fit is not None and (self.now_utc - last_fit) < timedelta(minutes=interval):
+            return
+        self.battery_thermal_last_fit = self.now_utc
+
+        history_minutes = BATTERY_THERMAL_FIT_DAYS * 24 * 60
+        entity_id = self.get_arg("battery_temperature_history", "", indirect=False)
+        if isinstance(entity_id, list):
+            entity_id = entity_id[0] if entity_id else ""
+        temperature = self.battery_thermal_history(entity_id, BATTERY_THERMAL_FIT_DAYS) if entity_id else {}
+        soc_kwh = self.battery_thermal_history(self.prefix + ".soc_kw_h0", BATTERY_THERMAL_FIT_DAYS, required_unit="kWh")
+        ambient, _ = self.battery_thermal_ambient(history_minutes, 0)
+        power = battery_power_from_soc(soc_kwh, history_minutes, PREDICT_STEP)
+        model = thermal_fit(temperature, power, ambient, history_minutes, PREDICT_STEP)
+        if model:
+            self.battery_thermal_model = model
+            self.battery_thermal_last_success = self.now_utc
+            self.log("Battery thermal model fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, offset {} °C, step error {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["offset"], model["rmse"]))
+        else:
+            self.log(
+                "Warn: Battery thermal model could not be fitted ({} temperature, {} battery power and {} outdoor temperature minutes of history), {}".format(
+                    len(temperature), len(power) * PREDICT_STEP, len(ambient) * PREDICT_STEP, "keeping the previous fit" if self.battery_thermal_model else "using the history look back"
+                )
+            )
+
+    def battery_thermal_forecast(self, current_temp, step):
+        """
+        Forecast the battery temperature with the fitted thermal model, warmed by the previous cycle's best plan.
+
+        Returns:
+            The forecast keyed by minutes ahead, or None when the model is off, not fitted or there is no outdoor forecast
+        """
+        if not self.battery_temperature_model or not self.battery_thermal_model:
+            return None
+        _, ambient = self.battery_thermal_ambient(0, self.forecast_minutes)
+        if not ambient:
+            return None
+        power = plan_power_minutes(self.battery_power_plan_best, self.now_utc, self.forecast_minutes, step)
+        return thermal_forecast(current_temp, self.battery_thermal_model, ambient, power, self.forecast_minutes, step)
 
     def download_ge_data(self, now_utc):
         """
@@ -5161,6 +5254,7 @@ class Fetch:
         self.battery_temperature_charge_curve = self.validate_curve(self.args.get("battery_temperature_charge_curve", {}), "battery_temperature_charge_curve")
         self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
         self.battery_rate_grid_auto = bool(self.get_arg("battery_rate_grid_auto", True))
+        self.battery_temperature_model = bool(self.get_arg("battery_temperature_model", False))
         # How much history the rate grid scans read: the first (and any until one succeeds) and the daily ones
         self.battery_rate_grid_history_days = max(int(self.get_arg("battery_rate_grid_history_days", BATTERY_RATE_GRID_FIRST_SCAN_DAYS)), 1)
         self.battery_rate_grid_scan_days = max(int(self.get_arg("battery_rate_grid_scan_days", BATTERY_RATE_GRID_DAILY_SCAN_DAYS)), 1)
