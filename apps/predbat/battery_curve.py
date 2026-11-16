@@ -289,7 +289,7 @@ class BatteryCurve:
         The battery temperature history by minute before now, or None when battery_temperature_history is not set, has
         no history, or only ever reads exactly 0 (how several integrations report a missing reading).
         """
-        temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False)
+        temperature_sensor = self.base.get_arg("battery_temperature_history", indirect=False, index=self.id)
         if not temperature_sensor:
             return None
         temperature_data = self.base.get_history_wrapper(entity_id=temperature_sensor, days=days, required=False, tracked=days <= self.base.max_days_previous)

@@ -253,4 +253,15 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     block = [("Charging", 1000, -1000, 40, 15.3, -1000) for _ in range(25)]
     _, samples = _scan(block)
     failed |= _check("t8", _segments(samples) == [], samples)
+
+    print("Test 9: battery_temperature_history as a per-inverter list reads this inverter's own sensor")
+
+    def temperature_list(my_predbat):
+        """apps.yaml gives battery_temperature_history as a list, one sensor per inverter."""
+        my_predbat.args["battery_temperature_history"] = [TEMP_SENSOR]
+
+    _, samples = _scan(_charge(25), setup=temperature_list)
+    segments = _segments(samples)
+    failed |= _check("t9 count", len(segments) == 3, segments)
+    failed |= _check("t9 temperature", all(abs(s[1] - 15.3) < 1e-6 for s in segments), segments)
     return failed
