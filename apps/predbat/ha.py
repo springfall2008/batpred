@@ -1214,8 +1214,13 @@ class HAInterface(ComponentBase):
 
     def _is_owned_virtual_control(self, domain, data):
         """
-        Return True if this service call targets only Predbat-owned virtual GivTCP controls
-        (published into HA state without a registered select/number/switch platform).
+        Return True if this service call targets only controls Predbat published itself.
+
+        Every component control made with dashboard_item(..., app=...) is recorded in
+        dashboard_index_app and published to HA as state only (POST /api/states), with no
+        select/number/switch platform behind it. HA fires the call_service event for such an
+        entity but then logs "Referenced entities ... are missing" because no platform owns it,
+        so these writes are looped back to Predbat directly instead of going through HA.
         """
         if domain not in ("select", "number", "switch"):
             return False
@@ -1226,10 +1231,7 @@ class HAInterface(ComponentBase):
             entities = [entities]
         elif not isinstance(entities, (list, tuple, set)):
             return False
-        app_map = getattr(self.base, "dashboard_index_app", None)
-        if not isinstance(app_map, dict):
-            return False
-        return all(app_map.get(entity_id) == "givtcp" for entity_id in entities)
+        return all(entity_id in self.base.dashboard_index_app for entity_id in entities)
 
     def call_service(self, service, **kwargs):
         """
@@ -1249,7 +1251,7 @@ class HAInterface(ComponentBase):
         if self.websocket_active and not self._is_owned_virtual_control(domain, data):
             return self.call_service_websocket_command(domain, service, data)
         else:
-            # Loopback with no home assistant or Predbat-owned virtual GivTCP control
+            # Loopback with no home assistant, or for a control Predbat published itself
             data_frame = {"domain": domain, "service": service, "service_data": data}
             return run_async(self.base.trigger_callback(data_frame))
 
