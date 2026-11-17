@@ -120,6 +120,9 @@ from const import (
     BATTERY_RATE_GRID_TEMP_MAX,
     BATTERY_RATE_GRID_TEMP_MIN,
     BATTERY_RATE_GRID_UNKNOWN_TEMP,
+    EXPORT_STATUS_NONE,
+    EXPORT_STATUS_TARGET,
+    EXPORT_STATUS_FREEZE,
 )
 
 CURVE_EVIDENCE_DAYS = 90  # Curves page: evidence segments up to this old are drawn on the grids
@@ -5338,7 +5341,20 @@ chart.render();
         text += str(dp2(percent)) + "%"
 
         if is_exporting:
-            text += '<span class="mdi mdi-transmission-tower-export"></span>'
+            # Colour the export icon by which kind of export is running - both look identical otherwise, so
+            # freeze export (PV surplus only) reads as if stored capacity were being sold (#5125). An
+            # unrecognised/absent mode keeps the original uncoloured icon.
+            export_status = self.get_state_wrapper("binary_sensor." + self.prefix + "_exporting", attribute="export_status", default=EXPORT_STATUS_NONE)
+            if export_status == EXPORT_STATUS_TARGET:
+                export_class = " export-active"
+                export_title = "Active export - discharging stored battery capacity to the grid"
+            elif export_status == EXPORT_STATUS_FREEZE:
+                export_class = " export-freeze"
+                export_title = "Freeze export - exporting solar surplus only, stored battery capacity is held"
+            else:
+                export_class = ""
+                export_title = "Exporting"
+            text += '<span class="mdi mdi-transmission-tower-export{}" title="{}"></span>'.format(export_class, export_title)
         return text
 
     async def html_api_login(self, request):
