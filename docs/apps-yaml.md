@@ -113,10 +113,10 @@ sets the configuration item **template** to the value `true` and **load_filter_t
 - Entries where the Predbat configuration item is set to point to a Home Assistant sensor name, e.g.:
 
 ```yaml
-  battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+  battery_temperature_history: sensor.givtcp_battery_stack_1_battery_temperature
 ```
 
-sets the configuration item **battery_temperature_history** to the Home Assistant sensor name `sensor.givtcp_battery_stack_1_bms_temperature`.  You should verify that the sensor name is correct and matches your HA setup.
+sets the configuration item **battery_temperature_history** to the Home Assistant sensor name `sensor.givtcp_battery_stack_1_battery_temperature`.  You should verify that the sensor name is correct and matches your HA setup.
 
 - Entries where the Predbat configuration item is a list of values, e.g.:
 
@@ -1233,17 +1233,19 @@ Configuration keys:
 - `growatt_control_enable`: allow dispatch writes, default `true`; set false for monitoring only
 - `growatt_battery_rate_max`: optional W override when the reported battery rating is wrong or absent
 - `growatt_api_delay`: delay between different-device calls, default `0.2` seconds
-- `growatt_min_write_interval`: dispatch pacing, default and minimum `5` seconds
+- `growatt_min_write_interval`: dispatch pacing, default and minimum `6` seconds (Growatt's five-second limit plus a second of margin)
 
 Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from telemetry, which Growatt updates about every five minutes. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export slot is removed. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval (about five minutes) of overshoot and confirm the behaviour on the target model before relying on it.
 
 Growatt has no reserve Predbat can hold the battery with, so the reserve functions (`switch.predbat_set_reserve_enable` and the reserve-based holds) are turned off for this inverter. Outside a slot the inverter runs its own self-consumption down to its local minimum.
 
-The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat hands control back to the inverter's own settings.
+The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat clears the slot table it wrote, handing control back to the inverter's own settings. Before writing a table that exports, Predbat raises the inverter's OpenAPI export limit to 100% if it reads as anything lower (see below).
 
 The API times are UTC. Predbat converts the local planned windows on every apply, including the current daylight-saving offset, and splits a window that crosses UTC midnight.
 
-The OpenAPI does not report the site's grid export cap. Set `export_limit` manually if the DNO cap is below the inverter's nominal rating.
+Predbat reads the inverter's OpenAPI export limit (`readDeviceDispatch` `export_limit`) every eight hours and publishes it as `sensor.predbat_growatt_<serial>_export_limit` in W. Growatt gives it as a percentage; Predbat takes that as a percentage of the inverter's rated output (`nominalPower`). On a live SPH the limit read 0% and Predbat's export slots only covered the house load, while the inverter's own schedule still exported to the grid. So, while it is in control, Predbat raises the limit to 100% before an export unless it is already at 100% or disabled (reading it first if it has not been read yet), and leaves it there - it is not set back on release. Predbat does not change it while it is read-only. The sensor is not bound to Predbat's `export_limit`: if your grid connection is capped below the inverter's rating, set `export_limit` in `apps.yaml`.
+
+The inverter's own SoC floors from the device information are published as `sensor.predbat_growatt_<serial>_discharge_cutoff_soc` (`dischargeCutOffSOC`) and `sensor.predbat_growatt_<serial>_backup_cutoff_soc` (`backupCutOffSOC`, the off-grid minimum). The discharge cut-off acts as the floor for forced export, not as a reserve. On a live SPH reading 100%, an export slot at 100% SoC exported nothing, while the battery still discharged to cover the house. Predbat's export slots stop at it, so at 100% Predbat's exports do nothing. Neither value is used as Predbat's minimum reserve, and the OpenAPI cannot change either, so set them in the Growatt app.
 
 See [Components - Growatt OpenAPI](components.md#growatt-openapi-growatt) and [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi).
 
@@ -1697,15 +1699,15 @@ or
 
 - **battery_voltage** - Nominal maximum battery voltage (not current battery voltage) - only needed for inverters controlled via Amps and used internally by Predbat to convert Watts to Amps to control the inverter.
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
-Predbat also uses **battery_rate_max** when creating [charge and discharge curves](#battery-chargedischarge-curves), looking for charging or discharging at 95% of the max rate.
-Be careful of setting the rate at a value higher than your inverter can handle for grid charging in order for Predbat to be able to find the historical 'full rate' charging/discharging needed to correctly calculate the curves.
+Predbat also uses **battery_rate_max** when learning the [rate grids](#battery-rate-grids), looking for charging or discharging at 95% of the max rate.
+Be careful of setting the rate at a value higher than your inverter can handle for grid charging in order for Predbat to be able to find the historical 'full rate' charging/discharging needed to learn them.
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh.
 If not set or set to 0, Predbat will attempt to automatically determine the battery size by analyzing historical charging data from `soc_percent` and `battery_power` sensors.
 This requires at least several days of historical data with charging periods of 15% or more SoC change. If automatic detection fails, you must manually set this value.
 - **soc_max_fallback** - Optional. The battery size in kWh (or an entity giving it) to plan with while `soc_max` is unset and Predbat has not yet estimated the size from charge history - without it Predbat uses 8 kWh. Unlike `soc_max` it is never treated as the battery's nominal size, so it does not constrain the estimate: once one exists it is used instead, however far it is from the fallback.
 Some inverter integrations (e.g. Sunsynk) set this automatically from a capacity the inverter reports but cannot be trusted.
 - **battery_size_power** - Optional. A battery power sensor (W, same sign convention and `battery_power_invert` as `battery_power`) used only for estimating the battery size from charge history, in place of `battery_power`. Set it when a more accurate battery-side reading exists for sustained charging than the one used for live power - Sunsynk sets it automatically to the battery management system's own power.
-- **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value
+- **battery_min_soc** - When set limits the target SoC% setting for charge and discharge to a minimum percentage value. Don't point it at the same entity as **reserve**: that entity holds whatever reserve Predbat last wrote, so Predbat ignores `battery_min_soc` in that case and logs a warning
 - **reserve** - sensor name for the reserve SoC % setting. The reserve SoC is the lower limit target % to discharge the battery down to.
 Can also be set to a fixed percentage rather than an entity name for inverters that have no reserve register to point at -
 the supplied Huawei and Sofar templates do this. A fixed value tells Predbat what the inverter is set to so it can be modelled,
@@ -1820,6 +1822,19 @@ If you have multiple inverters then you need to configure both battery and PV po
     - sensor.givtcp_{geserial}_pv_power
     - sensor.givtcp2_{geserial2)_pv_power
 ```
+
+If a single sensor reports the battery power for the whole site (for example an EMS in front of several inverters, which GE Cloud configures for you),
+put it on the first inverter and a dummy `0` on the others. Predbat then treats the first sensor as the total for every inverter, and the rate grids
+learn it against the combined battery (every inverter's SoC and rated rate together) rather than against the first inverter alone:
+
+```yaml
+  battery_power:
+    - sensor.ems_battery_power
+    - 0
+```
+
+With that set up, the rate grids are only learned while every inverter's SoC and charge/discharge rate sensors have history; if one is missing they
+keep the curves they have rather than learn from the first inverter alone.
 
 #### Battery SoC
 
@@ -1943,6 +1958,13 @@ repointing them at a sensor it has only just created would throw that history aw
 planning with no load model until the days build back up. This applies per setting, so naming one of
 the four by hand leaves the other three auto-configured. Everything else Predbat auto-configures here
 is read as a current value rather than as history, and anything you set for those is still overridden.
+
+**battery_temperature_history** is the exception to that exception: it is read as history, but it is
+still pointed at the first answering inverter's `sensor.predbat_givtcp_<n>_battery_temperature`, the same sensor
+**battery_temperature** reads. Predbat predicts the battery temperature forward from it, and a different
+sensor - such as a GivTCP battery stack sensor that always reads 0 - would make it plan every charge at
+your **battery_temperature_charge_curve**'s coldest rate. Only the last 24 hours are used, so switching
+sensor costs at most a day of temperature trend.
 
 **export_limit** is also left to you if you set it. Predbat publishes the inverter's own export limit
 as `sensor.predbat_givtcp_<n>_export_limit` (from GivTCP's `Export_Limit`, which is 0 for a
@@ -2790,9 +2812,18 @@ Default value 1.0. Used to scale the import & export kWh data from GivTCP if the
   inverter_battery_rate_min: watts
 ```
 
-One per inverter (optional), set in Watts, when set models a "bug" in the inverter firmware
+Optional, set in Watts, when set models a "bug" in the inverter firmware
 in some models where if charge or discharge rates are set to 0 you actually get a small amount of charge or discharge.
 The recommended setting is 200 for Gen 1 hybrids with this issue.
+
+The value is per inverter, and Predbat adds them up across inverters. A single value applies to each inverter. With more than one
+inverter you can instead give one value per inverter as a list, which must have an entry for each inverter:
+
+```yaml
+  inverter_battery_rate_min:
+    - 200
+    - 100
+```
 
 ### Inverter reserve maximum
 
@@ -2802,6 +2833,15 @@ The recommended setting is 200 for Gen 1 hybrids with this issue.
 
 Global, sets the maximum reserve % that may be set to the inverter, the default is 98, as some Gen 2 & Gen 3 inverters and
 AIO firmware versions refuse to be set to 100.  Comment the line out or set it to 100 if your inverter allows setting it to 100%.
+
+A single value applies to every inverter. With more than one inverter you can instead give one value per inverter as a list,
+which must have an entry for each inverter:
+
+```yaml
+  inverter_reserve_max:
+    - 100
+    - 98
+```
 
 ### Savings Max Charge Slots
 
@@ -2842,67 +2882,95 @@ The auto_restart itself is a list of commands to run to trigger a restart.
 NB: If you are running GivTCP v2 then the line '533ea71a_givtcp' must be replaced with 'a6a2857d_givtcp'
 as the slug-id (Home Assistant App identifier) is different between GivTCP v2 and v3.
 
-## Battery charge/discharge curves
+## PV calibration
 
-Some batteries tail off their charge rate at high SoC% or their discharge rate at low SoC%, and these optional configuration items enable you to model this tail-off in Predbat.
-Note that the charge/discharge curves *only* affect the accuracy of the charging/discharging model Predbat applies in the forward battery plan,
-Predbat will still instruct the inverter to charge/discharge at full rate regardless of the charging curve so not having these curves only has an impact on plan accuracy.
+When **switch.predbat_metric_pv_calibration_enable** is On (the default) Predbat calibrates your solar forecast from your own generation history - see [PV calibration](customisation.md) for how it works. These optional settings tune it; the defaults suit most systems:
 
-If you know the battery charge or discharge curves (e.g. manufacturer info or your own testing) then you can manually configure this in `apps.yaml`,
-or Predbat can calculate the curves based on historical inverter charging/discharging data in Home Assistant. Note the battery curves cannot be calculated if Predbat is in Read Only mode.
-
-If the battery has not recently been fully charged or fully discharged *at a charge/discharge rate that is at least 95% of your maximum charge/discharge rate* then Predbat will not be able to calculate the curves and you'll get a warning in the logfile.
-For some inverters you may not be able to practically charge/discharge at full rates so you'll keep getting the curve warning every time Predbat starts. Simply create dummy curves to stop this warning, e.g:
+- **pv_calibration_history_days** - how many days of evidence are kept, and how many days the first scan reads (default 28). Home Assistant's recorder keeps 10 days unless you change `purge_keep_days`, so the evidence builds up to this over the following weeks. A long first read bypasses Predbat's history cache. Calibration needs at least 3 days.
+- **pv_calibration_scan_days** - how many days each daily scan reads (default 2), more if it has not scanned for longer. A scan whose history read fails is tried again an hour later.
+- **pv_calibration_half_life** - how quickly older evidence counts for less, in days (default 3.5): a day's weight halves every this many days. Shorter follows a change in your system faster; longer is steadier.
+- **pv_calibration_shrink** - how readily the day factor moves away from 1 (default 0.20). Smaller leaves a forecast that is already accurate for your site more alone; larger follows a real, consistent difference faster.
+- **pv_calibration_shrink_slot** - the same for the half-hour shape (default 0.20).
 
 ```yaml
-  battery_charge_power_curve:
-    100 : 1.0
-  battery_discharge_power_curve:
-    1 : 1.0
+  pv_calibration_history_days: 28
+  pv_calibration_scan_days: 2
+  pv_calibration_half_life: 3.5
+  pv_calibration_shrink: 0.20
+  pv_calibration_shrink_slot: 0.20
 ```
 
-- **battery_charge_power_curve** - This optional configuration item enables you to model in Predbat a tail-off in charging at high SoC%.
+## Battery rate grids
+
+Batteries do not always charge or discharge at their full rated rate: most tail off their charge rate near full and their discharge rate near empty, and many limit charging (and sometimes discharging) when cold.
+Predbat models this with two **rate grids**, one for charging and one for discharging: the rate the battery reaches, as a fraction of its rated rate, at each SoC (0-100%) and each battery temperature.
+The grids only affect the accuracy of the plan - Predbat still instructs the inverter to charge or discharge at the rate the plan chooses.
+
+Predbat learns both grids from your battery's own history, automatically, and falls back to the curves you set in `apps.yaml` (below) where it has no evidence. Learning is on by default:
+
+- **battery_rate_grid_auto** - set to `False` to plan with your `apps.yaml` curves only. The evidence is still gathered, so you can compare your curves with it on the Curves page.
+- **battery_rate_grid_history_days** - how many days of history the first scan reads (default 28). A long first read bypasses Predbat's history cache, so it does not keep that much history in memory afterwards.
+- **battery_rate_grid_scan_days** - how many days each daily scan reads (default 2).
+
+How the grids are learned:
+
+- When Predbat starts it scans up to **battery_rate_grid_history_days** (default 28) days of your history - as much as Home Assistant has kept, as its recorder keeps 10 days unless you change `purge_keep_days` - then once a day the last **battery_rate_grid_scan_days** (default 2) days, more if it has not scanned for longer. A scan whose history read fails is tried again an hour later. Each scan looks for runs of 15 minutes or more where it was **Charging** (or, for the discharge grid, in a forced **Export**) with the rate set to its maximum.
+  The first and last 5 minutes of each run are dropped (ramping up and down) and the rest is cut into 5-minute segments, each giving one point: SoC, battery temperature and the rate the battery reached.
+- A minute where the battery did not actually charge (or discharge), or a forced export that did not reach the grid (from **grid_power**, when it has history), breaks the run: that is a control failure or the house using the power, not a battery limit.
+  Exports held back by **export_limit** are left out too. If your export limit is below your maximum discharge rate and **grid_power** has no history, no discharge evidence is gathered.
+- A battery temperature reading of exactly 0 is treated as missing (several integrations report a missing reading as 0) and also breaks the run. If your temperature sensor only ever reads 0, or **battery_temperature_history** is not set, the grid has no temperature and is learned as a single SoC curve.
+- The points are kept in Predbat's cache for a year, so last winter's cold-weather evidence is still there when the next cold spell arrives. Recent evidence counts for more: a point's weight halves every 90 days.
+- The grid is fitted so the rate never rises as SoC rises (charge) or as SoC falls (discharge), and never rises as the temperature falls. A one-off reading that breaks that rule is averaged against its neighbours rather than followed.
+  Values are capped at 1.2, as some systems run a little above their rated rate.
+- A learned grid is used once it has at least 20 SoC x temperature cells from at least 3 different days. Until then the curves from `apps.yaml` are used, as they are wherever the evidence does not reach.
+  Colder than any evidence, the coldest learned row is used, capped by your `battery_temperature_charge_curve` (or discharge curve) if you set one; Predbat never guesses a slower rate than it has seen.
+  A grid learned without temperature (no **battery_temperature_history**) is capped by your temperature curve at every temperature.
+- With more than one inverter the combined battery is learned from, as Predbat plans them as one.
+- If you have set **input_number.battery_rate_max_scaling** (or **_discharge**), it is divided out of the evidence, as Predbat applies it on top of the grid.
+
+How the plan uses them:
+
+- For each step of the plan the grid row for that step's forecast battery temperature gives the battery's ceiling at each SoC, in kW (the grid value times your rated rate). A forecast temperature of exactly 0 is treated as missing and uses the 20 degree row of a learned grid.
+- On a path whose maximum is at or below your rated rate (AC charging, forced export) the ceiling is the same number of kW whichever path is used, so a cold battery limited to 1 kW is planned at 1 kW whether charging or exporting.
+  On a path above your rated rate (a hybrid inverter's DC charging from PV) a learned grid scales with that path instead, as Predbat only ever sees the battery up to its rated rate; a temperature curve you set in `apps.yaml` stays an absolute limit there too.
+  Before the rate grids, a `battery_charge_power_curve` or `battery_discharge_power_curve` was always a fraction of whichever maximum the path used, so on a path whose maximum differs from the rated rate the planned rate can now differ slightly.
+- A rate below the ceiling is never scaled down.
+
+### Checking the grids
+
+Predbat publishes one binary sensor per grid:
+
+- **binary_sensor.predbat_battery_charge_rate_grid**
+- **binary_sensor.predbat_battery_discharge_rate_grid**
+
+Each is **on** while a grid learned from your battery's history is in use, and **off** while your `apps.yaml` curves (or the full rated rate) are used. The attributes give:
+
+- **source** - `learned`, `manual` (from your `apps.yaml` curves) or `default` (no curve set)
+- **auto** - whether learning is on (**battery_rate_grid_auto**)
+- **cells**, **segments** and **days** - how much evidence the learned grid has
+- **temperature_range** - the coldest and warmest degree with evidence
+- **updated** - when the learned grid last changed, and **last_scan** - when the history was last scanned
+- **table** - the grid in use at every 10% SoC and 5 degrees
+
+The **Curves** page in the web interface (Charts, then Curves) shows the status of both grids, each grid in 3D with the evidence from the last 90 days as dots, and a short table of each.
+
+## Battery charge/discharge curves
+
+These optional curves describe your battery in `apps.yaml`. With **battery_rate_grid_auto** on (the default) they are the fallback where the learned grids have no evidence;
+with it off they are what Predbat plans with. Setting a curve no longer turns learning off.
+
+- **battery_charge_power_curve** - a tail-off in charging at high SoC%.
 
 Enter the charging curve as a series of steps of % of max charge rate for each SoC percentage.
 The percentage steps can either be expressed as an integer number (e.g. 97) or as a string (e.g. "97"); the Percent symbol is not required (see example curve below).
-
-The default is 1.0 (full power) charge to 100%.
+A SoC percentage the curve does not set is full rate. **auto** (or leaving it unset) means no curve.
 
 Modelling the charge curve becomes important if you have limited charging slots (e.g. only a few hours a night) or you wish to make accurate use of the
 [low power charging mode](customisation.md#inverter-control-options) (**switch.predbat_set_charge_low_power**).
+The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg) explains how the curve works.
 
-If the battery_charge_power_curve option is *not* set in `apps.yaml` and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon app,
-or an edit being made to `apps.yaml`), then Predbat will automatically calculate the charging curve for you from historical battery charging information.
-
-You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery charging curve and copy/paste it into your `apps.yaml` file.
-
-The logfile *may* also include an Info recommendation for how to set your **input_number.battery_rate_max_scaling**/**_scaling_discharge** setting in HA if Predbat detects that your inverter is charging/discharging at a different maximum rate than is configured in `apps.yaml`.<BR>
-If you don't get such a message then Predbat didn't detect any charge/discharge rate discrepancy.
-
-The YouTube video [charging curve and low power charging](https://youtu.be/L2vY_Vj6pQg) explains how the curve works and shows how Predbat automatically creates it.
-
-Setting this option to **auto** will cause the computed curve to be stored and used automatically. This is not recommended if you use low power charging mode as your
-history will eventually not contain any full power charging data to compute the curve, so in this case it's best to manually configure the charge curve in `apps.yaml`.
-
-NB: For Predbat to calculate your charging curve it needs to have access to historical Home Assistant data for **status**, **battery_charge_rate**, **battery_power** and **soc_percent** or **soc_kw**.
-These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
-
-Either **soc_percent** or **soc_kw** from `apps.yaml` can be used to generate the charge curve. If both are defined then **soc_percent** is used in preference.
-
-Predbat will search through the charge history of your inverter, looking for periods of where Predbat status is Charging, battery_charge_rate is at least 95% of the maximum inverter battery charge rate, and the battery charges to above 85% SoC.
-From the corresponding battery_power readings, Predbat determines the charge curve and reports it as 'Info' messages in the Predbat logfile. If suitable charge history cannot be found then Predbat will report that it cannot create the charge curve.
-
-If you have a GivEnergy inverter and are using the recommended default [REST mode to control your inverter](#inverter-control-configurations)
-then you will need to uncomment out the following entries in `apps.yaml`:
-
-```yaml
-  charge_rate:
-    - number.givtcp_{geserial}_battery_charge_rate
-  battery_power:
-    - sensor.givtcp_{geserial}_battery_power
-  soc_kw:
-    - sensor.givtcp_{geserial}_soc_kwh
-```
+If you pasted a curve logged by a Predbat version before the fix for [#6183](https://github.com/springfall2008/batpred/issues/6183) and you use **soc_percent** with a **battery_scaling** below 1.0,
+it tapers too early (at battery_scaling 0.95, a taper that really starts at 91% was logged from about 87%): remove it and let the charge grid be learned.
 
 Example charging curve from a GivEnergy 9.5kWh battery with the latest firmware and Gen 1 inverter:
 
@@ -2920,81 +2988,9 @@ Example charging curve from a GivEnergy 9.5kWh battery with the latest firmware 
     100 : 0.24
 ```
 
-- **battery_discharge_power_curve** - This optional configuration item enables you to model in Predbat a tail-off in discharging at low SoC%.
+- **battery_discharge_power_curve** - a tail-off in discharging at low SoC%, entered the same way as a series of steps of % of max discharge rate for each SoC percentage.
 
-Enter the discharging curve as a series of steps of % of max discharge rate for each SoC percentage.
-
-The default is 1.0 (full power) discharge to 0%.
-
-If the battery_discharge_power_curve option is *not* set in `apps.yaml` and Predbat performs an initial run (e.g. due to restarting the Predbat/AppDaemon app,
-or an edit being made to `apps.yaml`), then Predbat will automatically calculate the discharging curve for you from historical battery discharging information.
-
-You should look at the [Predbat logfile](output-data.md#predbat-logfile) to find the predicted battery discharging curve and copy/paste it into your `apps.yaml` file.
-
-Setting This option to **auto** will cause the computed curve to be stored and used automatically. This may not work very well if you don't do regular discharges to empty the battery.
-
-In the same way, as for the battery charge curve above, Predbat needs to have access to historical Home Assistant data for **status**, **battery_discharge_rate**, **battery_power** and **soc_percent** or **soc_kw**.
-These must be configured in `apps.yaml` to point to Home Assistant entities that have appropriate history data for your inverter/battery.
-
-Either **soc_percent** or **soc_kw** from `apps.yaml` can be used to generate the discharge curve. If both are defined then **soc_percent** is used in preference.
-
-Predbat will search through the discharge history of your inverter, looking for periods of where Predbat status is Exporting or Discharging, battery_discharge_rate is at least 95% of the maximum inverter battery discharge rate,
-and the battery discharges down below 20% SoC.
-From the corresponding battery_power readings, Predbat determines the discharge curve and reports it as 'Info' messages in the Predbat logfile. If suitable discharge history cannot be found then Predbat will report that it cannot create the discharge curve.
-
-If you are using REST mode to control your GivEnergy inverter then the following entries in `apps.yaml` will need to be uncommented :
-
-```yaml
-  discharge_rate:
-    - number.givtcp_{geserial}_battery_discharge_rate
-  battery_power:
-    - sensor.givtcp_{geserial}_battery_power
-  soc_kw:
-    - sensor.givtcp_{geserial}_soc_kwh
-```
-
-- **battery_charge_power_curve_default** - This optional configuration item provides a fallback charging curve when Predbat cannot auto-detect the curve from your inverter.
-
-This is useful when:
-
-- Your inverter doesn't provide historical charging data needed for auto-detection
-- You've recently installed Predbat and don't have sufficient historical data yet
-- Auto-detection fails but you know your battery's charging characteristics
-
-The default curve is only used if:
-
-- You have not manually configured `battery_charge_power_curve` (i.e., it is not set, or is set to `"auto"`)
-- Auto-detection from inverter history fails or returns no curve
-
-**Precedence:** If you manually configure `battery_charge_power_curve` (with any value other than `"auto"`),
-it will be used exclusively and neither auto-detection nor the default will be considered.
-Only if `battery_charge_power_curve` is set to `"auto"` or not configured at all will the system attempt auto-detection,
-with the default as a fallback if auto-detection fails.
-
-Example:
-
-```yaml
-  battery_charge_power_curve_default:
-    91 : 0.91
-    92 : 0.81
-    93 : 0.71
-    94 : 0.62
-    95 : 0.52
-    96 : 0.43
-    97 : 0.33
-    98 : 0.24
-    99 : 0.24
-    100 : 0.24
-```
-
-- **battery_discharge_power_curve_default** - This optional configuration item provides a fallback discharging curve when Predbat cannot auto-detect the curve from your inverter.
-
-Similar to the charge curve default above, this is used as a fallback, but only if you have not manually configured
-`battery_discharge_power_curve` (or have set it to `"auto"`).
-
-**Precedence:** If you manually configure `battery_discharge_power_curve`, it takes absolute precedence and is always used.
-Only if `battery_discharge_power_curve` is set to `"auto"` or not configured at all will Predbat attempt to auto-detect
-the curve from inverter history; if that fails, the default `battery_discharge_power_curve_default` is used as a fallback.
+- **battery_charge_power_curve_default** / **battery_discharge_power_curve_default** - used in place of the curve above when that curve is not set.
 
 Example:
 
@@ -3012,26 +3008,58 @@ Example:
     1 : 0.05
 ```
 
+For Predbat to learn the grids it needs historical Home Assistant data for **status**, **battery_charge_rate** (and **battery_discharge_rate**), **battery_power** (one per inverter, or a [site-wide sensor on the first](#power-data)) and **soc_percent** or **soc_kw**,
+plus **battery_temperature_history** for the temperature dimension and **grid_power** to spot exports that did not reach the grid.
+If you have a GivEnergy inverter and are using the recommended default [REST mode to control your inverter](#inverter-control-configurations)
+then you will need to uncomment out the following entries in `apps.yaml`:
+
+```yaml
+  charge_rate:
+    - number.givtcp_{geserial}_battery_charge_rate
+  discharge_rate:
+    - number.givtcp_{geserial}_battery_discharge_rate
+  battery_power:
+    - sensor.givtcp_{geserial}_battery_power
+  soc_kw:
+    - sensor.givtcp_{geserial}_soc_kwh
+```
+
 ## Battery temperature curves
 
-Your battery's maximum charge and discharge rate can be impacted by cold weather, Predbat can predict this if you provide a temperature sensor and define a curve.
+Your battery's maximum charge and discharge rate can be impacted by cold weather. The rate grids learn this from your history when **battery_temperature_history** is set;
+you can also describe it in `apps.yaml`, as the fallback where there is no evidence (or what Predbat plans with when **battery_rate_grid_auto** is off).
 
 - You must make sure battery_temperature is defined (one per inverter).
-- Set **battery_temperature_history** to a sensor with history, this will be used to predict future temperatures based on past changes
+- Set **battery_temperature_history** to a sensor with history, this will be used to predict future temperatures based on past changes.
+  With more than one inverter you can give a list of sensors, one per battery: Predbat plans with their average, minute by minute,
+  leaving out any that read exactly 0 (a missing reading), and the rate grids learn from the same average
 - Set **battery_temperature_charge_curve** to define the maximum charge rate in C which is a percentage of your battery capacity.
 - Set **battery_temperature_discharge_curve** to define the maximum discharge rate in C which is a percentage of your battery capacity.
+
+**GivTCP users:** GivTCP 3.6.13 renamed the battery stack temperature sensor from `sensor.givtcp_battery_stack_1_bms_temperature`
+to `sensor.givtcp_battery_stack_1_battery_temperature`, and the old sensor now reads 0. If your `apps.yaml` still uses the old name,
+Predbat predicts your battery at 0 °C and plans charging and discharging at the 0 °C rates in your temperature curves.
+Check the sensor in Home Assistant and update **battery_temperature** and **battery_temperature_history** to the new name.
+Predbat warns once (in the log and on its status) when the temperature history has read 0 for the last 24 hours.
+
+If you control your inverter through Predbat's [GivTCP REST interface](#rest-interface-inverter-control) with **givtcp_automatic**
+left on, you do not need to set either: Predbat points **battery_temperature** and **battery_temperature_history** at its own
+`sensor.predbat_givtcp_<n>_battery_temperature`, read straight from GivTCP, and overrides any sensor you name for them.
 
 An example for GivEnergy Gen2 battery is below.
 
 *Note* You must adjust the curve for your system.
-gaps in the curve above 20 will use 20 degrees, and gaps below 0 will use 0 degrees. Do not leave gaps in the curve between 20 and 0.
+Degrees from -20 to 30 can be set; a reading warmer than 30 uses 30. A positive degree the curve does not set uses the 20 entry (or full rate if there is no 20 entry),
+and gaps below 0 will use 0 degrees, or the coldest degree the curve sets if it has no 0 entry. Do not leave gaps in the curve between 20 and 0.
+A reading of exactly 0 is treated as possibly missing (several integrations report a missing temperature as 0) and uses the 0 entry, or full rate if there is none;
+any other reading between -1 and 1 degrees uses the 1 (or -1) degree entry, and if that is not set, the 0 entry (or the coldest degree set) as for any reading below 1 degree.
 
 ```yaml
   # Battery temperature charge adjustment curve
   # Specific in C which is a multiple of the battery capacity
   # e.g. 0.33 C is 33% of the battery capacity
   # values unspecified will be assumed to be 1.0 hence rate is capped by the max charge rate
-  battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+  battery_temperature_history: sensor.givtcp_battery_stack_1_battery_temperature
   battery_temperature_charge_curve:
     20: 0.50
     19: 0.33
@@ -3055,6 +3083,8 @@ gaps in the curve above 20 will use 20 degrees, and gaps below 0 will use 0 degr
     1: 0.15
     0: 0.00
 ```
+
+`battery_temperature_charge_curve_auto` has been replaced by the rate grids, which learn the charge and discharge rate by SoC and temperature together; remove it from `apps.yaml`.
 
 ## Weather Alert System
 

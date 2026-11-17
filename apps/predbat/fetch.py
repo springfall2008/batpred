@@ -19,7 +19,26 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import clock_change_minutes, minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
+from utils import (
+    average_temperature_minutes,
+    battery_temperature_entities,
+    clock_change_minutes,
+    minutes_to_time,
+    str2time,
+    dp1,
+    dp2,
+    dp3,
+    dp4,
+    time_string_to_stamp,
+    minute_data,
+    get_now_from_cumulative,
+    MinuteArray,
+    strptime_aware,
+    is_entity_id,
+    intelligent_device_is_charger,
+)
+from battery_rate_grid import clean_rate_grid_samples, combine_rate_grid, fit_rate_grid, manual_rate_grid, merge_rate_grid_samples, rate_grid_table
+from battery_curve import charge_day
 from const import (
     MINUTE_WATT,
     PREDICT_STEP,
@@ -45,6 +64,15 @@ from const import (
     CLOUD_WINDOW_MINUTES,
     CLOUD_ARRAY_MARGIN,
     PV_ARRAY_KWP_UNKNOWN,
+    BATTERY_RATE_GRID_DAILY_SCAN_DAYS,
+    BATTERY_RATE_GRID_FIRST_SCAN_DAYS,
+    BATTERY_RATE_GRID_LOAD_ATTEMPTS,
+    BATTERY_RATE_GRID_LOAD_WAIT_MINUTES,
+    BATTERY_RATE_GRID_RESAVE_MINUTES,
+    BATTERY_RATE_GRID_MAX_AGE_DAYS,
+    BATTERY_RATE_GRID_RETRY_MINUTES,
+    BATTERY_RATE_GRID_SCAN_MINUTES,
+    BATTERY_RATE_GRID_STORE_EXPIRY_DAYS,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -53,10 +81,13 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 import ast
 import copy
 import math
+import re
 
 # Days of battery temperature history to fetch: predict_battery_temperature() looks back at most
 # 24 hours plus one step, so a longer window is only held in memory (about 3 MB at 22 days)
 BATTERY_TEMPERATURE_HISTORY_DAYS = 2
+# A battery temperature history reading exactly 0 for this long is taken as a dead sensor (GH#6193)
+BATTERY_TEMPERATURE_STUCK_MINUTES = 24 * 60
 
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
@@ -1023,7 +1054,7 @@ class Fetch:
         else:
             return max(data.get(index + 1, 0) - data.get(index, 0), 0)
 
-    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, required=True):
+    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, required=True, tracked=True):
         """
         Download one or more entities for import/export data
 
@@ -1050,7 +1081,8 @@ class Fetch:
                 continue
 
             try:
-                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous, required=required)
+                # tracked=False (a long one-off read) is passed only when asked for, so callers and mocks without it are unchanged
+                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous, required=required, **({} if tracked else {"tracked": False}))
             except (ValueError, TypeError) as exc:
                 self.log("Warn: No history data found for {} : {}".format(entity_id, exc))
                 history = []
@@ -2912,9 +2944,49 @@ class Fetch:
         Only BATTERY_TEMPERATURE_HISTORY_DAYS are fetched, not max_days_previous: the prediction looks
         back at most 24 hours plus one step, so a longer per-minute window is only held in memory.
         """
-        self.battery_temperature_history = self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
+        # One sensor per inverter is averaged, not summed as minute_data_import_export() sums an energy total: the plan
+        # models one combined battery, and the rate grid learner reads the same average (average_temperature_minutes)
+        entity_ids = battery_temperature_entities(self.get_arg("battery_temperature_history", indirect=False))
+        self.battery_temperature_history = average_temperature_minutes([self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, entity_id, scale=1.0, increment=False, smoothing=False) for entity_id in entity_ids])
         self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
         self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
+        self.check_battery_temperature_history_stuck(self.battery_temperature_history)
+
+    def check_battery_temperature_history_stuck(self, battery_temperature_history):
+        """
+        Warn when the battery temperature history has read exactly 0 for the last day.
+
+        A battery really at 0 °C for a whole day is rare; a sensor that never reports is not. Predbat
+        predicts forward from this history, so a dead sensor plans at the 0 °C rates of the battery
+        temperature curves (GH#6193). GivTCP 3.6.13 renamed the battery stack sensor from
+        ..._bms_temperature to ..._battery_temperature, leaving the old name reading 0, so name it.
+        Only the symptom triggers the warning: on older GivTCP the old name is still the right one.
+
+        Only the most recent BATTERY_TEMPERATURE_STUCK_MINUTES are checked, so a sensor that read a real
+        temperature within the last day is not reported. minute_data pads the oldest sample back across the
+        whole window, so a sensor whose only history is 0 - however short - is reported at once: one that
+        has never reported a temperature is as dead as one that stopped.
+
+        The plan effect is only claimed when a temperature curve is set: without one a 0 °C reading changes
+        nothing. Reported once per sensor through record_status, so it reaches the status sensor without
+        repeating every cycle, and re-armed when the sensor reads a real temperature again.
+        """
+        recent = [battery_temperature_history.get(minute) for minute in range(BATTERY_TEMPERATURE_STUCK_MINUTES)]
+        if any(value is None or value != 0 for value in recent):
+            self.battery_temperature_stuck_warned = None
+            return
+        entity_id = self.get_arg("battery_temperature_history", "", indirect=False)
+        if self.battery_temperature_stuck_warned == str(entity_id):
+            return
+        self.battery_temperature_stuck_warned = str(entity_id)
+        if self.battery_temperature_charge_curve or self.battery_temperature_discharge_curve:
+            effect = "so Predbat is planning at the 0 °C rates of your battery temperature curves"
+        else:
+            effect = "which will cap charging and discharging if you set a battery temperature curve"
+        message = "Warn: battery_temperature_history sensor {} has read 0 for the last {} hours, {} - check the sensor in Home Assistant".format(entity_id, int(BATTERY_TEMPERATURE_STUCK_MINUTES / 60), effect)
+        if isinstance(entity_id, str) and re.search(r"_battery_stack_\d+_bms_temperature$", entity_id):
+            message += ". GivTCP 3.6.13 renamed this sensor, use {} instead".format(re.sub(r"_bms_temperature$", "_battery_temperature", entity_id))
+        self.record_status(message, had_errors=True)
 
     def predict_battery_temperature(self, battery_temperature_history, step):
         """
@@ -4197,6 +4269,233 @@ class Fetch:
         num_cars = min(self.get_arg("num_cars", 1), PREDBAT_MAX_CARS)
         self.car_charging_max_rate = [self.car_max_rate_cap(car_n) for car_n in range(max(num_cars, 1))]
 
+    def battery_rate_grid_update(self, inverter, discharge):
+        """
+        Update the charge (or discharge) rate grid the plan reads its ceiling from.
+
+        The manual curves (battery_*_power_curve, or its _default, and battery_temperature_*_curve) always make a grid:
+        the fallback, and the prior for cells the evidence does not reach. The history is scanned every
+        BATTERY_RATE_GRID_SCAN_MINUTES for full-rate segments (find_rate_grid_samples), kept in storage per day for
+        BATTERY_RATE_GRID_MAX_AGE_DAYS, and fitted into a learned grid (fit_rate_grid). With battery_rate_grid_auto on
+        (the default) the learned grid is laid over the manual one once it has enough evidence; off, the evidence is still
+        gathered (for the Curves page) but the manual grid is used.
+
+        As for the old curve learners, the store only counts as loaded once a read returns data: a failed read and an
+        empty store both come back as None, and treating a failed read as empty would let the next save replace a year
+        of evidence with one history window, so it is read again just before a scan is merged and saved.
+
+        Args:
+            inverter: the Inverter whose (fleet) history is scanned
+            discharge: True for the discharge grid
+        """
+        from ha import run_async
+
+        kind = "discharge" if discharge else "charge"
+        key = "battery_rate_grid_" + kind
+        storage = self.components.get_component("storage") if self.components else None
+        manual, manual_key, configured = self.rate_grid_manual(discharge)
+        today = charge_day(self.now_utc, 0, self.local_tz)
+        merged_on_load = [False]
+
+        def load_store():
+            """Read the stored samples; True when a read returned data."""
+            data = None
+            if storage:
+                try:
+                    data = run_async(storage.load("predbat", key))
+                except Exception as e:
+                    self.log("Warn: {}: failed to load the stored evidence: {}".format(key, e))
+            else:
+                self.battery_rate_grid_loaded[kind] = True
+            if not isinstance(data, dict):
+                return False
+            self.battery_rate_grid_loaded[kind] = True
+            stored = clean_rate_grid_samples(data.get("samples"))
+            current = self.battery_rate_grid_samples.get(kind)
+            if current:
+                # Days scanned while the store could not be read are kept, the stored days merged under them, and saved
+                stored = merge_rate_grid_samples(stored, current, today, BATTERY_RATE_GRID_MAX_AGE_DAYS)
+                merged_on_load[0] = True
+            self.battery_rate_grid_samples[kind] = stored
+            updated = data.get("updated")
+            if isinstance(updated, str) and not self.battery_rate_grid_updated.get(kind):
+                self.battery_rate_grid_updated[kind] = updated
+            return True
+
+        refit = kind not in self.battery_rate_grid_learned or self.battery_rate_grid_fit_key.get(kind) != manual_key
+        save = self.battery_rate_grid_pending_save.get(kind, False)
+        failures = self.battery_rate_grid_load_failures.setdefault(kind, [])  # one time per cycle whose reads all came back empty
+        if not self.battery_rate_grid_loaded.get(kind):
+            refit |= load_store()
+        last_scan = self.battery_rate_grid_last_scan.get(kind)
+        last_success = self.battery_rate_grid_last_success.get(kind)
+        # A scan whose history read failed is tried again within the hour; one that succeeded, a day later
+        succeeded = last_success is not None and last_scan is not None and last_success >= last_scan
+        interval = BATTERY_RATE_GRID_SCAN_MINUTES if succeeded else BATTERY_RATE_GRID_RETRY_MINUTES
+        if last_scan is None or (self.now_utc - last_scan) >= timedelta(minutes=interval):
+            self.battery_rate_grid_last_scan[kind] = self.now_utc
+            if not self.battery_rate_grid_loaded.get(kind):
+                # Read again just before merging, as the old learners did
+                refit |= load_store()
+            stored = self.battery_rate_grid_samples.get(kind, {})
+            # Until a scan has succeeded, read as far back as battery_rate_grid_history_days; after that only the days since the
+            # last success with a day's overlap (battery_rate_grid_scan_days, more after a gap), as the per-day merge keeps the rest
+            if last_success is None:
+                days = self.battery_rate_grid_history_days
+            else:
+                # The days since the last success, to the nearest day, plus a day's overlap (a scan a few minutes over a day late reads 2)
+                gap_days = int((self.now_utc - last_success).total_seconds() / (24 * 60 * 60) + 0.5) + 1
+                days = min(max(self.battery_rate_grid_scan_days, gap_days), self.battery_rate_grid_history_days)
+            scanned = inverter.find_rate_grid_samples(discharge, days=days)
+            if scanned is not None:
+                # None means the settings or history were missing this time: the stored samples are left alone
+                self.battery_rate_grid_last_success[kind] = self.now_utc
+                merged = merge_rate_grid_samples(stored, scanned, today, BATTERY_RATE_GRID_MAX_AGE_DAYS, getattr(inverter, "curve_scan_coverage", {}).get("grid_" + kind))
+                save = save or merged != stored
+                self.battery_rate_grid_samples[kind] = merged
+            refit = True
+        save = save or merged_on_load[0]
+        if self.battery_rate_grid_loaded.get(kind):
+            failures.clear()
+        else:
+            failures.append(self.now_utc)
+
+        if refit:
+            samples = self.battery_rate_grid_samples.get(kind, {})
+            previous = self.battery_rate_grid_learned.get(kind)
+            # With no curve set in apps.yaml there is nothing to lean on: gaps are filled from the measured neighbours
+            learned = fit_rate_grid(samples, today, discharge, manual if configured else None) if samples else None
+            if (learned or {}).get("rows") != (previous or {}).get("rows"):
+                if learned:
+                    if previous is not None or not self.battery_rate_grid_updated.get(kind):
+                        self.battery_rate_grid_updated[kind] = self.now_utc.strftime(TIME_FORMAT)
+                    self.log("Battery {} rate grid learned from {} segments: {} cells over {} days, temperatures {}".format(kind, learned["segments"], learned["cells"], learned["days"], learned["temp_range"] or "not recorded"))
+                else:
+                    self.battery_rate_grid_updated[kind] = None
+                save = save or previous is not None
+            self.battery_rate_grid_learned[kind] = learned
+            self.battery_rate_grid_fit_key[kind] = manual_key
+
+        # An empty store and a failed read both come back as None, so a store that has never read back is only treated as
+        # empty (a new install) once its reads have failed on BATTERY_RATE_GRID_LOAD_ATTEMPTS cycles spanning at least
+        # BATTERY_RATE_GRID_LOAD_WAIT_MINUTES; until then a save waits, so a storage outage cannot replace a year of evidence
+        # with one scan. The scanned days are kept in memory meanwhile and merged with the store once it reads back.
+        # Saved at least daily even when nothing changed, and once after the store first reads back in this run, so a store
+        # written with an older (or no) expiry gets the current one and a quiet store's expiry keeps moving (#6225)
+        last_save = self.battery_rate_grid_last_save.get(kind)
+        if self.battery_rate_grid_loaded.get(kind) and self.battery_rate_grid_samples.get(kind) and (last_save is None or (self.now_utc - last_save) >= timedelta(minutes=BATTERY_RATE_GRID_RESAVE_MINUTES)):
+            save = True
+        store_ready = self.battery_rate_grid_loaded.get(kind) or (len(failures) >= BATTERY_RATE_GRID_LOAD_ATTEMPTS and (self.now_utc - failures[0]) >= timedelta(minutes=BATTERY_RATE_GRID_LOAD_WAIT_MINUTES))
+        self.battery_rate_grid_pending_save[kind] = bool(save and storage and not store_ready)
+        if save and storage and store_ready:
+            if store_ready and not self.battery_rate_grid_loaded.get(kind):
+                self.log("Info: {}: the stored evidence has not read back for {} cycles, treating the store as empty".format(key, len(failures)))
+                self.battery_rate_grid_loaded[kind] = True
+                failures.clear()
+            try:
+                if not run_async(
+                    storage.save("predbat", key, {"samples": self.battery_rate_grid_samples.get(kind, {}), "updated": self.battery_rate_grid_updated.get(kind)}, format="json", expiry=self.now_utc + timedelta(days=BATTERY_RATE_GRID_STORE_EXPIRY_DAYS))
+                ):
+                    self.log("Warn: {}: failed to save the evidence".format(key))
+                else:
+                    self.battery_rate_grid_last_save[kind] = self.now_utc
+            except Exception as e:
+                self.log("Warn: {}: failed to save the evidence: {}".format(key, e))
+
+        self.apply_rate_grid(discharge, manual, configured)
+
+    def rate_grid_inputs(self, discharge):
+        """
+        What the manual grid for one direction is built from: (SoC curve, temperature curve, rated rate, True when a
+        curve is set in apps.yaml rather than only a _default, a key that changes when any of them or the battery size do).
+        """
+        if discharge:
+            soc_curve = self.battery_discharge_power_curve or self.battery_discharge_power_curve_default or {}
+            temperature_curve = self.battery_temperature_discharge_curve or {}
+            rated = self.battery_rate_max_discharge
+            configured = bool(self.battery_discharge_power_curve or self.battery_temperature_discharge_curve)
+        else:
+            soc_curve = self.battery_charge_power_curve or self.battery_charge_power_curve_default or {}
+            temperature_curve = self.battery_temperature_charge_curve or {}
+            rated = self.battery_rate_max_charge
+            configured = bool(self.battery_charge_power_curve or self.battery_temperature_charge_curve)
+        key = (tuple(sorted(soc_curve.items())), tuple(sorted(temperature_curve.items())), self.soc_max, rated)
+        return soc_curve, temperature_curve, rated, configured, key
+
+    def rate_grid_manual(self, discharge):
+        """
+        The grid the apps.yaml curves make for one direction: (grid, a key that changes when the curves or battery size
+        do, True when a curve is set in apps.yaml rather than only a _default).
+        """
+        soc_curve, temperature_curve, rated, configured, key = self.rate_grid_inputs(discharge)
+        return manual_rate_grid(soc_curve, temperature_curve, self.soc_max, rated), key, configured
+
+    def rate_grids(self):
+        """
+        The (charge, discharge) engine grids for the curves, battery size and learned grids as they are now.
+
+        What the plan reads: rebuilt (apply_rate_grid) only when one of those has changed since the last call, so a
+        curve or battery size set by a tariff comparison, the annual simulator or a debug replay is always the one used.
+        """
+        cache = self.__dict__.setdefault("battery_rate_grid_cache", {})
+        grids = []
+        for discharge in (False, True):
+            kind = "discharge" if discharge else "charge"
+            key = (self.rate_grid_inputs(discharge)[4], bool(self.battery_rate_grid_auto))
+            learned = self.battery_rate_grid_learned.get(kind)
+            entry = cache.get(kind)
+            if entry is None or entry[0] != key or entry[1] is not learned:
+                self.apply_rate_grid(discharge)
+                entry = (key, learned, getattr(self, "battery_{}_rate_grid".format(kind)))
+                cache[kind] = entry
+            grids.append(entry[2])
+        return tuple(grids)
+
+    def apply_rate_grid(self, discharge, manual=None, configured=None):
+        """
+        Set the engine grid the plan reads for one direction: the learned grid (battery_rate_grid_auto on) laid over the
+        manual one. With no manual grid given it is built from the current curves - no history is scanned.
+        """
+        kind = "discharge" if discharge else "charge"
+        if manual is None:
+            manual, _, configured = self.rate_grid_manual(discharge)
+        learned = self.battery_rate_grid_learned.get(kind) if self.battery_rate_grid_auto else None
+        self.battery_rate_grid_manual[kind] = manual
+        self.battery_rate_grid_source[kind] = "learned" if learned else ("manual" if configured else "default")
+        setattr(self, "battery_{}_rate_grid".format(kind), combine_rate_grid(learned, manual))
+
+    def apply_rate_grids(self):
+        """Set both engine grids from the current curves and what has been learned (see apply_rate_grid)."""
+        self.apply_rate_grid(False)
+        self.apply_rate_grid(True)
+
+    def publish_battery_rate_grid_sensors(self):
+        """
+        Publish one binary sensor per rate grid: on while a grid learned from this battery's history is in use, with
+        where the grid in use came from, how much evidence it has and a coarse copy of it (10% SoC x 5 degrees).
+        """
+        for kind, icon in (("charge", "mdi:battery-charging-high"), ("discharge", "mdi:battery-arrow-down")):
+            source = self.battery_rate_grid_source.get(kind, "default")
+            learned = self.battery_rate_grid_learned.get(kind)
+            last_scan = self.battery_rate_grid_last_scan.get(kind)
+            self.dashboard_item(
+                "binary_sensor." + self.prefix + "_battery_{}_rate_grid".format(kind),
+                state="on" if source == "learned" else "off",
+                attributes={
+                    "source": source,
+                    "auto": bool(self.battery_rate_grid_auto),
+                    "cells": learned["cells"] if learned else 0,
+                    "segments": learned["segments"] if learned else 0,
+                    "days": len(self.battery_rate_grid_samples.get(kind, {})),
+                    "temperature_range": learned["temp_range"] if learned else None,
+                    "updated": self.battery_rate_grid_updated.get(kind) if learned else None,
+                    "last_scan": last_scan.strftime(TIME_FORMAT) if last_scan else None,
+                    "table": rate_grid_table(getattr(self, "battery_{}_rate_grid".format(kind), None)),
+                    "friendly_name": "Battery {} rate grid learned".format(kind),
+                    "icon": icon,
+                },
+            )
+
     def fetch_ml_load_forecast(self, now_utc, save=True):
         """
         Fetches ML load forecast from sensor
@@ -4835,25 +5134,20 @@ class Fetch:
         self.log("Freeze Export discharge rate configured: {:.0f} W".format(self.inverter_freeze_export_discharge_rate * MINUTE_WATT))
         self.base_load = self.get_arg("base_load", 100) / 1000.0
 
-        # Charge curve
-        if self.args.get("battery_charge_power_curve", "") == "auto":
-            self.battery_charge_power_curve_auto = True
-        else:
-            self.battery_charge_power_curve_auto = False
-            self.battery_charge_power_curve = self.validate_curve(self.args.get("battery_charge_power_curve", {}), "battery_charge_power_curve")
+        # Manual curves: the fallback for, and prior of, the learned rate grids (battery_rate_grid_update). "auto" or unset
+        # means no manual curve.
+        charge_curve = self.args.get("battery_charge_power_curve", "auto")
+        self.battery_charge_power_curve = {} if charge_curve in ("auto", "", None) else self.validate_curve(charge_curve, "battery_charge_power_curve")
         self.battery_charge_power_curve_default = self.validate_curve(self.args.get("battery_charge_power_curve_default", {}), "battery_charge_power_curve_default")
-
-        # Discharge curve
-        if self.args.get("battery_discharge_power_curve", "") == "auto":
-            self.battery_discharge_power_curve_auto = True
-        else:
-            self.battery_discharge_power_curve_auto = False
-            self.battery_discharge_power_curve = self.validate_curve(self.args.get("battery_discharge_power_curve", {}), "battery_discharge_power_curve")
+        discharge_curve = self.args.get("battery_discharge_power_curve", "auto")
+        self.battery_discharge_power_curve = {} if discharge_curve in ("auto", "", None) else self.validate_curve(discharge_curve, "battery_discharge_power_curve")
         self.battery_discharge_power_curve_default = self.validate_curve(self.args.get("battery_discharge_power_curve_default", {}), "battery_discharge_power_curve_default")
-
-        # Temperature curve charge/discharge
         self.battery_temperature_charge_curve = self.validate_curve(self.args.get("battery_temperature_charge_curve", {}), "battery_temperature_charge_curve")
         self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
+        self.battery_rate_grid_auto = bool(self.get_arg("battery_rate_grid_auto", True))
+        # How much history the rate grid scans read: the first (and any until one succeeds) and the daily ones
+        self.battery_rate_grid_history_days = max(int(self.get_arg("battery_rate_grid_history_days", BATTERY_RATE_GRID_FIRST_SCAN_DAYS)), 1)
+        self.battery_rate_grid_scan_days = max(int(self.get_arg("battery_rate_grid_scan_days", BATTERY_RATE_GRID_DAILY_SCAN_DAYS)), 1)
 
         self.import_export_scaling = self.get_arg("import_export_scaling", 1.0)
         self.best_soc_min = self.get_arg("best_soc_min")

@@ -38,6 +38,7 @@ from const import (
     RUN_STATE_NAMES,
     STATUS_STATE_MAX_LENGTH,
 )
+from battery_rate_grid import rate_grid_curve
 from utils import (
     local_day_end_minute,
     start_of_local_day,
@@ -57,7 +58,7 @@ from utils import (
     export_limit_from_stored,
 )
 from prediction import Prediction
-from billing import attach_billing, billing_entity_id, parse_axle_events, BILLING_DAYS, BILLING_EVENT_LABELS, BILLING_SLOT_FORMAT
+from billing import attach_billing, billing_entity_id, parse_axle_events, parse_saving_events, saving_session_events, BILLING_DAYS, BILLING_EVENT_LABELS, BILLING_SLOT_FORMAT
 
 # Per-slot plan "why" reason templates. Keyed by a stable reason code, each template is
 # rendered client-side (web_helper.py) by substituting {placeholder} names against the row's
@@ -1269,15 +1270,13 @@ class Output:
             self.charge_limit_best[charge_window_n],
             self.battery_rate_max_charge,
             self.soc_max,
-            self.battery_charge_power_curve,
+            rate_grid_curve(self.rate_grids()[0], self.battery_temperature, rated=self.battery_rate_max_charge),
             self.set_charge_low_power,
             self.charge_low_power_margin,
             self.battery_rate_min,
             self.battery_rate_max_scaling,
             self.battery_loss,
             None,
-            self.battery_temperature,
-            self.battery_temperature_charge_curve,
             pv_window_kwh=pv_window_kwh,
             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
             solar_full_rate=self.set_charge_low_power_solar_full_rate,
@@ -4323,11 +4322,19 @@ class Output:
             "credit_events": self.get_state_wrapper(entity_id=entity, attribute="credit_events", default=None) or [],
             # Axle VPP events, current and past, which Axle pays separately from the bill
             "axle_events": list(self.axle_sessions or []),
+            # Joined Octopus saving sessions, current and past, priced as fetch_octopus_sessions() prices them; Octopus rewards them in points
+            "saving_events": saving_session_events(
+                self.octopus_saving_joined_events,
+                self.get_arg("octopus_saving_session_octopoints_per_penny", 8),
+                self.get_arg("octopus_saving_session_rate", 0.0),
+                # fetch_octopus_sessions() only adds a session to the export rate when the export tariff pays
+                on_export=self.rate_export_max > 0,
+            ),
         }
 
     @staticmethod
     def history_billing_mark(billing):
-        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a credited event or its credit changes, or an Axle event changes; None without billing."""
+        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a credited event or its credit changes, or an Axle event or saving session changes; None without billing."""
         slots = (billing or {}).get("slots") or {}
         mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] for leg in ("import", "export")]
         mark.append([[event.get("start"), event.get("credit")] for event in (billing or {}).get("credit_events") or []])
@@ -4338,6 +4345,10 @@ class Output:
         if keys:
             spans = [(start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), direction, pence) for start, end, direction, pence in parse_axle_events((billing or {}).get("axle_events"))]
             mark.append([list(span) for span in spans if span[0] <= keys[-1] and span[1] > keys[0]])
+            # ... and the saving sessions over them, with every field attach_billing() reads (its points rate, an award being posted, or
+            # becoming expected or not, included)
+            sessions = [(start.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT), end.astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)) + tuple(rest) for start, end, *rest in parse_saving_events((billing or {}).get("saving_events"))]
+            mark.append([list(span) for span in sessions if span[0] <= keys[-1] and span[1] > keys[0]])
         return mark if mark[0][0] else None
 
     def history_minute_data(self, suffix, days):
@@ -4548,6 +4559,7 @@ class Output:
             import_kwh,
             None if import_only else export_kwh,
             billing.get("axle_events"),
+            billing.get("saving_events"),
         )
 
     def local_midnight_utc(self, day):
