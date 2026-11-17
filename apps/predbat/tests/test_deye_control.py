@@ -8,7 +8,7 @@
 
 """Tests for the DEYE behaviour to work-mode derivation (``derive_control_state``)."""
 
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 from deye_const import DEYE_WORKMODE, FREEZE_EXPORT_SOC, TOU_FIELD, TOU_SLOT_COUNT, DEYE_ORDER_MAX_POLLS
 from deye_const import CONFIG_BATTERY_KEYS, DEYE_TOU_DAYS
 from tests.test_deye_api import MockDeye, MOCK_RATED_POWER
@@ -339,6 +339,9 @@ def _patched_run(d, poll_status):
         publish_data=_fake_run_step,
         publish_schedule_settings_ha=_fake_run_step_sn,
         poll_order=fake_poll_order,
+        # Read on the static and config tiers; without a stub, they post the fake token to the live Deye API
+        fetch_measure_points=AsyncMock(return_value={}),
+        fetch_tou_config=AsyncMock(return_value=[]),
     ):
         return run_async_local(d.run(0, False))
 
@@ -396,6 +399,102 @@ def test_run_clears_pending_order_and_count_on_success():
         print("ERROR: applied_payload cache should not be touched on success")
         failed = True
     assert not failed, "test_run_clears_pending_order_and_count_on_success"
+
+
+# The order-poll body Deye returned for a device-rejected order (GH#6017): the outer success
+# flag is true because the poll worked, but the order itself failed and was never applied.
+DEYE_FAILED_ORDER_POLL = {
+    "code": "1000000",
+    "msg": "success",
+    "success": True,
+    "orderId": 42,
+    "status": 500,
+    "error": "540",
+    "analysisResult": None,
+}
+
+
+def test_poll_order_device_failure_is_failed():
+    """An order whose poll has outer success but order status 500 / error set is reported failed and dropped; status 666 with no error (null, empty or zero) still counts as success."""
+    failed = False
+    cases = [
+        ("status 500 with error", DEYE_FAILED_ORDER_POLL, "failed"),
+        ("error alone", {"success": True, "status": 666, "error": "540"}, "failed"),
+        ("status 500 as a string", {"success": True, "status": "500", "error": None}, "failed"),
+        ("executed", {"success": True, "status": 666, "error": None, "analysisResult": "{}"}, "success"),
+        ("executed with numeric zero error", {"success": True, "status": 666, "error": 0}, "success"),
+        ("executed with string zero error", {"success": True, "status": 666, "error": "0"}, "success"),
+        ("executed with empty error", {"success": True, "status": 666, "error": ""}, "success"),
+        ("status 500 with zero error", {"success": True, "status": 500, "error": 0}, "failed"),
+    ]
+    for label, body, expected in cases:
+        d = MockDeye()
+        d.pending_orders["INV1"] = 42
+
+        async def fake_get(path, body=body):
+            """Return the order-poll body under test."""
+            return body
+
+        with patch.object(d, "_get", side_effect=fake_get):
+            status = run_async_local(d.poll_order("INV1"))
+        if status != expected:
+            print(f"ERROR: {label}: expected {expected}, got {status}")
+            failed = True
+        if "INV1" in d.pending_orders:
+            print(f"ERROR: {label}: a completed order should be cleared from pending: {d.pending_orders}")
+            failed = True
+    assert not failed, "test_poll_order_device_failure_is_failed"
+
+
+def test_run_rewrites_after_a_device_failed_order():
+    """A run() cycle that polls a device-failed order re-sends the programme in the same cycle instead of skipping it as unchanged (GH#6017)."""
+    failed = False
+    d = MockDeye(auth_method="oauth").with_rating("INV1")
+    d.access_token = "tok"
+    d.device_list = ["INV1"]
+    d.control_active = {"INV1"}
+    sched = {"reserve": 10, "charge": {"enable": False}, "export": {"enable": False}}
+    d.local_schedule = {"INV1": sched}
+    d.device_values = {"INV1": {"soc": 50}}
+    # The failed order's payload was cached as applied when it was submitted.
+    d.applied_payload["INV1"] = d.build_dynamic_payload("INV1", sched, 50)
+    d.pending_orders["INV1"] = 42
+    d.mark_refreshed("static")
+    posts = []
+
+    async def fake_get(path):
+        """Return the device-failed order poll for the pending order."""
+        return dict(DEYE_FAILED_ORDER_POLL)
+
+    async def fake_post(endpoint_key, body):
+        """Record control writes and accept them with a new orderId; other POSTs (the TOU read) return an empty success."""
+        if endpoint_key != "dynamic_control":
+            return {"success": True}
+        posts.append(endpoint_key)
+        return {"success": True, "orderId": 43}
+
+    with patch.multiple(
+        d,
+        fetch_battery_config=_fake_run_step_sn,
+        fetch_device_data=_fake_run_step_sn,
+        get_schedule_settings_ha=_fake_run_step_sn,
+        publish_data=_fake_run_step,
+        publish_schedule_settings_ha=_fake_run_step_sn,
+        _get=fake_get,
+        _post=fake_post,
+    ):
+        run_async_local(d.run(0, False))
+
+    if posts != ["dynamic_control"]:
+        print(f"ERROR: expected the failed programme to be re-sent once this cycle, got posts {posts}")
+        failed = True
+    if d.pending_orders.get("INV1") != 43:
+        print(f"ERROR: the re-sent order should now be pending: {d.pending_orders}")
+        failed = True
+    if "INV1" in d.order_poll_count:
+        print(f"ERROR: poll count should be reset after a failed order: {d.order_poll_count}")
+        failed = True
+    assert not failed, "test_run_rewrites_after_a_device_failed_order"
 
 
 def test_window_times_reach_the_slots_in_deye_format():
@@ -1275,6 +1374,8 @@ def run_deye_control_tests(my_predbat):
         ("poll_order_empty_pending", test_poll_order_empty_response_stays_pending),
         ("run_forces_rewrite_after_max_polls", test_run_forces_rewrite_after_max_unconfirmed_polls),
         ("run_clears_on_success", test_run_clears_pending_order_and_count_on_success),
+        ("poll_order_device_failure", test_poll_order_device_failure_is_failed),
+        ("run_rewrites_after_failed_order", test_run_rewrites_after_a_device_failed_order),
         ("window_times_reach_slots", test_window_times_reach_the_slots_in_deye_format),
         ("to_slot_time", test_to_slot_time_normalisation),
         ("write_button_no_resend", test_repeated_write_button_presses_do_not_resend_an_unchanged_payload),

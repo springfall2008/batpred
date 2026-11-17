@@ -218,6 +218,7 @@ def test_load_error_is_reported_as_a_component_error(my_predbat):
     """
     original_components = my_predbat.components
     original_had_errors = my_predbat.had_errors
+    original_run_state = my_predbat.status_run_state
     base = LoggingMockBase()
     comps = Components(base)
     comps.initialize(only="storage", phase=0)
@@ -237,6 +238,7 @@ def test_load_error_is_reported_as_a_component_error(my_predbat):
     finally:
         my_predbat.components = original_components
         my_predbat.had_errors = original_had_errors
+        my_predbat.status_run_state = original_run_state
     return False
 
 
@@ -289,6 +291,43 @@ def test_registry_bool_default_survives_an_empty_apps_yaml_value(my_predbat):
 
     # An arg the registry gives no default keeps resolving to None rather than being invented.
     assert absent.get("token_expires_at") is None, absent.get("token_expires_at")
+    return False
+
+
+def test_registry_align_minute_reaches_the_component(my_predbat):
+    """The registry's "align_minute" is what puts a component's loop on the minute boundary.
+
+    It is a registry property rather than something each class sets, so the registry alone says which
+    components run aligned. Only the inverters whose run() times a window's edges ask for it (Teslemetry,
+    SolaX, Sigenergy): aligning every component would have them all hit their APIs, and the machine, in
+    the same second.
+    """
+
+    class _Stub(ComponentBase):
+        """Stands in for every component class."""
+
+        def initialize(self, **kwargs):
+            """Nothing to set up."""
+
+    class _FakeModule:
+        """Answers any class name with the stub."""
+
+        def __getattr__(self, name):
+            return _Stub
+
+    base = LoggingMockBase()
+    base.args.update({"teslemetry_key": "token"})
+    comps = Components(base)
+    _with_import_module(lambda _name: _FakeModule(), lambda: comps.initialize(only="teslemetry", phase=1))
+    _with_import_module(lambda _name: _FakeModule(), lambda: comps.initialize(only="storage", phase=0))
+
+    assert COMPONENT_LIST["teslemetry"].get("align_minute") is True, "Teslemetry's signal-tariff edges need the minute-aligned loop"
+    assert COMPONENT_LIST["solax"].get("align_minute") is True, "SolaX's remote-control windows start and end on our loop"
+    assert COMPONENT_LIST["sigenergy"].get("align_minute") is True, "Sigenergy's VPP commands start on our loop"
+    assert comps.components["teslemetry"].align_minute is True, "the registry flag must reach the component"
+    assert comps.components["storage"].align_minute is False, "an entry without the flag keeps the free-running loop"
+    aligned = sorted(name for name, info in COMPONENT_LIST.items() if info.get("align_minute"))
+    assert aligned == ["sigenergy", "solax", "teslemetry"], "aligning a component spends machine headroom - add it here deliberately: {}".format(aligned)
     return False
 
 
@@ -448,6 +487,7 @@ def test_components_all(my_predbat):
         ("event_dispatch_respects_configured_prefix", test_event_dispatch_respects_configured_prefix, "event dispatch matches the configured prefix, not the literal word 'predbat' (#4939)"),
         ("inverter_source_status_lists_components_and_errors", test_inverter_source_status_lists_components_and_errors, "configured inverter components are listed with whether each is in error (#4990)"),
         ("registry_bool_default_survives_an_empty_apps_yaml_value", test_registry_bool_default_survives_an_empty_apps_yaml_value, "a registry default applies to an absent or empty apps.yaml key, and an explicit False still opts out (#5186)"),
+        ("registry_align_minute_reaches_the_component", test_registry_align_minute_reaches_the_component, "the registry's align_minute reaches the component, and only Teslemetry sets it"),
     ]
 
     failed = []

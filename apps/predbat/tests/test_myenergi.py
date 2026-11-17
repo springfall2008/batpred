@@ -966,11 +966,11 @@ def test_control_window_parsing():
     inside = _plan_window(datetime.datetime(2026, 8, 22, 23, 0), datetime.datetime(2026, 8, 23, 1, 0))
     component = _control_component(plans={0: [inside]})
 
-    assert component.refresh_car_windows(CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))) is True
-    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))) is True
-    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 22, 59))) is False
+    assert component.charger_control_refresh_windows(CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))) is True
+    assert component.charger_control_should_charge(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))) is True
+    assert component.charger_control_should_charge(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 22, 59))) is False
     # The window end is exclusive, so the boundary minute is already outside
-    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 1, 0))) is False
+    assert component.charger_control_should_charge(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 1, 0))) is False
     print("  ✓ Planned car charging windows are parsed and matched against the clock")
 
 
@@ -985,25 +985,25 @@ def test_control_windows_across_new_year():
     component = _control_component(plans={0: [crossing]})
 
     before_midnight = CONTROL_TZ.localize(datetime.datetime(2026, 12, 31, 23, 30))
-    assert component.refresh_car_windows(before_midnight) is True
-    assert component.should_charge_now(0, before_midnight) is True, "The window is active before midnight"
+    assert component.charger_control_refresh_windows(before_midnight) is True
+    assert component.charger_control_should_charge(0, before_midnight) is True, "The window is active before midnight"
 
     after_midnight = CONTROL_TZ.localize(datetime.datetime(2027, 1, 1, 0, 30))
-    assert component.refresh_car_windows(after_midnight) is True
-    assert component.should_charge_now(0, after_midnight) is True, "The same window is still active after midnight"
+    assert component.charger_control_refresh_windows(after_midnight) is True
+    assert component.charger_control_should_charge(0, after_midnight) is True, "The same window is still active after midnight"
 
     ended = CONTROL_TZ.localize(datetime.datetime(2027, 1, 1, 6, 0))
-    assert component.refresh_car_windows(ended) is True
-    assert component.should_charge_now(0, ended) is False, "The window has ended by 06:00"
+    assert component.charger_control_refresh_windows(ended) is True
+    assert component.charger_control_should_charge(0, ended) is False, "The window has ended by 06:00"
 
     # A window genuinely far ahead must not be dragged back a year by the rebuild - the
     # plan reaches 48 hours, well beyond the 23 hour margin the first version allowed
     ahead = _plan_window(datetime.datetime(2026, 8, 23, 20, 0), datetime.datetime(2026, 8, 24, 2, 0))
     component = _control_component(plans={0: [ahead]})
     now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 10, 0))
-    assert component.refresh_car_windows(now) is True
-    assert component.should_charge_now(0, now) is False, "A window 34 hours ahead has not started"
-    assert component.should_charge_now(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 21, 0))) is True, "...and is active once it arrives"
+    assert component.charger_control_refresh_windows(now) is True
+    assert component.charger_control_should_charge(0, now) is False, "A window 34 hours ahead has not started"
+    assert component.charger_control_should_charge(0, CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 21, 0))) is True, "...and is active once it arrives"
     print("  ✓ Windows spanning New Year are matched from both sides of midnight")
 
 
@@ -1014,13 +1014,13 @@ def test_control_windows_are_per_car():
     component = _control_component(plans={0: [car0], 1: [car1]})
 
     now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))
-    assert component.refresh_car_windows(now) is True
-    assert component.should_charge_now(0, now) is True
-    assert component.should_charge_now(1, now) is False, "Car 1's window has not started yet"
+    assert component.charger_control_refresh_windows(now) is True
+    assert component.charger_control_should_charge(0, now) is True
+    assert component.charger_control_should_charge(1, now) is False, "Car 1's window has not started yet"
 
     later = CONTROL_TZ.localize(datetime.datetime(2026, 8, 23, 4, 30))
-    assert component.should_charge_now(0, later) is False
-    assert component.should_charge_now(1, later) is True
+    assert component.charger_control_should_charge(0, later) is False
+    assert component.charger_control_should_charge(1, later) is True
     print("  ✓ Each car's plan drives its own Zappi")
 
 
@@ -1034,12 +1034,12 @@ def test_control_windows_tolerate_a_bad_entry_and_a_missing_plan():
     now = CONTROL_TZ.localize(datetime.datetime(2026, 8, 22, 23, 30))
 
     component = _control_component(plans={0: [{"start": "nonsense"}, good]})
-    assert component.refresh_car_windows(now) is True
-    assert component.should_charge_now(0, now) is True, "The good window must survive a bad neighbour"
+    assert component.charger_control_refresh_windows(now) is True
+    assert component.charger_control_should_charge(0, now) is True, "The good window must survive a bad neighbour"
 
     never_published = _control_component()
-    assert never_published.refresh_car_windows(now) is False
-    assert never_published.should_charge_now(0, now) is False
+    assert never_published.charger_control_refresh_windows(now) is False
+    assert never_published.charger_control_should_charge(0, now) is False
     print("  ✓ A malformed window is skipped and a missing plan is not acted on")
 
 
@@ -1050,8 +1050,8 @@ def test_control_windows_cross_the_year_boundary():
     component = _control_component(plans={0: [window]})
 
     now = CONTROL_TZ.localize(datetime.datetime(2026, 12, 31, 23, 45))
-    assert component.refresh_car_windows(now) is True
-    assert component.should_charge_now(0, now) is True, "A window straddling New Year must still match"
+    assert component.charger_control_refresh_windows(now) is True
+    assert component.charger_control_should_charge(0, now) is True, "A window straddling New Year must still match"
     print("  ✓ Windows crossing the year boundary are rebuilt around now")
 
 
@@ -1075,10 +1075,10 @@ def test_control_charge_sets_fast_inside_and_stopped_outside():
     component.devices = {"Z12345678": _zappi(12345678)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Fast", component.transport.set_mode.await_args
 
-    run_async(component.control_charge(OUT_OF_WINDOW))
+    run_async(component.charger_control_apply(OUT_OF_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Stopped", component.transport.set_mode.await_args
     print("  ✓ Fast inside a planned window, Stopped outside it")
 
@@ -1093,7 +1093,7 @@ def test_control_charge_maps_each_zappi_to_its_own_car():
     component.devices = {"Z12345678": _zappi(12345678), "Z22223333": _zappi(22223333)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     by_serial = {call.args[0].serial: call.args[1] for call in component.transport.set_mode.await_args_list}
     assert by_serial == {"12345678": "Fast", "22223333": "Stopped"}, by_serial
     print("  ✓ Each Zappi follows its own car's plan")
@@ -1109,16 +1109,16 @@ def test_control_charge_is_edge_triggered_but_corrects_drift():
     component.devices = {"Z12345678": _zappi(12345678)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     assert component.transport.set_mode.await_count == 1
     # The poll now reports Fast, matching what was set, so nothing more is sent
     component.devices["Z12345678"] = _zappi(12345678, mode_index=1)
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     assert component.transport.set_mode.await_count == 1, "A settled charger must not be re-commanded"
 
     # Someone switches it to Eco+ in the myenergi app - Predbat puts it back
     component.devices["Z12345678"] = _zappi(12345678, mode_index=3)
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     assert component.transport.set_mode.await_count == 2, "Drift away from the set mode must be corrected"
     assert component.transport.set_mode.await_args.args[1] == "Fast"
     print("  ✓ Control is edge triggered but corrects drift")
@@ -1130,7 +1130,7 @@ def test_control_charge_ignores_eddis():
     component.devices = {"E87654321": normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     component.transport.set_mode.assert_not_awaited()
     print("  ✓ Eddis are never driven by car charge control")
 
@@ -1145,7 +1145,7 @@ def test_control_charge_does_nothing_before_a_plan_exists():
     component.devices = {"Z12345678": _zappi(12345678)}
     component.transport.set_mode = AsyncMock(return_value=True)
 
-    run_async(component.control_charge(IN_WINDOW))
+    run_async(component.charger_control_apply(IN_WINDOW))
     component.transport.set_mode.assert_not_awaited()
     print("  ✓ Nothing is commanded before Predbat has published a plan")
 
@@ -1166,7 +1166,7 @@ def _controlling_component(plans=None, **overrides):
 
 def test_control_gating_refuses_with_a_reason():
     """Control only runs when it is asked for and can work, and says why when it will not."""
-    assert _controlling_component().control_active is True
+    assert _controlling_component().charger_control_active is True
 
     for overrides, expected in (
         ({"zappi_control": False}, None),
@@ -1176,34 +1176,252 @@ def test_control_gating_refuses_with_a_reason():
         ({"enable_controls": False}, "myenergi_enable_controls"),
     ):
         component = _controlling_component(**overrides)
-        assert component.control_active is False, overrides
+        assert component.charger_control_active is False, overrides
         if expected:
             assert any(expected in message for message in component.log_messages), (overrides, component.log_messages)
     print("  ✓ Zappi control refuses to run without its prerequisites, and says which")
 
 
+def _unset_control_component(apps_yaml, **overrides):
+    """Build a component with myenergi_zappi_control unset and the given apps.yaml entries."""
+    component = _control_component(**overrides)
+    component.base.args_from_apps_yaml = apps_yaml
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.log_messages = []
+    component.log = component.log_messages.append
+    component.enable_control()
+    return component
+
+
+def test_unset_control_stays_off_whatever_automatic_says():
+    """Unset myenergi_zappi_control leaves the Zappi alone, even when the user wrote the automatic setting.
+
+    Control Stops a Zappi between windows, so it must be asked for and never arrive with an upgrade.
+    """
+    for apps_yaml in ({}, {"myenergi_automatic": True}, {"myenergi_automatic_zappi": True}):
+        component = _unset_control_component(apps_yaml)
+        assert component.charger_control_active is False, apps_yaml
+        # Control that was never asked for is not warned about
+        assert not any("Warn" in message for message in component.log_messages), (apps_yaml, component.log_messages)
+    print("  ✓ Unset Zappi control stays off, whatever the automatic settings say")
+
+
+def test_control_setting_strings_are_read_as_booleans():
+    """A quoted or numeric myenergi_zappi_control must read as the boolean it names, and unset as off."""
+    assert _make_component(zappi_control="false").zappi_control is False
+    assert _make_component(zappi_control="true").zappi_control is True
+    assert _make_component(zappi_control=0).zappi_control is False
+    assert _make_component().zappi_control is False
+    print("  ✓ Quoted and numeric myenergi_zappi_control values read as booleans")
+
+
+def test_control_hand_to_octopus_never_fast():
+    """Handing a Zappi to Octopus restores its saved mode, but never Fast - that would start a charge."""
+    component = _controlling_component()
+    device = component.devices["Z12345678"]
+    component.control_saved_modes[device.device_id] = "Fast"
+    run_async(component.charger_control_hand_to_octopus(device, False))
+    assert component.transport.set_mode.await_args.args[1] == "Eco+", component.transport.set_mode.await_args
+    assert device.device_id not in component.control_saved_modes
+
+    component.control_saved_modes[device.device_id] = "Eco"
+    run_async(component.charger_control_hand_to_octopus(device, False))
+    assert component.transport.set_mode.await_args.args[1] == "Eco", component.transport.set_mode.await_args
+    print("  ✓ A Zappi handed to Octopus goes back to its own mode, never Fast")
+
+
 def test_control_releases_to_the_saved_mode():
     """Releasing puts the Zappi back where it was before Predbat first moved it."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Fast"
 
     # The switch going off is a release, not just a pause in commanding
-    component.control_enabled = False
-    run_async(component.control_tick(IN_WINDOW))
+    component.charger_control_enabled = False
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Eco+", "The Zappi was in Eco+ before Predbat took over"
-    assert component.control_modes == {}, "A released Zappi is no longer held"
+    assert component.charger_control_state == {}, "A released Zappi is no longer held"
     print("  ✓ Releasing restores the mode the Zappi had before Predbat took over")
+
+
+def test_control_release_forgets_the_saved_mode():
+    """A Zappi released on its own (its car gone) forgets the mode it was saved in, so taking it
+    back later snapshots the mode the user has set since."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW], 1: [NIGHT_WINDOW]})
+    second = _zappi(22345678)
+    component.devices[second.device_id] = second
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes[second.device_id] == "Eco+"
+
+    component.base.num_cars = 1
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert second.device_id not in component.control_saved_modes, component.control_saved_modes
+
+    second.mode = "Eco"
+    component.base.num_cars = 2
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes[second.device_id] == "Eco", component.control_saved_modes
+    print("  ✓ A released Zappi snapshots its mode afresh when taken back")
+
+
+def test_control_release_retry_keeps_the_saved_mode():
+    """A release that fails is retried next cycle, still restoring the mode the Zappi had before.
+
+    The Zappi was in Eco before Predbat took it. The first release command fails, so the
+    retry must still put it back in Eco rather than falling back to Eco+.
+    """
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.devices = {"Z12345678": _zappi(12345678, mode_index=2)}
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes == {"Z12345678": "Eco"}, component.control_saved_modes
+
+    component.charger_control_enabled = False
+    component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("timed out"))
+    try:
+        run_async(component.charger_control_tick(IN_WINDOW))
+        raise AssertionError("The failed release should raise to the run loop")
+    except MyEnergiApiError:
+        pass
+
+    component.transport.set_mode = AsyncMock(return_value=True)
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Eco", component.transport.set_mode.await_args
+    assert component.control_saved_modes == {}, "Saved modes are forgotten once the release has gone through"
+    print("  ✓ A failed release is retried with the saved mode intact")
+
+
+def test_control_release_forgets_a_mode_saved_before_a_refused_command():
+    """A mode saved ahead of a refused command does not outlive the release."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("refused"))
+    try:
+        run_async(component.charger_control_tick(IN_WINDOW))
+    except MyEnergiApiError:
+        pass
+    assert component.control_saved_modes == {"Z12345678": "Eco+"}, component.control_saved_modes
+    assert component.charger_control_state == {}, "A refused command is not recorded as set"
+
+    component.charger_control_enabled = False
+    component.transport.set_mode = AsyncMock(return_value=True)
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes == {}, component.control_saved_modes
+    print("  ✓ Release forgets modes saved ahead of refused commands")
+
+
+def test_control_releases_to_a_saved_stopped():
+    """A Zappi the user had Stopped before Predbat took over goes back to Stopped, like any other mode."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.devices = {"Z12345678": _zappi(12345678)}
+    component.devices["Z12345678"].mode = "Stopped"
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.control_saved_modes == {"Z12345678": "Stopped"}, component.control_saved_modes
+
+    component.charger_control_enabled = False
+    run_async(component.charger_control_tick(IN_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Stopped", component.transport.set_mode.await_args
+    print("  ✓ A saved Stopped is restored on release")
+
+
+class _MemoryStorage:
+    """Minimal in-memory stand-in for the Storage component, served as base.components."""
+
+    def __init__(self):
+        """Start with nothing saved."""
+        self.saved = {}
+
+    async def save(self, module, filename, data, format="yaml", expiry=None):
+        """Record the saved payload."""
+        self.saved[(module, filename)] = data
+        return True
+
+    async def load(self, module, filename):
+        """Return a previously saved payload, or None."""
+        return self.saved.get((module, filename))
+
+    def get_component(self, name):
+        """Stand in for the component registry too, serving only storage."""
+        return self if name == "storage" else None
+
+
+def test_control_saved_modes_survive_a_restart():
+    """The mode a Zappi had before Predbat took over is persisted, so a restart while Predbat
+    holds it Stopped still releases it to that mode rather than to a fresh snapshot of Stopped."""
+    storage = _MemoryStorage()
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    component.base.components = storage
+    component.devices["Z12345678"].mode = "Eco"
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Stopped", component.transport.set_mode.await_args
+    assert storage.saved[("myenergi", "control_saved_modes")] == {"modes": {"Z12345678": "Eco"}}, storage.saved
+
+    # Restart: nothing in memory, and the Zappi is sitting in Predbat's own Stopped
+    restarted = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    restarted.base.components = storage
+    restarted.devices["Z12345678"].mode = "Stopped"
+    run_async(restarted.load_control_modes())
+    run_async(restarted.charger_control_tick(OUT_OF_WINDOW))
+    assert restarted.control_saved_modes == {"Z12345678": "Eco"}, "The restored mode must not be replaced by a snapshot of Predbat's own Stopped"
+
+    restarted.charger_control_enabled = False
+    run_async(restarted.charger_control_tick(OUT_OF_WINDOW))
+    assert restarted.transport.set_mode.await_args.args[1] == "Eco", restarted.transport.set_mode.await_args
+    assert storage.saved[("myenergi", "control_saved_modes")] == {"modes": {}}, "A released Zappi's mode is forgotten in storage too"
+    print("  ✓ Saved Zappi modes survive a restart, and are forgotten once released")
+
+
+def test_control_saved_modes_are_dropped_when_control_is_off():
+    """Modes left in storage by an earlier session are dropped once control is off, so they
+    cannot be restored long after the user last chose the Zappi's mode."""
+    storage = _MemoryStorage()
+    storage.saved[("myenergi", "control_saved_modes")] = {"modes": {"Z12345678": "Eco"}}
+    component = _controlling_component(zappi_control=False)
+    component.base.components = storage
+    run_async(component.load_control_modes())
+    assert component.control_saved_modes == {}, component.control_saved_modes
+    assert storage.saved[("myenergi", "control_saved_modes")] == {"modes": {}}, storage.saved
+    print("  ✓ Stale saved Zappi modes are dropped when control is off")
+
+
+def test_control_off_in_config_releases_a_held_zappi():
+    """#5788: with myenergi_zappi_control turned off and a restart, a Zappi an earlier session held Stopped
+    is released on the first poll, to the mode it had before - not left Stopped."""
+    storage = _MemoryStorage()
+    storage.saved[("myenergi", "control_state")] = {"control_enabled": True, "held": {"Z12345678": False}}
+    storage.saved[("myenergi", "control_saved_modes")] = {"modes": {"Z12345678": "Eco"}}
+    component = _controlling_component(zappi_control=False)
+    component.base.components = storage
+    zappi = _zappi(12345678)
+    zappi.mode = "Stopped"
+    component.transport.fetch_devices = AsyncMock(return_value=[zappi])
+
+    assert run_async(component.run(0, True)) is True
+    assert component.charger_control_active is False
+    assert component.transport.set_mode.await_args.args[1] == "Eco", component.transport.set_mode.await_args
+    assert component.charger_control_state == {} and storage.saved[("myenergi", "control_state")]["held"] == {}
+    assert storage.saved[("myenergi", "control_saved_modes")] == {"modes": {}}, "Released, so its mode is forgotten"
+    print("  ✓ Control turned off in config still releases a held Zappi")
+
+
+def test_control_off_with_controls_disabled_writes_nothing():
+    """With myenergi_enable_controls off Predbat must not write to the Zappi, so a held one is left as it is."""
+    storage = _MemoryStorage()
+    storage.saved[("myenergi", "control_state")] = {"control_enabled": True, "held": {"Z12345678": False}}
+    component = _controlling_component(zappi_control=False, enable_controls=False)
+    component.base.components = storage
+    component.transport.fetch_devices = AsyncMock(return_value=[_zappi(12345678)])
+    assert run_async(component.run(0, True)) is True
+    component.transport.set_mode.assert_not_awaited()
+    print("  ✓ With controls disabled a held Zappi is not written to")
 
 
 def test_control_releases_to_eco_plus_when_nothing_was_saved():
     """With no saved mode - a restart, or a mode that cannot be set - release falls back to Eco+."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
-    component.control_modes = {"Z12345678": "Fast"}
+    component.charger_control_state = {"Z12345678": True}
     component.control_saved_modes = {}
-    component.control_enabled = False
+    component.charger_control_enabled = False
 
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Eco+", component.transport.set_mode.await_args
     print("  ✓ Release falls back to Eco+ when there is nothing saved")
 
@@ -1211,19 +1429,19 @@ def test_control_releases_to_eco_plus_when_nothing_was_saved():
 def test_control_stops_and_resumes_on_read_only():
     """Read only mode releases the Zappis, and clearing it resumes control."""
     component = _controlling_component(plans={0: [NIGHT_WINDOW]})
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_count == 1
 
     component.base.args["set_read_only"] = True
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Eco+", "Read only must release, not just stop commanding"
 
     # Still read only - nothing more is sent, there is nothing left to release
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_count == 2
 
     component.base.args["set_read_only"] = False
-    run_async(component.control_tick(IN_WINDOW))
+    run_async(component.charger_control_tick(IN_WINDOW))
     assert component.transport.set_mode.await_args.args[1] == "Fast", "Clearing read only must resume control"
     print("  ✓ Read only releases the Zappis and clearing it resumes control")
 
@@ -1235,13 +1453,47 @@ def test_control_switch_is_published_and_toggles_control():
     assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "on"
 
     run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_control", "turn_off"))
-    assert component.control_enabled is False
+    assert component.charger_control_enabled is False
     run_async(component.publish_data())
     assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "off"
 
     run_async(component.switch_event_handler("switch.predbat_myenergi_zappi_control", "turn_on"))
-    assert component.control_enabled is True
+    assert component.charger_control_enabled is True
     print("  ✓ The zappi control switch is published and toggles control")
+
+
+def test_guest_switch_is_published_and_releases_the_zappi():
+    """The guest charging switch is published beside the control switch, and hands the Zappi back."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    run_async(component.publish_data())
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_guest_charging") == "off"
+
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Stopped"
+    assert run_async(component.switch_event_handler("switch.predbat_myenergi_guest_charging", "turn_on")) is True
+    run_async(component.publish_data())
+    assert component.base.get_state_wrapper("switch.predbat_myenergi_guest_charging") == "on"
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.transport.set_mode.await_args.args[1] == "Eco+", "Guest charging hands the Zappi back to its own mode"
+    print("  ✓ The guest charging switch is published and hands the Zappi back")
+
+
+def test_guest_charging_ends_when_the_zappi_is_unplugged():
+    """The Zappi's plug status ends guest charging once the guest's car is unplugged."""
+    component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+    device = component.devices["Z12345678"]
+    assert component.charger_control_car_plugged(device) is True, device.plug_status
+    device.plug_status = "EV Disconnected"
+    component.charger_control_set_guest(True)
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    device.plug_status = "EV Connected"
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.charger_control_guest is True
+
+    device.plug_status = "EV Disconnected"
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    assert component.charger_control_guest is False
+    print("  ✓ Unplugging from the Zappi ends guest charging")
 
 
 def test_control_switch_is_not_published_when_control_cannot_run():
@@ -1252,13 +1504,13 @@ def test_control_switch_is_not_published_when_control_cannot_run():
     run. Toggling it would only make it responsive, not honest - so it is not published.
     """
     component = _controlling_component(enable_controls=False)
-    assert component.control_active is False
+    assert component.charger_control_active is False
     run_async(component.publish_data())
     assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") is None
 
     # It reappears, with its remembered state, once controls are allowed again
     allowed = _controlling_component()
-    assert allowed.control_active is True
+    assert allowed.charger_control_active is True
     run_async(allowed.publish_data())
     assert allowed.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "on"
     print("  ✓ No control switch appears when control could not act on it")
@@ -1276,9 +1528,9 @@ def test_control_switch_publishes_its_restored_state_on_the_first_cycle():
 
     async def _load_off():
         """Stand in for storage returning a switched-off control state."""
-        component.control_enabled = False
+        component.charger_control_enabled = False
 
-    component.load_control_enabled = _load_off
+    component.charger_control_load_enabled = _load_off
 
     run_async(component.run(0, True))
     assert component.base.get_state_wrapper("switch.predbat_myenergi_zappi_control") == "off"
@@ -1301,11 +1553,12 @@ def test_run_enables_control_and_drives_the_zappi():
     zappi = _zappi(12345678)
     component.transport.fetch_devices = AsyncMock(return_value=[zappi])
     component.transport.set_mode = AsyncMock(return_value=True)
-    component.load_control_enabled = AsyncMock()
+    # As the real load does, it marks the saved state as read
+    component.charger_control_load_enabled = AsyncMock(side_effect=lambda: setattr(component, "charger_control_loaded", True))
 
     assert run_async(component.run(0, True)) is True
-    assert component.control_active is True
-    component.load_control_enabled.assert_awaited_once()
+    assert component.charger_control_active is True
+    component.charger_control_load_enabled.assert_awaited_once()
     # A real poll drove the Zappi from the plan without waiting for a second cycle
     assert component.transport.set_mode.await_count == 1, component.transport.set_mode.await_args_list
     print("  ✓ The run loop enables control and drives the Zappi from the plan")
@@ -1318,7 +1571,7 @@ def test_run_does_not_control_when_the_feature_is_off():
     component.transport.set_mode = AsyncMock(return_value=True)
 
     assert run_async(component.run(0, True)) is True
-    assert component.control_active is False
+    assert component.charger_control_active is False
     component.transport.set_mode.assert_not_awaited()
     print("  ✓ The run loop leaves the Zappi alone when control is off")
 
@@ -1360,9 +1613,9 @@ def test_control_switch_state_survives_a_restart():
 
     restarted = _controlling_component(plans={0: [NIGHT_WINDOW]})
     restarted.base.components = _Components(storage)
-    assert restarted.control_enabled is True, "A fresh component starts with control on"
-    run_async(restarted.load_control_enabled())
-    assert restarted.control_enabled is False, "The saved off state must survive a restart"
+    assert restarted.charger_control_enabled is True, "A fresh component starts with control on"
+    run_async(restarted.charger_control_load_enabled())
+    assert restarted.charger_control_enabled is False, "The saved off state must survive a restart"
     print("  ✓ The control switch state survives a restart")
 
 
@@ -1378,12 +1631,15 @@ def test_control_failure_does_not_break_the_poll():
     zappi = _zappi(12345678)
     component.transport.fetch_devices = AsyncMock(return_value=[zappi])
     component.transport.set_mode = AsyncMock(side_effect=MyEnergiApiError("myenergi refused the mode"))
-    component.load_control_enabled = AsyncMock()
+    # As the real load does, it marks the saved state as read
+    component.charger_control_load_enabled = AsyncMock(side_effect=lambda: setattr(component, "charger_control_loaded", True))
 
     assert run_async(component.run(0, True)) is True, "A refused mode must not fail the cycle"
     assert component.last_success_timestamp is not None, "Monitoring still succeeded, so the poll counts"
-    # Nothing was recorded as set, so the next cycle tries again rather than assuming it stuck
-    assert component.control_modes == {}, component.control_modes
+    # A stop is held as soon as it is sent (it may still have landed) but stays unconfirmed, so the next
+    # cycle tries again rather than assuming it stuck
+    assert component.charger_control_state == {"Z12345678": False}, component.charger_control_state
+    assert "Z12345678" in component.charger_control_unconfirmed
     print("  ✓ A refused mode command warns without failing the poll")
 
 
@@ -1426,6 +1682,16 @@ def test_component_publishes_entities():
     assert "sensor.predbat_myenergi_zappi_12345678_status" in entities
     assert "sensor.predbat_myenergi_zappi_12345678_mode" in entities
     assert "sensor.predbat_myenergi_zappi_12345678_plug_status" in entities
+    # Whether the cable is in, for car_charging_plugged - the mock Zappi is charging
+    assert entities["binary_sensor.predbat_myenergi_zappi_12345678_plugged"]["state"] == "on", entities["binary_sensor.predbat_myenergi_zappi_12345678_plugged"]
+    assert "binary_sensor.predbat_myenergi_eddi_87654321_plugged" not in entities
+    # Every connected pilot state is plugged in, including after a charge finishes; an empty or faulted one is no reading
+    zappi = component.devices["Z12345678"]
+    saved_plug = zappi.plug_status
+    for plug_status, expected in [("EV Disconnected", "off"), ("EV Connected", "on"), ("Waiting for EV", "on"), ("EV ready to charge", "on"), ("Charging", "on"), ("Fault", "unavailable"), ("", "unavailable")]:
+        zappi.plug_status = plug_status
+        assert component.plugged_state(zappi) == expected, (plug_status, component.plugged_state(zappi))
+    zappi.plug_status = saved_plug
     assert "sensor.predbat_myenergi_zappi_12345678_power" in entities
     assert "sensor.predbat_myenergi_zappi_12345678_session_energy" in entities
     assert "binary_sensor.predbat_myenergi_zappi_12345678_charging" in entities
@@ -1579,6 +1845,11 @@ def test_automatic_config():
         "sensor.predbat_myenergi_zappi_12345678_plug_status",
         "sensor.predbat_myenergi_zappi_22223333_plug_status",
     ], component.base.args["car_charging_planned"]
+    # car_charging_plugged too, in the same order, for the manual car SoC's reset on unplug
+    assert component.base.args["car_charging_plugged"] == [
+        "binary_sensor.predbat_myenergi_zappi_12345678_plugged",
+        "binary_sensor.predbat_myenergi_zappi_22223333_plugged",
+    ], component.base.args["car_charging_plugged"]
     # 11112222 sorts before 87654321, so it must be the one picked as "the first Eddi"
     assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_11112222_session_energy"
     print("  ✓ Automatic configuration wires both energy inputs, deterministically by serial")
@@ -1791,6 +2062,323 @@ def test_automatic_config_runs_once():
     run_async(component.run(60, False))
     assert component.base.args["car_charging_energy"] == ["sensor.user_override"], "Auto-config must not run twice"
     print("  ✓ Automatic configuration runs exactly once")
+
+
+# A Zappi that has died or been removed but is still on the myenergi account: the direct API lists it with no plug state (#6117)
+MOCK_DIRECT_DEAD_ZAPPI = {key: value for key, value in dict(MOCK_DIRECT_ZAPPI, sno=11110000, sta=0, div=0, che=0).items() if key != "pst"}
+LIVE_ZAPPI_ENERGY = "sensor.predbat_myenergi_zappi_12345678_session_energy"
+DEAD_ZAPPI_ENERGY = "sensor.predbat_myenergi_zappi_11110000_session_energy"
+
+
+def _zappi_liveness_component():
+    """A component whose log lines are captured, for the Zappi liveness tests."""
+    component = _make_component()
+    component.log_messages = []
+    component.log = component.log_messages.append
+    return component
+
+
+def _poll_at(component, now, devices, first=False):
+    """Run one polling cycle at the given clock time, returning what the transport hands back."""
+    component.transport.fetch_devices = AsyncMock(return_value=devices)
+    with patch("myenergi.time.time", return_value=now):
+        run_async(component.run(0, first))
+
+
+def test_normalise_direct_zappi_without_plug_state_is_offline():
+    """A direct Zappi record with no pilot state is offline; any reported state, even one not in the table, is online."""
+    assert normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI).online is True
+    assert normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI).online is False
+    assert normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, pst=""), DEVICE_KIND_ZAPPI).online is False
+    assert normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, pst="A"), DEVICE_KIND_ZAPPI).online is True
+    # A pilot code this module has no name for is still a reading from a live unit
+    unknown = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, pst="Z9"), DEVICE_KIND_ZAPPI)
+    assert unknown.online is True and unknown.plug_status == "", unknown
+    # An Eddi has no pst field at all, and must not be read as offline for it
+    assert normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI).online is True
+    print("  ✓ A direct Zappi record with no plug state reads as offline")
+
+
+def test_automatic_config_skips_an_offline_zappi():
+    """The #6117 site: a dead Zappi with the lower serial must not take car 0 from the live one.
+
+    Covers both transports' signals - the direct API's missing plug state and the cloud API's online flag -
+    and checks wiring, charge control and discovery all leave it out, so they cannot disagree about car order.
+    """
+    for dead in (normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI), normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, dict(MOCK_CLOUD_ZAPPI_META, deviceId="ZA11110000", serialNumber=11110000, online=False))):
+        component = _make_component()
+        live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+        component.devices = {dead.device_id: dead, live.device_id: live}
+        component.automatic_config()
+
+        assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+        assert component.base.args["car_charging_planned"] == ["sensor.predbat_myenergi_zappi_12345678_plug_status"], component.base.args["car_charging_planned"]
+        assert component.base.args["car_charging_plugged"] == ["binary_sensor.predbat_myenergi_zappi_12345678_plugged"]
+        assert component.base.args["car_charging_power"] == ["sensor.predbat_myenergi_zappi_12345678_power"]
+        assert component.base.args["car_charging_now"] == ["sensor.predbat_myenergi_zappi_12345678_power"]
+        assert [key for key, _ in component.charger_control_chargers()] == [live.device_id]
+        discovery = component.build_discovery()
+        assert len(discovery["chargers"]) == 1 and "myenergi:12345678" in str(discovery["chargers"][0]) and "11110000" not in str(discovery), discovery
+        assert component.wired_zappi_ids == [live.device_id]
+    print("  ✓ An offline Zappi gets no car, charge control or discovery record, on either transport")
+
+
+def test_run_leaves_a_zappi_dead_since_start_up_out_at_once():
+    """A Zappi never seen online is left out on the first poll, with the reason logged once rather than every poll."""
+    component = _zappi_liveness_component()
+    devices = [normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI), normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)]
+    _poll_at(component, 1000.0, devices, first=True)
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    _poll_at(component, 1060.0, devices)
+    offline_lines = [message for message in component.log_messages if "Zappi 11110000 is offline" in message]
+    assert len(offline_lines) == 1, component.log_messages
+    assert not any("re-wiring" in message for message in component.log_messages), component.log_messages
+    print("  ✓ A Zappi dead since start-up is never wired, and the reason is logged once")
+
+
+def test_run_rewires_when_a_zappi_dies_and_when_it_comes_back():
+    """A Zappi that stops reporting keeps its car through the grace period, then loses it; reporting again gives it back at once."""
+    component = _zappi_liveness_component()
+    grace = component.zappi_offline_grace
+    alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+    live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+
+    _poll_at(component, 1000.0, [alive, live], first=True)
+    assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+
+    # One poll without a plug state is a blip, not a death: no renumbering
+    _poll_at(component, 1060.0, [dead, live])
+    assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert not any("is offline" in message for message in component.log_messages), component.log_messages
+
+    # Still silent past the grace period: the unit is dead, and the live Zappi becomes car 0 without a restart
+    _poll_at(component, 1000.0 + grace + 60, [dead, live])
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert component.base.args["car_charging_planned"] == ["sensor.predbat_myenergi_zappi_12345678_plug_status"]
+    assert any("Zappi 11110000 is offline" in message for message in component.log_messages), component.log_messages
+    assert any("re-wiring" in message for message in component.log_messages), component.log_messages
+
+    # Reporting again gives it its car back on the next poll
+    _poll_at(component, 1000.0 + grace + 120, [alive, live])
+    assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert any("Zappi 11110000 is reporting again" in message for message in component.log_messages), component.log_messages
+    print("  ✓ A Zappi that dies mid-session re-wires after the grace period, and again when it comes back")
+
+
+def test_run_keeps_a_zappi_missing_from_one_poll():
+    """The cloud transport skips a device whose status call fails; that must not drop its car or renumber the others."""
+    component = _zappi_liveness_component()
+    grace = component.zappi_offline_grace
+    first = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+
+    _poll_at(component, 1000.0, [first, live], first=True)
+    _poll_at(component, 1060.0, [live])
+    assert set(component.devices) == {first.device_id, live.device_id}, component.devices
+    assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+
+    # Gone for longer than the grace period: let go, and the remaining Zappi becomes car 0
+    _poll_at(component, 1000.0 + grace + 60, [live])
+    assert set(component.devices) == {live.device_id}, component.devices
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    print("  ✓ A Zappi missing from one poll keeps its car until the grace period runs out")
+
+
+def test_zappi_offline_grace_is_eight_hours():
+    """A Zappi silent for most of a night keeps its car; only past 8 hours is it dropped, and one poll back restores it.
+
+    The window is long on purpose: a Wi-Fi dropout or myenergi outage lasting a few hours must not renumber the cars,
+    which would hand the Intelligent Octopus car 0 to the other Zappi. Coming back is not delayed at all.
+    """
+    hours = 60 * 60
+    # Polled every minute and every 30 minutes through the whole dropout: however often the dead
+    # Zappi is seen without a plug state, the grace is measured from when it was last online
+    for poll_seconds in (60, 30 * 60):
+        component = _zappi_liveness_component()
+        component.poll_seconds = poll_seconds
+        assert component.zappi_offline_grace == 8 * hours, component.zappi_offline_grace
+        alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+        dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+        live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+
+        _poll_at(component, 0.0, [alive, live], first=True)
+        for now in range(poll_seconds, 8 * hours - 60, poll_seconds):
+            _poll_at(component, float(now), [dead, live])
+            assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], (poll_seconds, now, component.base.args["car_charging_energy"])
+        _poll_at(component, 8 * hours - 60, [dead, live])
+        assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
+        assert not any("re-wiring" in message for message in component.log_messages), (poll_seconds, component.log_messages)
+        _poll_at(component, 8 * hours + 60, [dead, live])
+        assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
+        _poll_at(component, 8 * hours + 120, [alive, live])
+        assert component.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], (poll_seconds, component.base.args["car_charging_energy"])
+    print("  ✓ A Zappi keeps its car for 8 hours offline and gets it back on the first poll it reports")
+
+
+def test_rewire_respects_automatic_zappi_off():
+    """With automatic_zappi off a Zappi dying is not a reason to wire car inputs the user asked Predbat to leave alone."""
+    component = _zappi_liveness_component()
+    component.automatic_zappi = False
+    grace = component.zappi_offline_grace
+    _poll_at(component, 1000.0, [normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)], first=True)
+    _poll_at(component, 1000.0 + grace + 60, [normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)])
+    assert "car_charging_energy" not in component.base.args, component.base.args
+    assert not any("re-wiring" in message for message in component.log_messages), component.log_messages
+    # No Zappi has a car with the Zappi half off, so warning that this one lost its car would mislead
+    assert not any("is offline" in message for message in component.log_messages), component.log_messages
+    print("  ✓ Re-wiring and the offline warning are skipped with automatic_zappi off")
+
+
+FIRST_EDDI_ENERGY = "sensor.predbat_myenergi_eddi_11112222_session_energy"
+
+
+def test_rewire_wires_an_eddi_added_later():
+    """An Eddi that appears after start-up is wired into iboost_energy_today on that poll, leaving the car inputs as they were."""
+    component = _zappi_liveness_component()
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    _poll_at(component, 1000.0, [zappi], first=True)
+    assert "iboost_energy_today" not in component.base.args, component.base.args
+    _poll_at(component, 1060.0, [zappi, normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)])
+    assert component.base.args["iboost_energy_today"] == "sensor.predbat_myenergi_eddi_87654321_session_energy", component.base.args
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert any("re-wiring" in message for message in component.log_messages), component.log_messages
+    print("  ✓ An Eddi added after start-up is wired without a restart")
+
+
+def test_rewire_keeps_the_eddi_through_a_missed_reply():
+    """The cloud transport skips a device whose status call fails; if that lands on the poll a Zappi re-wire fires,
+    iboost_energy_today must stay on the first Eddi rather than move to the second for good."""
+    component = _zappi_liveness_component()
+    grace = component.zappi_offline_grace
+    alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+    live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    first_eddi = normalise_direct_device(dict(MOCK_DIRECT_EDDI, sno=11112222), DEVICE_KIND_EDDI)
+    second_eddi = normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)
+
+    _poll_at(component, 0.0, [alive, live, first_eddi, second_eddi], first=True)
+    assert component.base.args["iboost_energy_today"] == FIRST_EDDI_ENERGY, component.base.args
+    _poll_at(component, 60.0, [dead, live, first_eddi, second_eddi])
+    # The Zappi's grace (from its last online reading at 0) runs out on the very poll the first Eddi's status call
+    # fails; the Eddi was last seen at 60, so it is still well inside its own carry-over
+    _poll_at(component, grace + 30, [dead, live, second_eddi])
+    assert component.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], component.base.args["car_charging_energy"]
+    assert component.base.args["iboost_energy_today"] == FIRST_EDDI_ENERGY, component.base.args["iboost_energy_today"]
+    print("  ✓ A re-wire on a poll that missed the first Eddi keeps iboost_energy_today on it")
+
+
+def test_offline_grace_survives_a_restart():
+    """A restart while a live Zappi is mid-dropout keeps its car; a restart once its grace has run out does not.
+
+    Without the saved last-online times, the restarted component would read the Zappi as dead since start-up and drop
+    it at once, then give it its car back when it reported - renumbering the cars twice.
+    """
+    storage = _MemoryStorage()
+    alive = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    dead = normalise_direct_device(MOCK_DIRECT_DEAD_ZAPPI, DEVICE_KIND_ZAPPI)
+    live = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    hours = 60 * 60
+
+    component = _zappi_liveness_component()
+    component.base.components = storage
+    _poll_at(component, 0.0, [alive, live], first=True)
+    _poll_at(component, 60.0, [dead, live])
+    saved = storage.saved[("myenergi", "zappi_last_online")]["last_online"]
+    # The Zappi going quiet is saved at once, with the last time it was online
+    assert saved == {"Z11110000": 0.0, "Z12345678": 60.0}, saved
+    # Nothing changed and the re-save is not due, so a poll does not rewrite it
+    _poll_at(component, 120.0, [dead, live])
+    assert storage.saved[("myenergi", "zappi_last_online")]["last_online"]["Z12345678"] == 60.0, storage.saved
+
+    # Restarted an hour later, the Zappi still silent: it keeps car 0
+    restarted = _zappi_liveness_component()
+    restarted.base.components = storage
+    _poll_at(restarted, 1 * hours, [dead, live], first=True)
+    assert restarted.base.args["car_charging_energy"] == [DEAD_ZAPPI_ENERGY, LIVE_ZAPPI_ENERGY], restarted.base.args["car_charging_energy"]
+    assert not any("is offline" in message for message in restarted.log_messages), restarted.log_messages
+
+    # Restarted after its grace has run out: dropped at once, and forgotten in storage
+    late = _zappi_liveness_component()
+    late.base.components = storage
+    _poll_at(late, 8 * hours + 60, [dead, live], first=True)
+    assert late.base.args["car_charging_energy"] == [LIVE_ZAPPI_ENERGY], late.base.args["car_charging_energy"]
+    assert "Z11110000" not in storage.saved[("myenergi", "zappi_last_online")]["last_online"], storage.saved
+    print("  ✓ The offline grace survives a restart, and a Zappi past it is dropped and forgotten")
+
+
+def test_control_leaves_a_zappi_missing_from_the_poll_alone():
+    """A Zappi kept from an earlier poll still holds its car number, but is not commanded from its frozen reading.
+
+    Without this, a Zappi whose cloud status call kept failing read as still Stopped inside a window, so every poll
+    logged it as drifted and re-sent Fast to a unit that was not answering, for up to the whole grace period.
+    """
+    component = _control_component(plans={0: [NIGHT_WINDOW]})
+    component.log_messages = []
+    component.log = component.log_messages.append
+    component.transport.set_mode = AsyncMock(return_value=True)
+
+    # Read and settled Stopped outside the window
+    component.devices = component.update_device_liveness([_zappi(12345678, mode_index=4)], 0.0)
+    run_async(component.charger_control_apply(OUT_OF_WINDOW))
+    commands_before = component.transport.set_mode.await_count
+
+    # The window opens while every status call for it fails: kept, still car 0, but nothing is sent
+    for poll in range(1, 6):
+        component.devices = component.update_device_liveness([], 60.0 * poll)
+        run_async(component.charger_control_apply(IN_WINDOW))
+    assert [key for key, _ in component.charger_control_chargers()] == ["Z12345678"], component.charger_control_chargers()
+    assert component.transport.set_mode.await_count == commands_before, component.transport.set_mode.await_args_list
+    assert not any("re-applying" in message for message in component.log_messages), component.log_messages
+
+    # Read again, and still Stopped inside the window: driven to Fast once
+    component.devices = component.update_device_liveness([_zappi(12345678, mode_index=4)], 360.0)
+    run_async(component.charger_control_apply(IN_WINDOW))
+    assert [call.args[1] for call in component.transport.set_mode.await_args_list[commands_before:]] == ["Fast"], component.transport.set_mode.await_args_list
+    print("  ✓ Charge control leaves a Zappi missing from the poll alone, and drives it again once it is read")
+
+
+def test_renumbered_cars_forget_what_was_kept_per_car():
+    """When a Zappi drops out and the cars renumber, the Zappi now behind a car must not inherit the last one's per-car state.
+
+    charger_control_octopus_cars holds the "left alone" reason last logged for each car number, and
+    charger_control_discovery_since its discovery wait clock. A car whose Zappi did not move keeps both.
+    """
+    component = _zappi_liveness_component()
+    grace = component.zappi_offline_grace
+    first = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=11110000), DEVICE_KIND_ZAPPI)
+    middle = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    middle_dead = normalise_direct_device(dict(MOCK_DIRECT_DEAD_ZAPPI, sno=12345678), DEVICE_KIND_ZAPPI)
+    last = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sno=33330000), DEVICE_KIND_ZAPPI)
+    since = datetime.datetime(2026, 8, 22, 20, 0)
+
+    _poll_at(component, 1000.0, [first, middle, last], first=True)
+    component.charger_control_octopus_cars = {0: "octopus", 1: "unknown", 2: "car"}
+    component.charger_control_discovery_since = {0: since, 1: since, 2: since}
+
+    # No renumbering, nothing forgotten - including through the grace period, while the middle Zappi still holds car 1
+    _poll_at(component, 1060.0, [first, middle_dead, last])
+    assert component.charger_control_octopus_cars == {0: "octopus", 1: "unknown", 2: "car"}, component.charger_control_octopus_cars
+    assert component.charger_control_discovery_since == {0: since, 1: since, 2: since}, component.charger_control_discovery_since
+
+    # The middle Zappi's grace runs out: the last Zappi moves up to car 1, and car 2 is gone. Car 0 keeps its state
+    _poll_at(component, 1000.0 + grace + 60, [first, middle_dead, last])
+    assert [key for key, _ in component.charger_control_chargers()] == [first.device_id, last.device_id], component.charger_control_chargers()
+    assert component.charger_control_octopus_cars == {0: "octopus"}, component.charger_control_octopus_cars
+    assert component.charger_control_discovery_since == {0: since}, component.charger_control_discovery_since
+    print("  ✓ Renumbered cars forget their per-car control state, and cars that kept their Zappi keep theirs")
+
+
+def test_rewire_respects_automatic_eddi_off():
+    """With automatic_eddi off an Eddi appearing is not a reason to re-wire or claim iboost_energy_today."""
+    component = _zappi_liveness_component()
+    component.automatic_eddi = False
+    zappi = normalise_direct_device(MOCK_DIRECT_ZAPPI, DEVICE_KIND_ZAPPI)
+    _poll_at(component, 1000.0, [zappi], first=True)
+    _poll_at(component, 1060.0, [zappi, normalise_direct_device(MOCK_DIRECT_EDDI, DEVICE_KIND_EDDI)])
+    assert "iboost_energy_today" not in component.base.args, component.base.args
+    assert not any("re-wiring" in message for message in component.log_messages), component.log_messages
+    print("  ✓ Re-wiring for an Eddi is skipped with automatic_eddi off")
 
 
 def test_controls_queue_rather_than_call():
@@ -2468,6 +3056,124 @@ def test_templates_accept_the_connected_zappi_plug_states():
     print("  ✓ {} templates accept every connected Zappi plug state".format(checked))
 
 
+# Discovery catalogue reporter
+
+
+def _eddi(serial):
+    """Build a direct-API Eddi."""
+    return normalise_direct_device(dict(MOCK_DIRECT_EDDI, sno=serial), DEVICE_KIND_EDDI)
+
+
+def _discovery_component(devices, **overrides):
+    """A component polled once with these devices, its entities published, and its reports captured.
+
+    The hub serial differs from every device serial so a leak of it into the report is detectable.
+    """
+    overrides.setdefault("hub_serial", "99887766")
+    component = _make_component(**overrides)
+    component.transport.fetch_devices = AsyncMock(return_value=list(devices))
+    component.filed_reports = []
+    component.report_discovery = component.filed_reports.append
+    assert run_async(component.run(0, True)) is True
+    return component
+
+
+def test_discovery_none_without_zappi():
+    """An account with only an Eddi has no charger to describe."""
+    component = _discovery_component([_eddi(87654321)])
+    assert component.build_discovery() is None
+    assert component.filed_reports == []
+    print("  ✓ Discovery reports nothing without a Zappi")
+
+
+def test_discovery_zappi_record():
+    """A Zappi is a charger keyed by its hardware serial, with a stub car and the four bound entities."""
+    component = _discovery_component([_zappi(12345678), _eddi(87654321)])
+    report = component.build_discovery()
+    assert report["automatic"] is True
+    assert len(report["chargers"]) == 1, report
+    charger, car = report["chargers"][0], report["cars"][0]
+    assert charger["device_id"] == "myenergi:12345678", charger
+    assert charger["hardware_ids"] == {"serial": "12345678"}, charger
+    assert charger["info"] == {"vendor": "myenergi", "model": "zappi"}, charger
+    assert charger["serves_cars"] == ["myenergi:12345678:car"], charger
+    assert set(charger["entities"]) == {"car_charging_planned", "car_charging_plugged", "car_charging_energy", "car_charging_power"}, charger["entities"]
+    assert charger["entities"]["car_charging_planned"]["entity_id"] == "sensor.predbat_myenergi_zappi_12345678_plug_status"
+    assert charger["entities"]["car_charging_plugged"]["entity_id"] == "binary_sensor.predbat_myenergi_zappi_12345678_plugged"
+    assert car == {"device_id": "myenergi:12345678:car", "charged_by": "myenergi:12345678", "flags": ["stub"]}, car
+    assert "87654321" not in str(report), "the Eddi is not a charger and must not be reported"
+    print("  ✓ Discovery reports a Zappi with a stub car and its bound entities")
+
+
+def test_discovery_automatic_follows_automatic_zappi():
+    """With myenergi_automatic_zappi off no Zappi entity is bound, so the report must not claim automatic."""
+    component = _discovery_component([_zappi(12345678)], automatic_zappi=False)
+    assert "car_charging_energy" not in component.base.args, "the Zappi must not have been wired"
+    assert component.build_discovery()["automatic"] is False
+    print("  ✓ Discovery automatic flag follows myenergi_automatic_zappi")
+
+def test_discovery_cloud_alias_never_reported():
+    """The cloud transport's user-chosen alias and the hub serial (a login identifier) never reach the report."""
+    cloud_zappi = normalise_cloud_device(MOCK_CLOUD_ZAPPI_STATUS, MOCK_CLOUD_ZAPPI_META)
+    assert cloud_zappi.name == "Driveway"
+    component = _discovery_component([cloud_zappi])
+    report = component.build_discovery()
+    assert report["chargers"][0]["device_id"] == "myenergi:12345678", "cloud and direct must give the same identity"
+    assert "Driveway" not in str(report), report
+    assert "99887766" not in str(report), report
+    print("  ✓ Discovery never reports the cloud alias or the hub serial")
+
+
+def test_discovery_round_trip():
+    """The report survives the real Coordinator: every entity, the stub flag, and a readable serial."""
+    from coordinator import Coordinator
+
+    component = _discovery_component([_zappi(12345678)])
+    logs = []
+    base = MockBase()
+    coordinator = Coordinator(base)
+    coordinator.log = logs.append
+    coordinator.report("myenergi", component.build_discovery())
+    cleaned = coordinator.reports["myenergi"]
+    assert len(cleaned["chargers"][0]["entities"]) == 4, cleaned
+    assert cleaned["cars"][0]["flags"] == ["stub"], cleaned
+    assert not [line for line in logs if line.startswith("Warn")], logs
+    coordinator.assemble()
+    assert "12345678" in str(coordinator.catalogue()), "the Zappi serial is hardware, and stays readable"
+    print("  ✓ Discovery report round-trips through the Coordinator")
+
+
+def test_discovery_serial_readable_without_hub():
+    """With no hub the Zappi's serial doubles as the login username - still an identifier, so it is published readable.
+
+    Identifiers are not secret (maintainer decision, 2 Nov 2026); only the API key is, and it never
+    enters the record.
+    """
+    from coordinator import Coordinator
+
+    component = _discovery_component([_zappi(12345678)], hub_serial="12345678")
+    charger = component.build_discovery()["chargers"][0]
+    assert charger["hardware_ids"] == {"serial": "12345678"}, charger
+    assert "account_ids" not in charger, charger
+    coordinator = Coordinator(MockBase())
+    coordinator.report("myenergi", component.build_discovery())
+    catalogue = coordinator.catalogue()
+    assert catalogue["chargers"][0]["device_id"] == "myenergi:12345678", catalogue["chargers"]
+    assert "secret-key" not in str(catalogue), "the API key never enters the catalogue"
+    print("  ✓ Discovery keeps a hub-less Zappi's serial readable")
+
+
+def test_discovery_refreshed_on_non_poll_cycle():
+    """A report that failed to build on a poll cycle is retried on the next run(), poll or not."""
+    component = _discovery_component([_zappi(12345678)])
+    assert len(component.filed_reports) == 1, "the first cycle files the report"
+    component.filed_reports.clear()
+    component._discovery_report = None
+    assert run_async(component.run(30, False)) is True
+    assert len(component.filed_reports) == 1, "a non-poll cycle still refreshes the report"
+    print("  ✓ Discovery is refreshed on a non-poll cycle")
+
+
 def test_myenergi(my_predbat=None):
     """
     ======================================================================
@@ -2537,10 +3243,23 @@ def test_myenergi(my_predbat=None):
     test_control_charge_ignores_eddis()
     test_control_charge_does_nothing_before_a_plan_exists()
     test_control_gating_refuses_with_a_reason()
+    test_unset_control_stays_off_whatever_automatic_says()
+    test_control_setting_strings_are_read_as_booleans()
+    test_control_hand_to_octopus_never_fast()
     test_control_releases_to_the_saved_mode()
+    test_control_releases_to_a_saved_stopped()
+    test_control_saved_modes_survive_a_restart()
+    test_control_saved_modes_are_dropped_when_control_is_off()
+    test_control_off_in_config_releases_a_held_zappi()
+    test_control_off_with_controls_disabled_writes_nothing()
     test_control_releases_to_eco_plus_when_nothing_was_saved()
+    test_control_release_retry_keeps_the_saved_mode()
+    test_control_release_forgets_the_saved_mode()
+    test_control_release_forgets_a_mode_saved_before_a_refused_command()
     test_control_stops_and_resumes_on_read_only()
     test_control_switch_is_published_and_toggles_control()
+    test_guest_switch_is_published_and_releases_the_zappi()
+    test_guest_charging_ends_when_the_zappi_is_unplugged()
     test_control_switch_is_not_published_when_control_cannot_run()
     test_control_switch_publishes_its_restored_state_on_the_first_cycle()
     test_control_switch_is_not_published_without_the_feature()
@@ -2575,6 +3294,19 @@ def test_myenergi(my_predbat=None):
     test_automatic_config_keeps_user_car_charging_now()
     test_automatic_config_disabled()
     test_automatic_config_runs_once()
+    test_normalise_direct_zappi_without_plug_state_is_offline()
+    test_automatic_config_skips_an_offline_zappi()
+    test_run_leaves_a_zappi_dead_since_start_up_out_at_once()
+    test_run_rewires_when_a_zappi_dies_and_when_it_comes_back()
+    test_run_keeps_a_zappi_missing_from_one_poll()
+    test_zappi_offline_grace_is_eight_hours()
+    test_rewire_respects_automatic_zappi_off()
+    test_rewire_wires_an_eddi_added_later()
+    test_rewire_keeps_the_eddi_through_a_missed_reply()
+    test_offline_grace_survives_a_restart()
+    test_control_leaves_a_zappi_missing_from_the_poll_alone()
+    test_rewire_respects_automatic_eddi_off()
+    test_renumbered_cars_forget_what_was_kept_per_car()
     test_automatic_config_ignores_unsupported_kinds()
     test_templates_accept_the_connected_zappi_plug_states()
     test_controls_queue_rather_than_call()
@@ -2592,6 +3324,13 @@ def test_myenergi(my_predbat=None):
     test_queued_boost_rejection_is_logged_as_a_failure()
     test_device_for_entity_requires_a_whole_prefix_match()
     test_number_event_handler_ignores_other_number_entities()
+    test_discovery_none_without_zappi()
+    test_discovery_zappi_record()
+    test_discovery_automatic_follows_automatic_zappi()
+    test_discovery_cloud_alias_never_reported()
+    test_discovery_round_trip()
+    test_discovery_serial_readable_without_hub()
+    test_discovery_refreshed_on_non_poll_cycle()
 
     print("=" * 70)
     return False

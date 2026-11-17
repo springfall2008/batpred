@@ -6,8 +6,8 @@ Task 1-9 built the coordinator, its typed containers, the redactor and five repo
 Cloud, Octopus, Ohme, Solcast) in isolation, each with its own unit tests. This module is the one
 place that wires several of them together against a SHARED base object and proves three things no
 single-reporter test can: the assembled catalogue tags records from different components by
-source and surfaces the conflicts a mixed fleet actually creates; a seeded corpus of sensitive
-values never survives redaction, in original OR transformed form; and - the release's central
+source and surfaces the conflicts a mixed fleet actually creates; a seeded corpus publishes with
+only its credential and email withheld, every identifier left readable; and - the release's central
 promise - that running the whole discovery path changes not one byte of apps.yaml configuration.
 
 Kraken and Axle also exist in the codebase but report nothing in v1 (see coordinator.py's
@@ -240,22 +240,16 @@ def test_discovery_assembles_across_sections_and_sources(my_predbat=None):
 
 
 def _corpus_coordinator():
-    """A fresh Coordinator with a fixed salt, so this test's redaction is reproducible."""
-    base = MockBase()
-    coordinator = Coordinator(base)
-    coordinator.salt = "corpus-salt-0001"
-    return coordinator
+    """A fresh Coordinator on a bare MockBase."""
+    return Coordinator(MockBase())
 
 
-def test_redaction_corpus_hides_identifiers_and_keeps_public_data(my_predbat=None):
-    """A report seeded with a credential-shaped field, a 13-digit MPAN, an email, a postcode and a
-    coordinate pair - spread across hardware_ids/info/ratings/entities/account_ids/tariff - never
-    surfaces any of those originals, in byte-exact OR transformed form, while a serial, a firmware
-    string and a tariff code all stay readable.
-
-    The transformed-form check matters on its own: an earlier leak survived a passing test that
-    only checked the byte-exact original, because the value actually appeared case-folded with its
-    separators swapped inside an entity_id a get_entity_name()-style helper built from it.
+def test_redaction_corpus_withholds_only_credentials_and_emails(my_predbat=None):
+    """A report seeded with a credential-named field, an email, a 13-digit MPAN, an account id echoed
+    into an entity id, a postcode and a coordinate pair - spread across
+    hardware_ids/info/ratings/entities/account_ids/tariff - publishes with only the credential and the
+    email withheld. Identifiers and location are not secret (maintainer decision, 2 Nov 2026), so every
+    one of them, the echoed entity id included, stays readable alongside the serial, firmware and tariff code.
     """
     coordinator = _corpus_coordinator()
     coordinator.report(
@@ -296,28 +290,13 @@ def test_redaction_corpus_hides_identifiers_and_keeps_public_data(my_predbat=Non
     catalogue = coordinator.catalogue()
     text = str(catalogue)
 
-    for original in (
-        "sk-should-never-reach-the-catalogue",
-        "1234567890123",
-        "user@example.com",
-        "SW1A 1AA",
-        "51.5074",
-        "0.1278",
-        "A-1234ABCD",
-    ):
-        assert original not in text, "{} must not survive redaction".format(original)
+    for withheld in ("sk-should-never-reach-the-catalogue", "user@example.com"):
+        assert withheld not in text, "{} must not reach the published catalogue".format(withheld)
 
-    # Transformed form: the account id echoed lower-cased with "-" swapped for "_", exactly as a
-    # get_entity_name()-style helper folds one into an entity id - checked separately from the
-    # byte-exact originals above, since a mutant that only broke exact-match substitution would
-    # otherwise pass this test for the wrong reason.
-    assert "a_1234abcd" not in text, "a case-folded, separator-swapped echo of the account id must not survive either"
+    for readable in ("1234567890123", "A-1234ABCD", "binary_sensor.predbat_octopus_a_1234abcd_intelligent_dispatch_1", "SW1A 1AA", "51.5074", "-0.1278", "SA2242G123", "D0.451", "E-1R-AGILE-24-10-01-A"):
+        assert readable in text, "{} is not secret and must stay readable".format(readable)
 
-    assert "SA2242G123" in text, "a genuine hardware serial must stay readable"
-    assert "D0.451" in text, "a genuine firmware string must stay readable"
-    assert "E-1R-AGILE-24-10-01-A" in text, "a genuine tariff code must stay readable"
-
-    print("PASS: the redaction corpus hides every seeded identifier, in original and transformed form, while serials/firmware/tariff codes stay readable")
+    print("PASS: the redaction corpus withholds only the credential and the email; identifiers, location, serials, firmware and tariff codes stay readable")
     return 0
 
 
@@ -326,5 +305,5 @@ def test_discovery_catalogue_all(my_predbat=None):
     failures = 0
     failures += test_discovery_writes_no_config()
     failures += test_discovery_assembles_across_sections_and_sources()
-    failures += test_redaction_corpus_hides_identifiers_and_keeps_public_data()
+    failures += test_redaction_corpus_withholds_only_credentials_and_emails()
     return failures

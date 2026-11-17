@@ -1305,6 +1305,12 @@ def test_web_annual_fast_mode(my_predbat):
         print("  ERROR: an interpolated month should appear in the chart categories")
         failed = True
 
+    print("Test: the run details table totals an array given as panels (#4395)")
+    details = page._render_run_details({"config": {"solar": [{"panels": 10}]}})
+    if "4 kWp across 10 panels" not in details:
+        print("  ERROR: 10 panels at the default 400 W should read '4 kWp across 10 panels', got {!r}".format(details))
+        failed = True
+
     print("Test: the run details table reports fast mode")
     details = page._render_run_details({"config": {"fast_mode": True, "samples_per_month": 2}, "annual": {"fast_mode": True, "months_interpolated": 8}})
     if "Fast mode" not in details:
