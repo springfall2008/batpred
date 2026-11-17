@@ -86,6 +86,9 @@ def run_web_pv_calibration_chart_tests(my_predbat):
     """Run the PV Calibration page tests."""
     failed = False
     saved_components = getattr(my_predbat, "components", None)
+    saved_now_utc = my_predbat.now_utc
+    # The stub's scans are fixed dates, and the page only offers a next midnight still ahead of now (#6244): pin now between them
+    my_predbat.now_utc = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
     try:
         evidence = _evidence()
         model = fit_pv_calibration(evidence, TODAY, 1.0, 3.5, 0.2, 0.2, 30)
@@ -164,4 +167,5 @@ def run_web_pv_calibration_chart_tests(my_predbat):
         failed |= _check("t8 wrap", ".pv-calibration-page p { white-space: normal; }" in html and "max-width:960px" in html)
     finally:
         my_predbat.components = saved_components
+        my_predbat.now_utc = saved_now_utc
     return failed
