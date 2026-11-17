@@ -2626,7 +2626,7 @@ max: 10
       As with the other entities, the prefix may differ on your system (e.g. `sensor.solax_inverter_house_load_alt`). Please note some of these entities may have very different names if the integration was first added on newer versions of Home Assistant due to changes in the way HA generates entity IDs.
 
 - Predbat needs a 'Todays House Load' sensor.
-Home Assistant 2026.10 and newer can provide this for you by enabling the "Enable Dashboard Virtual Device" option in the HA configuration. This will provide a sensor called "Home Consumption Energy" (`sensor.solax_energy_dashboard_solax_home_consumption_power`) which can be used for this purpose.
+The Solax integration version 2026.01.2 and newer can provide this for you by enabling the "Enable Dashboard Virtual Device" option in the Home Assistant device configuration. This will provide a sensor called "Home Consumption Energy" (`sensor.solax_energy_dashboard_solax_home_consumption_power`) which can be used for this purpose.
 
   Or you can create your own:
 
