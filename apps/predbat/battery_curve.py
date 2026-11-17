@@ -98,9 +98,14 @@ class BatteryCurve:
                 history, the learners fall back to this inverter alone (as before multi-inverter learning) rather than stop.
             days: how many days of history to read, max_days_previous when not given
 
+        "max_power" is the full rate the history was written at: battery_rate_max_charge for charge (inverter_limit_charge
+        applied), and for discharge battery_rate_max_export, as the discharge evidence is forced exports and those run at
+        inverter_limit_export rather than the discharge rating. "rated_power" is the rating the plan scales the grid by
+        (battery_rate_max_charge, battery_rate_max_discharge).
+
         Returns:
             {"soc_kwh", "rate", "battery_power", "status": {minute: value}, "min_len", "soc_max", "max_power" (W),
-            "export_limit_w", "inverters"}, or None (after logging which setting or history is missing).
+            "rated_power" (W), "export_limit_w", "inverters"}, or None (after logging which setting or history is missing).
         """
         if fleet is None:
             fleet = self.curve_fleet()
@@ -173,8 +178,12 @@ class BatteryCurve:
             battery_power = to_minutes(battery_power_data[0], required_unit="W")
             if battery_power_invert:
                 battery_power = {minute: -value for minute, value in battery_power.items()}
-            max_power = (inverter.battery_rate_max_discharge if discharge else inverter.battery_rate_max_charge) * MINUTE_WATT
-            per_inverter.append({"soc_kwh": soc_kwh, "rate": to_minutes(rate_data[0], required_unit="W"), "battery_power": battery_power, "max_power": max_power})
+            if discharge:
+                max_power = (inverter.battery_rate_max_export or 0) * MINUTE_WATT
+                rated_power = inverter.battery_rate_max_discharge * MINUTE_WATT
+            else:
+                max_power = rated_power = inverter.battery_rate_max_charge * MINUTE_WATT
+            per_inverter.append({"soc_kwh": soc_kwh, "rate": to_minutes(rate_data[0], required_unit="W"), "battery_power": battery_power, "max_power": max_power, "rated_power": rated_power})
 
         # Not padded (nor the series above): a window longer than the history (28 days asked, Home Assistant keeping 10) must
         # stop where the history does, or the padding would count as evidence and as coverage, and the per-day merge would
@@ -206,6 +215,7 @@ class BatteryCurve:
             "min_len": min_len,
             "soc_max": sum(inverter.soc_max for inverter in fleet),
             "max_power": fleet_max_power,
+            "rated_power": int(sum(series["rated_power"] for series in per_inverter)),
             "export_limit_w": export_limit_w,
             "inverters": len(fleet),
         }
@@ -327,7 +337,13 @@ class BatteryCurve:
         down) and the rest is cut into centred BATTERY_RATE_GRID_SEGMENT_MINUTES segments, each averaged into one sample.
 
         The rate is recorded as learn_charge_curve() recorded it - battery power / rated maximum / battery_loss - with
-        battery_rate_max_scaling (or _discharge) divided out, so it is relative to the rated rate. With more than one
+        battery_rate_max_scaling (or _discharge) divided out, so it is relative to the rated rate. The full rate is the
+        rate the history was written at (load_curve_history() "max_power"), so inverter_limit_charge, and for the forced
+        exports inverter_limit_export, set what counts as full rate. When the export cap is below the discharge rating an
+        export that reached the cap shows only that the battery could do at least that much, so it is recorded as 1.0 (no
+        battery limit seen) rather than as cap / rating, which would read as a curve dip; one the battery held below the
+        cap is a real limit and is recorded in kW against the discharge rating. When the cap is above the rating the rate
+        is relative to the cap, so the plan scales the curve with the export path (utils.rate_curve_ceiling). With more than one
         inverter the combined battery is scanned (load_curve_history()).
 
         Args:
@@ -350,6 +366,10 @@ class BatteryCurve:
         soc_max = history["soc_max"]
         if max_power <= 0 or soc_max <= 0:
             return None
+        # What the rate is recorded against: the rating, or the written full rate when that is above it (an export cap above
+        # the discharge rating). Below it (an export cap under the rating) a minute at the cap is not a battery limit.
+        reference_power = max(history.get("rated_power", max_power), max_power)
+        capped = max_power < reference_power
         min_rate = max_power * BATTERY_RATE_GRID_FULL_RATE
         min_power = max(max_power * BATTERY_RATE_GRID_MIN_POWER, 1.0)
         limited = set()
@@ -397,7 +417,10 @@ class BatteryCurve:
                 temp = temperature.get(minute, None)
                 if temp is None or temp == 0:
                     return None
-            return (soc / soc_max * 100.0, temp, abs(power) / max_power / battery_loss / scaling)
+            delivered = abs(power) / battery_loss / scaling
+            if capped and delivered >= max_power * BATTERY_RATE_GRID_FULL_RATE:
+                return (soc / soc_max * 100.0, temp, 1.0)
+            return (soc / soc_max * 100.0, temp, delivered / reference_power)
 
         samples = {}
         found = 0
