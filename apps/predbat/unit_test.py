@@ -24,6 +24,7 @@ if hasattr(sys.stderr, "reconfigure"):
 from predbat import PredBat
 from tests.test_infra import FIXTURE_MINUTES_NOW, TestHAInterface, set_plot_enabled
 from tests.test_compute_metric import run_compute_metric_tests
+from tests.test_battery_grid_charge_cost import run_battery_grid_charge_cost_tests
 from tests.test_pv90 import run_pv90_tests
 from tests.test_performance_tweaks import run_performance_tweaks_tests
 from tests.test_perf import run_perf_test
@@ -901,6 +902,7 @@ def main():
         ("config_item_step_min_max_types", test_config_item_step_min_max_types_consistent, "Config item step/min/max type consistency tests", False),
         ("get_ha_config_fractional_default", test_get_ha_config_normalises_int_default_for_fractional_step, "get_ha_config normalises int default to float for fractional-step items (#4296)", False),
         ("metric_battery_cycle_fractional", test_metric_battery_cycle_fractional_value_not_truncated, "metric_battery_cycle fractional value not truncated by get_arg (#4296)", False),
+        ("battery_grid_charge_cost", run_battery_grid_charge_cost_tests, "metric_battery_grid_charge_cost charges grid energy into the battery only", False),
         ("metric_battery_value_scaling_step", test_metric_battery_value_scaling_step_resolves_export_margin, "metric_battery_value_scaling step resolves the export margin (#4840)", False),
         ("float_keys_float_defaults", test_float_declared_keys_never_read_with_int_default, "No float-declared APPS_SCHEMA key is read with an int default (#4925)", False),
         ("component_arg_float_specs", test_component_arg_specs_resolve_float_declared_keys_as_float, "COMPONENT_LIST arg specs resolve float-declared keys as float (#4925)", False),

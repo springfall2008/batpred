@@ -160,6 +160,17 @@ _NB: Setting this to a non-zero value will increase your daily cost, but will re
 
 Figures of around 0p-2p are recommended, the default is 0p per kWh.
 
+**input_number.predbat_metric_battery_grid_charge_cost** (_expert mode_) This sets an extra cost in pence per kWh on energy charged into the battery from the grid,
+on top of the import rate. It is for installations where grid charging costs more than the electricity itself - for example where a generation subsidy
+(such as green energy certificates) is paid on a generation meter between the inverter and the house, which counts grid energy going into the inverter as negative generation.
+In that case every kWh charged from the grid loses the subsidy on the energy that does not come back out, so the cost is roughly (1 - round trip efficiency) x the subsidy per kWh,
+e.g. (1 - 0.91) x 45p = 4.05p.
+
+Unlike **metric_battery_cycle** it only applies to grid import that ends up in the battery: charging from solar, discharging, and grid import that supplies the house are not affected.
+It is a real cost, so unlike the cycle cost it is included in Predbat's cost predictions. It also raises the value of energy left in the battery at the end of the plan,
+as refilling it from the grid would cost the same extra, but never above what that energy can save by avoiding imports (the existing cap on the battery value).
+The default is 0p per kWh, which leaves Predbat's behaviour unchanged.
+
 **input_number.predbat_metric_battery_value_scaling** (_expert mode_) A percentage value that can be used to scale the value of the energy in the battery at the end of the plan.
 The battery value is accounted for in the optimisations at the lowest future import rate including charging and inverter losses.
 A value of 1.0 (the default) means no change to this, while lower than 1.0 means to value future battery levels less,

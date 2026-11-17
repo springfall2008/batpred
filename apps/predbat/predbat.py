@@ -444,6 +444,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.export_more_solar_warned_reason = None
         self.battery_export_permitted = True
         self.metric_battery_cycle = 0.0
+        self.metric_battery_grid_charge_cost = 0.0
         self.metric_battery_value_scaling = 1.0
         self.metric_battery_value_export_scaling = 0.8
         self.calculate_pv90_plan = False
