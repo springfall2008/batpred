@@ -4289,6 +4289,12 @@ def run_execute_tests(my_predbat):
         soc_kw=8,
         assert_charge_rate=600,
     )
+    # The fleet is not charging yet: claiming "charge" would make the balancer treat batteries covering the
+    # house in the lead-in as cross-charging and zero their discharge rate
+    for inverter_id, entry in my_predbat.inverter_rate_intent.items():
+        if entry.get("owner") != "demand":
+            print("ERROR: the rate written ahead of the window should leave the owner as demand, inverter {} got {}".format(inverter_id, entry.get("owner")))
+            failed = True
     if failed:
         return failed
 

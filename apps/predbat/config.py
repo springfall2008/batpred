@@ -2380,10 +2380,10 @@ INVERTER_DEF = {
         "name": "HanchuCloud",
         "has_rest_api": False,
         "has_mqtt_api": False,
-        # CHG_PWR_LMT only caps battery charging while a charge slot is running: outside one, solar
-        # charges the battery above it, on DC- and AC-coupled units alike (#6190: 4.9 kW from 5.2 kW of
-        # PV with the limit at 3.5 kW and no slot set). So a low-power rate can be written with the
-        # early-armed window without throttling solar before it, and the window opens at that rate.
+        # CHG_PWR_LMT does not throttle solar charging while no charge slot is running (#6190: a DC-coupled
+        # unit charged at 4.9 kW from 5.2 kW of PV with the limit at 3.5 kW and no slot set). So a low-power
+        # rate can be written with the early-armed window without holding back solar before it, and the
+        # window opens at that rate.
         "charge_rate_ahead_of_window": True,
         # CHG_PWR_LMT / DSCHG_PWR_LMT are real watt setpoints, not an "unrestricted" flag, and a
         # rate of ZERO is how Predbat signals freeze in both directions.

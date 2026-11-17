@@ -1091,12 +1091,15 @@ class Execute:
                                     # Low power otherwise works out its rate only once the window is running, and until
                                     # then nothing claims the rate, so it sits at maximum and the window opens at full
                                     # power until the first cycle inside it writes the lower rate (#6190). Where the rate
-                                    # only limits charging inside a charge slot, write it now with the window instead:
-                                    # no slot is running yet (this is the lead-in, before charge_window_best[0]), so solar
-                                    # charging is not held back, and the window opens at the low-power rate. The running
-                                    # window re-solves the rate every cycle from the real SoC.
+                                    # does not throttle solar charging while no charge slot is running, write it now with
+                                    # the window instead: no slot is running yet (this is the lead-in, before
+                                    # charge_window_best[0]), so solar charging is not held back, and the window opens at
+                                    # the low-power rate. The running window re-solves the rate every cycle from the real SoC.
+                                    # rate_owner stays "demand": the fleet is not charging yet, and claiming "charge" would
+                                    # make balance_inverters() treat batteries covering the house in the lead-in as
+                                    # cross-charging and zero their discharge rate. apply_inverter_rates() writes
+                                    # charge_rate whatever the owner.
                                     charge_rate = self.charge_rate_ahead_of_window(inverter, window)
-                                    rate_owner = "charge"
                         else:
                             # If there is a previous set charge window, but its more than the set window minutes in the future but we are not close to it then we can leave it enabled for now
                             # saves register writes and avoids turning off the window before the inverter knows it finished
