@@ -8,7 +8,8 @@
 
 import random
 
-from utils import balance_inverters
+from const import BALANCE_CEILING_EXPIRY_SECONDS
+from utils import BALANCE_LATCH_SURPLUS_W, balance_inverters, learn_rate_ceilings
 
 
 def make_snapshot(soc_percent, battery_power, charge_rate_now=2600.0, discharge_rate_now=2600.0, reserve_percent=4.0, pv_power=0.0, rate_max=2600.0, in_calibration=False, grid_power=0.0):
@@ -151,19 +152,18 @@ def test_single_inverter_is_a_no_op():
     assert intent == before, "a single inverter must not be touched"
 
 
-def test_only_one_direction_of_pause_per_pass():
+def test_cross_charge_and_soc_holds_combine_within_capacity():
     """
-    A pass must never pause a charger and a discharger at the same time.
+    Stopping a cross-charger and SoC balancing happen in the same pass, and the SoC guard counts the charging
+    that has just been stopped as load the rest of the fleet now has to carry.
 
-    The inverters share an AC bus, so the four are coupled: pausing one of each changes the net
-    balance in both directions at once and the remaining units simply absorb or supply the
-    difference. Each guard is also evaluated as though its own pause were the only change.
-
-    Fleet net discharging with a cross-charger present: only the cross-charger is paused.
+    Fleet net discharging 2500W with inverter 2 charging 500W from the others. Once it is stopped the
+    batteries left discharging must supply 3000W. Holding inverters 0 and 3 leaves inverters 1 and 2 with
+    5200W between them, which covers it.
     """
     intent = make_intent(4)
     snapshot = [
-        make_snapshot(20.0, 1000.0),  # low and discharging - would be an SoC-balance candidate
+        make_snapshot(20.0, 1000.0),  # low and discharging - an SoC-balance candidate
         make_snapshot(80.0, 1000.0),
         make_snapshot(50.0, -500.0),  # charging while the fleet discharges - the real problem
         make_snapshot(50.0, 1000.0),
@@ -171,7 +171,78 @@ def test_only_one_direction_of_pause_per_pass():
     balance_inverters(intent, snapshot, True, True, True, 1.0, 1.0)
     assert intent[2]["charge_rate"] == 0, "the cross-charger must be stopped"
     paused_discharge = [id for id, value in intent.items() if value["discharge_rate"] == 0]
-    assert paused_discharge == [], "no discharge may be paused in the same pass as a charge, got {}".format(paused_discharge)
+    assert paused_discharge == [0, 3], "the two low inverters can both be spared, got {}".format(paused_discharge)
+
+
+def test_soc_guard_counts_the_charging_it_stops():
+    """
+    Net battery power understates what the fleet must supply while something is cross-charging. Here it nets to
+    1000W, but inverter 1 is charging 2400W from inverter 0. Once that stops, the house needs 3400W from the
+    batteries. Inverter 0 can give 2600W and inverter 1, which can only discharge 500W, another 500W - not
+    enough, so the low inverter must not be held as well.
+    """
+    intent = make_intent(3)
+    snapshot = [
+        make_snapshot(80.0, 3400.0, rate_max=5000.0),
+        make_snapshot(50.0, -2400.0),
+        make_snapshot(20.0, 0.0, discharge_rate_now=0.0),
+    ]
+    snapshot[0]["battery_rate_max_discharge"] = 2600.0
+    snapshot[1]["battery_rate_max_discharge"] = 500.0
+    balance_inverters(intent, snapshot, False, True, True, 1.0, 1.0)
+    assert intent[1]["charge_rate"] == 0, "the cross-charger must be stopped"
+    assert intent[2]["discharge_rate"] is None, "holding the low one too would leave the house short: {}".format(intent)
+
+
+def test_cross_charge_hold_is_latched():
+    """
+    A battery held from cross-charging reads 0W and a charge rate of 0 at the next pass. It must stay held while
+    the fleet still discharges - released, its loop winds straight back into charging from its neighbours.
+    """
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, 1500.0), make_snapshot(50.0, 0.0, charge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[1]["charge_rate"] == 0, "the latched cross-charge hold was released: {}".format(intent)
+
+
+def test_cross_charge_latch_ends_when_the_fleet_turns():
+    """
+    The latch only lasts while the fleet keeps its direction. With PV surplus to soak up, the battery held from
+    charging must be free to charge again.
+    """
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, -1500.0, grid_power=1500.0), make_snapshot(50.0, 0.0, charge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[1]["charge_rate"] is None, "the charge hold must end once the fleet should charge: {}".format(intent)
+
+
+def test_discharge_latch_kept_with_a_large_surplus():
+    """While the fleet soaks up a comfortable PV surplus, a battery held from discharging into it stays held."""
+    surplus = BALANCE_LATCH_SURPLUS_W + 500.0
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, -1500.0, grid_power=surplus - 1500.0), make_snapshot(50.0, 0.0, discharge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[1]["discharge_rate"] == 0, "the latched discharge hold was released: {}".format(intent)
+
+
+def test_discharge_latch_released_with_a_small_surplus():
+    """
+    A small surplus becomes a deficit as soon as a cloud passes, and a battery still held from discharging would
+    leave that to the grid until the next pass, so the latch lets go below BALANCE_LATCH_SURPLUS_W.
+    """
+    surplus = BALANCE_LATCH_SURPLUS_W - 400.0
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, -1500.0, grid_power=surplus - 1500.0), make_snapshot(50.0, 0.0, discharge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[1]["discharge_rate"] is None, "the discharge latch must let go on a small surplus: {}".format(intent)
+
+
+def test_cross_charge_latch_needs_the_correction_on():
+    """With the cross-charge correction switched off, a zero charge readback holds nothing."""
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, 1500.0), make_snapshot(50.0, 0.0, charge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, False, 1.0, 1.0)
+    assert intent[1]["charge_rate"] is None, intent
 
 
 def test_every_cross_charger_is_stopped():
@@ -573,7 +644,8 @@ def test_random_fleets_hold_the_physical_invariants():
        to absorb it
     c) cross-charging is prevented - nobody is left charging off the grid or off another battery
 
-    and, underpinning all three, a pass never holds in both directions at once.
+    d) when a pass stops cross-charging and SoC-balances too, the discharge capacity not held covers what the
+       batteries must supply once the stopped charging no longer nets off against the house
     """
     failed = False
     rng = random.Random(20260919)
@@ -587,9 +659,14 @@ def test_random_fleets_hold_the_physical_invariants():
         spare_pv = total_grid - net_battery
         context = "trial {} count {} pv {:.0f}W load {:.0f}W grid {:.0f}W battery {:.0f}W spare {:.0f}W".format(trial, count, total_pv, total_load, total_grid, net_battery, spare_pv)
 
-        if held_discharge and held_charge:
-            print("ERROR: held both directions in one pass - {} charge {} discharge {}".format(context, held_charge, held_discharge))
-            failed = True
+        # d) a charge hold while the fleet discharges removes draw the others were supplying, so the inverters
+        #    still free to discharge must cover the net battery power plus the charging that was stopped
+        if held_discharge and held_charge and net_battery > 0:
+            stopped = sum(-snapshot[id]["battery_power"] for id in held_charge if snapshot[id]["battery_power"] < 0)
+            remaining = sum(snapshot[id]["battery_rate_max_discharge"] for id in range(count) if id not in held_discharge and snapshot[id]["soc_percent"] - snapshot[id]["reserve_percent"] >= 4.0)
+            if remaining - 200 < net_battery + stopped:
+                print("ERROR: combined holds leave the batteries short - {} charge {} discharge {} remaining {:.0f}W < {:.0f}W".format(context, held_charge, held_discharge, remaining, net_battery + stopped))
+                failed = True
 
         # a) the house load must still be servable without forcing grid import that was not
         #    already there. Holding a battery that was discharging into an EXPORT is correct, so
@@ -617,6 +694,200 @@ def test_random_fleets_hold_the_physical_invariants():
                     break
 
     assert not failed, "random fleet invariants violated - see the ERROR lines above"
+
+
+def derated_peer_snapshot(peer_power=2000.0, grid_power=-600.0, held_rate=0.0, rate_max=3000.0):
+    """
+    A discharging pair: inverter 0 the fuller peer, really giving peer_power of its rate_max, and inverter 1
+    held at discharge_rate_now held_rate, with grid_power on the site meter (Predbat sign, -ve import).
+    """
+    return [
+        make_snapshot(80.0, peer_power, rate_max=rate_max, grid_power=grid_power),
+        make_snapshot(70.0, 0.0, discharge_rate_now=held_rate, rate_max=rate_max),
+    ]
+
+
+def test_ceiling_learned_from_shortfall_during_hold():
+    """A peer still short of the house while another is held is already giving all it can: that is its ceiling."""
+    snapshot = derated_peer_snapshot()
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["learned_discharge_ceiling"] == [2000.0, 1000.0], snapshot[0]
+    assert snapshot[0]["battery_rate_max_discharge"] == 2000.0, snapshot[0]
+    assert snapshot[1]["learned_discharge_ceiling"] is None, "the held inverter itself must not learn a ceiling"
+    assert snapshot[0]["learned_charge_ceiling"] is None, "importing says nothing about charging"
+
+
+def test_ceiling_not_learned_without_hold():
+    """Import with nothing held is the fleet's own business - the hold is what has to be shown to cost the grid."""
+    snapshot = derated_peer_snapshot(held_rate=2600.0)
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["learned_discharge_ceiling"] is None and snapshot[0]["battery_rate_max_discharge"] == 3000.0, snapshot[0]
+
+
+def test_ceiling_not_learned_from_small_shortfall():
+    """A meter reading within the shortfall margin is noise, not evidence."""
+    snapshot = derated_peer_snapshot(grid_power=-80.0)
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["learned_discharge_ceiling"] is None, snapshot[0]
+
+
+def test_ceiling_not_learned_at_configured_rate():
+    """A peer already at its configured rate is not derated; the guard sees the shortfall without help."""
+    snapshot = derated_peer_snapshot(peer_power=2900.0)
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["learned_discharge_ceiling"] is None and snapshot[0]["battery_rate_max_discharge"] == 3000.0, snapshot[0]
+
+
+def test_ceiling_kept_and_applied_while_peer_stays_below():
+    """With the hold released and nothing short, a stored ceiling still caps the peer it was learned for."""
+    snapshot = derated_peer_snapshot(peer_power=1300.0, grid_power=0.0, held_rate=2600.0)
+    snapshot[0]["learned_discharge_ceiling"] = [2000.0, 1000.0]
+    learn_rate_ceilings(snapshot, 1300.0)
+    assert snapshot[0]["learned_discharge_ceiling"] == [2000.0, 1000.0], snapshot[0]
+    assert snapshot[0]["battery_rate_max_discharge"] == 2000.0, snapshot[0]
+
+
+def test_ceiling_forgotten_when_peer_delivers_more():
+    """A peer seen giving more than its ceiling has recovered (a battery warming up), so its full rate is back."""
+    snapshot = derated_peer_snapshot(peer_power=2200.0, grid_power=0.0, held_rate=2600.0)
+    snapshot[0]["learned_discharge_ceiling"] = [2000.0, 1000.0]
+    learn_rate_ceilings(snapshot, 1300.0)
+    assert snapshot[0]["learned_discharge_ceiling"] is None and snapshot[0]["battery_rate_max_discharge"] == 3000.0, snapshot[0]
+
+
+def test_ceiling_expires():
+    """A ceiling is only trusted for so long, so a peer that is never asked for more still gets its rate back."""
+    snapshot = derated_peer_snapshot(peer_power=1300.0, grid_power=0.0, held_rate=2600.0)
+    snapshot[0]["learned_discharge_ceiling"] = [2000.0, 1000.0]
+    learn_rate_ceilings(snapshot, 1000.0 + BALANCE_CEILING_EXPIRY_SECONDS + 1)
+    assert snapshot[0]["learned_discharge_ceiling"] is None and snapshot[0]["battery_rate_max_discharge"] == 3000.0, snapshot[0]
+
+
+def test_ceiling_learned_on_charge_side():
+    """Charging mirrors it: surplus exported while one is held at charge 0 shows the peer's real charge rate."""
+    snapshot = [
+        make_snapshot(70.0, -1500.0, rate_max=3000.0, grid_power=1100.0),
+        make_snapshot(80.0, 0.0, charge_rate_now=0.0, rate_max=3000.0),
+    ]
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["learned_charge_ceiling"] == [1500.0, 1000.0], snapshot[0]
+    assert snapshot[0]["battery_rate_max_charge"] == 1500.0, snapshot[0]
+    assert snapshot[0]["learned_discharge_ceiling"] is None, snapshot[0]
+
+
+def test_derated_peer_hold_released_end_to_end():
+    """
+    The guard that used the peer's configured rate holds the low inverter and leaves the house importing; with the
+    learned ceiling it sees the peer cannot carry the house and lets go.
+    """
+    intent = make_intent(2)
+    balance_inverters(intent, derated_peer_snapshot(), False, True, False, 1, 1)
+    assert intent[1]["discharge_rate"] == 0, "precondition: on the configured rate the guard keeps the hold"
+    snapshot = derated_peer_snapshot()
+    learn_rate_ceilings(snapshot, 1000.0)
+    intent = make_intent(2)
+    balance_inverters(intent, snapshot, False, True, False, 1, 1)
+    assert intent[1]["discharge_rate"] is None, "with the learned ceiling the hold must be released: {}".format(intent)
+
+
+def test_learned_ceiling_caps_a_claimed_charge_rate():
+    """
+    In a charge window the executor claims every inverter's rate, and the capacity guard reasons about that claim.
+    A peer claimed at 2600W but seen absorbing only 1000W cannot soak up a 2000W surplus on its own, so the fuller
+    inverter must not be held from charging - holding it would export the difference.
+    """
+    snapshot = [
+        make_snapshot(70.0, -1000.0, rate_max=2600.0, grid_power=1000.0),
+        make_snapshot(80.0, 0.0, charge_rate_now=0.0, rate_max=2600.0),
+    ]
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["battery_rate_max_charge"] == 1000.0, "precondition: the peer's ceiling is learned: {}".format(snapshot[0])
+    intent = make_intent(2, {0: {"charge_rate": 2600, "owner": "charge"}, 1: {"charge_rate": 2600, "owner": "charge"}})
+    balance_inverters(intent, snapshot, True, False, False, 1.0, 1.0)
+    assert intent[1]["charge_rate"] == 2600, "the learned ceiling was bypassed by the claimed rate: {}".format(intent)
+
+
+def test_learned_ceiling_caps_a_claimed_discharge_rate():
+    """
+    The export mirror: a peer claimed at 2600W in an export window but seen delivering 1000W cannot carry the
+    fleet's 2400W on its own, so the lower inverter must not be held from discharging.
+    """
+    snapshot = [
+        make_snapshot(80.0, 1000.0, rate_max=2600.0, grid_power=-1400.0),
+        make_snapshot(70.0, 0.0, discharge_rate_now=0.0, rate_max=2600.0),
+    ]
+    learn_rate_ceilings(snapshot, 1000.0)
+    assert snapshot[0]["battery_rate_max_discharge"] == 1000.0, "precondition: the peer's ceiling is learned: {}".format(snapshot[0])
+    intent = make_intent(2, {0: {"discharge_rate": 2600, "owner": "export"}, 1: {"discharge_rate": 2600, "owner": "export"}})
+    snapshot[0]["battery_power"] = 2400.0
+    balance_inverters(intent, snapshot, False, True, False, 1.0, 1.0)
+    assert intent[1]["discharge_rate"] == 2600, "the learned ceiling was bypassed by the claimed rate: {}".format(intent)
+
+
+def test_charge_latch_released_when_the_fleet_is_idle():
+    """
+    Every inverter reads a charge rate of 0 - left by a freeze-export slot, say - and nothing is moving: no battery
+    power and nothing on the grid meter, because grid_power is not configured or the site curtails PV to zero
+    export. That is not a fleet discharging, so the latch must let go; held, it rewrites charge 0 every pass and
+    the batteries take no PV for the rest of the day.
+    """
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, 0.0, charge_rate_now=0.0), make_snapshot(60.0, 0.0, charge_rate_now=0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[0]["charge_rate"] is None and intent[1]["charge_rate"] is None, "an idle fleet kept the charge latch: {}".format(intent)
+
+
+def test_charge_latch_released_beside_a_full_peer():
+    """A held beside a full B, nothing moving: the latch must not outlive the discharge it was taken in."""
+    intent = make_intent(2)
+    snapshot = [make_snapshot(50.0, 0.0, charge_rate_now=0.0), make_snapshot(100.0, 0.0)]
+    balance_inverters(intent, snapshot, False, False, True, 1.0, 1.0)
+    assert intent[0]["charge_rate"] is None, "the charge latch outlived the discharge: {}".format(intent)
+
+
+def test_soc_guard_does_not_count_a_peer_just_held_from_discharging():
+    """
+    The fleet should be soaking up a small surplus, and B is discharging into it, so the cross-charge correction
+    holds B's discharge. A is low and already held from an earlier pass. The SoC discharge guard must not count B
+    as able to take over - it has just been stopped - or both are left held with only 100W of PV between the house
+    and the grid.
+    """
+    intent = make_intent(2)
+    snapshot = [
+        make_snapshot(40.0, 0.0, discharge_rate_now=0.0, rate_max=3000.0, grid_power=1600.0),
+        make_snapshot(80.0, 1500.0, rate_max=3000.0),
+    ]
+    balance_inverters(intent, snapshot, False, True, True, 1.0, 1.0)
+    assert intent[1]["discharge_rate"] == 0, "precondition: B discharging into the surplus is held: {}".format(intent)
+    assert intent[0]["discharge_rate"] is None, "A was held too, counting on B: {}".format(intent)
+
+
+def test_decisions_report_each_hold_and_its_reason():
+    """
+    balance_inverters() returns what it held and why, for the balance sensor: a cross-charger caught this pass, one
+    kept from before (latched), and a SoC hold, each in its own direction.
+    """
+    intent = make_intent(3)
+    snapshot = [
+        make_snapshot(80.0, 2000.0),  # the fullest, carrying the house
+        make_snapshot(50.0, -500.0),  # charging against the fleet - caught
+        make_snapshot(20.0, 0.0, charge_rate_now=0.0),  # held from charging last pass - latched; also the lowest
+    ]
+    decisions = balance_inverters(intent, snapshot, False, True, True, 1.0, 1.0)
+    assert decisions["status"] == "considered" and decisions["direction"] == "discharge", decisions
+    assert decisions["holds"][1]["charge"] == "cross_charge", decisions
+    assert decisions["holds"][2]["charge"] == "cross_charge_latched", decisions
+    assert decisions["holds"][0] == {"charge": None, "discharge": None}, decisions
+    assert decisions["spread_percent"] == 60.0, decisions
+    held_discharge = [id for id in range(3) if decisions["holds"][id]["discharge"] == "soc"]
+    assert held_discharge == [id for id in range(3) if intent[id]["discharge_rate"] == 0], "decisions must match the intent: {} {}".format(decisions, intent)
+
+
+def test_decisions_report_why_nothing_was_considered():
+    """A single inverter, or one calibrating, is reported as such rather than as balanced."""
+    assert balance_inverters(make_intent(1), [make_snapshot(50.0, 1000.0)], True, True, True, 1.0, 1.0)["status"] == "single"
+    snapshot = [make_snapshot(50.0, 1000.0, in_calibration=True), make_snapshot(80.0, 1000.0)]
+    assert balance_inverters(make_intent(2), snapshot, True, True, True, 1.0, 1.0)["status"] == "calibrating"
 
 
 def run_balance_pure_tests(my_predbat):

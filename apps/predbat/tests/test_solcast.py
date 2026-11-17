@@ -4819,12 +4819,12 @@ def test_fetch_pv_forecast_solcast_band_follows_calibration(my_predbat):
                 for m_of_day in range(window_start, window_start + window_length):
                     pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = 1.0
 
-            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist, **kwargs):
                 """Return the synthetic pv_today history."""
                 return dict(_hist) if key == "pv_today" else {}
 
             base.minute_data_import_export = mock_minute_import_export
-            solar.get_history_wrapper = lambda entity_id, days, required=False: []
+            solar.get_history_wrapper = lambda entity_id, days, required=False, **kwargs: []
             solar.forecast_solar = None
 
             # 1 kW in each 30-minute slot of the window, in kW as both Solcast routes report it
@@ -4969,12 +4969,12 @@ def test_fetch_pv_forecast_solcast_band_does_not_compound(my_predbat):
                 for m_of_day in range(window_start, window_start + window_length):
                     pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = 1.0
 
-            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist, **kwargs):
                 """Return the synthetic pv_today history."""
                 return dict(_hist) if key == "pv_today" else {}
 
             base.minute_data_import_export = mock_minute_import_export
-            solar.get_history_wrapper = lambda entity_id, days, required=False: []
+            solar.get_history_wrapper = lambda entity_id, days, required=False, **kwargs: []
             solar.forecast_solar = None
 
             detailed = None
@@ -5562,13 +5562,16 @@ def test_pv_calibration_total_adjustment_recency_weighted(my_predbat):
     history window. Otherwise a recent change in system performance (e.g. panel cleaning,
     seasonal trend) is diluted by older, less-relevant days.
 
-    3 days (day1=most recent, weight 1.0/0.9/0.8), uniform forecast=1.0 kWh/day:
+    3 days (day1=most recent), uniform forecast=1.0 kWh/day:
       day1: actual=2.0 kWh (ratio 2.0)
       day2: actual=1.0 kWh (ratio 1.0)
       day3: actual=0.5 kWh (ratio 0.5)
 
-    Flat/unweighted ratio (what the old code produced): (2.0+1.0+0.5) / (1.0+1.0+1.0) = 3.5/3 ~= 1.1667
-    Recency-weighted ratio (current code): (2.0*1.0+1.0*0.9+0.5*0.8) / (1.0*1.0+1.0*0.9+1.0*0.8) = 3.3/2.7 ~= 1.2222
+    Flat/unweighted ratio: (2.0+1.0+0.5) / (1.0+1.0+1.0) = 3.5/3 ~= 1.1667
+    Recency-weighted ratio: weights halve every pv_calibration_half_life (3.5) days, 1.0/0.82/0.67, giving ~1.25.
+
+    Shrinkage is switched off here (pv_calibration_shrink set very large) so the weighting itself is measured: with the default
+    shrinkage these three wildly different days would rightly leave the factor much closer to 1.
     """
     print("  - test_pv_calibration_total_adjustment_recency_weighted")
     failed = False
@@ -5607,7 +5610,7 @@ def test_pv_calibration_total_adjustment_recency_weighted(my_predbat):
 
     actual_per_day = [2.0, 1.0, 0.5]
     forecast_per_day = [1.0, 1.0, 1.0]
-    weights = [1.0, 0.9, 0.8]
+    weights = [0.5 ** (k / 3.5) for k in range(3)]
 
     flat_average = sum(actual_per_day) / sum(forecast_per_day)
     expected_weighted = sum(a * w for a, w in zip(actual_per_day, weights)) / sum(f * w for f, w in zip(forecast_per_day, weights))
@@ -5627,6 +5630,7 @@ def test_pv_calibration_total_adjustment_recency_weighted(my_predbat):
             return dict(_hist) if key == "pv_today" else {}
 
         base.minute_data_import_export = mock_minute_import_export
+        base.mock_config = {"pv_calibration_shrink": 1e6, "pv_calibration_shrink_slot": 1e6}
         solar.get_history_wrapper = lambda entity_id, days, required=False: []
 
         total_minutes = 4 * 24 * 60

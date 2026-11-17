@@ -39,7 +39,8 @@ from const import (
     RESERVE_HOLD_MARGIN_PERCENT,
     RESERVE_HOLD_HYSTERESIS_PERCENT,
 )
-from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
+from battery_rate_grid import rate_grid_curve
+from utils import dp0, dp2, dp3, calc_percent_limit, find_charge_rate, balance_inverters, learn_rate_ceilings, allocate_export_rates, export_mode_of, export_power_of, export_target_of, get_charge_rate_curve, get_discharge_rate_curve
 from predbat_metrics import metrics
 from inverter import Inverter, calibration_reported
 import time
@@ -202,6 +203,11 @@ def split_change_by_rate(change_kwh, members):
     return [member[0] + direction * amount for member, amount in zip(members, moved)]
 
 
+# Columns of the balance sensor's hourly counts, and how many recent events it shows
+BALANCE_COUNT_INDEX = {"hold": 0, "release": 1, "cross_charge": 2, "ceiling": 3}
+BALANCE_EVENTS_KEPT = 10
+
+
 class Execute:
     """Execution mixin for applying optimised plans to physical inverters.
 
@@ -238,6 +244,12 @@ class Execute:
         Keeping the readings as plain scalars is what lets the balancing algorithm live in utils as
         a pure function, testable without a PredBat instance or a mock Home Assistant.
 
+        Each inverter's rate ceilings are first capped at what learn_rate_ceilings() has seen it really
+        deliver, so a derated peer is not counted on for its configured rate. The learned ceilings are
+        stored back on the inverters for the next pass - the one piece of balancing state that has to
+        outlive a pass, because the evidence for it (the grid short while a hold was in place) is gone
+        once the hold is released.
+
         Returns:
         - list: one dict per inverter, indexed by inverter id
         """
@@ -250,13 +262,21 @@ class Execute:
                     "battery_power": inverter.battery_power,
                     "pv_power": inverter.pv_power,
                     "grid_power": inverter.grid_power,
-                    "charge_rate_now": inverter.charge_rate_now * MINUTE_WATT,
-                    "discharge_rate_now": inverter.discharge_rate_now * MINUTE_WATT,
+                    # Nonzero rates retain their existing scaling; an actual zero must survive the
+                    # prediction rate floor, or a hold reads back as a release.
+                    "charge_rate_now": 0 if inverter.charge_rate_is_zero else inverter.charge_rate_now * MINUTE_WATT,
+                    "discharge_rate_now": 0 if inverter.discharge_rate_is_zero else inverter.discharge_rate_now * MINUTE_WATT,
                     "battery_rate_max_charge": inverter.battery_rate_max_charge * MINUTE_WATT,
                     "battery_rate_max_discharge": inverter.battery_rate_max_discharge * MINUTE_WATT,
                     "in_calibration": inverter.in_calibration,
+                    "learned_charge_ceiling": inverter.balance_ceiling_charge,
+                    "learned_discharge_ceiling": inverter.balance_ceiling_discharge,
                 }
             )
+        learn_rate_ceilings(snapshot, self.now_utc.timestamp())
+        for inverter, entry in zip(self.inverters, snapshot):
+            inverter.balance_ceiling_charge = entry["learned_charge_ceiling"]
+            inverter.balance_ceiling_discharge = entry["learned_discharge_ceiling"]
         return snapshot
 
     def balance_inverter_rates(self, intent):
@@ -266,13 +286,17 @@ class Execute:
         Args:
             intent (dict): inverter id -> rate intent, mutated in place
         """
-        if not self.balance_inverters_enable or self.set_read_only:
-            return
         if len(self.inverters) < 2:
             return
-        balance_inverters(
+        if not self.balance_inverters_enable or self.set_read_only:
+            # Nothing is held by balancing now; a later enable must not report releases for holds made before
+            self.balance_held_previous = {}
+            self.publish_balance_inverters("read_only" if self.set_read_only else "off")
+            return
+        snapshot = self.build_inverter_snapshot()
+        decisions = balance_inverters(
             intent,
-            self.build_inverter_snapshot(),
+            snapshot,
             self.balance_inverters_charge,
             self.balance_inverters_discharge,
             self.balance_inverters_crosscharge,
@@ -280,6 +304,165 @@ class Execute:
             self.balance_inverters_threshold_discharge,
             log_to=self.log,
         )
+        self.record_balance_decisions(snapshot, decisions)
+
+    def record_balance_decisions(self, snapshot, decisions):
+        """
+        Turn one balancing pass into hold, release and ceiling events, and publish the balance sensor.
+
+        A hold is an inverter/direction balancing holds this pass that it did not hold the pass before, and a
+        release the other way round - so the 60s re-application of a hold that is still wanted is not counted
+        again. A ceiling event is a learned rate ceiling present now that was not the pass before, so a ceiling
+        relearned after it expired counts again. Each event is counted into its hour's bucket of
+        balance_counts, which give the 24-hour totals, and the ten most recent are kept to show.
+
+        Args:
+            snapshot (list): the readings balancing was given, after learn_rate_ceilings()
+            decisions (dict): what balance_inverters() returned
+        """
+        now = self.now_utc.timestamp()
+        stamp = self.now_utc.isoformat()
+        new_events = []
+        held_now = {id: {direction: reason for direction, reason in holds.items() if reason} for id, holds in decisions["holds"].items()}
+        held_now = {id: holds for id, holds in held_now.items() if holds}
+        previous = self.balance_held_previous
+        for id, holds in held_now.items():
+            for direction, reason in holds.items():
+                if direction not in previous.get(id, {}):
+                    new_events.append([now, stamp, "hold", id, direction, reason])
+        for id, holds in previous.items():
+            for direction, reason in holds.items():
+                if direction not in held_now.get(id, {}):
+                    new_events.append([now, stamp, "release", id, direction, reason])
+        ceilings_now = []
+        for id, entry in enumerate(snapshot):
+            for direction in ("charge", "discharge"):
+                learned = entry.get("learned_" + direction + "_ceiling")
+                if learned is None:
+                    continue
+                key = "{}:{}".format(id, direction)
+                ceilings_now.append(key)
+                if key not in self.balance_ceilings_previous:
+                    new_events.append([now, stamp, "ceiling", id, direction, int(round(learned[0]))])
+        self.balance_ceilings_previous = ceilings_now
+        self.balance_held_previous = held_now
+        self.balance_last_decisions = decisions
+        hour = int(now // 3600 * 3600)
+        bucket = self.balance_counts.setdefault(hour, [0, 0, 0, 0])
+        for event in new_events:
+            action, reason = event[2], event[5]
+            bucket[BALANCE_COUNT_INDEX[action]] += 1
+            if action == "hold" and reason == "cross_charge":
+                bucket[BALANCE_COUNT_INDEX["cross_charge"]] += 1
+        self.balance_events = (self.balance_events + new_events)[-BALANCE_EVENTS_KEPT:]
+        self.publish_balance_inverters()
+
+    def restore_balance_history(self, entity):
+        """
+        Read the balance sensor's own history back after a restart, once, before it is first published again.
+
+        The sensor is the durable store, as for the control-failure sensors: its "history" attribute holds the
+        hourly counts behind the 24-hour totals and "events" the most recent events. load_previous_value_from_ha()
+        reads the current state, or the last recorded one when Home Assistant itself has restarted. What is read
+        back is added to anything counted since the start - this process only counts events after it - and
+        anything unreadable is ignored, so the totals restart from what was counted since.
+
+        Args:
+            entity (str): the balance sensor's entity id
+        """
+        self.balance_restored = True
+        history = self.load_previous_value_from_ha(entity, attribute="history")
+        if isinstance(history, dict):
+            for hour_text, counts in history.items():
+                try:
+                    hour = int(float(hour_text))
+                    counts = [int(value) for value in counts]
+                except (TypeError, ValueError):
+                    continue
+                if len(counts) != len(BALANCE_COUNT_INDEX):
+                    continue
+                bucket = self.balance_counts.setdefault(hour, [0] * len(BALANCE_COUNT_INDEX))
+                for index, value in enumerate(counts):
+                    bucket[index] += value
+        events = self.load_previous_value_from_ha(entity, attribute="events")
+        if isinstance(events, list):
+            restored = []
+            for event in events:
+                try:
+                    epoch = datetime.fromisoformat(event["time"]).timestamp()
+                    restored.append([epoch, event["time"], event["action"], event["inverter"], event["direction"], event["detail"]])
+                except (TypeError, ValueError, KeyError, AttributeError):
+                    continue
+            self.balance_events = (restored + self.balance_events)[-BALANCE_EVENTS_KEPT:]
+
+    def publish_balance_inverters(self, status=None):
+        """
+        Publish sensor.<prefix>_balance_inverters: how many inverters balancing is holding now, why, and what it has done.
+
+        The state is the number of inverters with a balancing hold in either direction. Attributes give the
+        status ("off", "read_only", "calibrating", "balanced" or "holding"), the fleet direction, SoC spread and
+        spare PV the last pass judged on, each inverter's holds with their reasons and any learned rate ceiling with
+        its age, counts of holds, releases, cross-chargers caught and ceilings learned over the last 24 hours (since
+        Predbat started, if that is sooner), and the most recent events. Not published for a single inverter.
+
+        Args:
+            status (str): "off" or "read_only" when balancing did not run this pass; otherwise worked out from the
+                last decisions
+        """
+        if not self.inverters or len(self.inverters) < 2:
+            return
+        entity = "sensor." + self.prefix + "_balance_inverters"
+        if not self.balance_restored:
+            self.restore_balance_history(entity)
+        now = self.now_utc.timestamp()
+        # An hour's bucket counts towards the 24-hour totals while any of it is within the last 24 hours
+        self.balance_counts = {hour: counts for hour, counts in self.balance_counts.items() if hour + 3600 > now - 24 * 60 * 60}
+        decisions = self.balance_last_decisions if status is None else None
+        held = self.balance_held_previous if status is None else {}
+        inverters = []
+        for inverter in self.inverters:
+            holds = held.get(inverter.id, {})
+            entry = {"id": inverter.id, "soc_percent": inverter.soc_percent, "charge_hold": holds.get("charge"), "discharge_hold": holds.get("discharge")}
+            for direction, learned in (("charge", inverter.balance_ceiling_charge), ("discharge", inverter.balance_ceiling_discharge)):
+                entry[direction + "_ceiling_w"] = int(round(learned[0])) if learned else None
+                entry[direction + "_ceiling_age_minutes"] = int((now - learned[1]) // 60) if learned else None
+            inverters.append(entry)
+        count = sum(1 for entry in inverters if entry["charge_hold"] or entry["discharge_hold"])
+        if status is None:
+            status = "calibrating" if decisions and decisions["status"] == "calibrating" else ("holding" if count else "balanced")
+        totals = [sum(counts[index] for counts in self.balance_counts.values()) for index in range(len(BALANCE_COUNT_INDEX))]
+        holds_24h = totals[BALANCE_COUNT_INDEX["hold"]]
+        releases_24h = totals[BALANCE_COUNT_INDEX["release"]]
+        cross_24h = totals[BALANCE_COUNT_INDEX["cross_charge"]]
+        ceilings_24h = totals[BALANCE_COUNT_INDEX["ceiling"]]
+        self.dashboard_item(
+            entity,
+            state=count,
+            attributes={
+                "friendly_name": "Balance inverters - inverters held",
+                "icon": "mdi:scale-balance",
+                "state_class": "measurement",
+                "unit_of_measurement": "inverters",
+                "status": status,
+                "fleet_direction": decisions["direction"] if decisions else None,
+                "spread_percent": dp2(decisions["spread_percent"]) if decisions and decisions["spread_percent"] is not None else None,
+                "spare_pv_w": dp0(decisions["spare_pv_w"]) if decisions and decisions["spare_pv_w"] is not None else None,
+                "inverters": inverters,
+                "holds_24h": holds_24h,
+                "releases_24h": releases_24h,
+                "cross_charges_caught_24h": cross_24h,
+                "ceilings_learned_24h": ceilings_24h,
+                "events": [{"time": event[1], "action": event[2], "inverter": event[3], "direction": event[4], "detail": event[5]} for event in self.balance_events],
+                # The hourly counts behind the totals, [holds, releases, cross-chargers caught, ceilings learned] by
+                # hour start - read back after a restart, and small enough for the recorder however busy balancing is
+                "history": {str(hour): counts for hour, counts in sorted(self.balance_counts.items())},
+            },
+        )
+        m = metrics()
+        m.balance_held.set(count)
+        m.balance_holds_24h.set(holds_24h)
+        m.balance_cross_charges_24h.set(cross_24h)
+        m.balance_ceilings_learned_24h.set(ceilings_24h)
 
     def allocate_fleet_export_rates(self):
         """
@@ -451,12 +634,12 @@ class Execute:
         charge_w = getattr(inverter, "requested_charge_w", None)
         discharge_w = getattr(inverter, "requested_discharge_w", None)
         if charge_w is not None:
-            curve_w = MINUTE_WATT * get_charge_rate_curve(inverter.soc_kw, charge_w / MINUTE_WATT, inverter.soc_max, inverter.battery_rate_max_charge, self.battery_charge_power_curve, 0, inverter.battery_temperature, self.battery_temperature_charge_curve)
+            charge_curve = rate_grid_curve(self.rate_grids()[0], inverter.battery_temperature, rated=inverter.battery_rate_max_charge)
+            curve_w = MINUTE_WATT * get_charge_rate_curve(inverter.soc_kw, charge_w / MINUTE_WATT, inverter.soc_max, inverter.battery_rate_max_charge, charge_curve, 0)
             charge_w = int(round(min(charge_w, curve_w)))
         if discharge_w is not None:
-            curve_w = MINUTE_WATT * get_discharge_rate_curve(
-                inverter.soc_kw, discharge_w / MINUTE_WATT, inverter.soc_max, inverter.battery_rate_max_discharge, self.battery_discharge_power_curve, 0, inverter.battery_temperature, self.battery_temperature_discharge_curve
-            )
+            discharge_curve = rate_grid_curve(self.rate_grids()[1], inverter.battery_temperature, rated=inverter.battery_rate_max_discharge)
+            curve_w = MINUTE_WATT * get_discharge_rate_curve(inverter.soc_kw, discharge_w / MINUTE_WATT, inverter.soc_max, inverter.battery_rate_max_discharge, discharge_curve, 0)
             limit_w = min(discharge_w, curve_w)
             # inverter_limit / export_limit are kW-per-minute like the rates; 0 means not set
             if self.inverter_hybrid and inverter.inverter_limit:
@@ -694,15 +877,13 @@ class Execute:
                             inv_target_soc_percent * inverter.soc_max / 100.0,
                             inverter.battery_rate_max_charge,
                             inverter.soc_max,
-                            self.battery_charge_power_curve,
+                            rate_grid_curve(self.rate_grids()[0], inverter.battery_temperature, rated=inverter.battery_rate_max_charge),
                             self.set_charge_low_power,
                             self.charge_low_power_margin,
                             self.battery_rate_min,
                             self.battery_rate_max_scaling,
                             self.battery_loss,
                             self.log,
-                            inverter.battery_temperature,
-                            self.battery_temperature_charge_curve,
                             current_charge_rate=current_charge_rate / MINUTE_WATT,
                             pv_window_kwh=pv_window_kwh,
                             low_power_pv_threshold_w=self.low_power_pv_threshold_w,
@@ -1566,36 +1747,6 @@ class Execute:
                     return False
             inverter.update_status(self.minutes_now, quiet=quick)
 
-            if id == 0 and (not self.computed_charge_curve or self.battery_charge_power_curve_auto) and not self.battery_charge_power_curve:
-                curve = inverter.find_charge_curve(discharge=False)
-                if curve and (self.battery_charge_power_curve_auto or not self.computed_charge_curve):
-                    self.log("Saved computed battery charge power curve")
-                    self.battery_charge_power_curve = curve
-                    self.computed_charge_curve = True
-                else:
-                    if self.battery_charge_power_curve_default and not self.battery_charge_power_curve:
-                        self.battery_charge_power_curve = self.battery_charge_power_curve_default
-                        self.computed_charge_curve = True
-                        self.log("Using default battery charge power curve")
-                    elif not self.battery_charge_power_curve_auto:
-                        # Stop retrying every cycle when not in auto mode and no curve found
-                        self.computed_charge_curve = True
-
-            if id == 0 and (not self.computed_discharge_curve or self.battery_discharge_power_curve_auto) and not self.battery_discharge_power_curve:
-                curve = inverter.find_charge_curve(discharge=True)
-                if curve and (self.battery_discharge_power_curve_auto or not self.computed_discharge_curve):
-                    self.log("Saved computed battery discharge power curve")
-                    self.battery_discharge_power_curve = curve
-                    self.computed_discharge_curve = True
-                else:
-                    if self.battery_discharge_power_curve_default and not self.battery_discharge_power_curve:
-                        self.battery_discharge_power_curve = self.battery_discharge_power_curve_default
-                        self.computed_discharge_curve = True
-                        self.log("Using default battery discharge power curve")
-                    elif not self.battery_discharge_power_curve_auto:
-                        # Stop retrying every cycle when not in auto mode and no curve found
-                        self.computed_discharge_curve = True
-
             # As the inverters will run in lockstep, we will initially look at the programming of the first enabled one for the current window setting
             if not found_first:
                 found_first = True
@@ -1715,6 +1866,14 @@ class Execute:
                     100 - int(self.inverter_loss * 100),
                 )
             )
+
+        # The rate grids read the whole fleet's history (the plan models it as one battery), so they are updated once every
+        # inverter exists and is refreshed - on a fresh start the others are only created after inverter 0 - and after the
+        # totals above, which size the manual grid. With battery_rate_grid_auto off they only gather evidence.
+        if self.inverters:
+            self.battery_rate_grid_update(self.inverters[0], False)
+            self.battery_rate_grid_update(self.inverters[0], True)
+            self.publish_battery_rate_grid_sensors()
 
         # Work out current charge limits and publish charge limit base
         self.charge_limit = [self.current_charge_limit * self.soc_max / 100.0 for i in range(len(self.charge_window))]

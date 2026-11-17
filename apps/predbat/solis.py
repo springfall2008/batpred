@@ -313,6 +313,83 @@ def time_in_window(current_time, start_time, end_time):
     return current_time >= start_time or current_time <= end_time
 
 
+MINUTES_PER_DAY = 24 * 60
+
+
+def minutes_after(later_time, earlier_time):
+    """Minutes from one "HH:MM" time of day to the next occurrence of another, counting across midnight.
+
+    Args:
+        later_time: The time counted to, as "HH:MM"
+        earlier_time: The time counted from, as "HH:MM"
+
+    Returns: Minutes in 0 to a day less a minute, or None when either time cannot be read
+    """
+    try:
+        later_hour, later_minute = (int(part) for part in later_time.split(":")[:2])
+        earlier_hour, earlier_minute = (int(part) for part in earlier_time.split(":")[:2])
+    except (AttributeError, ValueError):
+        return None
+    return ((later_hour * 60 + later_minute) - (earlier_hour * 60 + earlier_minute)) % MINUTES_PER_DAY
+
+
+def slot_window_wait(current_time, start_time, end_time):
+    """How long until a slot window needs its slot, for choosing between a slot's charge and discharge window.
+
+    A running window needs it now. Its end minute counts as over, although time_in_window() still counts it
+    inside, so that a window starting on that minute takes the slot over at the hand-over.
+
+    Args:
+        current_time: Time now, as "HH:MM"
+        start_time: Window start, as "HH:MM"
+        end_time: Window end, as "HH:MM"
+
+    Returns: Minutes until the window starts, counting across midnight; 0 while it is running, and a full day
+        for a window that is not configured or cannot be read
+    """
+    if start_time == end_time:
+        return MINUTES_PER_DAY
+    if current_time != end_time and time_in_window(current_time, start_time, end_time):
+        return 0
+    wait = minutes_after(start_time, current_time)
+    return MINUTES_PER_DAY if wait is None else wait
+
+
+def slot_direction_to_defer(current_time, slot_data):
+    """Which of a TOU V2 slot's two directions to hold back when Predbat has asked for both.
+
+    A TOU V2 inverter keeps only one of a slot's charge and discharge enables on: writing one turns the other
+    off (issue #6210). Predbat arms its next window up to set_window_minutes before it starts, so slot 1 can be
+    asked for a charge and an export at once. The slot goes to the window that is running, or else to the one
+    that starts first. When both are running the one that started later wins; the charge wins a tie.
+
+    Both running is not a state the plan asks for - it gives each slot of time a single action - and this branch
+    relies on that rather than checking it. It is only ever seen part-way through one execute: execute.py sets
+    each inverter's charge window before its export, so a charge the plan moves to start now is armed moments
+    before the same execute withdraws the export it replaces, and a 60s write tick can land in between. The
+    later start is that new window, and handing it the slot cuts off only a window about to be withdrawn. (An
+    export moved to now never meets a running charge: the charge is withdrawn first.) Should both ever be
+    asked for in earnest, the earlier window would be cut off, as before this check existed.
+
+    Args:
+        current_time: Time now, as "HH:MM"
+        slot_data: One slot of charge_discharge_time_windows
+
+    Returns: "charge" or "discharge", the direction to leave unwritten, or None when only one is enabled
+    """
+    if not (slot_data.get("charge_enable", 0) and slot_data.get("discharge_enable", 0)):
+        return None
+    charge_start = slot_data.get("charge_start_time", "00:00")
+    discharge_start = slot_data.get("discharge_start_time", "00:00")
+    charge_wait = slot_window_wait(current_time, charge_start, slot_data.get("charge_end_time", "00:00"))
+    discharge_wait = slot_window_wait(current_time, discharge_start, slot_data.get("discharge_end_time", "00:00"))
+    if charge_wait == 0 and discharge_wait == 0:
+        # Both running: the one running for less time started later
+        charge_wait = minutes_after(current_time, charge_start) or 0
+        discharge_wait = minutes_after(current_time, discharge_start) or 0
+    return "discharge" if charge_wait <= discharge_wait else "charge"
+
+
 def export_power_cid_to_watts(value):
     """Convert a max export power register (CID 499) read to watts, or None when no limit is configured.
 
@@ -601,6 +678,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
         self.slot_probe_failures = {}  # {inverter_sn: consecutive probes that learned nothing}
         self.slot_probe_retry_at = {}  # {inverter_sn: datetime} not before which a failed probe is tried again
         self.mode_asserted_for = {}  # Inverter -> the window whose start already had the storage mode asserted
+        self.slot_direction_deferred = {}  # {(inverter_sn, slot): (direction, start, end)} last logged as held back, the slot's other direction having it (issue #6210)
         self.tou_v2_mode_saved = None  # {inverter_sn: {"value": CID 6798 value, "read_at": ISO time}} last read by any run, loaded from storage on first use
         self.time_windows_reload_pending = set()  # Inverters whose TOU mode changed but whose slot registers are not yet decoded in the new layout
 
@@ -1291,6 +1369,38 @@ class SolisAPI(ComponentBase, OAuthMixin):
             slot_data.update(restored)
         self.log(f"Warn: Solis API: {direction} slot {slot} {kind} was not accepted by {inverter_sn}, showing the inverter's {inverter_value} so Predbat writes it again")
 
+    def defer_slot_direction(self, inverter_sn, slot, slot_data, current_time):
+        """The direction of a TOU V2 slot to leave unwritten this cycle, logged when that changes.
+
+        See slot_direction_to_defer(). Logged once per change of direction or of the held-back window's times,
+        rather than every cycle, as the write runs each minute. Nothing here decides the next cycle: the held-back
+        window is written as the schedule holds it whenever it takes the slot, so a window moved while held back
+        goes out at its new times, and a restart (which decodes the schedule from the registers) holds it back again
+        once Predbat re-arms it.
+
+        Args:
+            inverter_sn: Inverter serial number
+            slot: Slot number, 1-6
+            slot_data: That slot of the schedule being written
+            current_time: Time now, as "HH:MM"
+
+        Returns: "charge", "discharge" or None
+        """
+        deferred = slot_direction_to_defer(current_time, slot_data)
+        key = (inverter_sn, slot)
+        if not deferred:
+            self.slot_direction_deferred.pop(key, None)
+            return None
+        held = (deferred, slot_data.get(f"{deferred}_start_time"), slot_data.get(f"{deferred}_end_time"))
+        if held != self.slot_direction_deferred.get(key):
+            other = "discharge" if deferred == "charge" else "charge"
+            self.log(
+                f"Solis API: Holding back {deferred} slot {slot} ({held[1]}-{held[2]}) on {inverter_sn} until the {other} window "
+                f"({slot_data.get(f'{other}_start_time')}-{slot_data.get(f'{other}_end_time')}) is over, as TOU V2 keeps only one of a slot's charge and discharge enabled"
+            )
+            self.slot_direction_deferred[key] = held
+        return deferred
+
     def is_holding_in_charge_slot(self, inverter_sn, slot_data):
         """True when slot_data is a charge slot open now with the battery already at its target SOC.
 
@@ -1823,12 +1933,17 @@ class SolisAPI(ComponentBase, OAuthMixin):
                 # Pass 2: Write active slot settings (enable, time, SOC, current).
                 # By this point all disabled slots should have been cleared on the inverter,
                 # so there is no risk of a time-overlap rejection from the API.
+                # A slot asked for both directions gives it to one and leaves the other unwritten (issue #6210),
+                # here only: the schedule Predbat sees keeps both, so it does not re-arm the one held back.
+                current_time = self.now_utc_exact.strftime("%H:%M")  # Local time, as active_window_key() uses
                 for slot in slots_to_check:
                     slot_data = time_windows.get(slot)
                     if not slot_data:
                         continue
 
-                    if slot_data.get("charge_enable", 0):
+                    deferred = self.defer_slot_direction(inverter_sn, slot, slot_data, current_time)
+
+                    if slot_data.get("charge_enable", 0) and deferred != "charge":
                         # Check and write charge enable if changed
                         enable_cid = SOLIS_CID_CHARGE_ENABLE_BASE + (slot - 1)
                         cached_enable = self.cached_values.get(inverter_sn, {}).get(enable_cid)
@@ -1867,7 +1982,7 @@ class SolisAPI(ComponentBase, OAuthMixin):
                                 result = await self.read_and_write_cid(inverter_sn, current_cid, new_current, field_description=f"charge slot {slot} current")
                                 success &= result
 
-                    if slot_data.get("discharge_enable", 0):
+                    if slot_data.get("discharge_enable", 0) and deferred != "discharge":
                         # Check and write discharge enable if changed
                         enable_cid = SOLIS_CID_DISCHARGE_ENABLE_BASE + (slot - 1)
                         cached_enable = self.cached_values.get(inverter_sn, {}).get(enable_cid)

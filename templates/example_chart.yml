@@ -881,7 +881,7 @@ series:
       Object.entries(entity.attributes.results)) { res.push([new
       Date(key).getTime(), value]); } return res.sort((a, b) => { return a[0] -
       b[0]  })
-  - entity: sensor.givtcp_battery_stack_1_bms_temperature
+  - entity: sensor.givtcp_battery_stack_1_battery_temperature
     name: Temperature history
     curve: stepline
     stroke_width: 2
