@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Debug the prediction issue"""
+
 import sys
 
 sys.path.insert(0, "../apps/predbat")

@@ -13,6 +13,7 @@ clip_export_slots and clip_charge_slots set the percentage shown on the plan and
 are a no-op in the expected case but move the metric through the PV10 branch, so calculate_plan keeps a
 snapshot of the plan taken before clipping and compares on that instead - see plan_scoring_pair().
 """
+
 from tests.test_infra import reset_inverter
 from tests.test_random_scenarios import load_scenarios, run_scenario
 

@@ -161,7 +161,6 @@ def test_annual_bootstrap(my_predbat):
     my_predbat.soc_kw = 3.3
     my_predbat.manual_charge_times = [1, 2, 3]
     my_predbat.manual_export_times = [4]
-    my_predbat.manual_all_times = [5]
     my_predbat.cost_today_sofar = 123.0
     my_predbat.import_today_now = 4.0
     my_predbat.export_today_now = 5.0
@@ -334,7 +333,7 @@ def test_annual_bootstrap(my_predbat):
             print("  ERROR: create_headless_predbat left {} as {}, expected {} (the headless apps.yaml has no 'mode' key, so fetch_config_options() defaults to Monitor mode, which sets all four False)".format(name, actual, expected))
             failed = True
 
-    print("Test: create_headless_predbat restores PREDBAT_APPS_FILE afterwards, even if it was previously unset")
+    print("Test: create_headless_predbat never touches PREDBAT_APPS_FILE, whether it was set or unset beforehand")
     saved_env = os.environ.get("PREDBAT_APPS_FILE")
     try:
         os.environ["PREDBAT_APPS_FILE"] = "/tmp/should-not-leak-annual-bootstrap-test.yaml"

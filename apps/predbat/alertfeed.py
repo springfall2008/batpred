@@ -271,7 +271,7 @@ class AlertFeed(ComponentBase):
         """
         try:
             timeout = aiohttp.ClientTimeout(total=60)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url) as response:
                     status_code = response.status
                     if status_code not in [200, 201]:

@@ -57,6 +57,8 @@ def _parallel_pair(s=None):
     s.device_list = [MASTER, SLAVE]
     s.device_roles = {MASTER: {"equip_mode": "M1", "plant": str(PLANT)}, SLAVE: {"equip_mode": "S2", "plant": str(PLANT)}}
     # 18 Oct ~10:00: the master charging from its own PV; the slave's battery block is garbage.
+    # grid_power is the site-wide CT reading (GH#6068), so both units report the same
+    # value - the group must publish 6.0, not the 12.0 summing would give.
     s.device_values[MASTER] = {
         "soc": 80,
         "battery_power": -1220.0,
@@ -78,7 +80,7 @@ def _parallel_pair(s=None):
         "battery_power": 6007.0,
         "battery_voltage": 54.0,
         "temperature": 0.0,
-        "grid_power": -2.0,
+        "grid_power": 6.0,
         "load_power": 305.0,
         "pv_power": 504.0,
         "capacity": 400.0,
@@ -263,11 +265,11 @@ def test_parallel_filter_warns_when_the_list_has_no_roles():
 
 
 def test_parallel_group_values():
-    """Grid, PV and load are summed; SoC and temperature come from the master; battery power from the BMS."""
+    """PV and load are summed; grid is the master's site-wide CT reading; SoC and temperature come from the master; battery power from the BMS."""
     failed = False
     s = _parallel_pair()
     values = s.group_values(MASTER)
-    expected = {"soc": 80, "battery_voltage": 54.1, "temperature": 29.0, "grid_power": 4.0, "load_power": 611.0, "pv_power": 2066.0, "battery_power": -1244.0}
+    expected = {"soc": 80, "battery_voltage": 54.1, "temperature": 29.0, "grid_power": 6.0, "load_power": 611.0, "pv_power": 2066.0, "battery_power": -1244.0}
     for leaf, want in expected.items():
         if values.get(leaf) != want:
             print(f"ERROR: group {leaf} {values.get(leaf)!r}, expected {want!r}")
@@ -278,6 +280,98 @@ def test_parallel_group_values():
     s.device_values["INV1"] = {"battery_power": -500.0, "bmsCurrent": 99.0, "battery_voltage": 50.0}
     if s.group_values("INV1") != s.device_values["INV1"]:
         print(f"ERROR: a standalone inverter's values must be unchanged, got {s.group_values('INV1')}")
+        failed = True
+    return failed
+
+
+def test_parallel_group_grid_power_sums_pac_fallback_shares():
+    """GH#6068 follow-up (triage-bot review 5828306042): a pac-only parallel pair sums its shares.
+
+    The live pair's own transport serves grid payloads with no limiterTotalPower on
+    either unit, so both fall back to pac: master pac -6 W exports 6.0 W, slave pac
+    +2 W imports 2.0 W. The group's grid_power must be their sum, 4.0 W - taking
+    only the master's 6.0 W under-reads the site by the slave's share, the exact
+    regression the review's inline finding (comment 4514604393) describes. On main
+    the summed pacs matched the supplier meter; the CT case below is the one that
+    must stay master-only.
+    """
+    failed = False
+    s = _parallel_pair()
+    fake_get, _fake_post = _pair_transport([])
+    with patch.object(s, "_get", side_effect=fake_get):
+        run_async_local(s.fetch_device_data(MASTER))
+        run_async_local(s.fetch_device_data(SLAVE))
+    if s.device_values[MASTER].get("grid_power") != 6.0:
+        print(f"ERROR: the master's pac fallback should read 6.0 W, got {s.device_values[MASTER].get('grid_power')}")
+        failed = True
+    if s.device_values[SLAVE].get("grid_power") != -2.0:
+        print(f"ERROR: the slave's pac fallback should read -2.0 W, got {s.device_values[SLAVE].get('grid_power')}")
+        failed = True
+    if getattr(s, "grid_power_source", {}) != {MASTER: "pac", SLAVE: "pac"}:
+        print(f"ERROR: both units should record a pac grid_power source, got {getattr(s, 'grid_power_source', {})}")
+        failed = True
+    if s.group_values(MASTER).get("grid_power") != 4.0:
+        print(f"ERROR: a pac-only group's grid_power should be the summed shares 4.0 W, got {s.group_values(MASTER).get('grid_power')}")
+        failed = True
+    return failed
+
+
+def test_parallel_group_grid_power_uses_master_ct_reading():
+    """GH#6068 follow-up: when both units report the site-wide CT, the group takes the master's reading once.
+
+    Both grid payloads carry the same limiterTotalPower -1805 W (the site flow) while
+    their pac shares differ (-3389 W master, -1200 W slave). Summing would publish
+    3610 W; the group must publish 1805.0 W. Guards the pac-sum fix against
+    over-correcting into always summing.
+    """
+    failed = False
+    s = _parallel_pair()
+    fake_get_base, _fake_post = _pair_transport([])
+
+    async def fake_get_ct(endpoint_key, sn=None, params=None):
+        """Serve the pair's other endpoints as live, but with a CT on both grid payloads."""
+        if endpoint_key == "grid":
+            return {"pac": -3389, "limiterTotalPower": -1805, "etodayFrom": 22.8, "etodayTo": 1.4} if sn == MASTER else {"pac": -1200, "limiterTotalPower": -1805, "etodayFrom": 22.8, "etodayTo": 1.4}
+        return await fake_get_base(endpoint_key, sn=sn, params=params)
+
+    with patch.object(s, "_get", side_effect=fake_get_ct):
+        run_async_local(s.fetch_device_data(MASTER))
+        run_async_local(s.fetch_device_data(SLAVE))
+    if getattr(s, "grid_power_source", {}) != {MASTER: "ct", SLAVE: "ct"}:
+        print(f"ERROR: both units should record a CT grid_power source, got {getattr(s, 'grid_power_source', {})}")
+        failed = True
+    if s.group_values(MASTER).get("grid_power") != 1805.0:
+        print(f"ERROR: a CT group's grid_power should be the master's site-wide reading 1805.0 W, got {s.group_values(MASTER).get('grid_power')}")
+        failed = True
+    return failed
+
+
+def test_parallel_group_grid_power_mixed_ct_and_pac_prefers_ct():
+    """GH#6068 follow-up: a master CT reading already is the site flow, so it wins over a slave's pac share.
+
+    The master's grid payload carries limiterTotalPower -1805 W; the slave's payload
+    has no CT field, so it falls back to its pac share (+500 W import, -500.0 W
+    published). The group must publish the master's 1805.0 W, not 1805 + (-500) =
+    1305 W: adding a per-unit share to a site-wide reading double-counts it.
+    """
+    failed = False
+    s = _parallel_pair()
+    fake_get_base, _fake_post = _pair_transport([])
+
+    async def fake_get_mixed(endpoint_key, sn=None, params=None):
+        """Serve the pair's other endpoints as live, with a CT on the master only."""
+        if endpoint_key == "grid":
+            return {"pac": -3389, "limiterTotalPower": -1805, "etodayFrom": 22.8, "etodayTo": 1.4} if sn == MASTER else {"pac": 500, "etodayFrom": 22.8, "etodayTo": 1.4}
+        return await fake_get_base(endpoint_key, sn=sn, params=params)
+
+    with patch.object(s, "_get", side_effect=fake_get_mixed):
+        run_async_local(s.fetch_device_data(MASTER))
+        run_async_local(s.fetch_device_data(SLAVE))
+    if getattr(s, "grid_power_source", {}) != {MASTER: "ct", SLAVE: "pac"}:
+        print(f"ERROR: the master should record a CT source and the slave a pac source, got {getattr(s, 'grid_power_source', {})}")
+        failed = True
+    if s.group_values(MASTER).get("grid_power") != 1805.0:
+        print(f"ERROR: a mixed group's grid_power should be the master's CT reading 1805.0 W, got {s.group_values(MASTER).get('grid_power')}")
         failed = True
     return failed
 
@@ -436,7 +530,7 @@ def test_parallel_automatic_config_registers_one_inverter():
         if isinstance(value, list) and any(SLAVE in str(item) for item in value):
             print(f"ERROR: {setting} is bound to the slave: {value}")
             failed = True
-    for setting in ("soc_max", "battery_rate_max", "inverter_limit", "export_limit", "import_today", "export_today", "battery_charge_today", "battery_discharge_today", "schedule_write_button"):
+    for setting in ("soc_max_fallback", "battery_rate_max", "inverter_limit", "export_limit", "import_today", "export_today", "battery_charge_today", "battery_discharge_today", "schedule_write_button"):
         if setting not in captured:
             print(f"ERROR: {setting} was not bound")
             failed = True
@@ -470,8 +564,8 @@ def test_parallel_publish():
     s = _parallel_pair()
     with _clock(s, LONDON.localize(datetime(2026, 10, 18, 9, 5))):
         run_async_local(s.publish_data())
-    if s.published.get(s._sensor_name(MASTER, "grid_power"), {}).get("state") != 4.0:
-        print(f"ERROR: the master's grid_power should be the group sum, got {s.published.get(s._sensor_name(MASTER, 'grid_power'))}")
+    if s.published.get(s._sensor_name(MASTER, "grid_power"), {}).get("state") != 6.0:
+        print(f"ERROR: the master's grid_power should be the site-wide CT reading, not the group sum, got {s.published.get(s._sensor_name(MASTER, 'grid_power'))}")
         failed = True
     if s.published.get(s._sensor_name(MASTER, "import_today"), {}).get("state") != 42.3:
         print(f"ERROR: the master's import_today should be the group sum, got {s.published.get(s._sensor_name(MASTER, 'import_today'))}")
@@ -714,9 +808,13 @@ def test_parallel_cli_never_writes_to_a_slave():
 
     args = argparse.Namespace(username=None, password=None, region="sunsynk", auth_method="password", serial=None, dump_settings=False, write_test=False, tou_test=True, automatic=False)
     buffer = io.StringIO()
-    with patch("sunsynk._build_sunsynk", return_value=client), patch.object(client, "run", side_effect=_async_true), patch("sunsynk._tou_round_trip", side_effect=fake_round_trip), _clock(
-        client, LONDON.localize(datetime(2026, 10, 18, 9, 5))
-    ), redirect_stdout(buffer):
+    with (
+        patch("sunsynk._build_sunsynk", return_value=client),
+        patch.object(client, "run", side_effect=_async_true),
+        patch("sunsynk._tou_round_trip", side_effect=fake_round_trip),
+        _clock(client, LONDON.localize(datetime(2026, 10, 18, 9, 5))),
+        redirect_stdout(buffer),
+    ):
         run_async_local(run_cli_once(args))
     output = buffer.getvalue()
     if tested != [MASTER]:
@@ -763,6 +861,9 @@ def run_sunsynk_parallel_tests(my_predbat):
         ("filter_own_battery_slave", test_parallel_filter_leaves_out_a_slave_with_its_own_battery),
         ("filter_no_roles_warns", test_parallel_filter_warns_when_the_list_has_no_roles),
         ("group_values", test_parallel_group_values),
+        ("group_grid_power_sums_pac", test_parallel_group_grid_power_sums_pac_fallback_shares),
+        ("group_grid_power_ct_master", test_parallel_group_grid_power_uses_master_ct_reading),
+        ("group_grid_power_mixed_ct_pac", test_parallel_group_grid_power_mixed_ct_and_pac_prefers_ct),
         ("battery_sign", test_parallel_battery_power_follows_the_bms_sign),
         ("battery_fallback", test_parallel_battery_power_without_a_bms_link_falls_back_to_the_master),
         ("missing_value_withheld", test_parallel_group_value_missing_on_one_unit_is_withheld),

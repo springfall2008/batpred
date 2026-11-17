@@ -13,6 +13,7 @@ The cache is only sound because window geometry is immutable for the life of tha
 optimiser turns windows on and off but never moves a start or end. These tests pin both halves:
 hit_charge_window's own contract, and the invariant that lets its result be reused.
 """
+
 from prediction import Prediction
 from const import EXPORT_MODE_IDLE
 from utils import pack_export_limit

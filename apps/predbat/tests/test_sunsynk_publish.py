@@ -81,6 +81,46 @@ def test_publish_data_emits_telemetry_and_ratings():
     assert not failed, "test_publish_data_emits_telemetry_and_ratings"
 
 
+def test_publish_data_emits_bms_battery_power():
+    """battery_power_bms is -bmsCurrent x bmsVolt, published beside battery_power; absent without a BMS link.
+
+    Values are a real charging poll: the inverter's own current (62.4A) reads 7.3% above the BMS's
+    (58A), which is why the size estimator is given the BMS figure rather than "power".
+    """
+    failed = False
+    s = PublishingSunsynk()
+    s.device_list = ["INV1"]
+    s.device_values["INV1"] = {"soc": 75, "battery_power": -3414, "battery_voltage": 54.7, "bmsCurrent": 58.0, "bmsVolt": 54.07, "bmsSoc": 75.0}
+    run_async_local(s.publish_data())
+    entity = s._sensor_name("INV1", "battery_power_bms")
+    if s.published.get(entity, {}).get("state") != -3136:
+        print(f"ERROR: battery_power_bms expected -3136 (charging), got {s.published.get(entity)}")
+        failed = True
+    if s.published.get(entity, {}).get("attributes", {}).get("unit_of_measurement") != "W":
+        print("ERROR: battery_power_bms published without a W unit")
+        failed = True
+    if s.published.get(s._sensor_name("INV1", "battery_power"), {}).get("state") != -3414:
+        print("ERROR: battery_power must stay the inverter's own reading")
+        failed = True
+
+    discharging = PublishingSunsynk()
+    discharging.device_list = ["INV1"]
+    discharging.device_values["INV1"] = {"soc": 34, "battery_power": 2750, "bmsCurrent": -52.0, "bmsVolt": 48.61, "bmsSoc": 34.0}
+    run_async_local(discharging.publish_data())
+    if discharging.published.get(discharging._sensor_name("INV1", "battery_power_bms"), {}).get("state") != 2528:
+        print(f"ERROR: discharging battery_power_bms expected 2528, got {discharging.published.get(discharging._sensor_name('INV1', 'battery_power_bms'))}")
+        failed = True
+
+    no_link = PublishingSunsynk()
+    no_link.device_list = ["INV1"]
+    no_link.device_values["INV1"] = {"soc": 50, "battery_power": -1500, "bmsCurrent": 0.0, "bmsVolt": 0.0, "bmsSoc": 0.0}
+    run_async_local(no_link.publish_data())
+    if no_link._sensor_name("INV1", "battery_power_bms") in no_link.published:
+        print("ERROR: battery_power_bms must not be published without a BMS link")
+        failed = True
+    assert not failed, "test_publish_data_emits_bms_battery_power"
+
+
 def test_publish_data_omits_underivable_ratings():
     """A rating that cannot be derived is not published as a zero."""
     failed = False
@@ -279,6 +319,7 @@ def run_sunsynk_publish_tests(my_predbat):
     for name, fn in [
         ("entity_names", test_entity_names_are_namespaced),
         ("publish_telemetry", test_publish_data_emits_telemetry_and_ratings),
+        ("publish_bms_power", test_publish_data_emits_bms_battery_power),
         ("publish_omits_underivable", test_publish_data_omits_underivable_ratings),
         ("schedule_round_trip", test_schedule_entities_round_trip),
         ("reserve_not_clamped", test_reserve_entity_is_not_clamped_to_the_floor),

@@ -20,10 +20,11 @@ cancelled slot), io_confirmed_credit_update() marks the run with a small score-o
 largest for the current half hour and tapering after it, so a tie goes to the energy already in hand. Cost
 is never touched, so a genuinely cheaper slot still wins.
 """
+
 import copy
 from datetime import timedelta
 
-from const import PREDBAT_MAX_CARS
+from const import PREDBAT_MAX_CARS, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, RUN_EVERY
 from plan import IO_CONFIRMED_CREDIT
 from prediction import Prediction
 from tests.test_infra import reset_inverter
@@ -261,10 +262,12 @@ def run_planner_tests(my_predbat):
     limits = _scenario(my_predbat, "boosted cheaper firm soc=6.0", 6.0, firm_rate=6.5)
     failed |= _check("p4 cheaper later slot still wins", all(limit <= 6.0 for limit in limits[:IOG_SLOTS]) and any(limit > 6.0 for limit in limits[IOG_SLOTS:]), "limits {}".format(limits))
 
-    # Nearly full with losses: topping up now and holding it costs about 0.2p more than not, more than the
-    # credit is worth, so the plan holds - the credit settles ties, it does not override a real cost
+    # Nearly full with losses: once the run is confirmed PV10 no longer prices the house's evening import at the
+    # worst-case rate, so letting the house import at the dispatch rate beats cycling the battery through its
+    # losses, and the plan fills the battery and holds it through the run. With the run assumed gone in PV10 it
+    # used to discharge through the evening and refill after 23:30.
     limits = _scenario(my_predbat, "boosted lossy soc=9.0", 9.0, losses=LOSSY)
-    failed |= _check("p4 credit does not outweigh the cost of losses", limits[0] <= 9.0, "limit {}".format(limits[0]))
+    failed |= _check("p4 with losses a confirmed run holds the battery full rather than cycling it", all(limit >= 10.0 for limit in limits[:IOG_SLOTS]), "limits {}".format(limits))
 
     # A full battery with no load to draw it down has nothing to take, so the credit changes nothing
     limits_off = _scenario(my_predbat, "no boost full", 10.0, boosted=False, load_kw=0.0)
@@ -324,6 +327,69 @@ def run_prediction_tests(my_predbat):
     return failed
 
 
+def run_confirmed_hedge_tests(my_predbat):
+    """
+    The PV10 hedge for a confirmed run. In PV10 a dispatch minute more than 30 minutes ahead is assumed gone and
+    paid at the worst-case rate. Once the car is charging in the run, a dispatch that goes away is seen within one
+    Predbat cycle, so a confirmed minute keeps its dispatch and pays only RUN_EVERY minutes of every 30 at the
+    worst-case rate, on what the house and battery import - the car stops with its dispatch.
+
+    No house load, so the only import is what each plan's charge window takes: 1.5 kWh in its half hour, scaled
+    by charge_scaling10 in PV10.
+    """
+    print("\n**** IOG bird-in-hand confirmed-run hedge ****")
+    failed = False
+    reset_inverter(my_predbat)
+    my_predbat.battery_rate_max_discharge = 3.0 / 60.0
+    my_predbat.discharge_rate_now = 3.0 / 60.0
+    _scenario(my_predbat, "hedge setup", 5.0, load_kw=0.0)
+    windows = [dict(window) for window in my_predbat.charge_window_best]
+    credit = copy.deepcopy(my_predbat.io_confirmed_credit)
+    rate_max = my_predbat.rate_max
+    failed |= _check("h0 the worst-case rate is dearer than the dispatch", rate_max > LOW_RATE, "rate_max {}".format(rate_max))
+    stored10 = 1.5 * my_predbat.charge_scaling10
+
+    def cost(slot, pv_scenario, confirmed, kernel, model_car=False):
+        """The cost of charging slot to full, or of charging nothing for slot None, in pv_scenario."""
+        my_predbat.io_confirmed_credit = credit if confirmed else {}
+        my_predbat.prediction_kernel_enable = kernel
+        if model_car:
+            _dispatch(my_predbat, windows[0]["start"], windows[IOG_SLOTS]["start"])
+        else:
+            my_predbat.num_cars = 0
+            my_predbat.car_charging_slots = [[] for _ in range(PREDBAT_MAX_CARS)]
+        my_predbat.prediction = Prediction(
+            my_predbat,
+            my_predbat.pv_forecast_minute_step,
+            my_predbat.pv_forecast_minute10_step,
+            my_predbat.load_minutes_step,
+            my_predbat.load_minutes_step10,
+            my_predbat.pv_forecast_minute90_step,
+            my_predbat.load_minutes_step90,
+        )
+        limits = [10.0 if n == slot else 0 for n in range(len(windows))]
+        return my_predbat.run_prediction(limits, windows, [], [], pv_scenario, end_record=my_predbat.forecast_minutes)[0]
+
+    for kernel in (False, True):
+        engine = "kernel" if kernel else "python"
+        # A half hour of the run beyond the first 30 minutes
+        confirmed = cost(3, PV_SCENARIO_PV10, True, kernel)
+        unconfirmed = cost(3, PV_SCENARIO_PV10, False, kernel)
+        expected = stored10 * (LOW_RATE + (rate_max - LOW_RATE) * RUN_EVERY / 30)
+        failed |= _check("h1 {} confirmed PV10 pays RUN_EVERY of 30 minutes at the worst-case rate".format(engine), abs(confirmed - expected) < 1e-3, "PV10 {} expected {}".format(confirmed, expected))
+        failed |= _check("h1 {} unconfirmed PV10 still pays the worst-case rate".format(engine), abs(unconfirmed - stored10 * rate_max) < 1e-3, "PV10 {} expected {}".format(unconfirmed, stored10 * rate_max))
+
+        # The current half hour was never assumed gone
+        confirmed = cost(0, PV_SCENARIO_PV10, True, kernel)
+        failed |= _check("h2 {} current half hour pays no premium".format(engine), abs(confirmed - stored10 * LOW_RATE) < 1e-3, "PV10 {} expected {}".format(confirmed, stored10 * LOW_RATE))
+
+        # The car's own import pays no premium: it stops with its dispatch
+        nominal = cost(None, PV_SCENARIO_NOMINAL, True, kernel, model_car=True)
+        confirmed = cost(None, PV_SCENARIO_PV10, True, kernel, model_car=True)
+        failed |= _check("h3 {} the car's import pays no premium".format(engine), abs(confirmed - nominal) < 1e-3, "PV10 {} nominal {}".format(confirmed, nominal))
+    return failed
+
+
 def run_iog_bird_in_hand_tests(my_predbat):
     """
     Tests for the Octopus Intelligent bird-in-hand credit.
@@ -334,6 +400,7 @@ def run_iog_bird_in_hand_tests(my_predbat):
     try:
         failed |= run_credit_map_tests(my_predbat)
         failed |= run_prediction_tests(my_predbat)
+        failed |= run_confirmed_hedge_tests(my_predbat)
         failed |= run_planner_tests(my_predbat)
     finally:
         _restore_state(my_predbat, saved)

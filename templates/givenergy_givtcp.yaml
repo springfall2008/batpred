@@ -198,6 +198,8 @@ pred_bat:
 
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
+  # With givtcp_rest set, Predbat reads this from the inverter (sensor.predbat_givtcp_0_export_limit),
+  # so leave it commented out. A value set here wins over the inverter's own, so only set it to override
   #export_limit:
   #  - 3600
   #  - 3600
@@ -307,6 +309,13 @@ pred_bat:
     - 'latched'
     - 'locked'
     - 'plugged in'
+
+  # car_charging_plugged can be set to a sensor that says only whether the car is plugged in - staying on after
+  # its charge has finished - matched against car_charging_planned_response. Predbat resets the manual car SoC
+  # (input_number.predbat_car_charging_manual_soc_kwh) to 0 when it reads unplugged, and with car_charging_energy
+  # set it tracks the SoC of a car that has no car_charging_soc sensor. One entry per car - e.g. for a myenergi Zappi:
+  #car_charging_plugged:
+  #  - 're:(sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
 
   # car_charging_now can be set to a sensor that shows the car is charging right now, so that
   # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
@@ -493,6 +502,4 @@ pred_bat:
   #  - '{octopus_intelligent_slot}'
   #  - '{octopus_ready_time}'
   #  - '{octopus_charge_limit}'
-  #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
-  #  - '+[car_charging_soc]'
