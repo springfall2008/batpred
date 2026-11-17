@@ -49,6 +49,18 @@ def test_plan_staleness_js(my_predbat):
     if "checkStaleness(currentViewData());" not in renderer_js:
         print("  ERROR: the unchanged-data poll should check the current view's data, not always the plan's")
         failed = True
+    # An older History day carries its own daily refresh_minutes, so the render judges it by its own data as the 5-second poll does;
+    # the render used to skip it while the poll didn't, so the warning came back within seconds of picking a day
+    if "checkStaleness(data);" not in function_source(renderer_js, "function refreshPlan()") or "historyDay ? null : data" in renderer_js:
+        print("  ERROR: refreshPlan should judge every view, an older History day included, by its own data, as the poll does")
+        failed = True
+    if "This History day has not been rebuilt for over " not in check:
+        print("  ERROR: the warning on an older History day should say its daily rebuild has stopped, in hours")
+        failed = True
+    # Worded from the data's own limit, not the view: a day still carrying a per-slot limit (built before an upgrade) said "over 0 hours"
+    if "limitMinutes >= 24 * 60" not in check or "historyDay" in check:
+        print("  ERROR: the stale warning should pick hours or minutes from the data's limit, not from which view is showing")
+        failed = True
     if "checkStaleness(null);" not in function_source(renderer_js, "function refreshPlan()"):
         print("  ERROR: refreshPlan should clear the warning when the current view has no data")
         failed = True

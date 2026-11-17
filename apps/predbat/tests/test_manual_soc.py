@@ -10,6 +10,82 @@
 
 from datetime import datetime, timezone, timedelta
 
+from tests.test_infra import reset_rates, reset_inverter, prime_flat_prediction
+from tests.test_kernel_parity import kernel_available
+
+
+def _keep_metric_for_floor(my_predbat, floor_percent, import_rate, best_soc_keep=0.0, prediction_kernel=False):
+    """Run an hour of prediction from 20% SoC with the given manual_soc floor, best_soc_keep and flat import rate on the chosen engine, and return the keep metric."""
+    reset_inverter(my_predbat)
+    reset_rates(my_predbat, import_rate, 5.0)
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 2.0
+    my_predbat.reserve = 0.0
+    my_predbat.best_soc_keep = best_soc_keep
+    my_predbat.best_soc_keep_weight = 1.0
+    my_predbat.debug_enable = False
+    my_predbat.prediction_kernel_enable = prediction_kernel
+
+    my_predbat.all_active_keep_max = {}
+    if floor_percent is None:
+        my_predbat.all_active_keep = {}
+    else:
+        my_predbat.all_active_keep = {minute: floor_percent for minute in range(my_predbat.minutes_now, my_predbat.minutes_now + 120)}
+
+    prime_flat_prediction(my_predbat)
+    if prediction_kernel and not getattr(my_predbat.prediction, "kernel_handle", 0):
+        raise RuntimeError("expected the C++ prediction kernel but it is not loaded")
+
+    result = my_predbat.run_prediction([], [], [], [], False, end_record=60)
+    return result[8]
+
+
+def _plan_soc_at_free_rate_target(my_predbat, floor_percent):
+    """
+    Plan a free (0p) horizon with a charge window over the next 5.5 hours and a manual_soc floor for
+    the half hour after it, from 10% SoC with no load and a 2p/kWh cycle cost, and return the planned
+    SoC (kWh) when the floor starts. With nothing to buy later, only the floor gives the plan a reason
+    to charge.
+    """
+    reset_inverter(my_predbat)
+    reset_rates(my_predbat, 0.0, 0.0)
+    my_predbat.rate_min_forward = {}
+    my_predbat.calculate_best_charge = True
+    my_predbat.calculate_best_export = False
+    my_predbat.calculate_second_pass = False
+    my_predbat.set_charge_freeze = False
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 1.0
+    my_predbat.reserve = 0.0
+    my_predbat.best_soc_keep = 0.0
+    my_predbat.best_soc_keep_weight = 0.5
+    # 3 kW so the window can fill the battery; reset_inverter's 1 kW cannot in 5.5 hours
+    my_predbat.battery_rate_max_charge = 3.0 / 60.0
+    my_predbat.inverter_limit = 3.0 / 60.0
+    my_predbat.metric_battery_cycle = 2.0
+    my_predbat.debug_enable = False
+    my_predbat.prediction_kernel_enable = False
+
+    my_predbat.all_active_keep_max = {}
+    my_predbat.all_active_keep = {minute: floor_percent for minute in range(my_predbat.minutes_now + 330, my_predbat.minutes_now + 360)} if floor_percent else {}
+
+    prime_flat_prediction(my_predbat)
+
+    end_record = my_predbat.forecast_minutes
+    charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 330, "average": 0.0}]
+    charge_limit_best = [0]
+    metric, _, _, _, _, _, _, _, metric_keep, _, _ = my_predbat.run_prediction(charge_limit_best, charge_window_best, [], [], False, end_record=end_record)
+    my_predbat.charge_limit_best = charge_limit_best
+    my_predbat.charge_window_best = charge_window_best
+    my_predbat.export_window_best = []
+    my_predbat.export_limits_best = []
+    my_predbat.optimise_all_windows(metric, metric_keep)
+    my_predbat.run_prediction(my_predbat.charge_limit_best, my_predbat.charge_window_best, [], [], False, end_record=end_record, save="best")
+    soc_at_target = my_predbat.predict_soc_best.get(330, 0)
+
+    my_predbat.all_active_keep = {}
+    return soc_at_target
+
 
 def run_test_manual_soc(my_predbat):
     """
@@ -153,6 +229,57 @@ def run_test_manual_soc(my_predbat):
         failed = True
     else:
         print("PASS: T6 Manual SOC slot 5:30-6:00 correctly dropped when time moved to 6:00am")
+
+    # Test 7: a manual floor must still cost something to miss when the import rate is free or
+    # negative (#5162). The penalty used to be weighted by the deficit minute's import rate alone,
+    # so inside a 0p window it was exactly 0 and the plan sat at reserve under a 100% target, and
+    # at a negative rate it rewarded being below the target.
+    print("Test 7: A manual floor is penalised at a 0p or negative import rate")
+    my_predbat.manual_select("manual_soc", "off")
+    my_predbat.now_utc = my_predbat.midnight_utc
+    my_predbat.minutes_now = 0
+    my_predbat.alert_active_keep = {}
+    my_predbat.manual_soc_keep = {}
+
+    engines = [False]
+    if kernel_available()[0]:
+        engines.append(True)
+    for prediction_kernel in engines:
+        engine = "C++ kernel" if prediction_kernel else "Python"
+        keep_normal = _keep_metric_for_floor(my_predbat, 50.0, 10.0, prediction_kernel=prediction_kernel)
+        keep_free = _keep_metric_for_floor(my_predbat, 50.0, 0.0, prediction_kernel=prediction_kernel)
+        keep_negative = _keep_metric_for_floor(my_predbat, 50.0, -5.0, prediction_kernel=prediction_kernel)
+        # With no manual/alert floor a plain best_soc_keep (20% SoC below a 50% keep) is unchanged: a free import costs nothing
+        keep_plain_free = _keep_metric_for_floor(my_predbat, None, 0.0, best_soc_keep=5.0, prediction_kernel=prediction_kernel)
+
+        if keep_normal <= 0:
+            print("ERROR: T7 {} Expected a keep penalty below a 50% floor at 10p, got {}".format(engine, keep_normal))
+            failed = True
+        elif abs(keep_free * 10 - keep_normal) > 0.01:
+            print("ERROR: T7 {} Expected the 0p floor penalty ({}) at the 1p minimum, a tenth of the 10p one ({})".format(engine, keep_free, keep_normal))
+            failed = True
+        elif abs(keep_negative - keep_free) > 0.001:
+            print("ERROR: T7 {} Expected the -5p floor penalty ({}) to equal the 0p one ({}), both at the 1p minimum".format(engine, keep_negative, keep_free))
+            failed = True
+        elif keep_plain_free != 0:
+            print("ERROR: T7 {} Expected no penalty below a plain best_soc_keep at 0p with no manual/alert floor, got {}".format(engine, keep_plain_free))
+            failed = True
+        else:
+            print("PASS: T7 {} floor penalised at 10p ({}), 0p ({}) and -5p ({}), plain best_soc_keep unclamped".format(engine, keep_normal, keep_free, keep_negative))
+    my_predbat.prediction_kernel_enable = False
+
+    # Test 8: the plan itself charges to a manual target that falls inside a free window (#5162)
+    print("Test 8: The plan charges to a 100% manual target inside a 0p window")
+    soc_no_target = _plan_soc_at_free_rate_target(my_predbat, None)
+    soc_target = _plan_soc_at_free_rate_target(my_predbat, 100.0)
+    if soc_no_target > 1.5:
+        print("ERROR: T8 Expected no charge without a target (2p cycle cost, nothing to buy later), got {} kWh when the floor starts".format(soc_no_target))
+        failed = True
+    elif soc_target < 9.5:
+        print("ERROR: T8 Expected the plan to reach the 100% target when the floor starts, got {} kWh of 10".format(soc_target))
+        failed = True
+    else:
+        print("PASS: T8 SoC when the floor starts is {} kWh with a 100% target, {} kWh without".format(soc_target, soc_no_target))
 
     # Clean up
     my_predbat.alert_active_keep = {}

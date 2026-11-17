@@ -42,10 +42,22 @@ DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
 # How long a half hour an Octopus Intelligent planned dispatch ran in keeps the dispatch rate after it ends,
 # while waiting for Octopus to list it as a completed dispatch - seen to take 15 to 60 minutes (GH#5520)
 OCTOPUS_DISPATCH_HOLD_MINUTES = 90
+# For this many minutes into the half hour after a held one, a car seen charging is taken for the tail of
+# the charge before it rather than an unlisted smart charge: car_charging_now can lag a car that stopped at the boundary while
+# Octopus still reports the smart charge in progress (GH#5884). One cycle, so a car that really charges on is held
+# at the next one
+OCTOPUS_DISPATCH_TAIL_MINUTES = 5
 # The same hold under the window billing rule (E.ON Next Drive Smart, GH#5521): the supplier bills every half hour a
 # planned dispatch was in force off-peak and never lists the ones the car did not charge in, so the hold is the
 # record - kept for a day, so today's cost and the hours either side of midnight are priced from it
 OCTOPUS_DISPATCH_WINDOW_HOLD_MINUTES = 24 * 60
+# Octopus Intelligent device currentState while it is running a smart charge, and the states in which it dispatches
+# nothing - the car unplugged or out of reach, or smart control turned off - whatever planned dispatches it still lists
+OCTOPUS_STATE_SMART_CONTROL_IN_PROGRESS = "SMART_CONTROL_IN_PROGRESS"
+OCTOPUS_STATES_NOT_DISPATCHING = ("SMART_CONTROL_NOT_AVAILABLE", "SMART_CONTROL_OFF")
+# How long the last known planned dispatches are kept through empty answers while a smart charge is in progress:
+# Octopus answers an empty planned list for a few minutes while it re-plans a running session (seen 2 to 8 minutes)
+OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES = 10
 # The settings of intelligent_dispatch_billing in apps.yaml
 DISPATCH_BILLING_CHOICES = ("auto", "octopus", "window")
 
@@ -65,6 +77,19 @@ CLOUD_ARRAY_MARGIN = 1.2
 # the HA integrations). Treated as "unknown", not as a real 9999 kWp array.
 PV_ARRAY_KWP_UNKNOWN = 9999
 RUN_EVERY = 5
+# How far above the reserve (in %) an inverter that has no reserve register stops discharging in Demand
+# (reserve_via_discharge_rate). SoC is only read every RUN_EVERY minutes, so holding exactly at the reserve
+# would let the house load take the battery below it before the next cycle sees it (#5358).
+RESERVE_HOLD_MARGIN_PERCENT = 1
+# Once held, how much further the SoC must rise before the hold is released, so solar that only just
+# covers the load doesn't switch the discharge rate on and off every cycle.
+RESERVE_HOLD_HYSTERESIS_PERCENT = 1
+
+# Lowest rate (in the currency's 1/100 unit per kWh, e.g. p or c) a manual SoC target is penalised at:
+# the import rate below a manual_soc or alert floor, and the export rate above a manual_soc_max
+# ceiling. The keep penalty is weighted by the minute's own rate, so without this a target in a free
+# (0) slot cost nothing to miss and one at a negative rate rewarded missing it (#5162).
+KEEP_TARGET_MIN_RATE = 1.0
 # Forecast scenarios simulated by the planner.
 # PV_SCENARIO_PV10 must remain 1 so it stays interchangeable with the legacy pv10 boolean.
 PV_SCENARIO_NOMINAL = 0
@@ -79,6 +104,9 @@ TIME_FORMAT_DAILY = "%Y-%m-%d"
 # Dispatch source for a charger's own schedule on a tariff with no dispatch rate (e.g. Ohme off Octopus
 # Intelligent): the slots are when the car will charge, but they are billed at the normal tariff rate
 DISPATCH_SOURCE_CHARGER_SCHEDULE = "charger-schedule"
+# Source for a half hour held because the car was charging in a smart charge Octopus had not listed a dispatch for:
+# Octopus starts charging when the car is plugged in, and lists that half hour only once it has completed
+DISPATCH_SOURCE_CHARGING_UNLISTED = "charging-unlisted"
 TIMEOUT = 60 * 5
 CONFIG_REFRESH_PERIOD = 60 * 8
 INVERTER_MAX_RETRY = 10  # Maximum number of retries for inverter commands
@@ -104,15 +132,82 @@ INVERTER_WRITE_DEGRADED_INTERVAL = 300
 INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
 INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
 INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
+BATTERY_SIZE_RETRY_MINUTES = 60  # Gap between retries of a battery size estimate that found nothing today, so an overnight charge is used the same morning
+
+# battery_temperature_charge_curve / battery_temperature_discharge_curve - how a manual temperature curve is looked up
+BATTERY_TEMPERATURE_CURVE_TEMP_MAX = 30  # Warmest degree battery_temperature_*_curve is looked up (and learned) at; a warmer reading uses this degree. Fox fleet BMS limits still rise up to ~25-30 degrees
+BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK = 20  # A positive degree the curve does not set falls back to this entry (then to uncapped), as it did when 20 was the warmest degree looked up
+BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN = 0.95  # A discharge minute whose grid export is at or above this fraction of export_limit was held back by the export limit, not the battery
+# Battery rate grids (battery_rate_grid.py): achievable charge/discharge rate as a fraction of the rated rate, by SoC % and battery temperature
+BATTERY_RATE_GRID_MAX = 1.2  # Highest grid value: some systems run a little above their rated rate, a reading above this is noise
+BATTERY_RATE_GRID_HALF_LIFE_DAYS = 90  # A segment counts half as much every this many days, so last winter still shapes the cold rows
+BATTERY_RATE_GRID_MAX_AGE_DAYS = 365  # Stored segments older than this are dropped
+BATTERY_RATE_GRID_STORE_EXPIRY_DAYS = BATTERY_RATE_GRID_MAX_AGE_DAYS + 30  # The evidence is saved with this expiry, past its retention, so a storage backend's default lifetime (72 h on KeyDB) cannot drop it (#6225)
+BATTERY_RATE_GRID_MIN_CELLS = 20  # A learned grid needs this many measured SoC x temperature cells ...
+BATTERY_RATE_GRID_MIN_DAYS = 3  # ... from at least this many different days, before it replaces the manual curves
+BATTERY_RATE_GRID_RUN_MINUTES = 15  # Evidence comes from runs of at least this many consecutive minutes at the full written rate
+BATTERY_RATE_GRID_EDGE_MINUTES = 5  # Minutes dropped at each end of a run (ramp up and down)
+BATTERY_RATE_GRID_SEGMENT_MINUTES = 5  # The rest of a run is cut into segments of this many minutes, each averaged into one sample
+BATTERY_RATE_GRID_FULL_RATE = 0.95  # A minute is at the full written rate when the rate written is at least this fraction of the maximum
+BATTERY_RATE_GRID_MIN_POWER = 0.02  # Below this fraction of the maximum the battery did not charge/discharge (or the export did not reach the grid): a failure, not a limit
+BATTERY_RATE_GRID_EMPTY_WEIGHT = 1e-3  # Weight of an empty cell's prior in the fit, small enough not to pull on measured cells
+BATTERY_RATE_GRID_MAX_ITER = 300  # Fit iteration cap (the same holdout error as running to convergence on the fleet data)
+BATTERY_RATE_GRID_TOLERANCE = 1e-4  # Fit stops once no cell moves by more than this
+BATTERY_RATE_GRID_TEMP_MIN = -20  # Coldest grid row
+BATTERY_RATE_GRID_TEMP_MAX = 40  # Warmest grid row
+BATTERY_RATE_GRID_UNKNOWN_TEMP = 20  # An exact 0 reading is treated as missing and uses this row of a learned grid
+BATTERY_RATE_GRID_SCAN_MINUTES = 24 * 60  # Gap between history scans for grid evidence
+BATTERY_RATE_GRID_RESAVE_MINUTES = 24 * 60  # The evidence is saved at least this often even when unchanged, so its expiry keeps moving (#6225)
+BATTERY_RATE_GRID_FIRST_SCAN_DAYS = 28  # battery_rate_grid_history_days default: until a scan has succeeded, read this many days of history (or as many as there are)
+BATTERY_RATE_GRID_DAILY_SCAN_DAYS = 2  # battery_rate_grid_scan_days default: later scans read this many - a day since the last plus a day's overlap - widened to cover a longer gap
+BATTERY_RATE_GRID_RETRY_MINUTES = 60  # A scan whose history read failed is tried again after this long, rather than a day later
+BATTERY_RATE_GRID_LOAD_ATTEMPTS = 3  # A store that never reads back is treated as empty (a new install) after this many cycles of failed reads ...
+BATTERY_RATE_GRID_LOAD_WAIT_MINUTES = 10  # ... spanning at least this long, so a storage outage cannot let one scan replace a year of evidence
+PV_CALIBRATION_LOWEST = 0.20  # Lowest calibration factor, day or half-hour slot
+PV_CALIBRATION_HIGHEST = 4.0  # Highest calibration factor, day or half-hour slot
+PV_CALIBRATION_HISTORY_DAYS = 28  # pv_calibration_history_days default: days of evidence kept, and how far the first scan reads back
+PV_CALIBRATION_SCAN_DAYS = 2  # pv_calibration_scan_days default: days a daily scan reads, widened to cover a longer gap
+PV_CALIBRATION_HALF_LIFE_DAYS = 3.5  # pv_calibration_half_life default: a day's evidence counts half as much every this many days
+PV_CALIBRATION_SHRINK = 0.20  # pv_calibration_shrink default: prior strength for the day factor - smaller leaves an already calibrated forecast alone more
+PV_CALIBRATION_SHRINK_SLOT = 0.20  # pv_calibration_shrink_slot default: the same for the half-hour shape
+PV_CALIBRATION_MIN_DAYS = 3  # Calibration needs this many valid (not down) days of evidence
+PV_CALIBRATION_BAND_DAYS = 7  # The P10/P90 band and the observed peak come from this many recent days, as before the evidence store
+PV_CALIBRATION_LOG_CLAMP = 1.5  # Per-day log ratios are held within +/- this before their spread is measured, so one wild day cannot dominate
+PV_CALIBRATION_MIN_SLOT_KWH = 0.02  # A half-hour slot forecast below this (kWh) is too small to say anything about the shape
+PV_CALIBRATION_MIN_SLOT_POINTS = 3  # A slot needs this many days of evidence for its own shape, otherwise it takes the day factor
+PV_CALIBRATION_STORE_EXPIRY_DAYS = 60  # The evidence is saved with this expiry, past its 28-day retention
+PV_CALIBRATION_SCAN_MINUTES = 24 * 60  # Gap between history scans for calibration evidence
+PV_CALIBRATION_RETRY_MINUTES = 60  # A scan whose history read failed is tried again after this long
+PV_CALIBRATION_RESAVE_MINUTES = 24 * 60  # The evidence is saved at least this often even when unchanged, so its expiry keeps moving
+PV_CALIBRATION_LOAD_ATTEMPTS = 3  # A store that never reads back is treated as empty after this many failed loads ...
+PV_CALIBRATION_LOAD_WAIT_MINUTES = 10  # ... spanning at least this long, so a storage outage cannot let one scan replace the evidence
+PV_CALIBRATION_STORE_KEY = "pv_calibration_evidence"  # Storage key (namespace "solcast") for the calibration evidence
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
+BALANCE_CEILING_SHORTFALL_W = 100  # Grid shortfall (W) during a balancing hold that shows the peers are already giving all they can
+BALANCE_CEILING_EXPIRY_SECONDS = 30 * 60  # How long a learned balancing rate ceiling is trusted before the configured rate is tried again
 INVERTER_LIMIT_DEFAULT_W = 7500.0  # Standing inverter AC limit when the user has not configured inverter_limit
 EXPORT_LIMIT_DEFAULT_W = 99999.0  # Standing export limit when the user has not configured export_limit - effectively unlimited
 PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car_charging_rate/_1../_7 config items - the hard ceiling on num_cars
 # A car_charging_now sensor that reports a charging power (in W, after unit conversion) rather than
 # on/off counts as charging from this power: above a charger's standby draw, below the smallest charge
 CAR_CHARGING_NOW_POWER_W = 200
+# A manually tracked car with no charge recorded keeps counting from up to this long ago, for energy its charger's history records late
+CAR_MANUAL_SOC_LATE_MINUTES = 60
+# A manually tracked car is only reset once its plugged-in sensor has read unplugged for this long - a charger reconnecting can read unplugged for a few minutes
+CAR_MANUAL_SOC_UNPLUG_MINUTES = 10
+# A manually tracked car with no car_charging_plugged sensor is reset once it has been idle - nothing charged, entered or written by the plan - for this long
+CAR_MANUAL_SOC_IDLE_MINUTES = 12 * 60
+# Charger energy counted for a manually tracked car is limited to car_charging_rate times the time elapsed, with this margin, plus a little slack for a coarse counter
+CAR_MANUAL_SOC_RATE_MARGIN = 1.1
+CAR_MANUAL_SOC_ENERGY_SLACK = 0.1
 CAR_CHARGING_LIMIT_UNCAPPED = 9999.0  # Model-facing car charge limit (kWh) that makes predict()'s fill clamp inert - larger than any real car battery (#4967)
+# The carbon component polls the Carbon Intensity API about every 4 hours for the 48 hours it publishes, so the
+# forecast's reach decays below a 48 hour plan between polls as a matter of course. A fresh fetch reaching less than
+# CARBON_FETCH_SHORT_HOURS is a genuine API shortfall and warns once per fetch; the per-cycle replication only warns
+# once the forecast covers less than CARBON_WARN_COVERAGE_HOURS of the plan (#5964)
+CARBON_FETCH_SHORT_HOURS = 47
+CARBON_WARN_COVERAGE_HOURS = 24
 DEBUG_ENABLE_MAX_HOURS = 2  # Auto-disable switch.predbat_debug_enable after this long left on, to bound the raw per-cycle debug.yaml disk writes it triggers (and the C++ kernel bypass it forces) if left on by accident - the rotating debug-history buffer covers longer-term history at a coarser interval instead
 # How far ahead a manual override may be placed. The two horizons differ on purpose: a manual
 # charge/export/freeze/demand slot is bounded by the plan, since Predbat can only act on a slot the
@@ -215,3 +310,9 @@ STATUS_STATE_MAX_LENGTH = 255
 # A log text that repeats (an API response, an Intelligent slot list) is logged in full again after this long, so
 # the full text is never only in a rotated-out log file; in between it is logged as one short line
 REPEAT_FULL_LOG_SECONDS = 3600
+
+# The default mcp_secret. It is published in the source and the docs, so the MCP server refuses to run with it (#5847)
+MCP_DEFAULT_SECRET = "predbat_mcp_secret"
+
+# Names of the temperature scales, after temperature_scale() has stripped degree marks and case
+TEMPERATURE_SCALES = {"c": "C", "celsius": "C", "f": "F", "fahrenheit": "F", "k": "K", "kelvin": "K"}

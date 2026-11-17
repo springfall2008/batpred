@@ -174,7 +174,7 @@ let it collide with real supply points in the `multiple_import_meters` detector.
 `car_charging_power`, `car_charging_now`.
 
 **`cars`** — a vehicle. Predbat indexes cars, not chargers, so a charger integration that
-knows nothing about the vehicle still emits a stub car record with `info.stub`. Ohme can do
+knows nothing about the vehicle still emits a stub car record with `flags: ["stub"]`. Ohme can do
 better: it holds a vehicle list today that is discarded. `make` and `model` in `info`;
 `battery_kwh` and `max_charge_kw` in `ratings`; `charged_by` cross-links to `chargers`. Its
 `entities` carry the car facts: `car_charging_soc`, `car_charging_limit`,
@@ -227,6 +227,15 @@ through in the clear, because the registry flags the apps.yaml names (`kraken_mp
 directions here.
 
 ### Four classes
+
+> **Superseded 2 Nov 2026 (maintainer decision).** Identifiers are not secret. The catalogue now
+> withholds only credentials (refused at validation by field name) and email addresses (scrubbed by
+> the Redactor); every identifier - serials, MPANs, account, site, plant and system ids, charger ids -
+> and location are published as reported. The pseudonymised class, the identifier shape guard and the
+> location-key guard described below were removed: tokenised entity ids made records useless to
+> anything re-binding configuration from them, and the shape guard kept mistaking ordinary values for
+> misfiled identifiers. `account_ids` remains, as the container for account and site identifiers. The
+> text below is kept as the original design record.
 
 **Never included.** These must not enter the catalogue at all, not even to be masked later.
 Credentials of every kind (API keys, tokens, passwords, secrets, OAuth material); any

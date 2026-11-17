@@ -13,7 +13,6 @@
 
 from deye_const import DEYE_BASE_URLS, DEYE_ENDPOINTS, DEYE_WORKMODE, DEYE_TELEMETRY_KEYS, TOU_FIELD, TOU_SLOT_COUNT, FREEZE_EXPORT_SOC
 
-
 # The per-slot wire names, transcribed from definitions.TimeUseSettingItem in DEYE's
 # published Swagger (GET https://eu1-developer.deyecloud.com/v2/api-docs). Spelled out here
 # rather than derived from TOU_FIELD on purpose: a test that reads the same dict it is

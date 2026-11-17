@@ -6,13 +6,99 @@
 # Test Enphase API functions
 # -----------------------------------------------------------------------------
 
-from datetime import datetime, timedelta, timezone
+import asyncio
 import base64
+import contextlib
 import json as json_module
+import time
+from datetime import datetime, timedelta, timezone
+from unittest.mock import patch
+
 import pytz
+import predbat  # noqa: F401 - imported before tests.discovery_contract, which imports config (circular-import guard)
 import enphase
 from enphase import EnphaseAPI, ENPHASE_REFRESH_SETTINGS, ENPHASE_REFRESH_SCHEDULE_SYNC, ENPHASE_RECONCILE_MAX_ATTEMPTS
-from tests.test_infra import run_async
+from tests.test_infra import run_async as _infra_run_async
+from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
+
+
+class _MqttTripwire(BaseException):
+    """Raised by the aiomqtt.Client tripwire. A BaseException so no `except Exception` in the component swallows it."""
+
+
+SLEEP_BUDGET = 1000
+WATCHDOG_SECONDS = 5
+
+
+class _SleepBudgetExceeded(BaseException):
+    """Raised when a test clock is asked to sleep too many times, so a retry loop that never ends fails."""
+
+
+def run_async(coro):
+    """Run a coroutine with a tripwire on aiomqtt.Client, so a site that skips mqtt_client() fails fast.
+
+    Each instance's MQTT client comes from its own base.mqtt_client_factory. Building the default
+    aiomqtt.Client means some site bypassed self.mqtt_client() and would try a real connection, so
+    the tripwire turns that into an AssertionError (and a sleep that really waits, or a retry loop
+    that never ends, into one too).
+    """
+    with patch("aiomqtt.Client", side_effect=_MqttTripwire()):
+        try:
+            return _infra_run_async(asyncio.wait_for(coro, timeout=WATCHDOG_SECONDS))
+        except asyncio.TimeoutError:
+            raise AssertionError("still running after {}s: a sleep bypassed the base clock and is really waiting".format(WATCHDOG_SECONDS)) from None
+        except _MqttTripwire:
+            raise AssertionError("aiomqtt.Client built: a site bypasses mqtt_client()") from None
+        except _SleepBudgetExceeded:
+            raise AssertionError("the test clock was asked to sleep more than {} times: a loop never ended".format(SLEEP_BUDGET)) from None
+
+
+class InstantClock:
+    """Clock for base.component_clock whose sleep returns at once, so a test never waits."""
+
+    def __init__(self):
+        """Start with no recorded sleeps."""
+        self.sleeps = []
+
+    def monotonic(self):
+        """Real monotonic time."""
+        return time.monotonic()
+
+    def time(self):
+        """Real wall-clock time."""
+        return time.time()
+
+    async def sleep(self, seconds):
+        """Record the request and return without waiting, after yielding once so the sleeper can be cancelled."""
+        self.sleeps.append(seconds)
+        if len(self.sleeps) > SLEEP_BUDGET:
+            raise _SleepBudgetExceeded()
+        await asyncio.sleep(0)
+
+
+@contextlib.contextmanager
+def _base_attr(api, name, value):
+    """Set an attribute on api.base for the duration of the block, then put it back."""
+    missing = object()
+    previous = getattr(api.base, name, missing)
+    setattr(api.base, name, value)
+    try:
+        yield
+    finally:
+        if previous is missing:
+            delattr(api.base, name)
+        else:
+            setattr(api.base, name, previous)
+
+
+def _api_clock(api, clock):
+    """Make api use clock for sleep()."""
+    return _base_attr(api, "component_clock", clock)
+
+
+def _api_mqtt_factory(api, factory):
+    """Make api build its MQTT clients with factory(**kwargs) instead of aiomqtt.Client."""
+    return _base_attr(api, "mqtt_client_factory", factory)
 
 
 def _b64(payload):
@@ -1044,6 +1130,7 @@ def test_inverter_def_enphase():
     assert idef["charge_time_entity_is_option"] is True
     assert idef["can_span_midnight"] is False
     assert idef["target_soc_used_for_discharge"] is True
+    assert idef["reserve_above_soc_charges_from_grid"] is True
 
 
 def test_run_first_polls_all_tiers():
@@ -2060,27 +2147,6 @@ def test_get_schedules_keeps_sibling_schedules_in_read_only_mode():
     assert [r for r in api.request_log if r["path"].endswith("/delete")] == []
 
 
-class _NoSleep:
-    """Context manager that replaces enphase.asyncio.sleep with a no-op.
-
-    Keeps tests exercising apply_battery_schedule's retry/backoff loop fast and deterministic.
-    """
-
-    def __enter__(self):
-        """Swap in a no-op sleep and remember the original to restore later."""
-        self._original = enphase.asyncio.sleep
-
-        async def _no_sleep(*args, **kwargs):
-            """Return immediately instead of actually sleeping."""
-
-        enphase.asyncio.sleep = _no_sleep
-        return self
-
-    def __exit__(self, *exc):
-        """Restore the real asyncio.sleep."""
-        enphase.asyncio.sleep = self._original
-
-
 def _apply_setup(api, charge=None, export=None, reserve=20):
     """Seed a MockEnphaseAPI with the state apply_battery_schedule/_reconcile_once need to run."""
     api.sites = [{"site_id": "12345", "name": "Home"}]
@@ -2383,10 +2449,12 @@ def test_apply_battery_schedule_retries_then_succeeds():
         ],
     )
     api.set_http_response("/service/batteryConfig/api/v1/batterySettings/12345", 200, {})
-    with _NoSleep():
+    clock = InstantClock()
+    with _api_clock(api, clock):
         ok = run_async(api.apply_battery_schedule("12345"))
     assert ok is True
     assert [r["method"] for r in api.request_log].count("POST") == 2  # one failed create, one that landed
+    assert len(clock.sleeps) == 1  # one pause between the two attempts, on the base clock
 
 
 def test_apply_battery_schedule_gives_up_after_max_attempts():
@@ -2394,11 +2462,13 @@ def test_apply_battery_schedule_gives_up_after_max_attempts():
     api = MockEnphaseAPI()
     _apply_setup(api, charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True})
     api.set_http_response(SCHEDULES_PATH, 409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}})
-    with _NoSleep():
+    clock = InstantClock()
+    with _api_clock(api, clock):
         ok = run_async(api.apply_battery_schedule("12345"))
     assert ok is False
     assert [r["method"] for r in api.request_log].count("POST") == ENPHASE_RECONCILE_MAX_ATTEMPTS
     assert api.count_errors == ENPHASE_RECONCILE_MAX_ATTEMPTS
+    assert len(clock.sleeps) == ENPHASE_RECONCILE_MAX_ATTEMPTS - 1  # a pause between attempts, none after the last
 
 
 def test_apply_battery_schedule_skips_everything_in_read_only_mode():
@@ -2525,6 +2595,250 @@ def test_consecutive_writes_stay_on_one_schedule_across_a_reorder():
     run_async(api._converge_family("12345", "cfg", {"enabled": True, "start": "22:50", "end": "23:30", "limit": 5}))
     written = [r["path"] for r in api.request_log if r["method"] == "PUT" and "schedules" in r["path"]]
     assert written == [SCHEDULES_PATH + "/first", SCHEDULES_PATH + "/first"]  # never swapped onto the sibling
+
+
+# Discovery catalogue reporter
+
+DISCOVERY_SITE = "4815162"
+DISCOVERY_ENVOY = "122530006866"
+
+
+def _discovery_enphase(ignore_pv=False):
+    """An EnphaseAPI holding one fully discovered site: battery status, settings, schedules and the Envoy serial."""
+    api = MockEnphaseAPI()
+    api.automatic = True
+    api.automatic_ignore_pv = ignore_pv
+    api.sites = [{"site_id": DISCOVERY_SITE, "name": "Grandma's House"}]
+    api.battery_status[DISCOVERY_SITE] = {"soc_percent": 55.0, "available_energy": 5.5, "max_capacity": 10.0, "max_power_kw": 3.84, "status": "normal", "batteries": BATTERY_STATUS_PAYLOAD["storages"]}
+    api.battery_settings[DISCOVERY_SITE] = {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25}
+    api.today[DISCOVERY_SITE] = {"serial": DISCOVERY_ENVOY, "totals": {}, "arrays": {}}
+    api.schedules[DISCOVERY_SITE] = {"cfg": {"supported": True}, "dtg": {"supported": True}, "rbd": {"supported": True}}
+    return api
+
+
+def test_enphase_catalogue_none_before_discovery():
+    """Nothing is reported until the site's battery and Envoy are known."""
+    api = MockEnphaseAPI()
+    assert api.build_discovery() is None
+    api = _discovery_enphase()
+    api.today[DISCOVERY_SITE] = {}
+    assert api.build_discovery() is None, "no Envoy serial yet"
+    api = _discovery_enphase()
+    api.battery_status[DISCOVERY_SITE]["max_capacity"] = 0
+    assert api.build_discovery() is None, "no battery yet"
+
+
+def test_enphase_record_shape():
+    """The Envoy is a gateway fronting the batteries; the site id is an account id; ratings are what the site reports."""
+    report = _discovery_enphase().build_discovery()
+    assert report["automatic"] is True
+    record = report["inverters"][0]
+    assert record["device_id"] == "enphase:" + DISCOVERY_ENVOY
+    assert record["inverter_type"] == "EnphaseCloud"
+    assert record["composition"] == "gateway" and record["serials"] == ["B1", "B2"], record
+    assert record["hardware_ids"] == {"serial": DISCOVERY_ENVOY}
+    assert record["account_ids"] == {"site_id": DISCOVERY_SITE}
+    assert record["functions"] == ["solar", "battery"]
+    assert record["capabilities"]["reserve_above_soc_charges_from_grid"] is True
+    assert record["ratings"] == {"soc_max": 10.0, "battery_rate_max": 3840.0, "battery_min_soc": 5}, record["ratings"]
+    assert "Grandma" not in str(report) and "user@example.com" not in str(report)
+
+
+def test_enphase_record_rebuilds_its_inverter_def_row():
+    """The record alone rebuilds the EnphaseCloud row - no base, no exceptions."""
+    record = validated_inverters(_discovery_enphase().build_discovery())[0]
+    assert_definition_complete(record, EnphaseAPI.WRITE_AND_POLL_SLEEP)
+
+
+def test_enphase_record_agrees_with_automatic_config():
+    """The record binds exactly what automatic_config() binds."""
+    api = _discovery_enphase()
+    record = validated_inverters(api.build_discovery())[0]
+    captured = capture_automatic_config(api)
+    assert_record_agrees(record, captured)
+    assert_record_binds_nothing_extra(record, captured)
+
+
+def test_enphase_record_keeps_pv_despite_automatic_ignore_pv():
+    """automatic_ignore_pv stops the binding, not the device fact (spec D11)."""
+    api = _discovery_enphase(ignore_pv=True)
+    record = validated_inverters(api.build_discovery())[0]
+    assert "pv_power" in record["entities"] and "pv_today" in record["entities"]
+    captured = capture_automatic_config(api)
+    assert "pv_power" not in captured
+    assert_record_agrees(record, captured)
+    assert_record_binds_nothing_extra(record, captured, allowed_extra=("pv_power", "pv_today"))
+
+
+def test_enphase_round_trip_keeps_site_id_readable():
+    """Through the real Coordinator: the site id and the entity ids that embed it stay readable, as every identifier does."""
+    from coordinator import Coordinator
+    from mock_base import MockBase as SharedMockBase
+
+    logs = []
+    coordinator = Coordinator(SharedMockBase())
+    coordinator.log = logs.append
+    coordinator.report("enphase", _discovery_enphase().build_discovery())
+    catalogue = str(coordinator.catalogue())
+    assert "sensor.predbat_enphase_{}_soc_percent".format(DISCOVERY_SITE) in catalogue, "the site id is not secret, and stays readable inside entity ids"
+    assert DISCOVERY_ENVOY in catalogue
+    assert not [line for line in logs if line.startswith("Warn")], logs
+
+
+def test_enphase_catalogue_filed_when_automatic_config_raises():
+    """A site Predbat cannot configure (no CFG scheduling) still has its hardware described."""
+    api = MockEnphaseAPI()
+    api.login_last_success = datetime.now(timezone.utc)
+    api.eauth_token = "tok"
+    api.sites = [{"site_id": DISCOVERY_SITE, "name": "Home"}]
+    filed = []
+    api.report_discovery = filed.append
+    api.set_http_response("/pv/settings/{}/battery_status.json".format(DISCOVERY_SITE), 200, BATTERY_STATUS_PAYLOAD)
+    api.set_http_response("/pv/systems/{}/today".format(DISCOVERY_SITE), 200, {"connectionDetails": [{"serial_num": DISCOVERY_ENVOY}], "stats": [{"totals": {"production": 1000}, "production": [1000], "start_time": 1783724400, "interval_length": 900}]})
+    api.set_http_response("/app-api/{}/get_latest_power".format(DISCOVERY_SITE), 200, {"latest_power": {"value": 450, "units": "w", "time": 1760000000}})
+    api.set_http_response("/service/batteryConfig/api/v1/profile/{}".format(DISCOVERY_SITE), 200, {"profile": "self-consumption", "batteryBackupPercentage": 20})
+    api.set_http_response("/service/batteryConfig/api/v1/batterySettings/{}".format(DISCOVERY_SITE), 200, {"chargeFromGrid": True, "veryLowSoc": 10, "veryLowSocMin": 5, "veryLowSocMax": 25})
+    api.set_http_response(
+        "/service/batteryConfig/api/v1/battery/sites/{}/schedules".format(DISCOVERY_SITE), 200, {"cfg": {"scheduleSupported": False, "details": []}, "dtg": {"scheduleSupported": True, "details": []}, "rbd": {"scheduleSupported": True, "details": []}}
+    )
+    api.automatic = True
+    assert run_async(api.run(0, True)) is False, "automatic_config() raises without CFG"
+    assert len(filed) == 1 and filed[0]["inverters"][0]["device_id"] == "enphase:" + DISCOVERY_ENVOY, filed
+
+
+# ---------------------------------------------------------------------------
+# Per-instance MQTT client factory and clock (base.mqtt_client_factory, base.component_clock)
+# ---------------------------------------------------------------------------
+
+
+class RecordingMQTTClient:
+    """Fake MQTT client that records what an instance does with it and yields one livestream frame."""
+
+    def __init__(self, kwargs, record):
+        """Remember the arguments and add this client to the record."""
+        self.kwargs = kwargs
+        self.record = record
+        record["clients"].append(kwargs)
+
+    async def __aenter__(self):
+        """Connect."""
+        return self
+
+    async def __aexit__(self, *args):
+        """Disconnect."""
+        pass
+
+    async def subscribe(self, topic, qos=0):
+        """Record the subscription."""
+        self.record["subscribed"].append(topic)
+
+    @property
+    def messages(self):
+        """A message stream carrying the one captured livestream frame."""
+        frames = [type("Message", (), {"payload": LIVESTREAM_FRAME})()]
+
+        class _Stream:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                if not frames:
+                    raise StopAsyncIteration
+                return frames.pop()
+
+        return _Stream()
+
+
+def _livestream_boot(endpoint, topic, digest):
+    """A livestream bootstrap reply for one site."""
+    return {"aws_iot_endpoint": endpoint, "live_stream_topic": topic, "aws_authorizer": "auth", "aws_token_value": "tok-" + digest, "aws_digest": digest, "timeout": 5}
+
+
+def test_instances_use_their_own_mqtt_factory():
+    """Two instances on separate bases read the livestream at once, each only through its own MQTT factory."""
+    if not (enphase.HAS_AIOMQTT and enphase.HAS_LIVESTREAM_PROTOBUF):
+        return
+    from enphase import LIVESTREAM_BOOTSTRAP
+
+    api_a, api_b = MockEnphaseAPI(), MockEnphaseAPI()
+    assert api_a.base is not api_b.base, "each instance has its own base"
+    record_a = {"clients": [], "subscribed": []}
+    record_b = {"clients": [], "subscribed": []}
+    for api, serial, endpoint, topic, digest in ((api_a, "SERIAL_A", "iot-a.example", "topic/a", "digestA"), (api_b, "SERIAL_B", "iot-b.example", "topic/b", "digestB")):
+        api.today["12345"] = {"serial": serial}
+        api.set_http_response(LIVESTREAM_BOOTSTRAP, 200, _livestream_boot(endpoint, topic, digest))
+
+    async def both():
+        return await asyncio.gather(api_a._fetch_live_power("12345"), api_b._fetch_live_power("12345"))
+
+    with _api_mqtt_factory(api_a, lambda **kwargs: RecordingMQTTClient(kwargs, record_a)):
+        with _api_mqtt_factory(api_b, lambda **kwargs: RecordingMQTTClient(kwargs, record_b)):
+            readings = run_async(both())
+
+    assert all(reading and reading["pv"] > 0 for reading in readings), "both instances decoded a reading, got {}".format(readings)
+    for label, record, serial, endpoint, topic, digest in (("A", record_a, "SERIAL_A", "iot-a.example", "topic/a", "digestA"), ("B", record_b, "SERIAL_B", "iot-b.example", "topic/b", "digestB")):
+        assert len(record["clients"]) == 1, "{}: one client, got {}".format(label, len(record["clients"]))
+        kwargs = record["clients"][0]
+        assert kwargs["hostname"] == endpoint and kwargs["port"] == 443, "{}: only its own endpoint, got {}".format(label, kwargs)
+        assert kwargs["transport"] == "websockets" and kwargs["websocket_path"] == "/mqtt" and kwargs["keepalive"] == 60 and kwargs["clean_session"] is True, "{}: connection arguments unchanged, got {}".format(label, kwargs)
+        assert kwargs["tls_context"] is not None and kwargs["identifier"].endswith("-" + serial), "{}: TLS context and its own client id, got {}".format(label, kwargs)
+        assert "digest" + label in kwargs["username"] and "digest" + ("B" if label == "A" else "A") not in kwargs["username"], "{}: only its own credentials, got {}".format(label, kwargs["username"])
+        assert record["subscribed"] == [topic], "{}: subscribed only to its own topic, got {}".format(label, record["subscribed"])
+
+
+def test_livestream_failure_through_the_factory_is_swallowed():
+    """A broker error raised by the instance's own client is logged and gives no reading, as before."""
+    api = MockEnphaseAPI()
+
+    def failing_factory(**kwargs):
+        raise OSError("broker unreachable")
+
+    with _api_mqtt_factory(api, failing_factory):
+        reading = run_async(api._read_livestream("12345", _livestream_boot("iot.example", "topic/x", "d"), "SERIAL"))
+    assert reading is None
+    assert any("Livestream failed" in m and "broker unreachable" in m for m in api.log_messages), "the failure is logged, got {}".format(api.log_messages)
+
+
+def test_request_retry_backoff_sleeps_on_the_clock():
+    """Connection errors and 429/5xx replies back off on the base clock, once per attempt, with no real waiting."""
+    from enphase import ENPHASE_RETRIES
+
+    started = time.monotonic()
+    with patch("enphase.random.random", return_value=1.0):
+        # A connection error waits 1 + retry * 5 seconds
+        api = MockEnphaseAPI()
+        clock = InstantClock()
+
+        async def timing_out(*args, **kwargs):
+            raise asyncio.TimeoutError()
+
+        api.request_raw = timing_out
+        with _api_clock(api, clock):
+            assert run_async(api.request_json("GET", "/some/data.json")) is None
+        assert clock.sleeps == [1 + retry * 5 for retry in range(ENPHASE_RETRIES)], "connection error backoff, got {}".format(clock.sleeps)
+
+        # A throttled or failing server waits (retry + 1) * 5 seconds, capped at 30
+        api = MockEnphaseAPI()
+        clock = InstantClock()
+        api.set_http_response("/some/data.json", 503, None)
+        with _api_clock(api, clock):
+            assert run_async(api.request_json("GET", "/some/data.json")) is None
+        assert clock.sleeps == [min(30, (retry + 1) * 5) for retry in range(ENPHASE_RETRIES)], "server error backoff, got {}".format(clock.sleeps)
+    assert time.monotonic() - started < 2.0, "no real waiting"
+
+
+def test_reconcile_backoff_sleeps_on_the_clock():
+    """A schedule write that keeps failing pauses 1 + attempt * 3 seconds between attempts, on the base clock."""
+    api = MockEnphaseAPI()
+    _apply_setup(api, charge={"start_time": "02:00:00", "end_time": "05:00:00", "soc": 90, "enable": True})
+    api.set_http_response(SCHEDULES_PATH, 409, {"error": {"status": "CONFLICTING_SCHEDULE_CFG"}})
+    clock = InstantClock()
+    started = time.monotonic()
+    with patch("enphase.random.random", return_value=1.0):
+        with _api_clock(api, clock):
+            assert run_async(api.apply_battery_schedule("12345")) is False
+    assert clock.sleeps == [1 + attempt * 3 for attempt in range(ENPHASE_RECONCILE_MAX_ATTEMPTS - 1)], "backoff between attempts, got {}".format(clock.sleeps)
+    assert time.monotonic() - started < 2.0, "no real waiting"
 
 
 def run_enphase_api_tests(my_predbat):
@@ -2666,5 +2980,17 @@ def run_enphase_api_tests(my_predbat):
     test_activate_rbd_mode_clears_pending_status_on_success()
     test_apply_pending_dtg_not_reactivated_after_success()
     test_apply_activates_cfg_when_setting_off_but_schedule_matches()
+    test_enphase_catalogue_none_before_discovery()
+    test_enphase_record_shape()
+    test_enphase_record_rebuilds_its_inverter_def_row()
+    test_enphase_record_agrees_with_automatic_config()
+    test_enphase_record_keeps_pv_despite_automatic_ignore_pv()
+    test_enphase_round_trip_keeps_site_id_readable()
+    test_enphase_catalogue_filed_when_automatic_config_raises()
+    test_delete_schedule_posts_to_the_delete_endpoint()
+    test_instances_use_their_own_mqtt_factory()
+    test_livestream_failure_through_the_factory_is_swallowed()
+    test_request_retry_backoff_sleeps_on_the_clock()
+    test_reconcile_backoff_sleeps_on_the_clock()
     print("**** Enphase API tests passed ****")
     return 0

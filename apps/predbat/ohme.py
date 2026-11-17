@@ -26,7 +26,8 @@ import time
 from typing import Dict, List, Union
 from datetime import timedelta, timezone
 from const import TIME_FORMAT_HA, DISPATCH_SOURCE_CHARGER_SCHEDULE
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session, writes
+from coordinator import car_record, charger_record
 from car_charger_control import CarChargerControl, parse_control_setting
 from predbat_metrics import record_api_call
 
@@ -54,6 +55,7 @@ ohme_attribute_table = {
     "battery_percent": {"friendly_name": "Ohme Battery Percent", "icon": "mdi:battery", "unit_of_measurement": "%", "device_class": "battery"},
     "current_vehicle": {"friendly_name": "Ohme Current Vehicle", "icon": "mdi:car"},
     "connected": {"friendly_name": "Ohme Car Connected", "icon": "mdi:ev-plug-type2"},
+    "plugged": {"friendly_name": "Ohme Car Plugged In", "icon": "mdi:ev-plug-type2"},
     "energy_today": {"friendly_name": "Ohme Charge Energy Today", "icon": "mdi:ev-station", "unit_of_measurement": "kWh", "device_class": "energy", "state_class": "total"},
     "approve_charge": {"friendly_name": "Ohme Approve Charge", "icon": "mdi:check-circle-outline"},
 }
@@ -74,12 +76,17 @@ SLOT_MODE_CHARGER = "charger_schedule"
 # finer cadence buys nothing, and this matches the gateway EV charger control loop
 CONTROL_INTERVAL_SECONDS = 60
 
+# Where the held charger and its saved target are kept across a restart
+OHME_STORAGE_MODULE = "ohme"
+OHME_CONTROL_STATE = "control_state"
+
 # The charger-facing entities for the discovery catalogue's chargers record - see
 # OhmeAPI.build_discovery(). Predbat standard name -> entity descriptor, filtered down to what
-# Home Assistant has actually seen by ComponentBase.discovery_entities(). All three are published
+# Home Assistant has actually seen by ComponentBase.discovery_entities(). All of them are published
 # unconditionally by publish_data(), so once it has run once every one of these exists.
 CHARGER_DISCOVERY_ENTITY_SPEC = {
     "car_charging_planned": {"entity_id": "binary_sensor.predbat_ohme_connected", "domain": "binary_sensor", "access": "r"},
+    "car_charging_plugged": {"entity_id": "binary_sensor.predbat_ohme_plugged", "domain": "binary_sensor", "access": "r"},
     "car_charging_energy": {"entity_id": ENERGY_TODAY_ENTITY, "domain": "sensor", "access": "r"},
     "car_charging_power": {"entity_id": POWER_WATTS_ENTITY, "domain": "sensor", "access": "r"},
 }
@@ -229,19 +236,23 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """Initialise the Ohme API component"""
         self.email = email
         self.password = password
-        self.client = OhmeApiClient(email, password, self.log)
+        self.client = OhmeApiClient(email, password, self.log, self.http_session)
         self.queued_events = []
         self.ohme_automatic = ohme_automatic
         # Tri-state: True/False force the Intelligent wiring on or off, None auto-detects it
         self.ohme_automatic_octopus_intelligent = ohme_automatic_octopus_intelligent
         self.ohme_control = parse_control_setting(ohme_control)
-        # No control switch: read only mode is what releases an Ohme charger
-        self.charger_control_setup("Ohme API", "charger", control=self.ohme_control, switch_prefix="ohme", control_setting="ohme_control")
+        # No control switch: read only mode is what releases an Ohme charger. The storage keeps the held
+        # charger and its saved target across a restart, so one an earlier session held is still released
+        # once control is off (#5788)
+        self.charger_control_setup("Ohme API", "charger", OHME_STORAGE_MODULE, OHME_CONTROL_STATE, "control_enabled", control=self.ohme_control, switch_prefix="ohme", control_setting="ohme_control")
         # Whether the car is on Octopus Intelligent as last decided, None until the first decision
         self.octopus_intelligent = None
-        # Octopus Intelligent is driving a device that is not this charger - the car itself, say - so
-        # Octopus schedules the charge and its own dispatches are the plan, see octopus_intelligent_wanted()
+        # Octopus Intelligent is driving a live device and wires the car slots to it itself - the car, another
+        # charger or this Ohme - so its own dispatches are the plan, see octopus_intelligent_wanted()
         self.octopus_other_device = False
+        # That device is this Ohme: Octopus starts and stops this very charger, so Predbat never drives it
+        self.octopus_drives_ohme = False
         # How the car slot args are wired to the session slots, None when they are not - see update_slot_mode()
         self.slot_mode = None
         # The mode the args were last wired for. Kept apart from slot_mode so that a wiring change
@@ -280,6 +291,15 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         """
         if first:
             self.log("Ohme API: Started")
+        # Every cycle until it succeeds, before anything decides control: a read that failed at start-up
+        # must not lose a charger an earlier session held. Here as well as in the shared tick, as Ohme's own
+        # stand-down hand-back runs outside it
+        if not self.charger_control_loaded:
+            await self.charger_control_load_enabled()
+        elif self.charger_control_save_pending and not self.charger_control_active:
+            # The shared tick retries a failed save, but only runs while control is on - this covers a
+            # stand-down hand-back whose save failed
+            await self.charger_control_save()
 
         # Process queued events
         refresh = False
@@ -405,6 +425,18 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             return mode is not ChargerMode.MAX_CHARGE
         return mode is not ChargerMode.PAUSED
 
+    def charger_control_extra_state(self):
+        """Save the charger's own target and whether Predbat started max charge, which a release needs."""
+        return {"saved_target": self.control_saved_target, "max_charge_started": self.control_max_charge_started}
+
+    def charger_control_restore_extra(self, saved):
+        """Restore what charger_control_extra_state() saved, keeping anything this session already knows."""
+        if self.control_saved_target is None and isinstance(saved.get("saved_target"), (int, float)):
+            self.control_saved_target = saved["saved_target"]
+        if saved.get("max_charge_started"):
+            self.control_max_charge_started = True
+
+    @writes
     async def charger_control_send(self, client, charge, car_n):
         """Max charge inside a planned window, paused outside one."""
         if charge:
@@ -418,6 +450,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             self.log("Info: Ohme API: Outside the charge plan, pausing the charger")
             await client.async_pause_charge()
 
+    @writes
     async def charger_control_release_one(self, client, charge):
         """Hand the charger back to Ohme's own smart schedule."""
         self.log("Info: Ohme API: Releasing the charger back to Ohme")
@@ -433,6 +466,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             self.log("Info: Ohme API: Restored the charger target to {}%".format(self.control_saved_target))
             self.control_saved_target = None
 
+    @writes
     async def charger_control_hand_to_octopus(self, client, charge):
         """Hand the charger to Octopus without starting a charge.
 
@@ -466,12 +500,20 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         Ohme is only the socket, so Ohme's session has nothing to do with what Octopus bills as
         off-peak. The slots are then left to the Octopus component, and octopus_other_device is set
         so nothing of Ohme's stands in for them - see charger_slots_wanted() and update_slot_mode().
+
+        The same holds where the device is this Ohme. Octopus's dispatch sensor then carries the car
+        slots, ready time and charge limit just the same, and Ohme's session slots are only a relayed
+        copy of those dispatches - minutes late, at times stale or missing one, and with no source, so
+        a boost started from the Ohme app was priced as an off-peak dispatch. octopus_drives_ohme is set
+        as well, so Predbat never drives a charger Octopus is driving.
         """
         if self.ohme_automatic_octopus_intelligent is not None:
             self.octopus_other_device = False
+            self.octopus_drives_ohme = False
             return bool(self.ohme_automatic_octopus_intelligent)
         if not self.ohme_automatic:
             self.octopus_other_device = False
+            self.octopus_drives_ohme = False
             return False
 
         # OctopusAPI has already detected this by the time we first run - it sits earlier in
@@ -485,6 +527,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             return bool(self.octopus_intelligent)
         if not octopus.is_intelligent_go_tariff(tariff_code):
             self.octopus_other_device = False
+            self.octopus_drives_ohme = False
             return False
 
         # The devices Octopus Intelligent is live on. OctopusAPI keeps the last known set through a
@@ -493,12 +536,10 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         # which is also why OctopusAPI.automatic_config() leaves it out of its own car slot wiring
         devices = list((octopus.get_intelligent_devices() or {}).values())
         active = [device for device in devices if not device.get("suspended")]
-        self.octopus_other_device = False
-        if any(self.is_ohme_charger(device) for device in active):
-            return True
+        self.octopus_drives_ohme = any(self.is_ohme_charger(device) for device in active)
+        self.octopus_other_device = bool(active)
         if active:
-            # Octopus is driving something else, and wires the car slots to its dispatches itself
-            self.octopus_other_device = True
+            # Octopus is driving the Ohme or something else, and wires the car slots to its dispatches itself
             return False
         if devices:
             # Every device is suspended, so Octopus is scheduling nothing and there are no dispatches
@@ -528,19 +569,22 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         been published the new way.
         """
         was_other_device = self.octopus_other_device
+        was_drives_ohme = self.octopus_drives_ohme
         octopus_intelligent = self.octopus_intelligent_wanted()
         # While Octopus drives the car, Predbat drives the charger only when asked to follow the car's
         # dispatches - or when Intelligent charging is off in Predbat, which then plans the car itself
         follows_car = bool(self.get_arg("octopus_intelligent_charger_follows_car", False)) or not self.get_arg("octopus_intelligent_charging", True)
-        octopus_changed = octopus_intelligent != self.octopus_intelligent or self.octopus_other_device != was_other_device
+        octopus_changed = octopus_intelligent != self.octopus_intelligent or self.octopus_other_device != was_other_device or self.octopus_drives_ohme != was_drives_ohme
         # The switch only matters while Octopus drives the car, so a change elsewhere is not a decision to remake
-        follows_changed = follows_car != self.follows_car and self.octopus_other_device
+        follows_changed = follows_car != self.follows_car and self.octopus_other_device and not self.octopus_drives_ohme
         self.follows_car = follows_car
         if octopus_changed or follows_changed:
             if not octopus_changed:
                 self.log("Info: Ohme API: Octopus Intelligent drives the car, and Predbat {} the charger".format("now drives" if follows_car else "no longer drives"))
             elif octopus_intelligent:
                 self.log("Info: Ohme API: Octopus Intelligent is in use, taking the car slots from Ohme")
+            elif self.octopus_drives_ohme:
+                self.log("Info: Ohme API: Octopus Intelligent drives this Ohme - leaving the car slots, ready time and charge limit to Octopus")
             elif self.octopus_other_device:
                 self.log("Info: Ohme API: Octopus Intelligent is driving another device, not this charger - leaving the car slots to Octopus")
             elif self.octopus_intelligent is not None:
@@ -548,15 +592,16 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             self.octopus_intelligent = octopus_intelligent
             # Predbat-led control is ruled out wherever Octopus schedules the charge, whichever device
             # it does that through, so it follows the same change - unless Octopus drives the car and
-            # the user has asked for the charger to be driven to the car's dispatches
-            self.enable_control(octopus_intelligent or (self.octopus_other_device and not follows_car))
+            # the user has asked for the charger to be driven to the car's dispatches. Never while
+            # Octopus drives this Ohme itself: the two would fight over the one charger
+            self.enable_control(octopus_intelligent or self.octopus_drives_ohme or (self.octopus_other_device and not follows_car))
 
         # Predbat has stood down but is still holding the charger: hand it back. Checked on every
         # poll rather than only on the change, as charger_control_release() forgets the charger last -
         # a hand-back that failed part way is tried again until the charger really is released
         if not self.charger_control_active and self.charger_control_state:
             try:
-                if octopus_intelligent:
+                if octopus_intelligent or self.octopus_drives_ohme:
                     # Octopus drives this charger: hand it over without starting a charge outside a dispatch
                     self.log("Info: Ohme API: Octopus Intelligent now schedules the charge, handing the charger to Octopus")
                     await self.charger_control_hand_over_all()
@@ -668,6 +713,8 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         if self.get_arg("num_cars", 0) < 1:
             self.set_arg("num_cars", 1)
         self.set_arg("car_charging_planned", ["binary_sensor.predbat_ohme_connected"])
+        # The connected sensor above turns off once a charge finishes, so whether the cable is in is its own sensor
+        self.set_arg("car_charging_plugged", ["binary_sensor.predbat_ohme_plugged"])
         self.set_arg("car_charging_soc", ["sensor.predbat_ohme_battery_percent"])
         # Whether the car is drawing power, which Octopus Intelligent slot confirmation and the battery hold
         # for the car both read - a power sensor counts as charging from CAR_CHARGING_NOW_POWER_W. Bound
@@ -855,7 +902,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         exactly the kind of fabricated record the catalogue design forbids - ratings is therefore
         never populated at all rather than populated with a guess.
 
-        The car record is a stub - device_id "ohme:{serial}:car", info.stub true - unless the Ohme
+        The car record is a stub - device_id "ohme:{serial}:car", flags ["stub"] - unless the Ohme
         account reports a current vehicle (self.client._cars, via _discovery_vehicle()), which this
         component discards today. When one is known, the record instead carries a genuine identity:
         device_id "ohme:{vehicle id}" with make/model in info. This is the one place a charger
@@ -893,29 +940,26 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         if device_model:
             charger_info["model"] = device_model
 
-        charger = {
-            "device_id": charger_device_id,
-            "hardware_ids": {"serial": serial},
-            "info": charger_info,
-            "serves_cars": [car_device_id],
-            "entities": self.discovery_entities(CHARGER_DISCOVERY_ENTITY_SPEC),
-        }
+        charger = charger_record(
+            charger_device_id,
+            serves_cars=[car_device_id],
+            hardware_ids={"serial": serial},
+            info=charger_info,
+            entities=self.discovery_entities(CHARGER_DISCOVERY_ENTITY_SPEC),
+        )
 
-        if vehicle_id:
-            car_info = {}
-            if make:
-                car_info["make"] = make
-            if model:
-                car_info["model"] = model
-        else:
-            car_info = {"stub": True}
-
-        car = {
-            "device_id": car_device_id,
-            "charged_by": charger_device_id,
-            "info": car_info,
-            "entities": self.discovery_entities(CAR_DISCOVERY_ENTITY_SPEC),
-        }
+        car_info = {}
+        if make:
+            car_info["make"] = make
+        if model:
+            car_info["model"] = model
+        car = car_record(
+            car_device_id,
+            charged_by=charger_device_id,
+            flags=None if vehicle_id else ["stub"],
+            info=car_info,
+            entities=self.discovery_entities(CAR_DISCOVERY_ENTITY_SPEC),
+        )
 
         return {"automatic": self.ohme_automatic, "chargers": [charger], "cars": [car]}
 
@@ -1038,6 +1082,9 @@ class OhmeAPI(ComponentBase, CarChargerControl):
 
         # A car is plugged in and still wants charge - drives car_charging_planned under ohme_automatic
         self.dashboard_item(entity_name_binary_sensor + "_connected", state="on" if self.client.status in CONNECTED_STATUSES else "off", attributes=ohme_attribute_table.get("connected", {}), app="ohme")
+        # A car is plugged in, whether or not it wants charge - drives car_charging_plugged under ohme_automatic
+        plugged = "unknown" if status == "unknown" else ("off" if status == ChargerStatus.UNPLUGGED.value else "on")
+        self.dashboard_item(entity_name_binary_sensor + "_plugged", state=plugged, attributes=ohme_attribute_table.get("plugged", {}), app="ohme")
 
         # Delivered-energy total, suitable for car_charging_energy unlike Ohme's own energy figure
         # Predbat's configured timezone, not the host's - the daily reset and the date this total is
@@ -1113,6 +1160,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
         self.queued_events.append((self.switch_event_handler, entity_id, service))
 
     # event handlers
+    @writes
     async def select_event_handler(self, entity_id, value):
         """
         Select event
@@ -1125,6 +1173,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
             else:
                 self.log(f"Warn: Ohme API: Invalid target time value: {value}")
 
+    @writes
     async def number_event_handler(self, entity_id, value):
         """
         Number event
@@ -1149,6 +1198,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
                 self.log(f"Info: Ohme API: Set preconditioning length to {int(value)} mins")
                 await self.client.async_set_target(pre_condition_length=int(value))
 
+    @writes
     async def switch_event_handler(self, entity_id, service):
         """
         Switch event
@@ -1172,7 +1222,7 @@ class OhmeAPI(ComponentBase, CarChargerControl):
 class OhmeApiClient:
     """API client for Ohme EV chargers."""
 
-    def __init__(self, email: str, password: str, log):
+    def __init__(self, email: str, password: str, log, session_factory=None):
         if email is None or password is None:
             raise AuthException("Credentials not provided")
 
@@ -1180,6 +1230,8 @@ class OhmeApiClient:
         self.email = email
         self._password = password
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
 
         # Charger and its capabilities
         self.device_info: dict[str, Any] = {}
@@ -1218,7 +1270,7 @@ class OhmeApiClient:
     async def async_login(self) -> bool:
         """Refresh the user auth token from the stored credentials."""
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = self._session_factory()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
@@ -1250,7 +1302,7 @@ class OhmeApiClient:
             return True
 
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = self._session_factory()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
@@ -1298,7 +1350,7 @@ class OhmeApiClient:
         await self._async_refresh_session()
 
         if self._session is None:
-            self._session = aiohttp.ClientSession()
+            self._session = self._session_factory()
             self._close_session = True
 
         async with asyncio.timeout(self._timeout):
@@ -1683,9 +1735,7 @@ class OhmeApiClient:
 
 
 # Exceptions
-class ApiException(Exception):
-    ...
+class ApiException(Exception): ...
 
 
-class AuthException(ApiException):
-    ...
+class AuthException(ApiException): ...

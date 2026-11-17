@@ -149,7 +149,10 @@ def run_rate_add_io_slots_tests(my_predbat):
     saved_effective = my_predbat.dynamic_load_car_effective
     saved_slot_log = my_predbat.io_slot_log_gate
     original_forecast_minutes = my_predbat.forecast_minutes
+    saved_octopus_slots = my_predbat.octopus_slots
     my_predbat.io_adjusted = {}
+    # The cap is shared with the other cars' dispatches (#5215), so none left by an earlier test may count here
+    my_predbat.octopus_slots = [[] for _ in range(len(saved_octopus_slots))]
     try:
         failed = run_rate_add_io_slots_cases(my_predbat)
     finally:
@@ -162,6 +165,7 @@ def run_rate_add_io_slots_tests(my_predbat):
         my_predbat.dynamic_load_car_effective = saved_effective
         my_predbat.io_slot_log_gate = saved_slot_log
         my_predbat.forecast_minutes = original_forecast_minutes
+        my_predbat.octopus_slots = saved_octopus_slots
 
     if failed:
         print("\n**** rate_add_io_slots tests: FAILED ****")
@@ -601,6 +605,21 @@ def run_rate_add_io_slots_cases(my_predbat):
 
     failed |= run_rate_add_io_slots_test("test24_completed_bump_charge_still_excluded", my_predbat, slots, True, 12, expected_rates)
 
+    # Test 24b: A boost running now, as Octopus lists it - a planned dispatch of type BOOST at home - is billed
+    # at the day rate, so the house is not planned to charge in it. The same window with no source, as Ohme's
+    # session slots carried it, was priced off-peak and had the battery charged from the grid at peak rate,
+    # which is why the car slots on Octopus Intelligent now come from Octopus's own sensor.
+    print("\n**** Test 24b: A boost in progress is not off-peak, the same slot with no source is ****")
+    boost_start = midnight_utc + timedelta(minutes=my_predbat.minutes_now - 10)
+    boost_end = boost_start + timedelta(minutes=100)
+    block_start = ((my_predbat.minutes_now - 10) // 30) * 30
+    for source, rate in (("BOOST", 10.0), (None, 4.0)):
+        slot = {"start": boost_start.strftime(TIME_FORMAT), "end": boost_end.strftime(TIME_FORMAT), "charge_in_kwh": 12.7, "location": "AT_HOME"}
+        if source:
+            slot["source"] = source
+        expected_rates = {minute: rate for minute in range(block_start, block_start + 30)}
+        failed |= run_rate_add_io_slots_test("test24b_boost_in_progress_source_{}".format(source), my_predbat, [slot], True, 12, expected_rates)
+
     # Test 25: A completed non-home dispatch consumes the day's low-rate budget, so a later planned
     # AT_HOME slot in the same midday-to-midday period goes over the cap. This is the other half of
     # the #4946 relaxation: once a completed AWAY dispatch is billed off-peak it must also spend a
@@ -630,6 +649,7 @@ def run_rate_add_io_slots_cases(my_predbat):
     failed |= run_rate_add_io_slots_flag_tests(my_predbat, midnight_utc, TIME_FORMAT)
     failed |= run_rate_add_io_slots_log_test(my_predbat, midnight_utc, TIME_FORMAT)
     failed |= run_cap_minutes_tests(my_predbat, midnight_utc, TIME_FORMAT)
+    failed |= run_shared_cap_tests(my_predbat, midnight_utc, TIME_FORMAT)
     failed |= run_rate_add_io_short_slot_tests(my_predbat, midnight_utc, TIME_FORMAT)
     return failed
 
@@ -777,6 +797,190 @@ def run_cap_minutes_tests(my_predbat, midnight_utc, time_format):
         slots = [dispatch((9, 40), (9, 50), 1.0), dispatch((9, 30), (10, 30), 0.0), dispatch((11, 0), (11, 20)), dispatch((11, 30), (11, 50))]
         expected_rates = rates_for((570, 630, 4.0), (660, 690, 4.0), (690, 720, 4.0))
         failed |= run_cap_minutes_case("cap_minutes_running_zero_kwh_overlap", my_predbat, slots, 3, expected_rates, [(600, 630, 4), (660, 680, 4), (690, 700, 4), (700, 710, 10)])
+    finally:
+        for key, value in saved.items():
+            setattr(my_predbat, key, value)
+
+    return failed
+
+
+def run_shared_cap_case(testname, my_predbat, car_slots, octopus_slot_max, expected_rates, expected_car_slots):
+    """
+    Run every car's dispatches through rate_add_io_slots() and then load_octopus_slots(), car by car,
+    checking the rates they build between them and each car's plan as (start, end, average). Fetch plans
+    the cars before it builds the rates, but both work the cap out from octopus_slots alone, not from each other
+    """
+    failed = False
+    print("**** Running Test: rate_add_io_slots {} ****".format(testname))
+    my_predbat.args["octopus_slot_low_rate"] = True
+    my_predbat.args["octopus_slot_max"] = octopus_slot_max
+    my_predbat.octopus_slots = [list(slots) for slots in car_slots]
+    rates = {minute: 10.0 for minute in range(-96 * 60, 3 * 24 * 60)}
+    for car_n in range(len(car_slots)):
+        rates = my_predbat.rate_add_io_slots(car_n, rates, my_predbat.octopus_slots[car_n])
+    for minute, expected_rate in expected_rates.items():
+        if rates.get(minute) != expected_rate:
+            print("ERROR: {} minute {} should have rate {} but got {}".format(testname, minute, expected_rate, rates.get(minute)))
+            failed = True
+    for car_n in range(len(car_slots)):
+        plan = [(slot["start"], slot["end"], slot["average"]) for slot in my_predbat.load_octopus_slots(car_n, my_predbat.octopus_slots[car_n], False)]
+        if plan != expected_car_slots[car_n]:
+            print("ERROR: {} car {} slots should be {} but got {}".format(testname, car_n, expected_car_slots[car_n], plan))
+            failed = True
+    return failed
+
+
+def run_shared_cap_tests(my_predbat, midnight_utc, time_format):
+    """
+    The daily cap is per account, so with two cars on Intelligent Octopus Go their dispatches share one
+    allowance, used up earliest first whichever car they are for, in the rates and the car plans alike (#5215)
+
+    Now is 10:00 and the dispatches here are from 13:00 on, in the midday-to-midday period from today's noon,
+    but for the across-midday case, which has one starting in the period before.
+    """
+    failed = False
+    saved = {
+        key: getattr(my_predbat, key)
+        for key in (
+            "num_cars",
+            "car_charging_soc",
+            "car_charging_limit",
+            "car_charging_loss",
+            "car_charging_rate",
+            "rate_max_base",
+            "octopus_slots",
+            "octopus_surplus",
+            "dynamic_load_car_effective",
+            "dynamic_load_car_confirmed",
+            "dynamic_load_car_confirmed_periods",
+            "minutes_now",
+            "rate_min_base",
+            "rate_import",
+        )
+    }
+    my_predbat.dynamic_load_car_effective = {}  # Neither car cancelled by dynamic load, whatever an earlier test left
+    my_predbat.minutes_now = 10 * 60
+    my_predbat.rate_min_base = 4
+    my_predbat.num_cars = 2
+    my_predbat.car_charging_soc = [0.0, 0.0]
+    my_predbat.car_charging_limit = [100.0, 100.0]
+    my_predbat.car_charging_loss = 1.0
+    my_predbat.car_charging_rate = [7.4, 7.4]
+    my_predbat.rate_max_base = 10
+    my_predbat.octopus_surplus = set()
+
+    def dispatch(start, end, kwh=2.0):
+        """A smart-charge dispatch at home between two (hour, minute) times today"""
+        start_time = midnight_utc + timedelta(hours=start[0], minutes=start[1])
+        end_time = midnight_utc + timedelta(hours=end[0], minutes=end[1])
+        return {"start": start_time.strftime(time_format), "end": end_time.strftime(time_format), "charge_in_kwh": kwh, "source": "smart-charge", "location": "AT_HOME"}
+
+    def rates_for(*spans):
+        """Expected rates from (start, end, rate) spans of minutes"""
+        return {minute: rate for start, end, rate in spans for minute in range(start, end)}
+
+    try:
+        # 40 minutes each against a 60-minute cap: car 0's come first and all fit, leaving 20 for car 1.
+        # Its plan splits 20 minutes in, and the rates keep the half hour that falls in cheap but not the next
+        print("\n**** Shared cap: two cars cannot use more than one allowance ****")
+        car_slots = [[dispatch((13, 0), (13, 40))], [dispatch((14, 0), (14, 40))]]
+        expected_rates = rates_for((780, 840, 4.0), (840, 870, 4.0), (870, 900, 10.0))
+        failed |= run_shared_cap_case("shared_cap_one_allowance", my_predbat, car_slots, 2, expected_rates, [[(780, 820, 4)], [(840, 860, 4), (860, 880, 10)]])
+
+        # Car 1's dispatch at 13:00 comes before car 0's at 15:00, so it takes the whole 60-minute cap,
+        # though car 0 is priced and planned first
+        print("\n**** Shared cap: earliest dispatch first, whichever car ****")
+        car_slots = [[dispatch((15, 0), (16, 0))], [dispatch((13, 0), (14, 0))]]
+        expected_rates = rates_for((780, 840, 4.0), (900, 960, 10.0))
+        failed |= run_shared_cap_case("shared_cap_earliest_first", my_predbat, car_slots, 2, expected_rates, [[(900, 960, 10)], [(780, 840, 4)]])
+
+        # The cars' dispatches take turns, so the budget runs out part-way through car 0's second one
+        print("\n**** Shared cap: dispatches interleaved between the cars ****")
+        car_slots = [[dispatch((13, 0), (13, 30)), dispatch((15, 0), (15, 40))], [dispatch((14, 0), (14, 30)), dispatch((16, 0), (16, 30))]]
+        expected_rates = rates_for((780, 810, 4.0), (840, 870, 4.0), (900, 930, 4.0), (930, 960, 10.0), (960, 990, 10.0))
+        failed |= run_shared_cap_case("shared_cap_interleaved", my_predbat, car_slots, 3, expected_rates, [[(780, 810, 4), (900, 930, 4), (930, 940, 10)], [(840, 870, 4), (960, 990, 10)]])
+
+        # The allowance is in clock time: both cars charging 13:00-14:00 use 60 minutes of it, not 120, so with
+        # a 90-minute cap car 0's 14:00 dispatch still fits and car 1's at 14:30 is the one over the cap
+        print("\n**** Shared cap: fully overlapping dispatches use the allowance once ****")
+        car_slots = [[dispatch((13, 0), (14, 0)), dispatch((14, 0), (14, 30))], [dispatch((13, 0), (14, 0)), dispatch((14, 30), (15, 0))]]
+        expected_rates = rates_for((780, 870, 4.0), (870, 900, 10.0))
+        failed |= run_shared_cap_case("shared_cap_full_overlap", my_predbat, car_slots, 3, expected_rates, [[(780, 840, 4), (840, 870, 4)], [(780, 840, 4), (870, 900, 10)]])
+
+        # Car 1's 13:30-14:30 overlaps car 0's 13:00-14:00 by half an hour: that half hour is cheap for car 1
+        # without using more of the 60-minute cap, and the half hour after it is over the cap
+        print("\n**** Shared cap: a partial overlap ****")
+        car_slots = [[dispatch((13, 0), (14, 0))], [dispatch((13, 30), (14, 30))]]
+        expected_rates = rates_for((780, 840, 4.0), (840, 870, 10.0))
+        failed |= run_shared_cap_case("shared_cap_partial_overlap", my_predbat, car_slots, 2, expected_rates, [[(780, 840, 4)], [(810, 840, 4), (840, 870, 10)]])
+
+        # Two dispatches from the same minute go to the lower car first. Counted in clock time they share
+        # their first half hour, so the 30-minute cap ends at 13:30 whichever car comes first
+        print("\n**** Shared cap: dispatches starting at the same minute ****")
+        car_slots = [[dispatch((13, 0), (13, 30))], [dispatch((13, 0), (14, 0))]]
+        expected_rates = rates_for((780, 810, 4.0), (810, 840, 10.0))
+        expected_plans = [[(780, 810, 4)], [(780, 810, 4), (810, 840, 10)]]
+        failed |= run_shared_cap_case("shared_cap_same_start", my_predbat, car_slots, 1, expected_rates, expected_plans)
+        failed |= run_shared_cap_case("shared_cap_same_start_swapped", my_predbat, car_slots[::-1], 1, expected_rates, expected_plans[::-1])
+
+        # Car 0's 10:30-13:00 belongs to the period up to midday and has 60 minutes of it, car 1's 12:30-13:30
+        # to the next. The half hour from 12:30 that car 1 is granted is cheap for car 0 too, though car 0
+        # was over its own period's cap there, so its plan agrees with the rates
+        print("\n**** Shared cap: an overlap across midday ****")
+        car_slots = [[dispatch((10, 30), (13, 0), 5.0)], [dispatch((12, 30), (13, 30))]]
+        expected_rates = rates_for((630, 690, 4.0), (690, 750, 10.0), (750, 810, 4.0))
+        failed |= run_shared_cap_case("shared_cap_across_midday", my_predbat, car_slots, 2, expected_rates, [[(630, 690, 4), (690, 750, 10), (750, 780, 4)], [(750, 810, 4)]])
+
+        # Another car's dispatch that is not billed off-peak - away from home, or a bump charge - uses none of the cap
+        print("\n**** Shared cap: another car's away and bump-charge dispatches use none of it ****")
+        away = dict(dispatch((13, 0), (13, 30)), location="AWAY")
+        bump = dict(dispatch((13, 30), (14, 0)), source="bump-charge")
+        car_slots = [[dispatch((14, 0), (15, 0))], [away, bump]]
+        expected_rates = rates_for((780, 840, 10.0), (840, 900, 4.0))
+        # A tariff rate unlike rate_max_base, so the bump charge is seen to be priced at the tariff, not over the cap
+        my_predbat.rate_import = {**my_predbat.rate_import, **{minute: 7.0 for minute in range(780, 840)}}
+        failed |= run_shared_cap_case("shared_cap_not_billed_off_peak", my_predbat, car_slots, 2, expected_rates, [[(840, 900, 4)], [(810, 840, 7.0)]])
+
+        # A car dynamic load has cancelled gets no cheap rate from now, so its dispatch uses none of the cap and the
+        # other car's later one gets it all. Rates only: the car plan still counts a cancelled car's minutes (#5215)
+        print("\n**** Shared cap: a cancelled car's dispatch uses none of it in the rates ****")
+        my_predbat.args["octopus_slot_max"] = 2
+        my_predbat.dynamic_load_car_effective = {1: True}
+        my_predbat.dynamic_load_car_confirmed = {}
+        my_predbat.octopus_slots = [[dispatch((14, 0), (15, 0))], [dispatch((13, 0), (14, 0))]]
+        rates = {minute: 10.0 for minute in range(-96 * 60, 3 * 24 * 60)}
+        for car_n in range(2):
+            rates = my_predbat.rate_add_io_slots(car_n, rates, my_predbat.octopus_slots[car_n])
+        for minute, expected_rate in rates_for((780, 840, 10.0), (840, 900, 4.0)).items():
+            if rates.get(minute) != expected_rate:
+                print("ERROR: shared_cap_cancelled_car minute {} should have rate {} but got {}".format(minute, expected_rate, rates.get(minute)))
+                failed = True
+        my_predbat.dynamic_load_car_effective = {}
+
+        # Another car's dispatch too short to trust (#5657) is judged against that car's own charging: car 1's
+        # unconfirmed one-minute 13:13-13:14 is not cheap and uses none of the 30-minute cap, so car 0's 13:30-14:00
+        # gets all of it - even though car 0 itself was seen charging in the 13:00 half hour
+        print("\n**** Shared cap: another car's short unconfirmed dispatch uses none of it ****")
+        my_predbat.dynamic_load_car_confirmed_periods = {0: {midnight_utc + timedelta(minutes=810)}}
+        # A tariff rate unlike rate_max_base and rate_min_base, so car 1's short dispatch is seen to be priced at the tariff
+        my_predbat.rate_import = {**my_predbat.rate_import, **{minute: 7.0 for minute in range(780, 840)}}
+        car_slots = [[dispatch((13, 30), (14, 0))], [dispatch((13, 13), (13, 14), 0.1)]]
+        expected_rates = rates_for((780, 810, 10.0), (810, 840, 4.0))
+        failed |= run_shared_cap_case("shared_cap_short_unconfirmed", my_predbat, car_slots, 1, expected_rates, [[(810, 840, 4)], [(793, 794, 7.0)]])
+        my_predbat.dynamic_load_car_confirmed_periods = {}
+
+        # The same one-minute dispatch held as running (octopus_held_dispatches()) is exempt from the short test,
+        # so it is cheap and its minute comes out of the 30-minute cap before car 0's half hour
+        print("\n**** Shared cap: another car's short held dispatch uses its minute ****")
+        car_slots = [[dispatch((13, 30), (14, 0))], [dict(dispatch((13, 13), (13, 14), 0.1), held=True)]]
+        expected_rates = rates_for((780, 810, 4.0), (810, 840, 4.0))
+        failed |= run_shared_cap_case("shared_cap_short_held", my_predbat, car_slots, 1, expected_rates, [[(810, 839, 4), (839, 840, 10)], [(793, 794, 4)]])
+
+        # A second car with no dispatches leaves the first exactly as it is on its own
+        print("\n**** Shared cap: a second car with no dispatches changes nothing ****")
+        car_slots = [[dispatch((13, 0), (13, 40)), dispatch((14, 0), (14, 40))], []]
+        expected_rates = rates_for((780, 840, 4.0), (840, 870, 4.0), (870, 900, 10.0))
+        failed |= run_shared_cap_case("shared_cap_second_car_idle", my_predbat, car_slots, 2, expected_rates, [[(780, 820, 4), (840, 860, 4), (860, 880, 10)], []])
     finally:
         for key, value in saved.items():
             setattr(my_predbat, key, value)

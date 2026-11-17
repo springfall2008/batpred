@@ -1126,6 +1126,7 @@ def run_secrets_tests(my_predbat=None):
     failed = test_secrets_loading()
     failed |= test_mask_secret_yaml_text()
     failed |= test_load_apps_yaml_resolves_secrets()
+    failed |= test_apps_yaml_error_reaches_predbat_log()
     failed |= test_collect_log_secret_values()
     failed |= test_compile_log_secret_pattern_and_redact_log_line()
     failed |= test_log_redacts_at_write_time()
@@ -1182,4 +1183,90 @@ def test_load_apps_yaml_resolves_secrets():
 
     if not failed:
         print("**** test_load_apps_yaml_resolves_secrets PASSED ****")
+    return failed
+
+
+def test_apps_yaml_error_reaches_predbat_log():
+    """
+    Test an apps.yaml that cannot be parsed is reported in predbat.log with an actionable message
+
+    A mistyped secret reference ('!openrouter_api_key', '!secrets name') is an unknown YAML tag.
+    Startup used to print() the PyYAML error and exit, so predbat.log - the file users attach and
+    the only log they can easily find while the web interface is down - showed nothing but the
+    restart loop (GH#5530). The reason, its location and a '!secret' hint must now be logged there.
+
+    An unknown tag is only repeated when it names a key in secrets.yaml - a raw credential pasted
+    after a '!' would otherwise land in predbat.log unredacted. A missing pred_bat section or a
+    missing file is just as fatal, so it must be logged the same way rather than as a traceback.
+    """
+    print("**** Running test_apps_yaml_error_reaches_predbat_log ****")
+    failed = False
+
+    header = "pred_bat:\n  module: predbat\n  class: PredBat\n"
+    hidden = "unknown tag at line 4 column 12 (not shown in case it is a credential)"
+    cases = [
+        # (name, apps.yaml content or None for no file, text expected in predbat.log, text that must not appear)
+        ("unknown tag naming a secret", header + "  api_key: !openrouter_api_key\n", ["unknown tag '!openrouter_api_key'", "line 4 column 12", "did you mean '!secret openrouter_api_key'?"], []),
+        ("plural !secrets", header + "  api_key: !secrets axle_api_key\n", ["unknown tag '!secrets'", "line 4 column 12", "did you mean '!secret <name>'?"], []),
+        ("raw key as a tag", header + "  api_key: !sk-proj-abc123\n", [hidden, "did you mean '!secret <name>'?"], ["sk-proj-abc123"]),
+        ("unlisted name as a tag", header + "  api_key: !unlisted_api_key\n", [hidden], ["unlisted_api_key"]),
+        ("malformed YAML", header + "  api_key: [unclosed\n", ["is not valid YAML", "line 5, column 1"], []),
+        ("no pred_bat section", "predbat:\n  module: predbat\n", ["it has no pred_bat section", "nested under a top-level 'pred_bat:' key"], []),
+        ("missing file", None, ["Unable to load test_apps.yaml - [Errno 2] No such file or directory"], []),
+    ]
+
+    saved_apps_file = os.environ.get("PREDBAT_APPS_FILE")
+    saved_secrets_file = os.environ.get("PREDBAT_SECRETS_FILE")
+    os.environ["PREDBAT_APPS_FILE"] = "test_apps.yaml"
+    os.environ["PREDBAT_SECRETS_FILE"] = "test_apps_secrets.yaml"
+    try:
+        with open("test_apps_secrets.yaml", "w") as f:
+            f.write("openrouter_api_key: or-secret-value\n")
+        for name, apps_content, expected, absent in cases:
+            for stale in ("predbat.log", "test_apps.yaml"):
+                if os.path.exists(stale):
+                    os.remove(stale)
+            if apps_content is not None:
+                with open("test_apps.yaml", "w") as f:
+                    f.write(apps_content)
+
+            exited = False
+            h = None
+            try:
+                h = Hass()
+            except SystemExit:
+                exited = True
+            if h is not None:
+                h.logfile.close()
+            if not exited:
+                print("ERROR: {}: expected startup to exit on an unparseable apps.yaml".format(name))
+                failed = True
+
+            content = ""
+            if os.path.exists("predbat.log"):
+                with open("predbat.log") as f:
+                    content = f.read()
+            for text in expected:
+                if text not in content:
+                    print("ERROR: {}: expected '{}' in predbat.log, got:\n{}".format(name, text, content))
+                    failed = True
+            for text in absent:
+                if text in content:
+                    print("ERROR: {}: '{}' must not be written to predbat.log, got:\n{}".format(name, text, content))
+                    failed = True
+            if "Error: Unable to load" not in content:
+                print("ERROR: {}: the failure was not logged as an Error line:\n{}".format(name, content))
+                failed = True
+    finally:
+        for env_name, saved in (("PREDBAT_APPS_FILE", saved_apps_file), ("PREDBAT_SECRETS_FILE", saved_secrets_file)):
+            if saved is None:
+                os.environ.pop(env_name, None)
+            else:
+                os.environ[env_name] = saved
+        for leftover in ("test_apps.yaml", "test_apps_secrets.yaml", "predbat.log"):
+            if os.path.exists(leftover):
+                os.remove(leftover)
+
+    if not failed:
+        print("**** test_apps_yaml_error_reaches_predbat_log PASSED ****")
     return failed

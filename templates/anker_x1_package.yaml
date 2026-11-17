@@ -1,0 +1,442 @@
+# =============================================================================
+# Anker SOLIX X1 <-> Predbat bridge (Home Assistant package)
+#
+# For the anker-x1-ha integration, version 0.7.0 or later:
+#   https://github.com/afewyards/anker-x1-ha
+# Used with the Predbat template templates/anker_x1.yaml. See the Anker SOLIX X1
+# section of the Predbat inverter setup docs for the full instructions.
+#
+# Install:
+#   1. Save as <config>/packages/anker_x1_package.yaml
+#   2. Make sure configuration.yaml contains:
+#        homeassistant:
+#          packages: !include_dir_named packages
+#   3. Check the Anker entity IDs used below exist (Developer Tools -> States).
+#      They are the IDs the integration creates for its "Anker X1" device. If
+#      yours differ, replace them throughout this file and apps.yaml.
+#   4. If your inverter is not 5 kW, change battery_limit in the script and the
+#      max of the two rate helpers.
+#   5. Restart Home Assistant.
+#
+# Provides:
+#   input_number.predbat_anker_x1_charge_rate      -> apps.yaml charge_rate
+#   input_number.predbat_anker_x1_discharge_rate   -> apps.yaml discharge_rate
+#   script.predbat_anker_x1_control                -> apps.yaml *_service entries
+#   sensor.anker_x1_house_load_today               -> apps.yaml load_today
+#   sensor.anker_x1_house_load_power               -> apps.yaml load_power
+#   sensor.anker_x1_battery_soc_for_predbat        -> apps.yaml soc_percent
+#   input_text.predbat_anker_x1_last_command       (internal, skips repeat writes)
+#   input_number.predbat_anker_x1_setpoint_written (internal, last setpoint written)
+#   automation: follow the charge limit near full (stops discharge bursts)
+#   sensor.anker_x1_house_load_today_raw           (internal, running energy balance)
+# =============================================================================
+
+# Predbat writes its chosen charge/discharge power here and passes it to the
+# script as {power}. They do nothing on their own.
+input_number:
+  predbat_anker_x1_charge_rate:
+    name: Predbat Anker X1 charge rate
+    icon: mdi:battery-arrow-up
+    min: 0
+    max: 5000
+    step: 1
+    mode: box
+    unit_of_measurement: W
+  predbat_anker_x1_discharge_rate:
+    name: Predbat Anker X1 discharge rate
+    icon: mdi:battery-arrow-down
+    min: 0
+    max: 5000
+    step: 1
+    mode: box
+    unit_of_measurement: W
+
+  # The setpoint last written to the X1. The setpoint entity's own state shows
+  # the battery's actual power rather than what was asked, so this is kept
+  # separately, by the control script and by the near-full automation below.
+  predbat_anker_x1_setpoint_written:
+    name: Predbat Anker X1 setpoint written
+    icon: mdi:battery-sync
+    min: -6000
+    max: 10000
+    step: 1
+    mode: box
+    unit_of_measurement: W
+
+input_text:
+  predbat_anker_x1_last_command:
+    name: Predbat Anker X1 last command
+    icon: mdi:history
+    max: 32
+
+script:
+  predbat_anker_x1_control:
+    alias: Predbat Anker X1 control
+    description: >-
+      Called by Predbat's Service API. charge / discharge put the X1 into VPP
+      mode and write the battery setpoint, hold writes 0 W so the battery
+      neither charges nor discharges, auto clears the setpoint and switches
+      the X1 to Self-consumption.
+    icon: mdi:home-battery
+    mode: queued
+    max: 20
+    fields:
+      command:
+        name: Command
+        description: charge, discharge, hold or auto
+        required: true
+        example: charge
+        selector:
+          select:
+            options:
+              - charge
+              - discharge
+              - hold
+              - auto
+      power:
+        name: Power
+        description: Battery power in W, always positive
+        example: 3000
+        selector:
+          number:
+            min: 0
+            max: 5000
+            step: 100
+            mode: box
+            unit_of_measurement: W
+      target_soc:
+        name: Target SoC
+        description: Informational only, Predbat stops the charge or discharge itself
+        example: 80
+        selector:
+          number:
+            min: 0
+            max: 100
+            mode: box
+            unit_of_measurement: "%"
+    variables:
+      setpoint_entity: number.anker_x1_battery_setpoint_charge_discharge
+      control_switch: switch.anker_x1_modbus_control_hand_battery_to_ha_vpp
+      work_mode_entity: select.anker_x1_work_mode
+      # Work mode for when Predbat isn't charging, exporting or holding
+      auto_mode: Self-consumption
+      # Most battery power this script will ask for, charging or discharging (W).
+      # 5000 for the X1-H5K-S; the setpoint range (the inverter's nameplate,
+      # from anker-x1-ha 0.7.0) also enforces it.
+      battery_limit: 5000
+      last_command_helper: input_text.predbat_anker_x1_last_command
+      soc_entity: sensor.anker_x1_battery_soc
+      # Predbat's reserve, the lowest level it plans the battery down to (%)
+      reserve_entity: input_number.predbat_set_reserve_min
+    sequence:
+      # Fields normally arrive as variables, but read them from data as well
+      # in case the caller nests them there.
+      - variables:
+          cmd: >-
+            {{ (command if command is defined
+                else (data.command if data is defined and data.command is defined else 'unknown'))
+               | string | lower | trim }}
+          watts: >-
+            {{ (power if power is defined
+                else (data.power if data is defined and data.power is defined else 0))
+               | float(0) | abs | int }}
+          soc: "{{ states(soc_entity) | float(50) }}"
+          floor: "{{ states(reserve_entity) | float(4) }}"
+      # A hold at the floor is the same as self-consumption - the battery can't
+      # go lower either way - so use that, and keep the X1 out of VPP mode.
+      # Predbat sends a hold whenever a charge window's target is the reserve,
+      # even with support_charge_freeze off.
+      - variables:
+          cmd: "{{ 'auto' if cmd == 'hold' and soc <= floor + 1 else cmd }}"
+      - variables:
+          requested: >-
+            {{ (0 - ([watts, battery_limit] | min)) if cmd == 'charge'
+               else (([watts, battery_limit] | min) if cmd == 'discharge' else 0) }}
+          # What Predbat asked for. A repeat of a command already running is
+          # left alone, so the near-full automation below can lower a running
+          # charge without Predbat's next repeat putting it back up.
+          wanted: "{{ 'auto' if cmd == 'auto' else cmd ~ ':' ~ requested }}"
+          last_command: "{{ states(last_command_helper) }}"
+          x1_in_vpp: "{{ is_state(control_switch, 'on') }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ cmd in ['charge', 'discharge', 'hold'] }}"
+            sequence:
+              # Every setpoint write also rewrites the X1 work-mode register,
+              # so skip it when the X1 is already doing what was asked.
+              - if:
+                  - condition: template
+                    value_template: "{{ x1_in_vpp and last_command == wanted }}"
+                then:
+                  - stop: Already applied
+              # Clamp to battery_limit and to the setpoint's range. Writing the
+              # setpoint puts the X1 into VPP mode.
+              - variables:
+                  setpoint: >-
+                    {{ [[state_attr(setpoint_entity, 'min') | float(0 - battery_limit), 0 - battery_limit] | max,
+                        [[state_attr(setpoint_entity, 'max') | float(battery_limit), battery_limit] | min, requested] | min]
+                       | max | int }}
+              - service: number.set_value
+                target:
+                  entity_id: "{{ setpoint_entity }}"
+                data:
+                  value: "{{ setpoint }}"
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.predbat_anker_x1_setpoint_written
+                data:
+                  value: "{{ setpoint }}"
+              - service: input_text.set_value
+                target:
+                  entity_id: "{{ last_command_helper }}"
+                data:
+                  value: "{{ wanted }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ cmd == 'auto' }}"
+            sequence:
+              - if:
+                  - condition: template
+                    value_template: "{{ x1_in_vpp or last_command != 'auto' }}"
+                then:
+                  # Turning Modbus Control off clears the setpoint but leaves the
+                  # X1 in App-managed mode, so set the work mode afterwards
+                  - service: switch.turn_off
+                    target:
+                      entity_id: "{{ control_switch }}"
+                  - service: select.select_option
+                    target:
+                      entity_id: "{{ work_mode_entity }}"
+                    data:
+                      option: "{{ auto_mode }}"
+                  - service: input_number.set_value
+                    target:
+                      entity_id: input_number.predbat_anker_x1_setpoint_written
+                    data:
+                      value: 0
+                  - service: input_text.set_value
+                    target:
+                      entity_id: "{{ last_command_helper }}"
+                    data:
+                      value: auto
+                else:
+                  # Already released: only fix the work mode if something changed it
+                  - if:
+                      - condition: template
+                        value_template: "{{ not is_state(work_mode_entity, auto_mode) }}"
+                    then:
+                      - service: select.select_option
+                        target:
+                          entity_id: "{{ work_mode_entity }}"
+                        data:
+                          option: "{{ auto_mode }}"
+        default:
+          - stop: Unknown command, expected charge, discharge, hold or auto
+            error: true
+
+automation:
+  # Near full, the battery accepts far less than a forced charge asks for, and
+  # its limit (rechargeable_power) falls within seconds as it tops up. Asked to
+  # charge harder than that, the X1 overshoots into discharge for a few seconds
+  # at a time (in testing, 36 bursts of up to 4.7 kW in 50 minutes at 98-99%).
+  # Predbat only runs every five minutes, so this keeps a running charge at 90%
+  # of the live limit (never more than Predbat asked for) as it moves, from 95%
+  # up. It writes only when the setpoint should move by 100 W or more, and at
+  # most once every five seconds.
+  - id: predbat_anker_x1_follow_charge_limit
+    alias: Predbat Anker X1 - follow the charge limit near full
+    mode: single
+    max_exceeded: silent
+    triggers:
+      - trigger: state
+        entity_id: sensor.anker_x1_rechargeable_power
+      - trigger: state
+        entity_id: input_text.predbat_anker_x1_last_command
+    conditions:
+      - condition: template
+        value_template: "{{ states('input_text.predbat_anker_x1_last_command').startswith('charge:') }}"
+      - condition: state
+        entity_id: switch.anker_x1_modbus_control_hand_battery_to_ha_vpp
+        state: "on"
+      - condition: numeric_state
+        entity_id: sensor.anker_x1_battery_soc
+        above: 94.9
+      - condition: template
+        value_template: "{{ is_number(states('sensor.anker_x1_rechargeable_power')) }}"
+    actions:
+      - variables:
+          # What Predbat asked for, negative for charging: "charge:-5000"
+          requested: "{{ states('input_text.predbat_anker_x1_last_command').split(':')[1] | int(0) }}"
+          limit: "{{ states('sensor.anker_x1_rechargeable_power') | float(0) }}"
+          written: "{{ states('input_number.predbat_anker_x1_setpoint_written') | float(0) }}"
+      - variables:
+          # 90% of the limit, rounded down to the setpoint's 100 W steps, and no
+          # more charge than requested (both negative, so the larger number)
+          target: "{{ [requested, 0 - ((limit * 0.9 / 100) | round(0, 'floor') * 100)] | max | int }}"
+      - condition: template
+        value_template: "{{ (target - written) | abs >= 100 }}"
+      - action: number.set_value
+        target:
+          entity_id: number.anker_x1_battery_setpoint_charge_discharge
+        data:
+          value: "{{ target }}"
+      - action: input_number.set_value
+        target:
+          entity_id: input_number.predbat_anker_x1_setpoint_written
+        data:
+          value: "{{ target }}"
+      - delay: "00:00:05"
+
+template:
+  # House load energy balance, updated every minute:
+  #   load = PV + grid import + battery discharge - grid export - battery charge
+  # The X1 reports no house load energy. This adds up how far each counter moved
+  # since the last minute, so counters that reset at a slightly different
+  # midnight to Home Assistant don't cause jumps. Conversion losses end up
+  # counted as load, as most inverters do.
+  # The grid counters are listed under both names: anker-x1-ha 0.7.0 renamed
+  # "Grid Bought Today" / "Grid Fed-in Today" to "Grid Bought" / "Grid Fed-in",
+  # so a fresh install has sensor.anker_x1_grid_bought and an older one keeps
+  # sensor.anker_x1_grid_bought_today. Whichever doesn't exist is skipped.
+  # The entity list appears twice (state and readings), keep both in step.
+  - trigger:
+      - platform: time_pattern
+        minutes: "/1"
+    sensor:
+      - name: Anker X1 House Load Today Raw
+        unique_id: anker_x1_house_load_today_raw
+        icon: mdi:home-lightning-bolt-outline
+        unit_of_measurement: kWh
+        state: >-
+          {% set sources = {
+            'sensor.anker_x1_pv_energy_total': 1,
+            'sensor.anker_x1_grid_bought': 1,
+            'sensor.anker_x1_grid_bought_today': 1,
+            'sensor.anker_x1_battery_discharge_total': 1,
+            'sensor.anker_x1_grid_fed_in': -1,
+            'sensor.anker_x1_grid_fed_in_today': -1,
+            'sensor.anker_x1_battery_charge_total': -1,
+          } %}
+          {% set last = this.attributes.get('readings') or {} %}
+          {% set ns = namespace(delta=0.0) %}
+          {% for entity, sign in sources.items() %}
+            {% set new = states(entity) %}
+            {% set old = last.get(entity) %}
+            {% if is_number(new) and is_number(old) %}
+              {% set n = new | float %}
+              {% set o = old | float %}
+              {# A counter that went down was reset, so count what it has done since #}
+              {% set step = (n - o) if n >= o else n %}
+              {% if step < 25 %}
+                {% set ns.delta = ns.delta + sign * step %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          {% set same_day = (this.attributes.get('day') | string) == now().strftime('D%Y%m%d') %}
+          {{ (((this.state | float(0)) if same_day else 0) + ns.delta) | round(3) }}
+        attributes:
+          day: "{{ now().strftime('D%Y%m%d') }}"
+          readings: >-
+            {% set entities = [
+              'sensor.anker_x1_pv_energy_total',
+              'sensor.anker_x1_grid_bought',
+              'sensor.anker_x1_grid_bought_today',
+              'sensor.anker_x1_battery_discharge_total',
+              'sensor.anker_x1_grid_fed_in',
+              'sensor.anker_x1_grid_fed_in_today',
+              'sensor.anker_x1_battery_charge_total',
+            ] %}
+            {% set last = this.attributes.get('readings') or {} %}
+            {% set ns = namespace(pairs=[]) %}
+            {% for entity in entities %}
+              {% set v = states(entity) %}
+              {% set ns.pairs = ns.pairs + [(entity, (v | float) if is_number(v) else last.get(entity))] %}
+            {% endfor %}
+            {{ dict(ns.pairs) }}
+
+  # What Predbat reads as load_today: only ever goes up during the day and
+  # starts again from zero at midnight.
+  - trigger:
+      - platform: state
+        entity_id: sensor.anker_x1_house_load_today_raw
+      - platform: time_pattern
+        minutes: "/5"
+    sensor:
+      - name: Anker X1 House Load Today
+        unique_id: anker_x1_house_load_today
+        icon: mdi:home-lightning-bolt
+        unit_of_measurement: kWh
+        device_class: energy
+        state_class: total_increasing
+        state: >-
+          {% set today = now().strftime('D%Y%m%d') %}
+          {% set previous = (this.state | float(0)) if (this.attributes.get('day') | string) == today else 0 %}
+          {% set raw = states('sensor.anker_x1_house_load_today_raw') %}
+          {% if is_number(raw) and (state_attr('sensor.anker_x1_house_load_today_raw', 'day') | string) == today %}
+            {{ [raw | float, previous] | max | round(3) }}
+          {% else %}
+            {{ previous | round(3) }}
+          {% endif %}
+        attributes:
+          day: "{{ now().strftime('D%Y%m%d') }}"
+
+  # Live house load for Predbat's load_power: solar + battery + grid, where the
+  # battery is positive while discharging and the external meter is positive
+  # while importing. Conversion losses count as load, as in the energy balance
+  # above. Updated every minute.
+  - trigger:
+      - platform: time_pattern
+        minutes: "/1"
+    sensor:
+      - name: Anker X1 House Load Power
+        unique_id: anker_x1_house_load_power
+        icon: mdi:home-lightning-bolt
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        availability: >-
+          {{ is_number(states('sensor.anker_x1_usable_pv_power'))
+             and is_number(states('sensor.anker_x1_battery_power'))
+             and is_number(states('sensor.anker_x1_meter_total_power')) }}
+        state: >-
+          {{ [0, states('sensor.anker_x1_usable_pv_power') | float(0)
+                 + states('sensor.anker_x1_battery_power') | float(0)
+                 + states('sensor.anker_x1_meter_total_power') | float(0)] | max | round(0) | int }}
+
+  # Battery SoC for Predbat. Passes the X1's reading straight through, but if it
+  # goes unavailable or suddenly reads 0% (a glitch: the X1 keeps a minimum
+  # charge) the last good reading is held for up to 15 minutes. Without this a
+  # single bad read makes Predbat plan from an empty battery. After 15 minutes
+  # the real reading comes through, so a genuine outage or empty battery shows.
+  - trigger:
+      - platform: state
+        entity_id: sensor.anker_x1_battery_soc
+      - platform: time_pattern
+        minutes: "/1"
+    sensor:
+      - name: Anker X1 Battery SOC for Predbat
+        unique_id: anker_x1_battery_soc_for_predbat
+        icon: mdi:battery
+        unit_of_measurement: "%"
+        device_class: battery
+        state_class: measurement
+        availability: >-
+          {% set v = states('sensor.anker_x1_battery_soc') %}
+          {% set last = this.attributes.get('last_good') %}
+          {% set holding = is_number(this.state) and last is not none
+             and (now() - as_datetime(last | string)).total_seconds() < 900 %}
+          {{ is_number(v) or holding }}
+        state: >-
+          {% set v = states('sensor.anker_x1_battery_soc') %}
+          {% set good = is_number(v) and v | float(0) > 0 %}
+          {% set last = this.attributes.get('last_good') %}
+          {% set holding = is_number(this.state) and last is not none
+             and (now() - as_datetime(last | string)).total_seconds() < 900 %}
+          {% if good %}{{ v | float }}
+          {% elif holding %}{{ this.state | float }}
+          {% else %}{{ v | float(0) }}{% endif %}
+        attributes:
+          last_good: >-
+            {% set v = states('sensor.anker_x1_battery_soc') %}
+            {{ now().isoformat() if is_number(v) and v | float(0) > 0 else this.attributes.get('last_good') }}

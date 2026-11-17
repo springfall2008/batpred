@@ -194,12 +194,12 @@ pred_bat:
   # Battery temperature sensor per inverter, used outside REST mode to get current temperature
   #
   #battery_temperature:
-  # - sensor.givtcp_battery_stack_1_bms_temperature
-  # - sensor.givtcp2_battery_stack_1_bms_temperature
+  # - sensor.givtcp_battery_stack_1_battery_temperature
+  # - sensor.givtcp2_battery_stack_1_battery_temperature
 
   # Battery temperature history, only one for modelling, used to predict future temperature
   #
-  #battery_temperature_history: sensor.givtcp_battery_stack_1_bms_temperature
+  #battery_temperature_history: sensor.givtcp_battery_stack_1_battery_temperature
 
   # Battery temperature charge adjustment curve
   # Specific in C which is a multiple of the battery capacity
@@ -253,9 +253,12 @@ pred_bat:
   # the default is 1.0 (full power)
   # The example below is from GE 9.5kwh battery with latest firmware and gen1 inverter
   #
-  # Predbat can compute this curve automatically if you have enough data, restart the app and look in the logfile for the data
-  # once set here Predbat will no longer re-compute the curve.
-  # Can also be set to 'auto' to just use the calculation curve, not recommended if you are using low power charging mode.
+  # Predbat learns the charge and discharge rate (by SoC and battery temperature) from your history automatically - the rate grids.
+  # A curve set here is used where there is not yet enough evidence; set battery_rate_grid_auto to False to plan with your curves only.
+  #battery_rate_grid_auto: True
+  # Days of history the first scan reads (as much as Home Assistant keeps), and each daily scan after that
+  #battery_rate_grid_history_days: 28
+  #battery_rate_grid_scan_days: 2
   #battery_charge_power_curve:
   #  91 : 0.91
   #  92 : 0.81
@@ -328,6 +331,15 @@ pred_bat:
   # Requires wallbox_automatic
   #wallbox_control: True
 
+  # Hypervolt EV charger cloud direct integration
+  #hypervolt_username: !secret hypervolt_username
+  #hypervolt_password: !secret hypervolt_password
+  # Register the Hypervolt chargers with Predbat as cars (on by default)
+  #hypervolt_automatic: True
+  # Let Predbat stop and start the chargers according to its own car charging plan.
+  # Requires hypervolt_automatic
+  #hypervolt_control: True
+
   # car_charging_energy defines a daily incrementing sensor which measures the charge added to your car and resets to zero at midnight
   # is used for car_charging_hold feature to filter out car charging from the previous load data
   # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
@@ -387,6 +399,10 @@ pred_bat:
   #  - 're:number.tsunami_charge_limit'
   #car_charging_soc:
   #  - 're:sensor.tsunami_battery'
+  # Optional: the car's own maximum charge rate in kW, one entry per car (a number or a sensor).
+  # The car is planned at the lower of this and its charging rate; a blank entry or 0 means no cap.
+  #car_charging_max_rate:
+  #  - 3.6
 
   # One per car, when true only one car can charge at once, when False multiple cars can charge at once
   #car_charging_exclusive:
@@ -641,9 +657,7 @@ pred_bat:
   #  - '{octopus_intelligent_slot}'
   #  - '{octopus_ready_time}'
   #  - '{octopus_charge_limit}'
-  #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
-  #  - '+[car_charging_soc]'
 
   # Redact additional values from predbat.log and debug dumps that Predbat cannot otherwise
   # recognise as sensitive (an MPAN or similar identifier surfaced by a third-party HA

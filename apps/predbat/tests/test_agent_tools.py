@@ -187,6 +187,34 @@ def test_handler_crash_sets_is_error(my_predbat):
     return failed
 
 
+def test_get_status_reports_num_cars(my_predbat):
+    """get_status reports the configured number of cars (GH#5732).
+
+    num_cars is an apps.yaml argument, not a CONFIG_ITEMS entity, so reading it through
+    get_ha_config() always missed and the tool reported null. The value is set to one that
+    differs from any default so a lookup falling back to a default cannot pass by coincidence.
+    """
+    failed = False
+    print("**** Testing get_status reports num_cars ****")
+    tools = PredbatTools(my_predbat, log_func=my_predbat.log)
+
+    original_num_cars = my_predbat.num_cars
+    try:
+        my_predbat.num_cars = 3
+        result = asyncio.run(tools.execute("get_status", {}))
+        if not result.get("success"):
+            print("ERROR: get_status failed: {}".format(result.get("error")))
+            failed = True
+        num_cars = (result.get("data") or {}).get("num_cars")
+        if num_cars != 3:
+            print("ERROR: expected get_status num_cars=3, got {}".format(num_cars))
+            failed = True
+    finally:
+        my_predbat.num_cars = original_num_cars
+
+    return failed
+
+
 def _set_ha_state_switch(my_predbat, value):
     """Set ai_ha_state_enable's config value directly, returning the previous value to restore."""
     original = my_predbat.config_index["ai_ha_state_enable"].get("value")
@@ -947,7 +975,7 @@ def test_get_entity_history_does_not_block_the_event_loop(my_predbat):
     """The history fetch is offloaded, so the component's event loop keeps running during it.
 
     get_history_wrapper reaches HAInterface.get_history, which chunks the window at
-    HISTORY_CHUNK_DAYS and issues one synchronous requests.get per chunk with a 300s timeout
+    HISTORY_CHUNK_DAYS and issues one synchronous http_get per chunk with a 300s timeout
     each - up to 11 sequential blocking fetches for a 30-day window, none of them cached because
     tracked=False. Run on the event loop, that freezes the chat component and every request
     awaiting run_on_agent_loop with it: /chat/history, /chat/models, the conversation list.
@@ -1564,6 +1592,7 @@ def run_agent_tools_tests(my_predbat):
     failed |= test_execute_dispatch(my_predbat)
     failed |= test_mcp_wrapper_still_inherits(my_predbat)
     failed |= test_handler_crash_sets_is_error(my_predbat)
+    failed |= test_get_status_reports_num_cars(my_predbat)
     failed |= test_ha_state_tools_gate(my_predbat)
     failed |= test_search_entities(my_predbat)
     failed |= test_get_entity_state(my_predbat)

@@ -29,7 +29,7 @@ import time
 from datetime import datetime
 import aiohttp
 import yaml
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
@@ -48,6 +48,8 @@ from sunsynk_const import (
     SUNSYNK_TELEMETRY,
     SUNSYNK_ENERGY,
     SUNSYNK_TELEMETRY_NEGATE,
+    SUNSYNK_GRID_POWER_CT_FIELD,
+    SUNSYNK_GRID_POWER_FALLBACK_FIELD,
     SUNSYNK_CAPACITY_AH_FIELD,
     SUNSYNK_CHARGE_VOLT_FIELD,
     SUNSYNK_CHARGE_CURRENT_FIELDS,
@@ -86,6 +88,7 @@ from sunsynk_const import (
     SUNSYNK_EQUIP_MODE_FIELD,
     SUNSYNK_PARALLEL_FIELD,
     SUNSYNK_BMS_CURRENT_FIELD,
+    SUNSYNK_BMS_VOLT_FIELD,
     SUNSYNK_BMS_LINK_FIELDS,
     SUNSYNK_PARALLEL_SUMMED_POWER,
     SUNSYNK_PARALLEL_SUMMED_ENERGY,
@@ -167,6 +170,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.device_values = {}
         self.device_settings = {}
         self.device_energy = {}
+        # {sn: "ct" | "pac"} - which field sourced that unit's grid_power this poll
+        self.grid_power_source = {}
         self.device_rated_power = {}
         # {sn: {"amps", "seen"}} - the highest BMS charge limit seen; the live one tapers as the bank fills
         self.bms_charge_limit_max = {}
@@ -399,7 +404,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         while attempt < SUNSYNK_RETRIES:
             self.debug_api(method, url, body if body is not None else params)
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.request(method, url, headers=headers, params=params, json=body) as response:
                         if response.status != 200:
                             self.log(f"Warn: Sunsynk {method} {path} returned HTTP {response.status}")
@@ -584,6 +589,39 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 value = -value
             # Preserve integers as integers so SOC publishes as 62 rather than 62.0.
             values[leaf] = int(value) if float(value).is_integer() and leaf in ("soc",) else value
+
+        # grid_power reads the external CT (limiterTotalPower, GH#6068), not pac: on
+        # export pac is the inverter's own grid-port reading and overstates export by
+        # the grid-side house load. Fall back to pac when the CT field is missing, or
+        # reads 0 while pac is live - a site with no CT/limiter fitted. The telemetry
+        # loop above already mapped grid_power from the CT, so only those two cases
+        # need fixing here; both fields share the sign convention (negative on export),
+        # so the negation applies to whichever one sourced the value.
+        grid_payload = responses.get("grid") or {}
+        ct_raw = grid_payload.get(SUNSYNK_GRID_POWER_CT_FIELD)
+        pac_raw = grid_payload.get(SUNSYNK_GRID_POWER_FALLBACK_FIELD)
+        pac = self._as_float(pac_raw) if pac_raw is not None else None
+        falls_back_to_pac = pac is not None and (ct_raw is None or (self._as_float(ct_raw) == 0 and pac != 0))
+        if falls_back_to_pac:
+            values["grid_power"] = -pac
+            if ct_raw is not None:
+                # A zero CT reading is ambiguous: no CT/limiter fitted, or the net
+                # flow is zero at this poll because the grid-side load absorbs the
+                # port export. Say so once rather than silently reintroducing the
+                # over-read for that poll.
+                self._warn_parallel_once(
+                    ("grid_ct_zero_fallback", sn),
+                    f"Warn: Sunsynk {sn} limiterTotalPower reads 0 while pac is live, so grid_power falls back to pac - either no CT/limiter is fitted, or the net flow is zero at this poll",
+                )
+
+        # Which field sourced grid_power decides how a parallel group combines it
+        # (see _group_grid_power): a CT reading already is the site flow, while a
+        # pac reading is only that unit's share.
+        if "grid_power" in values:
+            self.grid_power_source[sn] = "pac" if falls_back_to_pac else "ct"
+        else:
+            self.grid_power_source.pop(sn, None)
+
         # Ratings inputs are kept raw on device_values so the derivations below can read them.
         battery = responses.get("battery") or {}
         for field in (SUNSYNK_CAPACITY_AH_FIELD, SUNSYNK_CHARGE_VOLT_FIELD, SUNSYNK_BMS_CURRENT_FIELD) + SUNSYNK_CHARGE_CURRENT_FIELDS + SUNSYNK_BMS_LINK_FIELDS:
@@ -632,6 +670,24 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Return True when the unit reports its own battery-management link (a non-zero bmsVolt or bmsSoc)."""
         values = self.device_values.get(sn, {})
         return any(self._as_float(values.get(field)) > 0 for field in SUNSYNK_BMS_LINK_FIELDS)
+
+    def battery_power_bms(self, sn):
+        """Return the battery power the BMS itself measures, -bmsCurrent x bmsVolt in W, or None without a BMS link.
+
+        This is what find_battery_size() integrates (bound as battery_size_power), not battery_power.
+        The battery endpoint's "power" is the inverter's own current x voltage, and that current
+        reads 7.3% above bmsCurrent on two real installs, part of why the estimate from "power" ran 11% high.
+        The BMS counts SoC with its own current, so integrating that against SoC gives the size the
+        SoC percentages are actually a share of. It is not used as battery_power because bmsCurrent
+        is whole amps - fine for the sustained charges the estimator looks at, coarse at idle.
+        Negated like the parallel group's battery power: bmsCurrent is positive while charging.
+        """
+        values = self.device_values.get(sn, {})
+        current = values.get(SUNSYNK_BMS_CURRENT_FIELD)
+        volts = self._as_float(values.get(SUNSYNK_BMS_VOLT_FIELD))
+        if not self._has_bms_link(sn) or current is None or volts <= 0:
+            return None
+        return round(-self._as_float(current) * volts)
 
     def _warn_parallel_once(self, key, message):
         """Log a parallel-group warning the first time its condition is seen."""
@@ -701,13 +757,33 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             return None
         return round(sum(readings), 3)
 
+    def _group_grid_power(self, members):
+        """Return a parallel group's grid_power, or None when it must be withheld.
+
+        A CT-sourced reading (limiterTotalPower) already is the whole site's flow,
+        so the first unit reporting one - the master, members being master-first -
+        supplies it and it is never summed. A pac reading is only that unit's own
+        share, so when every reporting member fell back to pac the shares are
+        summed, like PV and load; a share one member did not report withholds the
+        total rather than publishing the master's share. A unit whose source was
+        never recorded (values set without a poll, as in tests) reads as CT, the
+        primary mapping.
+        """
+        ct_members = [member for member in members if "grid_power" in self.device_values.get(member, {}) and self.grid_power_source.get(member, "ct") == "ct"]
+        if ct_members:
+            return self.device_values[ct_members[0]]["grid_power"]
+        return self._sum_members(members, self.device_values, "grid_power")
+
     def group_values(self, sn):
         """Return the telemetry Predbat sees for inverter sn - for a group master, the whole group's.
 
-        SoC, voltage and temperature are the master's (the slave mirrors them); grid, PV and load
-        are summed, a value one unit did not report being withheld rather than published as the
-        master's share. Battery power is the whole bank from the master's BMS, -bmsCurrent x
-        voltage: the master's own power is only its share, and the slave's is garbage.
+        SoC, voltage and temperature are the master's (the slave mirrors them); PV and load
+        are summed, a value one unit did not report being withheld rather than published as
+        the master's share. Grid is the master's site-wide CT reading when it came from
+        the CT (GH#6068), never summed; when every member fell back to pac the per-unit
+        shares are summed instead (see _group_grid_power). Battery power is the
+        whole bank from the master's BMS, -bmsCurrent x voltage: the master's own power is
+        only its share, and the slave's is garbage.
         """
         values = self.device_values.get(sn, {})
         members = self._group_members(sn)
@@ -718,6 +794,11 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             total = self._sum_members(members, self.device_values, leaf)
             if total is not None:
                 group[leaf] = total
+        grid_power = self._group_grid_power(members)
+        if grid_power is not None:
+            group["grid_power"] = grid_power
+        else:
+            group.pop("grid_power", None)
         volts = self._as_float(values.get("battery_voltage"))
         if self._has_bms_link(sn) and values.get(SUNSYNK_BMS_CURRENT_FIELD) is not None and volts > 0:
             group["battery_power"] = round(-self._as_float(values.get(SUNSYNK_BMS_CURRENT_FIELD)) * volts)
@@ -1182,6 +1263,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Compare two settings payloads for change detection."""
         return dict(a or {}) == dict(b or {})
 
+    @writes
     async def apply_settings(self, sn, schedule, current_soc, force=False):
         """Read, modify and write the settings object for one inverter.
 
@@ -1355,6 +1437,10 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             for leaf, unit in units.items():
                 if leaf in values:
                     self.dashboard_item(self._sensor_name(sn, leaf), state=values[leaf], attributes={"unit_of_measurement": unit, "friendly_name": f"Sunsynk {sn} {leaf.replace('_', ' ').title()}"}, app="sunsynk")
+
+            bms_power = self.battery_power_bms(sn)
+            if bms_power is not None:
+                self.dashboard_item(self._sensor_name(sn, "battery_power_bms"), state=bms_power, attributes={"unit_of_measurement": "W", "friendly_name": f"Sunsynk {sn} Battery Power (BMS)"}, app="sunsynk")
 
             # Ratings are published only when actually derivable. An arg pointing at a
             # sensor that never appears is worse than an absent arg, which the user can
@@ -1536,6 +1622,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
                 window["enable"] = self._to_bool(value, window.get("enable", False))
             return
 
+    @writes
     async def apply_schedule(self, sn, force=False):
         """Apply the locally held schedule for one inverter."""
         schedule = self.local_schedule.get(sn)
@@ -1548,6 +1635,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """Return True when Predbat is in read-only mode and must not write to the inverter."""
         return self.get_state_wrapper(f"switch.{self.prefix}_set_read_only", default="off") == "on"
 
+    @writes
     async def _reconcile_control(self, sn):
         """Re-apply sn's schedule if Predbat already controls it, unforced (matches deye.py's _reconcile_control).
 
@@ -1565,6 +1653,7 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         except Exception as error:
             self.log(f"Warn: Sunsynk schedule apply failed for {sn}: {error}")
 
+    @writes
     async def _handle_control_event(self, entity_id, value):
         """Route one control-entity event to the right inverter and apply it."""
         sn = self._sn_from_entity(entity_id)
@@ -1592,14 +1681,17 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         self.update_local_schedule(sn, entity_id, value)
         await self.publish_schedule_settings_ha(sn)
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle a select entity change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle a number entity change."""
         await self._handle_control_event(entity_id, value)
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle a switch entity service call."""
         await self._handle_control_event(entity_id, service)
@@ -1831,10 +1923,23 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
             else:
                 self.log(f"Warn: Sunsynk not every inverter reports {leaf}, it must be set manually in apps.yaml")
 
+        # The capacity is bound as soc_max_fallback, never as soc_max. Sunsynk's "capacity" is the
+        # inverter's Batt Capacity setting (batteryCap, Ah) - typed in at commissioning, not measured -
+        # and a real ~280Ah bank set to 150Ah was planned at about half its size. Bound as soc_max it also
+        # replaced any apps.yaml soc_max, and became the nominal whose 0.65-1.20 plausibility band made
+        # find_battery_size() reject every real charge as capacity_too_high, so nothing could correct
+        # it. As soc_max_fallback it is planned with only until Predbat's own estimate is ready, and an
+        # apps.yaml soc_max wins outright.
         if all(self.battery_capacity(sn) > 0 for sn in driven):
-            self.set_arg_auto("soc_max", [self._sensor_name(sn, "battery_capacity") for sn in devices])
+            self.set_arg_auto("soc_max_fallback", [self._sensor_name(sn, "battery_capacity") for sn in devices], overwrite=False)
         else:
-            self.log("Warn: Sunsynk no battery capacity available for every inverter, soc_max must be set manually in apps.yaml")
+            self.log("Warn: Sunsynk no battery capacity available for every inverter, Predbat will estimate the battery size from charge history - set soc_max manually in apps.yaml to use a known size")
+        # The estimate is made from the BMS's own power, see battery_power_bms(). overwrite=False
+        # because the estimator reads this sensor's history.
+        if all(self.battery_power_bms(sn) is not None for sn in driven):
+            self.set_arg_auto("battery_size_power", [self._sensor_name(sn, "battery_power_bms") for sn in devices], overwrite=False)
+        else:
+            self.log("Warn: Sunsynk not every inverter reports BMS current and voltage, so the battery size is estimated from battery_power, which can read several percent high - set soc_max manually in apps.yaml to use a known size")
         if all(self.battery_rate_max(sn) > 0 for sn in driven):
             self.set_arg_auto("battery_rate_max", [self._sensor_name(sn, "battery_rate_max") for sn in devices])
         else:
@@ -1880,7 +1985,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         soc_max is deliberately NOT a rating: Sunsynk reports amp-hours, and battery_capacity() turns
         them into kWh with a pack voltage Predbat infers from chargeVolt or the user sets
         (sunsynk_battery_nominal_voltage). A derived or user-overridden figure is an entity only (D14),
-        so soc_max appears in entities, bound to the battery_capacity sensor. The Ah the battery
+        so soc_max_fallback appears in entities, bound to the battery_capacity sensor - soc_max itself is
+        never bound, see automatic_config(). The Ah the battery
         endpoint returned is reported as the descriptive battery_capacity_ah. That endpoint is re-read
         every poll and can omit the field, so the last Ah seen is kept (_discovery_battery_ratings)
         rather than thinning the report on a partial poll; nothing is reported for an inverter whose
@@ -1925,7 +2031,8 @@ class SunsynkAPI(ComponentBase, OAuthMixin, TouScheduleMixin):
         """
         seen = self._discovery_sensors.setdefault(sn, set())
         candidates = {
-            "soc_max": ("battery_capacity", "kWh", self.battery_capacity(sn) > 0),
+            "soc_max_fallback": ("battery_capacity", "kWh", self.battery_capacity(sn) > 0),
+            "battery_size_power": ("battery_power_bms", "W", self.battery_power_bms(sn) is not None),
             "battery_rate_max": ("battery_rate_max", "W", self.battery_rate_max(sn) > 0),
             "inverter_limit": ("inverter_limit", "W", self.inverter_limit(sn) > 0),
             # This sensor's state is export_limit(), the lower of pvMaxLimit and the rating - that is the
