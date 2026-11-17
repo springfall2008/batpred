@@ -1709,7 +1709,24 @@ class OctopusAPI(ComponentBase):
         self.set_arg("octopus_saving_session", self.get_entity_name("binary_sensor", "saving_session"))
         self.set_arg("octopus_saving_session_join", self.get_entity_name("select", "saving_session_join"))
         self.set_arg("octopus_free_electricity", self.get_entity_name("sensor", "free_electricity"))
+        # Rate sources that rank below metric_octopus_xxx in fetch_sensor_data(). If the user has set one of
+        # these in apps.yaml they chose it deliberately, so it is kept rather than being silently out-ranked
+        # by the rates discovered from the Octopus account
+        competing_rate_args = {
+            "import": ["metric_spot_import", "metric_energidataservice_import", "metric_stromligning_import_today", "metric_stromligning_import_tomorrow"],
+            "export": ["metric_spot_export", "metric_energidataservice_export", "metric_stromligning_export_today", "metric_stromligning_export_tomorrow"],
+        }
+        raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
+        warned = getattr(self.base, "apps_yaml_override_warned", None)
         for tariff in tariffs:
+            user_rate_args = [arg for arg in competing_rate_args.get(tariff, []) if raw_args.get(arg) is not None]
+            if user_rate_args:
+                octopus_arg = "metric_octopus_{}".format(tariff)
+                warn_key = "competing:" + octopus_arg
+                if warned is not None and warn_key not in warned:
+                    warned.add(warn_key)
+                    self.log("Info: apps.yaml sets '{}: {}' - keeping your apps.yaml setting rather than auto-discovering '{}: {}'".format(user_rate_args[0], raw_args[user_rate_args[0]], octopus_arg, self.get_entity_name("sensor", tariff + "_rates")))
+                continue
             self.set_arg("metric_octopus_{}".format(tariff), self.get_entity_name("sensor", tariff + "_rates"))
             if tariff == "import":
                 self.set_arg("metric_standing_charge", self.get_entity_name("sensor", tariff + "_standing"))
@@ -5369,16 +5386,20 @@ class Octopus:
         self.dynamic_load_car_stripped = stripped
         return rates
 
-    def fetch_octopus_rates(self, entity_id, adjust_key=None):
+    def fetch_octopus_rates(self, entity_id, adjust_key=None, spot_arg=None):
         """
         Fetch the Octopus rates from the sensor
 
         :param entity_id: The entity_id of the sensor
         :param adjust_key: The key use to find Octopus Intelligent adjusted rates. self.io_adjusted is only
             replaced when this is given, so a fetch without it (export, gas) keeps the import's markers
+        :param spot_arg: The metric_spot_xxx apps.yaml name that replaces this call's metric_octopus_xxx setting for sensors
+            that supply raw_today / raw_tomorrow. When given and the rates came from those attributes a one-off
+            deprecation warning is logged
         """
         data_all = []
         rate_data = {}
+        raw_used = False  # True when the rates came from raw_today / raw_tomorrow
         if entity_id:
             # From 9.0.0 of the Octopus plugin the data is split between previous rate, current rate and next rate
             # and the sensor is replaced with an event - try to support the old settings and find the new events
@@ -5402,7 +5423,12 @@ class Octopus:
             else:
                 current_rate_id = entity_id
 
-            data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="rates") or self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today") or self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
+            data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="rates")
+            if not data_import:
+                data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_today")
+                raw_used = bool(data_import)
+            if not data_import:
+                data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="prices")
 
             if data_import:
                 data_all += data_import
@@ -5420,6 +5446,7 @@ class Octopus:
                 data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_tomorrow")
                 if data_import:
                     data_all += data_import
+                    raw_used = True
 
         if data_all:
             rate_key = "rate"
@@ -5445,6 +5472,14 @@ class Octopus:
             # import fetch found (#5286)
             if adjust_key:
                 self.io_adjusted = io_adjusted
+
+            if raw_used and spot_arg and rate_data:
+                self.spot_rates_warn_once(
+                    "deprecated:" + spot_arg,
+                    "Warn: Sensor {} supplies its rates in raw_today / raw_tomorrow attributes. Reading these through metric_octopus_import / metric_octopus_export is deprecated, please change apps.yaml to use {} for this sensor instead".format(
+                        entity_id, spot_arg
+                    ),
+                )
 
         return rate_data
 

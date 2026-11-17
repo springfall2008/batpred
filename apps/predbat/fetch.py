@@ -1579,6 +1579,76 @@ class Fetch:
         """
         return self.manual_charge_times + self.manual_export_times + self.manual_demand_times + self.manual_freeze_charge_times + self.manual_freeze_export_times
 
+    def spot_rates_warn_once(self, key, message):
+        """
+        Log a spot rate warning once per key, so a setting that is wrong on every cycle does not flood the log
+
+        :param key: Identifies the warning, e.g. "deprecated:metric_spot_import"
+        :param message: The text to log
+        """
+        if key not in self.spot_rates_warned:
+            self.spot_rates_warned.add(key)
+            self.log(message)
+
+    def fetch_spot_rates(self, entity_id):
+        """
+        Fetch generic spot energy rates (import or export) from a Home Assistant sensor.
+
+        This is the generic, non-Octopus rate path, used by metric_spot_import / metric_spot_export in apps.yaml.
+        The rates are read ONLY from the sensor's 'raw_today' and (optionally) 'raw_tomorrow' attributes, each
+        being a list of slots. It deliberately shares nothing with the Octopus handling (no Octopus event
+        sensors, no Intelligent adjusted slots) and is never seen by the Agile / AgilePredict future rate code.
+
+        The slot keys are detected from the first slot, in the same way as fetch_octopus_rates(), so a sensor
+        gives the same rates under either apps.yaml name:
+        - start / end / value        - value is currency per kWh and is multiplied by 100
+        - from / till / price        - price is currency per kWh and is multiplied by 100 (Nord Pool style)
+        - from / to / rate           - rate is already in pence/cents, no scaling
+        - valid_from / valid_to / value_inc_vat - already in pence/cents, no scaling
+
+        :param entity_id: The entity_id of the sensor
+        :return: dict of rate (pence/cents per kWh) keyed by minutes from midnight_utc, empty if nothing can be read
+        """
+        data_all = []
+        rate_data = {}
+        if entity_id:
+            if self.debug_enable:
+                self.log("Fetch spot rates from {}".format(entity_id))
+
+            data_today = self.get_state_wrapper(entity_id=entity_id, attribute="raw_today")
+            if data_today:
+                data_all += data_today
+            else:
+                self.log("Warn: Spot rates: No data in sensor {} attribute 'raw_today'".format(entity_id))
+
+            # Tomorrow's rates are normally only published part way through the day, so a missing list is not a warning
+            data_tomorrow = self.get_state_wrapper(entity_id=entity_id, attribute="raw_tomorrow")
+            if data_tomorrow:
+                data_all += data_tomorrow
+
+        if data_all:
+            rate_key = "rate"
+            from_key = "from"
+            to_key = "to"
+            scale = 1.0
+            if rate_key not in data_all[0]:
+                rate_key = "value_inc_vat"
+                from_key = "valid_from"
+                to_key = "valid_to"
+            if from_key not in data_all[0]:
+                from_key = "start"
+                to_key = "end"
+                scale = 100.0
+            if rate_key not in data_all[0]:
+                rate_key = "value"
+            if rate_key not in data_all[0]:
+                rate_key = "price"
+                from_key = "from"
+                to_key = "till"
+            rate_data, _ = minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, scale=scale)
+
+        return rate_data
+
     def fetch_sensor_data(self, save=True):
         """
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
@@ -1736,11 +1806,20 @@ class Fetch:
             import_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False)))
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
+            if "metric_spot_import" in self.args:
+                self.spot_rates_warn_once("both:import", "Warn: Both metric_octopus_import and metric_spot_import are set in apps.yaml, metric_octopus_import is used and metric_spot_import is ignored")
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
-            import_rates = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted")
+            import_rates = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted", spot_arg="metric_spot_import")
             if not import_rates:
                 self.log("Error: metric_octopus_import is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+        elif "metric_spot_import" in self.args:
+            # Generic spot import rates (raw_today / raw_tomorrow), never seen by Agile / AgilePredict
+            entity_id = self.get_arg("metric_spot_import", None, indirect=False)
+            import_rates = self.fetch_spot_rates(entity_id)
+            if not import_rates:
+                self.log("Error: metric_spot_import is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_spot_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
         elif "metric_energidataservice_import" in self.args:
             # Energi Data Service import rates
             entity_id = self.get_arg("metric_energidataservice_import", None, indirect=False)
@@ -1823,11 +1902,20 @@ class Fetch:
             export_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False)))
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
+            if "metric_spot_export" in self.args:
+                self.spot_rates_warn_once("both:export", "Warn: Both metric_octopus_export and metric_spot_export are set in apps.yaml, metric_octopus_export is used and metric_spot_export is ignored")
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
-            export_rates = self.fetch_octopus_rates(entity_id)
+            export_rates = self.fetch_octopus_rates(entity_id, spot_arg="metric_spot_export")
             if not export_rates:
                 self.log("Warning: metric_octopus_export is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Error: metric_octopus_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+        elif "metric_spot_export" in self.args:
+            # Generic spot export rates (raw_today / raw_tomorrow), never seen by Agile / AgilePredict
+            entity_id = self.get_arg("metric_spot_export", None, indirect=False)
+            export_rates = self.fetch_spot_rates(entity_id)
+            if not export_rates:
+                self.log("Warning: metric_spot_export is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_spot_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
         elif "metric_energidataservice_export" in self.args:
             # Energi Data Service export rates
             entity_id = self.get_arg("metric_energidataservice_export", None, indirect=False)

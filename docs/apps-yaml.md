@@ -2330,9 +2330,11 @@ There are a number of configuration items in `apps.yaml` for telling Predbat wha
 These are described in detail in [Energy Rates](energy-rates.md) and are listed here just for completeness:
 
 - **plan_interval_minutes** - Sets time duration of the slots used by Predbat for planning
-- **metric_octopus_import** - Import rates from the Octopus Energy integration
-- **metric_octopus_export** - Export rates from the Octopus Energy integration
+- **metric_octopus_import** - Import rates from the Octopus Energy integration (also enables Agile future rate prediction)
+- **metric_octopus_export** - Export rates from the Octopus Energy integration (also enables Agile future rate prediction)
 - **metric_octopus_gas** - Gas rates from the Octopus Energy integration
+- **metric_spot_import** - Import rates from any other supplier, a sensor with `raw_today` / `raw_tomorrow` attributes (see [Other Energy Spot Rate sensor integrations](energy-rates.md#other-energy-spot-rate-sensor-integrations))
+- **metric_spot_export** - Export rates from any other supplier, same format as metric_spot_import
 - **octopus_intelligent_slot** - Octopus Intelligent GO slot sensor from the Octopus Energy integration
 - **octopus_saving_session** - Energy saving sessions event sensor from the Octopus Energy integration
 - **octopus_saving_session_octopoints_per_penny** - Sets the Octopoints per pence
