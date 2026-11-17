@@ -16,6 +16,7 @@ floor rule, how run_prediction_metric feeds it the nominal run it has already ma
 steps clipping leaves are merged back into one export at the end. The prediction-layer behaviour (direct
 runs, the batch and its fallbacks) is pinned in test_prediction_batch.
 """
+
 from tests.test_infra import reset_inverter
 from const import EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 from prediction_batch import export_end_soc_from_series, floor_export_limits, prediction_cache_key
@@ -49,7 +50,6 @@ def setup(my_predbat):
     my_predbat.minutes_now = 720
     my_predbat.end_record = 24 * 60
     my_predbat.forecast_minutes = 48 * 60
-    my_predbat.manual_all_times = []
     my_predbat.all_active_keep_max = {}
     my_predbat.charge_window_best = []
     my_predbat.charge_limit_best = []
@@ -153,11 +153,13 @@ def test_metric_runs_nominal_first_and_feeds_the_floor(my_predbat):
     export_limits = [target(0), target(0)]
     nominal_soc = {0: 6.0, 90: 4.0, 210: 2.5}
     order = []
+    series_asked = {}
     held = {}
 
-    def run_prediction(cl, cw, ew, el, pv_scenario, end_record, save=None, step=PREDICT_STEP):
+    def run_prediction(cl, cw, ew, el, pv_scenario, end_record, save=None, step=PREDICT_STEP, series=True):
         """Record the scenario order and leave a per-scenario SoC series behind, as the real one does"""
         order.append(pv_scenario)
+        series_asked[pv_scenario] = series
         if pv_scenario == PV_SCENARIO_PV10:
             held["memo_at_pv10"] = dict(my_predbat.prediction.prediction_cache_export_end)
         my_predbat.predict_soc = dict(nominal_soc) if pv_scenario == PV_SCENARIO_NOMINAL else {0: float(pv_scenario)}
@@ -178,6 +180,8 @@ def test_metric_runs_nominal_first_and_feeds_the_floor(my_predbat):
     key = prediction_cache_key(charge_limit, charge_window, export_limits, export_window, PV_SCENARIO_NOMINAL, my_predbat.end_record, PREDICT_STEP)
     expected = export_end_soc_from_series(nominal_soc, export_window, my_predbat.minutes_now, export_limits)
     failed = check(failed, held.get("memo_at_pv10", {}).get(key) == expected, "pv10 should find the nominal window-end SoCs {} in the memo, found {}".format(expected, held.get("memo_at_pv10")))
+    # The window-end SoCs are read from the nominal series, so that run must ask for it; the other two are discarded
+    failed = check(failed, series_asked == {PV_SCENARIO_NOMINAL: True, PV_SCENARIO_PV10: False, PV_SCENARIO_PV90: False}, "only the nominal run should ask for its SoC series, asked {}".format(series_asked))
     failed = check(failed, my_predbat.predict_soc == nominal_soc and my_predbat.iboost_next == PV_SCENARIO_NOMINAL, "the nominal run's state should be left in place, got predict_soc {} iboost_next {}".format(my_predbat.predict_soc, my_predbat.iboost_next))
     my_predbat.pv_metric90_weight = 0.0
     if not failed:
@@ -284,7 +288,7 @@ def test_merge_skips_manual_windows(my_predbat):
     print("**** test_merge_skips_manual_windows ****")
     setup(my_predbat)
     staircase(my_predbat, [60, 40])
-    my_predbat.manual_all_times = [1050]
+    my_predbat.manual_export_times = [1050]
     install_nominal_stub(my_predbat, lambda shape: 100.0)
     try:
         my_predbat.merge_export_staircase()

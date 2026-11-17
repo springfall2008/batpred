@@ -20,6 +20,7 @@ class TestGatewayDisplayOnly:
         gw.prefix = "predbat"
         gw.args = {}
         gw.log = MagicMock()
+        gw.component_loop = None  # set by ComponentBase.__init__, which this skips
         gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.test", gateway_display_only=display)
         gw._mqtt_connected = True
         gw._mqtt_client = SimpleNamespace(publish=AsyncMock())
@@ -188,7 +189,7 @@ class TestGatewayDisplayOnly:
         for connected, online in ((False, False), (True, False), (True, True)):
             gw._mqtt_connected = connected
             gw._gateway_online = online
-            gw._last_telemetry_time = time.time() - 7200
+            gw._last_telemetry_time = gw.monotonic() - 7200
             gw.last_success_timestamp = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(hours=2)
             with patch("gateway.HAS_AIOMQTT", True):
                 assert asyncio.run(gw.run(60, False))
@@ -201,7 +202,7 @@ class TestGatewayDisplayOnly:
 
         gw._mqtt_connected = True
         gw._gateway_online = True
-        gw._last_telemetry_time = time.time()
+        gw._last_telemetry_time = gw.monotonic()
         gw._update_display_health()
         assert base.dashboard_item.call_args.args[1] == "on"
         # A stopped component thread remains a real process-health failure.
@@ -286,7 +287,7 @@ class TestGatewayDisplayOnly:
         assert not gw.is_alive()
         gw._mqtt_connected = True
         gw._gateway_online = True
-        gw._last_telemetry_time = time.time() - 121
+        gw._last_telemetry_time = gw.monotonic() - 121
         assert not gw.is_alive()
 
 
@@ -304,8 +305,8 @@ class TestIndependentVisibility:
         asyncio.run(gw._publish_display_binding(force=True))
         gw._mqtt_client.publish.assert_not_awaited()
         gw._mqtt_connected = True
-        with patch("gateway.time.time", return_value=1800000000):
-            asyncio.run(gw._publish_display_binding(force=True))
+        gw.base.component_clock = SimpleNamespace(monotonic=time.monotonic, time=lambda: 1800000000, sleep=asyncio.sleep)
+        asyncio.run(gw._publish_display_binding(force=True))
         call = gw._mqtt_client.publish.await_args
         assert call.args[0] == gw._topic_base + "/config"
         assert call.kwargs == {"qos": 1, "retain": False}
@@ -335,19 +336,26 @@ class TestIndependentVisibility:
         asyncio.run(gw._publish_raw(gw._topic_base + "/predbat_data", b"cached display", retain=True))
         gw._mqtt_client.publish.assert_not_awaited()
 
-    def test_display_flags_reject_non_boolean_values(self):
-        """Integer or misspelt display flags fail loudly instead of silently picking a mode."""
-        for name in ("gateway_display_enabled", "gateway_live_display"):
-            for value in (0, 1, "typo"):
-                gw = GatewayMQTT.__new__(GatewayMQTT)
-                gw.base = MagicMock()
-                gw.prefix = "predbat"
-                gw.args = {}
-                gw.log = MagicMock()
-                try:
-                    gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.test", **{name: value})
-                except ValueError:
-                    continue
-                raise AssertionError(f"{name}={value!r} was accepted")
+    def test_screen_preferences_never_stop_the_component(self):
+        """A bad screen preference falls back and warns; it must not take inverter control down."""
+
+        def build(**kwargs):
+            """Initialise a real gateway with these keyword options."""
+            gw = GatewayMQTT.__new__(GatewayMQTT)
+            gw.base = MagicMock()
+            gw.prefix = "predbat"
+            gw.args = {}
+            gw.log = MagicMock()
+            gw.initialize(gateway_device_id="pbgw_test", mqtt_host="mqtt.test", **kwargs)
+            return gw
+
+        # get_arg passes ints through unconverted: 0/1 read as false/true.
+        assert build(gateway_display_enabled=0).gateway_display_enabled is False
+        assert build(gateway_live_display=1).gateway_live_display is True
+        # Anything else unreadable falls back to the default, with a warning.
+        gw = build(gateway_display_enabled="typo", gateway_live_display=7)
+        assert gw.gateway_display_enabled is True and gw.gateway_live_display is False
+        warnings = [c.args[0] for c in gw.log.call_args_list if "must be a boolean" in c.args[0]]
+        assert len(warnings) == 2
         gw = TestGatewayDisplayOnly()._make_gateway()
         assert gw.gateway_display_enabled is True and gw.gateway_live_display is False

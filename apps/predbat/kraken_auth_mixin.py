@@ -227,7 +227,7 @@ class KrakenAuthMixin:
         secrets = [str(value) for value in input_vars.values() if value]
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(
                     url,
                     json={"query": mutation, "variables": {"input": input_vars}},

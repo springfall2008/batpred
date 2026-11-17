@@ -15,7 +15,7 @@ import os
 import pytz
 from datetime import datetime, timedelta
 from utils import calc_percent_limit, is_entity_id
-from tests.test_infra import TestHAInterface
+from tests.test_infra import TestHAInterface, run_async
 from predbat import PredBat
 from inverter import Inverter, within_fuzzy
 from givtcp_rest import GivTCPRest
@@ -345,7 +345,22 @@ def _rest_client(inv, dummy_rest=None):
     """
     if dummy_rest is None:
         return GivTCPRest(inv.base, inv)
-    return GivTCPRest(inv.base, inv, rest_postCommand=dummy_rest.dummy_rest_postCommand, rest_getData=dummy_rest.dummy_rest_getData)
+
+    async def post_command(url, json):
+        """The client's POST coroutine, answered by the dummy."""
+        return dummy_rest.dummy_rest_postCommand(url, json)
+
+    async def get_data(url):
+        """The client's GET coroutine, answered by the dummy."""
+        return dummy_rest.dummy_rest_getData(url)
+
+    async def sleep(seconds):
+        """Take the client's waits between retries on the inverter's sleep(), which these tests replace and count."""
+        inv.sleep(seconds)
+
+    client = GivTCPRest(inv.base, inv, rest_postCommand=post_command, rest_getData=get_data)
+    client.sleep = sleep
+    return client
 
 
 def dummy_sleep(seconds):
@@ -616,6 +631,103 @@ def test_battery_rate_max_source(test_name, my_predbat, ha, inverter_type, charg
     return failed
 
 
+def test_inverter_reserve_max_forms(my_predbat):
+    """
+    Test
+       inverter_reserve_max and inverter_battery_rate_min are read both as one value for every inverter and as a
+       per-inverter list, without warning, and a manual API override still applies as it did before.
+
+    GH#5369: the validator wants one entry per inverter, but the reader took the whole list and failed
+    the int conversion, logging "Return bad int value" every cycle and falling back to 100.
+    """
+    failed = False
+    print("Test: test_inverter_reserve_max_forms")
+
+    saved = {arg: copy.deepcopy(my_predbat.args.get(arg, None)) for arg in ("inverter_type", "inverter_reserve_max", "inverter_battery_rate_min", "num_inverters")}
+    try:
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        for case, value, expect in (("list", [97, 98], [97, 98]), ("single", 98, [98, 98]), ("unset", None, [100, 100])):
+            if value is None:
+                my_predbat.args.pop("inverter_reserve_max", None)
+            else:
+                my_predbat.args["inverter_reserve_max"] = value
+            for inverter_id in (0, 1):
+                logged = []
+                saved_log = my_predbat.log
+                my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+                try:
+                    inv = Inverter(my_predbat, inverter_id)
+                finally:
+                    my_predbat.log = saved_log
+                if inv.reserve_max != expect[inverter_id]:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} reserve_max should be {} got {}".format(case, inverter_id, expect[inverter_id], inv.reserve_max))
+                    failed = True
+                warned = [message for message in logged if "inverter_reserve_max is incorrectly setup" in message]
+                if warned:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} should not warn, got {}".format(case, inverter_id, warned))
+                    failed = True
+        # inverter_battery_rate_min takes the same two forms, in watts
+        for case, value, expect in (("rate_min list", [200, 100], [200, 100]), ("rate_min single", 200, [200, 200]), ("rate_min unset", None, [0, 0])):
+            if value is None:
+                my_predbat.args.pop("inverter_battery_rate_min", None)
+            else:
+                my_predbat.args["inverter_battery_rate_min"] = value
+            for inverter_id in (0, 1):
+                # A single value read per inverter id gave the right number but warned "incorrectly setup" every refresh
+                logged = []
+                saved_log = my_predbat.log
+                my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+                try:
+                    inv = Inverter(my_predbat, inverter_id)
+                finally:
+                    my_predbat.log = saved_log
+                rate_min_w = round(inv.battery_rate_min * MINUTE_WATT)
+                if rate_min_w != expect[inverter_id]:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} battery_rate_min should be {}W got {}W".format(case, inverter_id, expect[inverter_id], rate_min_w))
+                    failed = True
+                warned = [message for message in logged if "inverter_battery_rate_min is incorrectly setup" in message]
+                if warned:
+                    print("ERROR: test_inverter_reserve_max_forms: {}: inverter {} should not warn, got {}".format(case, inverter_id, warned))
+                    failed = True
+        # A manual API override with no index applies to every inverter, as docs/manual-api.md says, and one
+        # with an index only to that inverter
+        my_predbat.args["inverter_reserve_max"] = 98
+        my_predbat.args["inverter_battery_rate_min"] = 200
+        try:
+            my_predbat.api_select("manual_api", "inverter_reserve_max=95")
+            my_predbat.api_select("manual_api", "inverter_battery_rate_min(1)=500")
+            my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+            for inverter_id, expect_reserve, expect_rate in ((0, 95, 200), (1, 95, 500)):
+                inv = Inverter(my_predbat, inverter_id)
+                rate_min_w = round(inv.battery_rate_min * MINUTE_WATT)
+                if inv.reserve_max != expect_reserve or rate_min_w != expect_rate:
+                    print("ERROR: test_inverter_reserve_max_forms: API override on inverter {} should give reserve_max {} and rate_min {}W, got {} and {}W".format(inverter_id, expect_reserve, expect_rate, inv.reserve_max, rate_min_w))
+                    failed = True
+        finally:
+            my_predbat.api_select("manual_api", "off")
+            my_predbat.manual_api = my_predbat.api_select_update("manual_api")
+        # An item that is not single_value_ok still warns when a single value is read by index
+        logged = []
+        saved_log = my_predbat.log
+        my_predbat.log = lambda message, *args, **kwargs: logged.append(message)
+        try:
+            my_predbat.resolve_arg("inverter_limit", 3600, index=1)
+        finally:
+            my_predbat.log = saved_log
+        if not any("inverter_limit is incorrectly setup" in message for message in logged):
+            print("ERROR: test_inverter_reserve_max_forms: a single inverter_limit read by index should still warn, got {}".format(logged))
+            failed = True
+    finally:
+        for arg, value in saved.items():
+            if value is None:
+                my_predbat.args.pop(arg, None)
+            else:
+                my_predbat.args[arg] = value
+
+    return failed
+
+
 def test_solis_cloud_rate_limits(test_name, my_predbat, ha, user_limits, expect_charge, expect_discharge, expect_export):
     """
     Test
@@ -745,6 +857,237 @@ def test_reserve_literal_value(test_name, my_predbat, ha, inverter_type, reserve
         my_predbat.args.update(saved_args)
         my_predbat.set_reserve_enable = saved_reserve_enable
         ha.dummy_items["number.reserve"] = saved_reserve_item
+
+    return failed
+
+
+def test_reserve_dummy_percent(test_name, my_predbat, ha, stale_state=None):
+    """
+    Test
+       Inverter.__init__ seeds the dummy reserve entity of a type with no reserve register in percent.
+
+    It was seeded with the kWh reserve while labelled %, and the next refresh read that back as
+    reserve_percent_current - the value balance_inverters() checks a peer's SoC against (#5850).
+    battery_min_soc is set low because its floor on that read otherwise hides the kWh number, and
+    stale_state pre-loads an existing kWh-seeded dummy, which create_entity() alone never overwrites;
+    reserve_percent_current must be the corrected value in the same pass that corrects it.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_reserve_min = my_predbat.get_arg("set_reserve_min")
+    saved_items = dict(ha.dummy_items)
+    entity_id = "sensor.{}_HU_0_reserve".format(my_predbat.prefix)
+    try:
+        my_predbat.args["inverter_type"] = ["HU"]
+        my_predbat.args["battery_min_soc"] = 3
+        my_predbat.expose_config("set_reserve_min", 50)
+        ha.dummy_items.pop(entity_id, None)
+        if stale_state is not None:
+            ha.dummy_items[entity_id] = {"state": stale_state, "unit_of_measurement": "%"}
+
+        inv = Inverter(my_predbat, 0)
+        # The pass that corrects a stale dummy reports the corrected value too, not the stale one a cycle late.
+        # A fresh dummy is never rewritten, so its construction pass still reports the arg it replaced (GH#5003)
+        if stale_state is not None and inv.reserve_percent_current != 50:
+            print("ERROR: reserve_percent_current should be 50 on construction got {}".format(inv.reserve_percent_current))
+            failed = True
+        inv.refresh_config()
+        if inv.reserve_percent != 50:
+            print("ERROR: reserve_percent should be 50 got {}".format(inv.reserve_percent))
+            failed = True
+        if my_predbat.args["reserve"][0] != entity_id:
+            print("ERROR: reserve should be the dummy {} got {}".format(entity_id, my_predbat.args["reserve"][0]))
+            failed = True
+        state = ha.get_state(entity_id)
+        unit = ha.get_state(entity_id, attribute="unit_of_measurement")
+        if state != 50 or unit != "%":
+            print("ERROR: dummy reserve should be 50 % got {} {} (reserve is {}kWh)".format(state, unit, inv.reserve))
+            failed = True
+        if inv.reserve_percent_current != 50:
+            print("ERROR: reserve_percent_current should be 50 got {}".format(inv.reserve_percent_current))
+            failed = True
+    finally:
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        my_predbat.expose_config("set_reserve_min", saved_reserve_min)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+
+    return failed
+
+
+def test_reserve_min_published_floor(test_name, my_predbat, ha):
+    """
+    Test
+       refresh_config() publishes the reserve floor as set_reserve_min's min, following it up and back down.
+
+    The entity used to carry the config item's static min of 0, so a UI driven by its attributes
+    accepted a value under battery_min_soc that the raise in refresh_config() reverted a cycle later
+    (GH#5995). The min must follow the floor down again without moving the value, fall back to the
+    declared 0 with no floor bound, and fold in the reserve register's own minimum.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    snapshot = _snapshot_fixture(my_predbat)
+    item = my_predbat.config_index["set_reserve_min"]
+    saved_value = item.get("value", None)
+    saved_min = item["min"]
+    entity = item["entity"]
+
+    def check(stage, expect_min, expect_value):
+        """Check the published min and value, and the item min the web slider reads"""
+        published_min = ha.get_state(entity, attribute="min")
+        published_value = ha.get_state(entity)
+        if published_min != expect_min or item["min"] != expect_min or published_value != expect_value:
+            print("ERROR: {}: {}: expected min {} value {}, published min {} value {}, item min {}".format(test_name, stage, expect_min, expect_value, published_min, published_value, item["min"]))
+            return True
+        return False
+
+    try:
+        my_predbat.args["inverter_type"] = ["GE"]
+        my_predbat.args["reserve"] = ["number.reserve"]
+        ha.dummy_items["number.reserve"] = 4.0
+        my_predbat.args["battery_min_soc"] = 15
+        my_predbat.expose_config("set_reserve_min", 12)
+
+        inv = Inverter(my_predbat, 0)
+        inv.refresh_config()
+        failed |= check("floor raised", 15, 15)
+
+        # The plant's cut-off is lowered: the min follows, the value stays where it was
+        my_predbat.args["battery_min_soc"] = 10
+        inv.refresh_config()
+        failed |= check("floor lowered", 10, 15)
+
+        # No floor bound at all: back to the declared min
+        del my_predbat.args["battery_min_soc"]
+        inv.refresh_config()
+        failed |= check("no floor", 0, 15)
+
+        # The reserve register's own minimum is a floor too
+        ha.dummy_items["number.reserve"] = {"state": 20.0, "min": 20, "max": 100}
+        inv.refresh_config()
+        failed |= check("register floor", 20, 15)
+    finally:
+        _restore_fixture(my_predbat, snapshot)
+        item["min"] = saved_min
+        item.pop("declared_min", None)
+        my_predbat.expose_config("set_reserve_min", saved_value, force_ha=True)
+
+    return failed
+
+
+def test_battery_min_soc_is_reserve_entity(test_name, my_predbat, ha):
+    """
+    Test
+       refresh_config() ignores a battery_min_soc that names the inverter's own reserve entity.
+
+    That entity reads back whatever Predbat last wrote to the reserve, and a hold writes the current
+    SoC there, so the one-way raise of set_reserve_min ratcheted the floor up with every hold - 8% to
+    97% over one overnight charge (GH#4013). The value and the published min must stay put, with a
+    warning, while a separate battery_min_soc entity still raises the floor as before.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+
+    snapshot = _snapshot_fixture(my_predbat)
+    item = my_predbat.config_index["set_reserve_min"]
+    saved_value = item.get("value", None)
+    saved_min = item["min"]
+    entity = item["entity"]
+    log_messages = []
+    orig_log = my_predbat.log
+    orig_status = my_predbat.current_status
+    orig_had_errors = my_predbat.had_errors
+
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        my_predbat.args["inverter_type"] = ["GE"]
+        my_predbat.args["reserve"] = ["number.reserve"]
+        my_predbat.args["battery_min_soc"] = ["number.reserve"]
+        # Home Assistant states are strings
+        ha.dummy_items["number.reserve"] = "97"
+        my_predbat.expose_config("set_reserve_min", 8)
+
+        # Construction runs refresh_config() once, so this is the second cycle: one warning, then Info
+        inv = Inverter(my_predbat, 0)
+        inv.refresh_config()
+        value = ha.get_state(entity)
+        warned = [msg for msg in log_messages if msg.startswith("Warn: Inverter 0 battery_min_soc") and "number.reserve" in msg]
+        if not my_predbat.had_errors:
+            print("ERROR: {}: expected the warning on the status sensor too (had_errors)".format(test_name))
+            failed = True
+        noted = [msg for msg in log_messages if msg.startswith("Info:") and "battery_min_soc" in msg and "number.reserve" in msg]
+        # With no floor the published min falls back to the item's declared min, not the reserve's 97
+        declared_min = item.get("declared_min", saved_min)
+        if value != 8 or inv.reserve_min != 8 or item["min"] != declared_min:
+            print("ERROR: {}: same entity: expected set_reserve_min 8 and min {}, got value {} reserve_min {} min {}".format(test_name, declared_min, value, inv.reserve_min, item["min"]))
+            failed = True
+        if len(warned) != 1 or len(noted) != 1:
+            print("ERROR: {}: expected one warning then one Info naming the shared entity, got {} and {}".format(test_name, warned, noted))
+            failed = True
+
+        # Another inverter's reserve reads back that inverter's holds just the same
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["reserve"] = ["number.reserve_other", "number.Reserve"]
+        inv.refresh_config()
+        if inv.reserve_min != 8:
+            print("ERROR: {}: other inverter's reserve: expected set_reserve_min 8, got {}".format(test_name, inv.reserve_min))
+            failed = True
+
+        # Fixed numbers are not entities, so equal literals (huawei.yaml ships 12 for both) are a real floor
+        my_predbat.args["reserve"] = [12]
+        my_predbat.args["battery_min_soc"] = [12]
+        del log_messages[:]
+        inv.refresh_config()
+        if inv.reserve_min != 12 or any("is a reserve entity" in msg for msg in log_messages):
+            print("ERROR: {}: equal literals: expected set_reserve_min raised to 12 with no warning, got {}".format(test_name, inv.reserve_min))
+            failed = True
+        my_predbat.args["reserve"] = ["number.reserve"]
+        my_predbat.expose_config("set_reserve_min", 8)
+
+        # A reserve entry past num_inverters is never written, so it is a real floor: the older Growatt
+        # Solar Assistant templates list a second reserve entity for one inverter and point battery_min_soc at it
+        my_predbat.args["num_inverters"] = 1
+        my_predbat.args["reserve"] = ["number.load_first_stop", "number.grid_first_stop"]
+        my_predbat.args["battery_min_soc"] = ["number.grid_first_stop"]
+        ha.dummy_items["number.grid_first_stop"] = "10"
+        del log_messages[:]
+        inv.refresh_config()
+        if inv.reserve_min != 10 or any("is a reserve entity" in msg for msg in log_messages):
+            print("ERROR: {}: unused reserve entry: expected set_reserve_min raised to 10 with no warning, got {}".format(test_name, inv.reserve_min))
+            failed = True
+        my_predbat.args["reserve"] = ["number.reserve"]
+        my_predbat.expose_config("set_reserve_min", 8)
+
+        # A battery_min_soc entity of its own is still a floor that raises set_reserve_min
+        # An unavailable one falls back to the default as before, rather than raising
+        my_predbat.args["battery_min_soc"] = ["number.min_soc"]
+        ha.dummy_items["number.min_soc"] = "unavailable"
+        inv.refresh_config()
+        value = ha.get_state(entity)
+        if value != 8 or inv.reserve_min != 8:
+            print("ERROR: {}: unavailable entity: expected set_reserve_min 8, got value {} reserve_min {}".format(test_name, value, inv.reserve_min))
+            failed = True
+
+        ha.dummy_items["number.min_soc"] = "15"
+        inv.refresh_config()
+        value = ha.get_state(entity)
+        if value != 15 or inv.reserve_min != 15:
+            print("ERROR: {}: separate entity: expected set_reserve_min raised to 15, got value {} reserve_min {}".format(test_name, value, inv.reserve_min))
+            failed = True
+    finally:
+        my_predbat.log = orig_log
+        my_predbat.current_status = orig_status
+        my_predbat.had_errors = orig_had_errors
+        ha.dummy_items.pop("number.min_soc", None)
+        _restore_fixture(my_predbat, snapshot)
+        item["min"] = saved_min
+        item.pop("declared_min", None)
+        my_predbat.expose_config("set_reserve_min", saved_value, force_ha=True)
 
     return failed
 
@@ -1774,7 +2117,7 @@ def test_rest_enable_charge_target(test_name, ha, inv, dummy_rest, enable, expec
     else:
         dummy_rest.rest_data = {"Control": {"Enable_Charge_Target": "enable" if enable else "disable"}}
 
-    _rest_client(inv, dummy_rest).enable_charge_target(enable)
+    run_async(_rest_client(inv, dummy_rest).enable_charge_target(enable))
 
     rest_commands = dummy_rest.get_commands()
     if json.dumps(expect_commands) != json.dumps(rest_commands):
@@ -3418,7 +3761,7 @@ def test_discharge_target_read_back(test_name, ha, inv, dummy_rest):
         dummy_rest.get_commands()
         del errors[:]
 
-        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
+        if not run_async(_rest_client(inv, dummy_rest).set_discharge_target(20)):
             print("ERROR: {}: string read back of the export target should count as success".format(test_name))
             failed = True
         if target_errors():
@@ -3529,7 +3872,7 @@ def test_discharge_target_settle_delay(test_name, ha, inv, dummy_rest):
         dummy_rest.queue_rest_data(settled)
         dummy_rest.get_commands()
 
-        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
+        if not run_async(_rest_client(inv, dummy_rest).set_discharge_target(20)):
             print("ERROR: {}: write should be recognised as successful once the stale cache catches up".format(test_name))
             failed = True
 
@@ -3588,7 +3931,7 @@ def test_discharge_target_control_signal(test_name, ha, inv, dummy_rest):
         dummy_rest.queue_rest_data(settled_control)
         dummy_rest.get_commands()
 
-        if not _rest_client(inv, dummy_rest).set_discharge_target(20):
+        if not run_async(_rest_client(inv, dummy_rest).set_discharge_target(20)):
             print("ERROR: {}: write should be recognised as successful from Control.Discharge_Target_SOC_1 alone".format(test_name))
             failed = True
 
@@ -4434,6 +4777,26 @@ def test_battery_scaling_invalid_value_clamped(test_name, my_predbat):
             print("ERROR: battery_scaling should retain last known-good value 0.72 when source reads {}, got {}".format(bad_scaling, inv.battery_scaling))
             failed = True
 
+    # A source that keeps reading invalid warns once, then logs at Info, until a valid read (#5368)
+    log_messages = []
+    orig_log = my_predbat.log
+    try:
+        my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+        my_predbat.args["battery_scaling"] = [0.0]
+        inv = Inverter(my_predbat, 0)  # __init__ runs the first refresh_config
+        inv.refresh_config(quiet=True)
+        inv.refresh_config(quiet=True)
+        my_predbat.args["battery_scaling"] = [0.8]
+        inv.refresh_config(quiet=True)
+        my_predbat.args["battery_scaling"] = [0.0]
+        inv.refresh_config(quiet=True)
+    finally:
+        my_predbat.log = orig_log
+    levels = [message.split(":")[0] for message in log_messages if "not a valid scaling factor" in message]
+    if levels != ["Warn", "Info", "Info", "Warn"]:
+        print("ERROR: invalid battery_scaling should warn once, then Info, and warn again after a valid read; got levels {}".format(levels))
+        failed = True
+
     del my_predbat.args["battery_scaling"]
     del my_predbat.args["battery_scaling_last_known"]
     return failed
@@ -4800,7 +5163,7 @@ def test_charge_window_stuck_enable_presses_button_once(test_name, ha, inv, my_p
                 ha.dummy_items.pop(key, None)
             else:
                 ha.dummy_items[key] = value
-        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+        inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending = saved_fields
 
     return failed
 
@@ -4944,7 +5307,7 @@ def test_charge_window_unmapped_minute_entity_commits_once(test_name, ha, inv, m
                 ha.dummy_items.pop(key, None)
             else:
                 ha.dummy_items[key] = value
-        (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending) = saved_fields
+        inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.last_committed, inv.commit_pending = saved_fields
 
     return failed
 
@@ -5314,7 +5677,7 @@ def _save_inverter_fields(inv):
 
 def _restore_inverter_fields(inv, saved):
     """Put back what _save_inverter_fields() copied"""
-    (inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.reserve_percent, inv.last_committed, inv.commit_pending) = saved
+    inv.rest_data, inv.inv_charge_time_format, inv.inv_time_button_press, inv.reserve_percent, inv.last_committed, inv.commit_pending = saved
 
 
 def _setup_hm_charge_window(ha, inv, start, end):
@@ -5558,6 +5921,81 @@ def test_export_commit_guard_latches_across_fetches(test_name, my_predbat):
     return failed
 
 
+def test_balance_preserves_zero_rate_readback(my_predbat):
+    """A real status refresh must not turn an existing balancing hold into a release.
+
+    The prediction rate has a nonzero minimum, but a zero hardware rate means this battery is
+    already held. Exercise status -> snapshot -> balance -> apply after its power reaches zero,
+    on both sides, including convergence and a peer that can no longer carry the load/surplus.
+    """
+    print("Test: balance_preserves_zero_rate_readback")
+    failed = False
+    fixture = _snapshot_fixture(my_predbat)
+    saved_inverters = my_predbat.inverters
+    saved_scaling = my_predbat.battery_rate_max_scaling, my_predbat.battery_rate_max_scaling_discharge
+    try:
+        my_predbat.args["inverter_type"] = ["GE", "GE"]
+        my_predbat.args["charge_rate"] = [3000, 3000]
+        my_predbat.args["discharge_rate"] = [3000, 3000]
+        my_predbat.args.pop("charge_rate_percent", None)
+        my_predbat.args.pop("discharge_rate_percent", None)
+        inverters = [Inverter(my_predbat, index, quiet=True) for index in range(2)]
+        my_predbat.inverters = inverters
+        my_predbat.battery_rate_max_scaling = 0.8
+        my_predbat.battery_rate_max_scaling_discharge = 0.9
+        for inverter in inverters:
+            inverter.battery_rate_min = 25 / MINUTE_WATT
+            inverter.battery_rate_max_charge = 3000 / MINUTE_WATT
+            inverter.battery_rate_max_discharge = 3000 / MINUTE_WATT
+            inverter.battery_rate_max_raw = 3000
+
+        from utils import balance_inverters
+
+        for side in ("charge", "discharge"):
+            for case, raw_rate, held_power, same_soc, peer_max, expected in (
+                ("first hold", 3000, 240, False, 3000, 0),
+                ("held with no flow", 0, 0, False, 3000, 0),
+                ("held with small flow", 0, 2, False, 3000, 0),
+                ("converged", 0, 0, True, 3000, 3000),
+                ("peer lacks capacity", 0, 0, False, 1000, 3000),
+                ("small nonzero rate is not a hold", 3, 0, False, 3000, 3000),
+            ):
+                my_predbat.args["charge_rate"] = [3000, raw_rate if side == "charge" else 3000]
+                my_predbat.args["discharge_rate"] = [3000, raw_rate if side == "discharge" else 3000]
+                for inverter in inverters:
+                    inverter.update_status(my_predbat.minutes_now, quiet=True)
+                    inverter.in_calibration = False
+                    inverter.reserve_percent_current = 10
+                    inverter.soc_percent = 72 if same_soc else (71 + inverter.id if side == "charge" else 72 - inverter.id)
+                    inverter.battery_power = (-1 if side == "charge" else 1) * (1546 if inverter.id == 0 else held_power)
+                    inverter.grid_power = 0
+                    inverter.battery_rate_max_charge = (peer_max if inverter.id == 0 else 3000) / MINUTE_WATT
+                    inverter.battery_rate_max_discharge = (peer_max if inverter.id == 0 else 3000) / MINUTE_WATT
+
+                # Prediction's minimum and nonzero scaling must retain their existing behaviour.
+                model_rate = getattr(inverters[1], side + "_rate_now") * MINUTE_WATT
+                expected_model_rate = max(raw_rate * (0.8 if side == "charge" else 0.9), 25)
+                if abs(model_rate - expected_model_rate) > 0.001:
+                    print("ERROR: {} {} changed prediction rate: {} != {}".format(side, case, model_rate, expected_model_rate))
+                    failed = True
+
+                intent = {index: {"charge_rate": None, "discharge_rate": None, "owner": "demand"} for index in range(2)}
+                balance_inverters(intent, my_predbat.build_inverter_snapshot(), side == "charge", side == "discharge", False, 1, 1)
+                writes = {}
+                # Capture the actuator boundary: no mock of status, snapshot, balancing or rate resolution.
+                inverters[1].adjust_charge_rate = lambda rate, notify=True: writes.update(charge=rate)
+                inverters[1].adjust_discharge_rate = lambda rate, notify=True: writes.update(discharge=rate)
+                my_predbat.apply_inverter_rates(inverters[1], intent[1])
+                if writes[side] != expected:
+                    print("ERROR: {} {} wrote {}W, expected {}W".format(side, case, writes[side], expected))
+                    failed = True
+    finally:
+        my_predbat.inverters = saved_inverters
+        my_predbat.battery_rate_max_scaling, my_predbat.battery_rate_max_scaling_discharge = saved_scaling
+        _restore_fixture(my_predbat, fixture)
+    return failed
+
+
 def run_inverter_tests(my_predbat_dummy):
     """
     Test the inverter functions
@@ -5625,6 +6063,7 @@ def run_inverter_tests(my_predbat_dummy):
         arg_name = entity_id.split(".")[1]
         my_predbat.args[arg_name] = entity_id
 
+    failed |= test_balance_preserves_zero_rate_readback(my_predbat)
     failed |= test_inverter_time_handling(my_predbat, dummy_items)
     failed |= test_inverter_clock_skew_bands(my_predbat)
     failed |= test_inverter_time_space_no_tz_gh2444(my_predbat, dummy_items)
@@ -5840,6 +6279,12 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_solis_energy_control("solis_gs_unavailable", my_predbat, ha, "GS", "unavailable", target, "Self-Use")
     failed |= test_solis_energy_control("solis_gs_charge_immediate_leaves_switch", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", charge, "Self-Use - No Timed Charge/Discharge")
     failed |= test_solis_energy_control("solis_gs_export_immediate_leaves_switch", my_predbat, ha, "GS", "Self-Use - No Timed Charge/Discharge", export_freeze, "Self-Use - No Timed Charge/Discharge")
+    # Discharging to a Hold charging target (#5937): execute_plan clears the window (disable_charge_window writes 00:00-00:00) and, as GS has
+    # no target SoC, writes a 0% target while still charging, which reaches mimic_target_soc at the reserve. Above a reserve of more than 0% the
+    # timed charge bit goes off too. With set_reserve_min at 0 it takes the eco branch and leaves the bit on, as Demand does; the cleared window
+    # is then what keeps the battery from charging
+    discharge_to_target = lambda inv: inv.adjust_battery_target(0, isCharging=True, isExporting=False)
+    failed |= test_solis_energy_control("solis_gs_discharge_to_target", my_predbat, ha, "GS", "Self-Use", discharge_to_target, "Self-Use - No Timed Charge/Discharge")
     if failed:
         return failed
 
@@ -5989,6 +6434,7 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_battery_rate_max_source("battery_rate_max_percent_only", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
     failed |= test_battery_rate_max_source("battery_rate_max_percent_only_ge", my_predbat, ha, "GE", None, charge_rate_max=None, battery_rate_max_arg="sensor.battery_rate_max", expect_rate_raw=9984)
     failed |= test_battery_rate_max_source("battery_rate_max_no_source", my_predbat, ha, "GEC", None, charge_rate_max=None, battery_rate_max_arg=None, expect_rate_raw=2600)
+    failed |= test_inverter_reserve_max_forms(my_predbat)
     if failed:
         return failed
 
@@ -6024,6 +6470,16 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_reserve_literal_value("reserve_literal_ge", my_predbat, ha, "GE", [12], expect_reserve_percent=12, expect_reserve_percent_current=12, set_reserve_enable=False)
     # An entity id is still resolved as one, rather than everything being treated as a literal
     failed |= test_reserve_literal_value("reserve_entity_still_read", my_predbat, ha, "GE", ["number.reserve"], expect_reserve_percent=4, expect_reserve_percent_current=4, set_reserve_enable=False)
+    if failed:
+        return failed
+
+    # GH#5850: the dummy reserve of a type with no reserve register holds a percent, both when it is
+    # first created and when an earlier version already seeded it with the kWh reserve
+    failed |= test_reserve_dummy_percent("reserve_dummy_seeded_percent", my_predbat, ha)
+    failed |= test_reserve_dummy_percent("reserve_dummy_kwh_seed_corrected", my_predbat, ha, stale_state=5.0)
+    # GH#5995: set_reserve_min publishes the reserve floor as its min, both up and back down
+    failed |= test_reserve_min_published_floor("reserve_min_published_floor", my_predbat, ha)
+    failed |= test_battery_min_soc_is_reserve_entity("battery_min_soc_is_reserve_entity", my_predbat, ha)
     if failed:
         return failed
 

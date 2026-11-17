@@ -38,6 +38,9 @@ armhf
 armv
 ASHP
 asn
+asname
+aspectmode
+aspectratio
 astimezone
 asyncio
 atfork
@@ -49,9 +52,11 @@ automations
 autopep
 autoupdate
 ax1
+axisbelow
 axvline
 axvspan
 Backfeed
+backgroundcolor
 backprop
 Backpropagate
 backpropagation
@@ -101,6 +106,8 @@ chg
 Chrg
 citem
 cloudfront
+cmax
+cmin
 cmpl
 cobat
 codepoint
@@ -109,6 +116,8 @@ Codespaces
 COEFF
 collaps
 collapsable
+colorbar
+colorscale
 compareform
 configform
 connack
@@ -118,6 +127,7 @@ coro
 corruptleg
 corruptplans
 cprofile
+CREAT
 creds
 crosscharge
 ctrdis
@@ -149,6 +159,7 @@ deadbanding
 deadbeefdeadbeef
 dedup
 dedupe
+deepseek
 dend
 denorm
 derate
@@ -180,6 +191,8 @@ dstart
 dtu
 dtype
 dwindow
+Dykstra
+Dykstra's
 eauth
 echargingpile
 ECONNRESET
@@ -187,6 +200,8 @@ ecosmart
 Eddi
 eddis
 edfenergy
+edfgb
+edgecolor
 efgh
 elif
 elinter
@@ -216,6 +231,7 @@ enphaseenergy
 Enpower
 entityfilter
 entrez
+eonnext
 epod
 epvtoday
 errno
@@ -236,6 +252,7 @@ exog
 expmsg
 exportlimit
 exportvalue
+facecolor
 fdpwr
 fdsoc
 feedin
@@ -256,6 +273,7 @@ formmethod
 foxcloud
 foxess
 foxesscloud
+frameon
 freephase
 fromisoformat
 fronius
@@ -269,9 +287,12 @@ generationmix
 generationpower
 geserial
 geseriale
+getaddrinfo
 getaffinity
 getall
 getattr
+getframe
+getmembers
 getrusage
 Ginlong
 githubusercontent
@@ -286,8 +307,10 @@ GOELEC
 goldens
 gridcharge
 gridcode
+gridcolor
 gridconsumption
 gridconsumptionpower
+gridspec
 Groq
 growatt
 growattsph
@@ -295,10 +318,12 @@ guoxia
 guoxiatech
 GWMQTT
 HACS
+hacsfiles
 hadashboard
 hahistory
 hainterface
 halfhourly
+haléř
 hanchu
 hanchuess
 hanres
@@ -317,9 +342,11 @@ heatsink
 holdout
 homeassistant
 houseb
+hovertemplate
 htmlcov
 hultenvp
 husforbrukning
+hvac
 hypervolt
 iboost
 idag
@@ -389,6 +416,7 @@ lmt
 loadml
 loadmlpower
 loadspower
+localdomain
 localfolder
 locationless
 lockstep
@@ -422,6 +450,7 @@ metricmid
 microinverters
 middlebox
 middleboxes
+middot
 milli
 minb
 minmax
@@ -445,6 +474,7 @@ monokai
 Mosquitto
 mousedown
 mpan
+mpans
 mppt
 mprn
 mpxn
@@ -460,6 +490,8 @@ nanstd
 nattribute
 nbytes
 ncalls
+ncol
+nearbyint
 nearr
 nemotron
 NESO
@@ -470,6 +502,7 @@ nocharge
 NODETAIL
 nodischarge
 nohup
+NONAME
 noopener
 nord
 nordpool
@@ -484,6 +517,7 @@ OCPP
 octo
 octoplus
 octopoints
+oegb
 OFFPEAK
 Ofgem
 Ohme
@@ -511,6 +545,7 @@ pac
 packettypes
 paho
 parseable
+pava
 pbat
 pbgw
 pcharging
@@ -583,6 +618,7 @@ reactivepower
 readback
 readbacks
 reasoncodes
+rebooked
 recp
 redownload
 Referer
@@ -632,6 +668,8 @@ setpoints
 setstate
 SFMB
 sg05lp1
+sharex
+showlegend
 SIGALRM
 sigcloud
 sigen
@@ -688,6 +726,8 @@ substep
 sunspec
 sunsynk
 supabase
+suptitle
+surrogatepass
 suspendedev
 suspendedevse
 synkctl
@@ -705,6 +745,9 @@ testname
 thirdparty
 threadpool
 threadpoolctl
+tickfont
+ticktext
+tickvals
 timea
 timeb
 timec
@@ -777,6 +820,7 @@ Vallery
 varh
 venv
 Victron
+Viridis
 visibilitychange
 vvwwxxabcdefyyzzuu
 waf
@@ -791,9 +835,11 @@ WIFEXITED
 WNOHANG
 workmode
 workstream
+workstreams
 worktree
 writeonly
 wrongsha
+WRONLY
 wwxxabcdefyyzz
 x1
 xaxis
@@ -805,14 +851,19 @@ xrtkq
 xtest
 xticks
 xxabcdefyy
+yanchor
 yaxis
 yaxistooltip
 yday
 ylabel
+ylim
 YOURSERIAL
+yticks
 yuanzhi
 zappi
 zappis
+zaxis
 zcat
+zeroline
 zigbee
 zoneinfo

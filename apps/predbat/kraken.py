@@ -20,6 +20,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from component_base import ComponentBase
+from billing import BillingReader
 from const import TIME_FORMAT
 from utils import (
     filter_payment_method,
@@ -340,7 +341,12 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         self.flextras_property_id = None
         self.flextras_sessions = []
         self.flextras_fetched_at = None
+        # What the supplier actually billed, half-hour by half-hour, published as sensor.predbat_billing
+        self.billing = BillingReader(self, "kraken", f"billing_{account_id}")
         self.flextras_last_status = None
+        # Whether this process has bound octopus_free_electricity to the Flextras sensor - what the discovery
+        # programme record follows (build_discovery()). Never persisted: the binding itself is per process.
+        self.flextras_bound = False
 
         # Export account/MPAN from SaaS config (matched by address at onboarding time).
         # Tariff is always discovered dynamically via GraphQL so changes are detected.
@@ -440,7 +446,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         try:
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.post(url, json={"query": query}, headers=headers) as response:
                     if response.status != 200:
                         # Include the response body — Kraken returns GraphQL validation errors
@@ -762,8 +768,14 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         return new_tariff
 
     def build_rates_url(self, product_code, tariff_code):
-        """Construct public REST rates URL from base URL + tariff info."""
-        return f"{self.base_url}/v1/products/{product_code}/electricity-tariffs/{tariff_code}/standard-unit-rates/"
+        """Construct public REST rates URL from base URL + tariff info.
+
+        Bounded to the window Predbat reads back (_rates_window), otherwise the endpoint returns every
+        period since the contract started, which on a long fixed contract grows past the page cap (#5572).
+        The API still returns a period that started before the window and is open-ended.
+        """
+        start, end = (moment.astimezone(timezone.utc) for moment in self._rates_window())
+        return f"{self.base_url}/v1/products/{product_code}/electricity-tariffs/{tariff_code}/standard-unit-rates/?period_from={start.strftime('%Y-%m-%dT%H:%M:%SZ')}&period_to={end.strftime('%Y-%m-%dT%H:%M:%SZ')}&page_size=1500"
 
     def build_standing_charge_url(self, product_code, tariff_code):
         """Construct public REST standing charge URL."""
@@ -1007,7 +1019,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         pages = 0
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 while url and pages < 3:
                     async with session.get(url, auth=auth, headers=headers) as response:
                         if response.status != 200:
@@ -1181,7 +1193,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         http_error_status = None
         try:
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url) as response:
                     if response.status != 200:
                         http_error_status = response.status
@@ -1355,25 +1367,30 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
     def _published_rates(self, rates):
         """Trim a rate list to the window Predbat reads back, for publishing as a sensor attribute.
 
-        A long fixed contract returns every period since it started - about three a day, so a few
-        months reaches 255+ periods (~38 KB), past Home Assistant's 16 KB recorder limit for a
-        state's attributes (#5534). Predbat reads the sensor back through fetch_octopus_rates(),
+        A long fixed contract used to return every period since it started - about three a day, so a
+        few months reached 255+ periods (~38 KB), past Home Assistant's 16 KB recorder limit for a
+        state's attributes (#5534). The REST request is now bounded to this same window (#5572), but
+        a cache saved before that can still hold the full history, so trimming here stays. Predbat reads the sensor back through fetch_octopus_rates(),
         whose minute_data() keeps only (forecast_days + 1) days either side of midnight and drops
         the rest, so publish just that and the plan sees exactly the rates it did before. The
         back end is deliberately wider than the Octopus component's -24h: when fetches keep
         failing, rate_replicate() copies the last real day forward from up to two days back, and
-        trimming that away would lose the rates sooner than before. The in-memory list and the
-        cache keep the full set.
+        trimming that away would lose the rates sooner than before.
 
         The forward end has one day to spare: the sensor is republished only on the first run and
         when a rates refresh is due (every 30 minutes), so one published just before midnight can
         still be what Predbat reads just after it, when its own window has moved on a day. forecast_days is worked out as fetch.py does,
         including its 24 hour minimum.
         """
+        start, end = self._rates_window()
+        return self._rates_in_window(rates, start, end)
+
+    def _rates_window(self):
+        """Return the (start, end) UTC window of rates Predbat reads back - see _published_rates for why."""
         forecast_hours = max(self.get_arg("forecast_hours", 48), 24)
         forecast_days = int((forecast_hours + 23) / 24)
         midnight = self.midnight_utc
-        return self._rates_in_window(rates, midnight - timedelta(days=forecast_days + 1), midnight + timedelta(days=forecast_days + 2))
+        return midnight - timedelta(days=forecast_days + 1), midnight + timedelta(days=forecast_days + 2)
 
     def _publish_rate_sensors(self):
         """Publish the import/export rate + standing-charge sensors from the current in-memory data.
@@ -1733,7 +1750,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         try:
             self.requests_total += 1
             timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with self.http_session(timeout=timeout) as session:
                 async with session.get(url, headers=headers) as response:
                     status = response.status
                     body = await response.json(content_type=None) if status == 200 else await response.text()
@@ -1785,6 +1802,98 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         entity = self.get_entity_name("sensor", "free_electricity")
         self.dashboard_item(entity, "on" if active else "off", attributes={"friendly_name": "EDF Flextras Free Hours", "icon": "mdi:flash", "events": events}, app="kraken")
         self.set_arg("octopus_free_electricity", entity)
+        self.flextras_bound = True
+
+    def _discovery_meter(self, direction, tariff, mpan, account, entities):
+        """One meters record: the supply point, its account, the tariff codes and the bindings Home Assistant has seen."""
+        record = {"device_id": "kraken:{}".format(mpan or direction), "direction": direction}
+        account_ids = {}
+        if mpan:
+            account_ids["mpan"] = str(mpan)
+        if account:
+            account_ids["account"] = account
+        if account_ids:
+            record["account_ids"] = account_ids
+        info = {}
+        if tariff.get("tariff_code"):
+            info["tariff_code"] = tariff["tariff_code"]
+        if tariff.get("product_code"):
+            info["product_code"] = tariff["product_code"]
+        if info:
+            record["tariff"] = {"info": info}
+        seen = self.discovery_entities(entities)
+        if seen:
+            record["entities"] = seen
+        return record
+
+    def build_discovery(self):
+        """
+        Describe the Kraken (EDF / E.ON Next) account for the discovery catalogue.
+
+        meters: the import supply point once a tariff is found, and the export one once an export tariff
+        is - each keyed "kraken:{mpan}" with its MPAN and account in account_ids (E.ON can put export on
+        its own account, export_account_id), the tariff and product codes, and the import standing
+        charge in pence. Each carries the metric_octopus_* binding run() makes for it, under the same
+        condition as the set_arg (export rates only once they are actually available) but regardless
+        of the one-shot wired latches, since the record describes the account, not whether wiring
+        already happened. No tariff flags: Kraken exposes nothing to derive them from.
+
+        cars: one record per LIVE SmartFlex EV (every entry in intelligent_devices), bound to the
+        intelligent_dispatch slot sensor _publish_dispatch_sensors() wires octopus_intelligent_slot to.
+        Battery size and charge-point power are never populated, so there are no ratings.
+
+        programmes: an EDF account on Flextras is a free_electricity programme cross-linked to the import
+        meter, overriding rates through the octopus_free_electricity sensor. It follows the binding, as
+        every entity here does: present once this process has bound that sensor (which a restart does
+        from cached sessions before any fetch, and a transient server error does not undo) or the last
+        Flextras fetch succeeded. Never bound and never fetched successfully, or an E.ON account, gives none.
+
+        Every binding is filtered to entities Home Assistant has seen. Kraken has no automatic flag -
+        every set_arg it makes is unconditional - so "automatic" is always True. Identifiers are
+        published readable; credentials (API key, login email, password, tokens) and the account
+        address are never read.
+
+        Returns None until a tariff has been found.
+        """
+        if not self.current_tariff:
+            return None
+
+        def sensor(setting, suffix, domain="sensor"):
+            """The descriptor for one binding run() makes."""
+            return {setting: {"entity_id": self.get_entity_name(domain, suffix), "domain": domain, "access": "r"}}
+
+        import_mpan = self.import_mpan or self.configured_mpan
+        import_meter = self._discovery_meter("import", self.current_tariff, import_mpan, self.account_id, {**sensor("metric_octopus_import", "import_rates"), **sensor("metric_standing_charge", "import_standing")})
+        if self.import_standing_charge is not None:
+            import_meter["ratings"] = {"standing_charge_p": round(self.import_standing_charge * 100, 4)}
+        meters = [import_meter]
+        if self.export_tariff:
+            meters.append(self._discovery_meter("export", self.export_tariff, self.export_mpan, self.export_account_id or self.account_id, sensor("metric_octopus_export", "export_rates") if self.export_rates_available else {}))
+
+        cars = []
+        for device_id, device in self.intelligent_devices.items():
+            index_suffix = self._device_index_suffix(device_id)
+            record = {"device_id": "kraken:{}".format(device_id), "account_ids": {"intelligent_device_id": device_id}}
+            info = {key: device[key] for key in ("make", "model") if device.get(key)}
+            if info:
+                record["info"] = info
+            seen = self.discovery_entities(sensor("octopus_intelligent_slot", "intelligent_dispatch_" + index_suffix if index_suffix else "intelligent_dispatch", domain="binary_sensor"))
+            if seen:
+                record["entities"] = seen
+            cars.append(record)
+
+        programmes = []
+        if self.provider == "edf" and (self.flextras_bound or self.flextras_last_status == 200):
+            account_ids = {"account": self.account_id}
+            if self.flextras_property_id:
+                account_ids["programme_id"] = str(self.flextras_property_id)
+            record = {"device_id": "kraken:flextras:{}".format(self.account_id), "kind": "free_electricity", "meter": import_meter["device_id"], "account_ids": account_ids, "effects": ["rate_override"]}
+            seen = self.discovery_entities(sensor("octopus_free_electricity", "free_electricity"))
+            if seen:
+                record["entities"] = seen
+            programmes.append(record)
+
+        return {"automatic": True, "meters": meters, "cars": cars, "programmes": programmes}
 
     async def run(self, seconds, first):
         """Component run method — called by ComponentBase.start() every 60s.
@@ -1801,6 +1910,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         """
         if first:
             await self.load_kraken_cache()
+            await self.billing.load()
 
         had_success = False
 
@@ -1857,6 +1967,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # Publish rate sensors from current in-memory data (cache or fresh)
         if self.current_tariff and (first or rates_due):
             self._publish_rate_sensors()
+
+        # Half-hourly billing for the MPANs Predbat models, refreshed every few hours
+        await self.async_update_billing(first)
 
         # Fetch SmartFlex intelligent dispatches for any known devices, then publish + wire them.
         # dispatch_due stays permanently true for accounts with no devices (dispatch_fetched_at
@@ -1920,6 +2033,10 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             app="kraken",
         )
 
+        # Filed every cycle, before the first-cycle failure return below, so a report that failed to file
+        # is retried. refresh_discovery() owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
+
         # Persist to storage whenever we refreshed something, so the next restart restores it.
         # (Not every cycle — if the cache is lost it is simply re-fetched on the next due check.)
         if tariff_due or rates_due or dispatches_refreshed or flextras_refreshed:
@@ -1934,6 +2051,27 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return False
 
         return True
+
+    async def async_update_billing(self, first):
+        """Read the half-hourly billing for the modelled import/export MPANs when due, and publish sensor.predbat_billing.
+
+        Export is read on the export account when it differs from the import one. KrakenAPI's GraphQL
+        query already returns None for any response carrying errors, so a partial error is a failed read.
+        """
+        if not self.current_tariff or not self.import_mpan:
+            return
+        now_utc = datetime.now(timezone.utc)
+        self.billing.random_delay = self.get_arg("plan_random_delay", 0) > 0
+        # The first run only publishes what was cached, keeping a restart free of API calls; the read follows a cycle later
+        if not first and self.billing.due(now_utc):
+            mpans = {"import": (self.account_id, self.import_mpan), "export": (self.export_account_id or self.account_id, self.export_mpan) if self.export_mpan else None}
+            await self.billing.read(self.async_graphql_query, mpans, now_utc, self.provider, app="kraken")
+        elif first:
+            self.billing.publish(self.provider, now_utc, app="kraken")
+
+    async def final(self):
+        """Cancel a background billing read that is still running."""
+        self.billing.stop()
 
 
 async def test_kraken_api(

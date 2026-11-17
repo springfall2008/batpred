@@ -21,7 +21,8 @@ pred_bat:
   #
 
   # For Solis inverters with firmware FB00 or later (6 charge/discharge time slots)
-  # Select the "Solis FB00" inverter type in the Solax Modbus integration
+  # Uses wills106's Solax Modbus integration (https://github.com/wills106/homeassistant-solax-modbus), which this
+  # template is written and tested for - select its "Solis FB00" inverter type
   # For older firmware (fewer than 6 slots) use ginlong_solis.yaml instead
   inverter_type: "GS_fb00"
 

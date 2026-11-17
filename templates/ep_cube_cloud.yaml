@@ -1,9 +1,11 @@
-# Predbat config for the Canadian Solar EP Cube, via the ha-ep-cube HACS
+# Predbat config for the Canadian Solar EP Cube, via the ha-ep-cube custom
 # integration (https://github.com/SkiLtY/ha-ep-cube)
 #
 # Copy this over your apps.yaml and:
-#   1. Install the "Canadian Solar EP Cube" integration via HACS (Default
-#      store) and configure it with your EP Cube cloud account email + password.
+#   1. Install the "Canadian Solar EP Cube" integration from the Marketplace
+#      (Settings -> Marketplace, Home Assistant 2026.11 or newer) or from HACS
+#      (Home Assistant 2026.10 or older) and configure it with your EP Cube
+#      cloud account email + password.
 #   2. Restart Home Assistant, then Predbat, and check the Predbat log to
 #      confirm it sees the ep_cube_* entities and calls the ep_cube.* services.
 #
@@ -431,6 +433,4 @@ pred_bat:
   #  - '{octopus_intelligent_slot}'
   #  - '{octopus_ready_time}'
   #  - '{octopus_charge_limit}'
-  #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
-  #  - '+[car_charging_soc]'

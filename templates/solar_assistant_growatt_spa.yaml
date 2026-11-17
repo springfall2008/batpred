@@ -59,10 +59,12 @@ pred_bat:
   soc_percent:
     - sensor.growatt_spa_battery_state_of_charge
 
+  # One entry per inverter: the reserve Predbat writes, including to hold the battery
   reserve:
     - number.growatt_spa_load_first_stop_discharge
-    - number.growatt_spa_grid_first_stop_discharge
 
+  # The lowest SoC Predbat will plan to. Never point this at the reserve entity above: it would read back
+  # the reserve Predbat writes during a hold and ratchet the minimum up (GH#4013). Or set a fixed value, e.g. 10
   battery_min_soc:
     - number.growatt_spa_grid_first_stop_discharge
 
@@ -265,6 +267,10 @@ pred_bat:
   octopus_saving_session_octopoints_per_penny: 8
   # Minimum octopoints_per_kwh an available saving session must offer for Predbat to auto-join it (default 0, joins any non-negative reward).
   octopus_saving_session_min_octopoints_per_kwh: 0
+
+  # Octopus free session points to the free session Sensor in the Octopus plugin
+  # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))'
 
   # Energy rates
   # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric

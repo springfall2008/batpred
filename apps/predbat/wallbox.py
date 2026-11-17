@@ -32,7 +32,8 @@ from typing import Optional
 
 import aiohttp
 
-from component_base import ComponentBase
+from component_base import ComponentBase, new_http_session, writes
+from coordinator import charger_with_stub_car
 from mock_base import MockBase
 from predbat_metrics import record_api_call
 from car_charger_control import CarChargerControl, ChargerControlDeferred, parse_control_setting
@@ -281,9 +282,11 @@ def basic_auth_header(username, password):
 class WallboxTransport:
     """Owns the Wallbox tokens and performs every HTTP call."""
 
-    def __init__(self, log, username, password):
+    def __init__(self, log, username, password, session_factory=None):
         """Store the credentials and start with no token."""
         self.log = log
+        # Called for every HTTP session; the owning component passes its http_session
+        self._session_factory = session_factory or new_http_session
         self.username = username
         self.password = password
         self.token = None
@@ -324,7 +327,7 @@ class WallboxTransport:
                 bad credentials, and an empty response body is accepted.
         """
         try:
-            async with aiohttp.ClientSession() as session:
+            async with self._session_factory() as session:
                 async with session.request(method, url, headers=headers, json=body, timeout=aiohttp.ClientTimeout(total=API_TIMEOUT)) as response:
                     status = response.status
                     if status == 429:
@@ -521,7 +524,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         if not username or not password:
             self.log("Error: wallbox: wallbox_username and wallbox_password must both be set")
             return
-        self.transport = WallboxTransport(self.log, username, password)
+        self.transport = WallboxTransport(self.log, username, password, self.http_session)
 
     def entity_prefix(self, charger):
         """Return the entity name prefix for a charger, e.g. predbat_wallbox_12345."""
@@ -542,6 +545,52 @@ class WallboxAPI(ComponentBase, CarChargerControl):
     def ordered_chargers(self):
         """The chargers that have been read, in car order."""
         return [self.chargers[charger_id] for charger_id in self.car_order if charger_id in self.chargers]
+
+    def build_discovery(self):
+        """Describe each charger, and the car it charges, for the discovery catalogue.
+
+        One charger record per charger in car order (ordered_chargers()), keyed "wallbox:{serial}" by
+        the hardware serial, with the Wallbox charger id - the id its entities are named by - beside it
+        in hardware_ids. Neither is secret, so both stay readable in the catalogue. A charger whose
+        status carries no serial is still reported, as "wallbox:charger:{id}", rather than going missing.
+        Wallbox knows nothing about the vehicle, so each car is a stub. The entities are the four
+        automatic_config() binds, filtered to those Home Assistant has seen; car_charging_now is left
+        out because it only re-binds the power sensor.
+
+        Never reported: the charger's name (user-chosen), its location (timezone, country, postcode),
+        and the number plate and user fields the status payload also carries.
+
+        Returns None when no charger has been read.
+        """
+        chargers = []
+        cars = []
+        for charger in self.ordered_chargers():
+            prefix = self.entity_prefix(charger)
+            descriptors = {
+                "car_charging_planned": {"entity_id": "binary_sensor.{}_connected".format(prefix), "domain": "binary_sensor", "access": "r"},
+                "car_charging_plugged": {"entity_id": "binary_sensor.{}_plugged".format(prefix), "domain": "binary_sensor", "access": "r"},
+                "car_charging_energy": {"entity_id": "sensor.{}_session_energy".format(prefix), "domain": "sensor", "access": "r"},
+                "car_charging_power": {"entity_id": "sensor.{}_power".format(prefix), "domain": "sensor", "access": "r"},
+            }
+            info = {"vendor": "Wallbox"}
+            if charger.part_number:
+                info["model"] = charger.part_number
+            if charger.software_version:
+                info["firmware"] = charger.software_version
+            device_id = "wallbox:{}".format(charger.serial) if charger.serial else "wallbox:charger:{}".format(charger.charger_id)
+            hardware_ids = {"serial": charger.serial} if charger.serial else {}
+            hardware_ids["charger_id"] = str(charger.charger_id)
+            record, car = charger_with_stub_car(
+                device_id,
+                hardware_ids=hardware_ids,
+                info=info,
+                entities=self.discovery_entities(descriptors),
+            )
+            chargers.append(record)
+            cars.append(car)
+        if not chargers:
+            return None
+        return {"automatic": self.automatic, "chargers": chargers, "cars": cars}
 
     def warn_refused_once(self, exc):
         """Log a refusal from the plan-led loop once: it would otherwise repeat on every poll."""
@@ -597,9 +646,13 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             return True
         try:
             refresh = await self.process_events()
+            ok = True
             if first or refresh or (seconds % self.poll_seconds) == 0:
-                return await self.poll(seconds, first)
-            return True
+                ok = await self.poll(seconds, first)
+            # Every cycle, polled or not: a report that failed to file is retried on the next run()
+            # rather than the next poll - see ComponentBase.refresh_discovery()
+            self.refresh_discovery()
+            return ok
         except WallboxRateLimitError:
             self.backoff_cycles = min(RATE_LIMIT_MAX_CYCLES, max(RATE_LIMIT_MIN_CYCLES, self.backoff_cycles * 2))
             self.skip_cycles = self.backoff_cycles
@@ -788,6 +841,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         """Queue a select change for the run loop."""
         self.queued_events.append((self.select_event_handler, entity_id, value))
 
+    @writes
     async def switch_event_handler(self, entity_id, service):
         """Pause/resume or lock/unlock in response to a charger switch."""
         if await self.charger_control_guest_event(entity_id, service):
@@ -813,6 +867,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
             self.log("Info: wallbox: {} {}".format("locking" if turn_on else "unlocking", charger.name))
             await self.transport.set_locked(self.api_id(charger), turn_on)
 
+    @writes
     async def number_event_handler(self, entity_id, value):
         """Set the maximum charging current, clamped to what the charger allows."""
         if not entity_id.endswith("_max_charging_current"):
@@ -830,6 +885,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         self.log("Info: wallbox: setting {} maximum charging current to {}A".format(charger.name, amps))
         await self.transport.set_max_charging_current(self.api_id(charger), amps)
 
+    @writes
     async def select_event_handler(self, entity_id, value):
         """Set the Eco-Smart mode on a charger that supports it."""
         if not entity_id.endswith("_eco_smart") or value not in ECO_SMART_OPTIONS:
@@ -930,6 +986,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
         """Has the charger been paused, or started charging, against what Predbat set - e.g. from the Wallbox app."""
         return charger.paused if charge else charger.charging
 
+    @writes
     async def charger_control_send(self, charger, charge, car_n):
         """Resume a paused charger inside a window, pause a charging one outside.
 
@@ -952,6 +1009,7 @@ class WallboxAPI(ComponentBase, CarChargerControl):
                 await self.charger_control_save()
             await self.transport.pause(self.api_id(charger))
 
+    @writes
     async def charger_control_release_one(self, charger, charge):
         """Release one charger: resume it if Predbat paused it and it is still paused, then hand it back to its own schedule.
 

@@ -45,6 +45,7 @@ coverage/*.log
 coverage/*.json
 coverage/*.txt
 coverage/*.db
+coverage/gecloud_api_budget_log.jsonl
 coverage/*.html
 coverage/*.prof
 coverage/*.py

@@ -41,7 +41,6 @@ def setup(my_predbat):
     my_predbat.debug_enable = False
     my_predbat.minutes_now = 720
     my_predbat.predict_soc = {}
-    my_predbat.manual_all_times = []
     my_predbat.all_active_keep = {}
     my_predbat.set_charge_low_power = False
 
@@ -140,7 +139,7 @@ def test_no_combine_manual_times(my_predbat):
     print("**** test_no_combine_manual_times ****")
     failed = False
     setup(my_predbat)
-    my_predbat.manual_all_times = [750]  # Boundary between the two windows
+    my_predbat.manual_charge_times = [750]  # Boundary between the two windows
 
     windows = [make_window(720, 750, average=10.0), make_window(750, 780, average=10.0)]
     limits = [5.0, 5.0]

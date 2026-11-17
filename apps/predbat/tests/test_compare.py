@@ -89,6 +89,7 @@ CALCULATE_PLAN_REBUILT = (
     "metric_cloud_coverage",
     "metric_load_divergence",
     "plan_last_duration_seconds",
+    "charge_keep_target",
 )
 
 
@@ -605,7 +606,6 @@ def test_compare(my_predbat):
     pb.manual_freeze_charge_times = None
     pb.manual_freeze_export_times = None
     pb.manual_demand_times = None
-    pb.manual_all_times = None
     pb.octopus_intelligent_charging = False
     pb.iboost_plan = ["stale_plan_from_live_tariff"]
 
@@ -654,7 +654,6 @@ def test_compare(my_predbat):
     pb.manual_freeze_charge_times = None
     pb.manual_freeze_export_times = None
     pb.manual_demand_times = None
-    pb.manual_all_times = None
     pb.octopus_intelligent_charging = False
     pb.iboost_plan = ["stale_plan_from_live_tariff"]
     pb.plan_iboost_smart = lambda: tariff_plan_calls.append(1) or []
@@ -1125,6 +1124,12 @@ def test_compare(my_predbat):
     pb.rate_export_max = 15.0
     pb.rate_scan = lambda rates, print=True: None
     pb.rate_scan_export = lambda rates, print=True: None
+    pb.rate_min_forward_calc = lambda rates: {}
+    pb.rate_min_forward = {}
+    pb.rate_export_max_forward_calc = lambda rates: {}
+    pb.rate_export_max_forward = {}
+    pb.rate_minmax = lambda rates: (0, 0, 0, 0, 0)
+    pb.rate_export_min_base = None
     pb.rate_replicate = lambda rates, io_adjusted=None, is_import=True, **kwargs: (dict(rates), {})
     pb.set_rate_thresholds = lambda: None
     pb.rate_scan_window = lambda rates, *args: ([], 0, 0)

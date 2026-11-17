@@ -13,6 +13,7 @@ The prune trials use a stubbed run_prediction_metric so each test controls exact
 simulation reports for every candidate plan shape, keeping the tests about the prune logic
 (criterion, baseline update, guards) rather than the simulator.
 """
+
 from tests.test_infra import reset_inverter
 from const import EXPORT_MODE_IDLE
 from utils import export_mode_of, export_target_of, export_limit_sort_key
@@ -58,7 +59,6 @@ def setup(my_predbat):
     my_predbat.minutes_now = 720
     my_predbat.end_record = 24 * 60
     my_predbat.forecast_minutes = 48 * 60
-    my_predbat.manual_all_times = []
     my_predbat.charge_window_best = []
     my_predbat.charge_limit_best = []
     my_predbat.export_window_best = []
@@ -322,7 +322,7 @@ def test_prune_skips_manual_window(my_predbat):
 
     my_predbat.export_window_best = [make_window(780, 810)]
     my_predbat.export_limits_best = [0.0]
-    my_predbat.manual_all_times = [780]
+    my_predbat.manual_export_times = [780]
     install_metric_stub(my_predbat, {}, default=100.0)
 
     try:

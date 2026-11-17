@@ -33,7 +33,8 @@ from datetime import datetime, timezone
 
 import aiohttp
 
-from component_base import ComponentBase
+from component_base import ComponentBase, writes
+from coordinator import inverter_record
 from mock_base import MockBase
 from oauth_mixin import OAuthMixin
 
@@ -76,6 +77,22 @@ POWERWALL_1_MAX_POWER = 3500  # Per-unit nameplate power at/below this is treate
 # whatever its nameplate, ~9.8 kW with one expansion, the 11 kW nameplate with two, ~5.04 kW per Powerwall 2
 # unit - and solar charging stops at the same figure.
 POWERWALL_CHARGE_PER_UNIT_W = 5000
+
+# The TESLA INVERTER_DEF row's behaviour, stated in every discovery record so the record alone rebuilds
+# the row (coordinator.inverter_definition()). A reserve set above the live SoC is met from the grid,
+# hence reserve_above_soc_charges_from_grid; and no reserve between 80 and 100 is honoured, hence
+# reserve_full_only_above_80 (GH#6046).
+TESLA_CAPABILITIES = {
+    "support_charge_freeze": True,
+    "support_discharge_freeze": False,
+    "support_feedin_first": False,
+    "can_span_midnight": False,
+    "charge_discharge_with_rate": False,
+    "charge_control_immediate": False,
+    "target_soc_used_for_discharge": True,
+    "reserve_above_soc_charges_from_grid": True,
+    "reserve_full_only_above_80": True,
+}
 # max/min_site_meter_power_ac report "no limit" as +/-1e9
 SITE_METER_UNLIMITED = 1_000_000
 
@@ -117,12 +134,24 @@ SIGNAL_SELL_PRICES = {SIGNAL_CHEAP_TIER: 0.0, SIGNAL_BASE_TIER: 0.0, SIGNAL_PEAK
 SIGNAL_HOLD_DEADBAND_PERCENT = 1
 # The only reserve above 80 that Tesla still accepts: since firmware 25.18.4, 81-99 snap to 80.
 SIGNAL_HOLD_RESERVE = 100
-# Highest reserve below the snap band. A request above this is rounded UP to SIGNAL_HOLD_RESERVE
-# rather than left to be snapped down to 80 by the device: Predbat only asks for a reserve up here
-# when it wants a hold (execute.py writes soc+1 under set_reserve_hold), and 80 would not hold it.
-# Either way what Predbat models and what the battery honours must agree, which is the divergence
-# GH#4953/#4956 fixed for the reserve floor generally.
+# Highest reserve below the snap band. A hold or reserve request in 81-99 goes through _settable_reserve(),
+# which sends 80 or 100 instead, so for those the device's snap direction does not matter. The real-rate
+# (teslemetry_tbc_control off) charge window is the exception: it sends its charge target as asked, so a
+# target in 81-99 still reaches the device and is snapped there - which way is not settled (see
+# set_backup_reserve). Either way what Predbat models and what the battery honours must agree, which is the
+# divergence GH#4953/#4956 fixed for the reserve floor generally.
 SIGNAL_MAX_SETTABLE_RESERVE = 80
+# A hold request at or above this is sent as SIGNAL_HOLD_RESERVE: the battery is close to full, so the
+# top-up a 100% reserve makes from the grid is the smaller deviation from the plan (GH#6046).
+SIGNAL_HOLD_ROUND_UP_PERCENT = 97
+# A hold request in the band below that is held at SIGNAL_MAX_SETTABLE_RESERVE, letting the battery cover
+# the house, and topped back up to the hold level with SIGNAL_HOLD_RESERVE once the SOC falls more than
+# this many percent below it (GH#6046).
+SIGNAL_HOLD_TOP_UP_PERCENT = 3
+# The hold _settable_reserve() is keeping is saved so a restart keeps it, re-saved this often while a hold
+# runs, and trusted after a restart only if it is younger than HOLD_STATE_MAX_AGE_SECONDS.
+HOLD_STATE_REFRESH_SECONDS = 5 * 60
+HOLD_STATE_MAX_AGE_SECONDS = 30 * 60
 
 OPTIONS_TIME_FULL = ["{:02d}:{:02d}:00".format(hour, minute) for hour in range(24) for minute in range(60)]
 
@@ -210,12 +239,25 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self._last_export_permission_check = 0
         self.battery_type = None  # components.battery_type from site_info: solar_powerwall (PW3) or ac_powerwall (PW2)
         self.powerwall_3 = False  # battery_type solar_powerwall AND a "Powerwall 3" gateway, set by fetch_site_info
+        # Held from site_info for the discovery catalogue only (build_discovery()): the hardware list and
+        # the figures the site itself reports. Nothing Teslemetry controls reads them.
+        self.site_components = {}
+        self.site_ratings = {}
+        self.site_version = None
         self._reserve_band_warned = False
+        # The hold a band reserve is kept near, and whether a top-up towards it is running (_settable_reserve)
+        self._hold_level = None
+        self._hold_topping_up = False
+        # Which hold set the level ("reserve", or "target:<n>" for a hold at a charge target), whether the state
+        # has changed since it was saved, and when it was saved - so a restart can pick the hold up again
+        self._hold_kind = None
+        self._hold_dirty = False
+        self._hold_saved_at = None
         self.schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.pending_schedule = copy.deepcopy(DEFAULT_SCHEDULE)
         self.schedule_loaded = False
         self.log("Info: TeslemetryAPI initialising site filter={}".format(self.site_filter or "all account sites"))
-        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes), backed by a forced re-assert of the full device tuple every {} minutes".format(FORCED_ASSERT_SECONDS // 60))
+        self.log("Info: Teslemetry control drift-correction is transition-based (self-heals when Predbat's own desired value changes), backed by a forced re-assert of the full device tuple and tariff every {} minutes".format(FORCED_ASSERT_SECONDS // 60))
         self.register_control_entities()
 
     def entity(self, suffix, domain="sensor"):
@@ -242,7 +284,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         timeout = aiohttp.ClientTimeout(total=TESLEMETRY_TIMEOUT)
         for attempt in range(TESLEMETRY_RETRIES):
             try:
-                async with aiohttp.ClientSession(timeout=timeout) as session:
+                async with self.http_session(timeout=timeout) as session:
                     async with session.request(method, url, headers=headers, json=json_body) as resp:
                         if resp.status == 401 and self.auth_method == "oauth" and not _retry_after_refresh:
                             # Force one token refresh and retry the request with the new access token.
@@ -488,12 +530,22 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             # live_status (total_pack_energy) will upgrade this if/when it appears.
             self.publish_soc_max(self.estimate_pack_kwh(response), estimate=True)
         nameplate_power = response.get("nameplate_power", 0)
+        export_limit = self.site_export_limit_w(response)
+        self.site_components = components
+        self.site_version = response.get("version")
+        self.site_ratings = {}
+        if nameplate_wh or gateway_kwh:
+            self.site_ratings["soc_max"] = round(nameplate_wh / 1000.0, 3) if nameplate_wh else gateway_kwh
+        if nameplate_power:
+            self.site_ratings["inverter_limit"] = int(round(nameplate_power))
+            self.site_ratings["battery_rate_max"] = int(round(nameplate_power))
+        if export_limit is not None:
+            self.site_ratings["export_limit"] = export_limit
         if nameplate_power:
             self.publish_sensor("battery_rate_max", int(round(nameplate_power)), unit="W", state_class=None, friendly="Powerwall Max Rate")
             # The Powerwall's own AC rating - on a Powerwall 3 the commissioned limit. max_site_meter_power_ac
             # is the site's supply limit at the meter (18.4 kW on an 80 A service), not the inverter's (GH#5275).
             self.publish_sensor("inverter_limit", int(round(nameplate_power)), unit="W", state_class=None, friendly="Powerwall AC Limit")
-        export_limit = self.site_export_limit_w(response)
         if export_limit is not None:
             self.publish_sensor("export_limit", export_limit, unit="W", state_class=None, friendly="Powerwall Export Limit")
         charge_limit = self.site_charge_limit_w(response)
@@ -647,6 +699,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if first or (seconds - self.last_energy_poll >= ENERGY_POLL_SECONDS):
             self.last_energy_poll = seconds
             await self.fetch_energy_today()
+        # Filed every cycle that resolved a site, after this cycle's publishes and before the auto-config
+        # gate, which waits on a soc_max sensor some hardware is slow to produce. refresh_discovery()
+        # owns the compare/retry/guard loop and never raises.
+        self.refresh_discovery()
         # Auto-config once site info is read AND a battery-capacity sensor (soc_max) exists. soc_max may
         # come from live_status (total_pack_energy) rather than site_info on some hardware (e.g. PW3), so
         # this is gated on the published sensor and runs after the live poll rather than on site_info alone.
@@ -663,10 +719,13 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             # (GH#5157). The timer advances only on a fully successful forced assert, which keeps
             # _apply_command's failure-retry invariant: a forced assert that failed is retried on the next
             # cycle instead of waiting another two hours.
+            # The tariff is re-sent with the tuple: under signal-tariff control it is what steers Tesla's
+            # optimiser, so a dropped tariff is the same stall as a dropped reserve (GH#6020).
             force = (seconds - self._last_forced_assert) >= FORCED_ASSERT_SECONDS
-            await self.sync_tariff()
+            tariff_ok = await self.sync_tariff(force=force)
             asserted = await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc), force=force)
-            if force and asserted:
+            await self.save_hold_state()
+            if force and asserted and tariff_ok:
                 self._last_forced_assert = seconds
         return success
 
@@ -741,77 +800,181 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return self.evaluate_schedule_tbc(minutes_now, soc)
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
-        reserve = self.schedule.get("reserve", 20)
         if self.in_window(minutes_now, charge):
+            # The charge target is a charge, not a hold, so it is sent as asked rather than through _settable_reserve,
+            # and the state change ends any hold
+            self._end_hold()
             target = int(charge.get("soc", 100))
             grid = soc < target
             return {"export_rule": "pv_only", "grid_charging": grid, "reserve": target, "mode": "backup"}
         if self.in_window(minutes_now, discharge):
+            self._end_hold()
             target = int(discharge.get("soc", 10))
             if soc > target:
                 return {"export_rule": "battery_ok", "grid_charging": False, "reserve": target, "mode": "autonomous"}
             return {"export_rule": "pv_only", "grid_charging": False, "reserve": target, "mode": "self_consumption"}
-        return {"export_rule": "pv_only", "grid_charging": True, "reserve": int(reserve), "mode": "self_consumption"}
+        reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc, kind="idle")
+        return {"export_rule": "pv_only", "grid_charging": True if band_grid is None else band_grid, "reserve": reserve, "mode": "self_consumption"}
 
-    def _settable_reserve(self, percent):
-        """Map a requested reserve onto one the Powerwall will actually hold.
+    def _settable_reserve(self, percent, soc, kind):
+        """Map a requested reserve onto one the Powerwall will honour, as (reserve, grid_charging).
 
-        Since firmware 25.18.4 only 0-80 and exactly 100 are honoured; 81-99 are silently snapped
-        down to 80. A request in that band is Predbat asking to hold above 80 - execute.py writes
-        adjust_reserve(soc+1) under set_reserve_hold - and 80 would not hold it, leaving the battery
-        free to discharge back down to 80 during a window meant to keep SOC flat. So it rounds UP to
-        the one value above 80 that is honoured. Callers disable grid charging whenever this returns
-        SIGNAL_HOLD_RESERVE, which is what stops the device importing to reach it - including a
-        `set_reserve_min` anywhere in 81-99 (a plausible Powerwall value on its own), which lands here
-        too and then holds grid charging off in every state, permanently. A request of exactly 100 is
-        already honoured and passes through without a diagnostic; only a value the device would have
-        silently moved is logged, once rather than every cycle, so a user can see why nothing is
-        charging. It is a Warn rather than an Info because this path is on by default (GH#5186), so
-        it is reached by a plausible set_reserve_min rather than only by a trial opt-in; it stays
-        one-shot per instance, since the condition is a standing config value and not a per-cycle event.
+        Since firmware 25.18.4 only 0-80 and exactly 100 are honoured; 81-99 are snapped. A request in that
+        band is Predbat asking to hold above 80 - a freeze charge (execute.py writes the live SOC rounded
+        down under set_reserve_hold), a hold at a charge target, or a set_reserve_min up there. 100 is no
+        hold: a Powerwall meets a reserve above its SOC from the grid whatever the grid-charging flag says,
+        so it fills to full (GH#6046). So:
+
+        - SIGNAL_HOLD_ROUND_UP_PERCENT or more: SIGNAL_HOLD_RESERVE with grid charging on, as the top-up to
+          full is a few percent at most.
+        - Otherwise SIGNAL_MAX_SETTABLE_RESERVE with grid charging off, letting the battery cover the house,
+          until the SOC falls more than SIGNAL_HOLD_TOP_UP_PERCENT below the hold level. Then
+          SIGNAL_HOLD_RESERVE with grid charging on tops it up, until the SOC is back at the hold level.
+
+        The hold level is the highest request since the hold began, because execute rewrites a freeze's
+        reserve as the live SOC each cycle and the request falls with the battery - judged against the
+        request itself, the top-up would never come. A request of 80 or below, or at the round-up level,
+        ends the hold, and so does a change of kind - the control state the request came from ("idle",
+        "export", "charging") or a hold at a charge target ("target:<n>") - so one hold's level never carries
+        into another, even when execute's reset leaves the request in the band (a set_reserve_min up there). The state is saved by
+        save_hold_state() so a restart keeps it. grid_charging is None for a request passed through
+        unchanged, leaving it to the caller.
+
+        A request moved off what was asked is logged once per instance rather than every cycle, since it
+        is usually a standing condition; exactly 100 is honoured as asked and logs nothing, so it cannot
+        burn the one-shot flag before the case the diagnostic exists for.
         """
         percent = int(percent)
-        if percent <= SIGNAL_MAX_SETTABLE_RESERVE:
-            return percent
-        # Exactly 100 is honoured by the device as asked, so it is not being changed under the
-        # caller's feet and warrants no diagnostic - and warning for it would burn the one-shot flag
-        # and silence the real 81-99 case later, which is the case the diagnostic exists for.
-        if percent < SIGNAL_HOLD_RESERVE and not self._reserve_band_warned:
+        if percent <= SIGNAL_MAX_SETTABLE_RESERVE or percent >= SIGNAL_HOLD_ROUND_UP_PERCENT:
+            self._end_hold()
+            if percent <= SIGNAL_MAX_SETTABLE_RESERVE:
+                return percent, None
+            if percent < SIGNAL_HOLD_RESERVE and not self._reserve_band_warned:
+                self._reserve_band_warned = True
+                self.log("Warn: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - using 100% instead, as the battery is nearly full".format(percent))
+            return SIGNAL_HOLD_RESERVE, True
+        if not self._reserve_band_warned:
             self._reserve_band_warned = True
-            self.log("Warn: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - using 100% instead, which also disables grid charging until set_reserve_min moves out of that band".format(percent))
-        return SIGNAL_HOLD_RESERVE
+            self.log(
+                "Warn: Teslemetry reserve request of {}% is in the 81-99 band Tesla rejects - holding at {}% instead, and topping up from the grid with a 100% reserve whenever the battery falls more than {}% below {}%".format(
+                    percent, SIGNAL_MAX_SETTABLE_RESERVE, SIGNAL_HOLD_TOP_UP_PERCENT, percent
+                )
+            )
+        if kind != self._hold_kind:
+            self._end_hold()
+        before = (self._hold_kind, self._hold_level, self._hold_topping_up)
+        self._hold_kind = kind
+        self._hold_level = max(self._hold_level or 0, percent)
+        soc = float(soc or 0)
+        if self._hold_topping_up:
+            if soc >= self._hold_level:
+                self._hold_topping_up = False
+        elif soc < self._hold_level - SIGNAL_HOLD_TOP_UP_PERCENT:
+            self._hold_topping_up = True
+        if (self._hold_kind, self._hold_level, self._hold_topping_up) != before:
+            self._hold_dirty = True
+        if self._hold_topping_up:
+            return SIGNAL_HOLD_RESERVE, True
+        return SIGNAL_MAX_SETTABLE_RESERVE, False
+
+    def _end_hold(self):
+        """Forget the hold _settable_reserve() was keeping, marking the saved copy for clearing if there was one."""
+        if self._hold_kind is not None or self._hold_level is not None:
+            self._hold_dirty = True
+        self._hold_kind = None
+        self._hold_level = None
+        self._hold_topping_up = False
+
+    def _wall_clock(self):
+        """The current time, in UTC; the hold state's save stamps are taken from it."""
+        return datetime.now(timezone.utc)
+
+    async def save_hold_state(self):
+        """Save the hold _settable_reserve() is keeping, so a restart can pick it up (GH#6046).
+
+        Written when the state changed, and every HOLD_STATE_REFRESH_SECONDS while a hold runs so that the stamp
+        stays fresh through a long steady hold; an ended hold is saved as empty, so a restart cannot bring the old
+        level back. No-op without storage.
+        """
+        storage = self.storage
+        if not storage:
+            return
+        now = self._wall_clock().timestamp()
+        active = self._hold_kind is not None
+        refresh_due = active and (self._hold_saved_at is None or now - self._hold_saved_at >= HOLD_STATE_REFRESH_SECONDS)
+        if not self._hold_dirty and not refresh_due:
+            return
+        data = {"kind": self._hold_kind, "level": self._hold_level, "topping_up": self._hold_topping_up, "saved_at": now} if active else {}
+        await storage.save("teslemetry", "hold", data, format="json")
+        self._hold_dirty = False
+        self._hold_saved_at = now if active else None
+
+    async def load_hold_state(self):
+        """Restore a saved hold younger than HOLD_STATE_MAX_AGE_SECONDS; anything older, or missing, starts afresh.
+
+        The restored hold only applies while the requests after the restart are of the same kind, since
+        _settable_reserve() ends a hold on a change of kind.
+        """
+        storage = self.storage
+        data = await storage.load("teslemetry", "hold") if storage else None
+        if not isinstance(data, dict) or not data.get("kind") or not isinstance(data.get("level"), (int, float)) or not isinstance(data.get("saved_at"), (int, float)):
+            return
+        age = self._wall_clock().timestamp() - data["saved_at"]
+        if not 0 <= age <= HOLD_STATE_MAX_AGE_SECONDS:
+            self.log("Info: Teslemetry not restoring the saved reserve hold at {}%, as it was saved {} minutes ago".format(data["level"], int(age // 60)))
+            return
+        self._hold_kind = data["kind"]
+        self._hold_level = int(data["level"])
+        self._hold_topping_up = bool(data.get("topping_up"))
+        self._hold_saved_at = data["saved_at"]
+        self._hold_dirty = False
+        self.log("Info: Teslemetry restored the reserve hold at {}% ({}{})".format(self._hold_level, self._hold_kind, ", topping up" if self._hold_topping_up else ""))
 
     def evaluate_schedule_tbc(self, minutes_now, soc):
         """Map the committed schedule to the device tuple under signal-tariff control (GH#4892).
 
-        Mode is autonomous in every state, because Tesla's optimiser only acts on the pushed tariff
-        under Time-Based Control - the tariff, not this tuple, is what asks for the charge or the
-        export. Reserve therefore stops being an overloaded charge signal and is simply the reserve
+        Mode is autonomous whenever the signal tariff has a band in it, because Tesla's optimiser only
+        acts on the pushed tariff under Time-Based Control - the tariff, not this tuple, is what asks
+        for the charge or the export. When neither window is in the tariff it is one flat band, which
+        gives the optimiser no price reason to cover house load, so it can leave small loads on the
+        grid with the reserve already released (GH#6020). That state uses self_consumption instead,
+        which covers house load down to the reserve whatever the tariff says, as the real-rate path
+        does. The test is the same windows sync_tariff builds the tariff from, so a charge window
+        committed ahead of its start already switches to autonomous, and the export band and
+        autonomous arrive together once the export starts (GH#5960).
+
+        Reserve stops being an overloaded charge signal and is simply the reserve
         Predbat asked for, in every state; the charge and export target percentages are advisory
         under this mode, since Tesla decides how much energy actually moves, and window length rather
         than a reserve floor is the lever for them.
 
-        Grid charging is enabled only while a charge is actually wanted and no hold is in force, so
-        no other state can import unexpectedly whatever the optimiser decides.
+        Grid charging is enabled only while a charge is actually wanted, or while _settable_reserve is
+        topping a hold in the snap band back up with a 100% reserve, so no other state can import
+        unexpectedly whatever the optimiser decides.
         """
         charge = self.schedule.get("charge", {})
         discharge = self.schedule.get("discharge", {})
-        reserve = self._settable_reserve(self.schedule.get("reserve", 20))
         if self.in_window(minutes_now, charge):
             target = int(charge.get("soc", 100))
             if soc >= target - SIGNAL_HOLD_DEADBAND_PERCENT:
-                # At (or effectively at) target: hold. Reserve 100 stops the discharge and grid
-                # charging off stops it importing to reach that reserve; solar may still charge,
-                # which is what a freeze charge wants.
-                return {"export_rule": "pv_only", "grid_charging": False, "reserve": SIGNAL_HOLD_RESERVE, "mode": "autonomous"}
-            # Charging. A reserve that came back as SIGNAL_HOLD_RESERVE is a hold request Predbat
-            # made in its own right, and must not be turned into an import up to 100% against the 0p
-            # band, so grid charging is suppressed in that case.
-            return {"export_rule": "pv_only", "grid_charging": reserve < SIGNAL_HOLD_RESERVE, "reserve": reserve, "mode": "autonomous"}
+                # At (or effectively at) target: hold on the reserve with grid charging off; solar may still
+                # charge, which is what a freeze charge wants. A target in the snap band is held by the same
+                # rule as a reserve request, as 100 would fill the battery from the grid (GH#6046).
+                hold = target if target > SIGNAL_MAX_SETTABLE_RESERVE else min(target, int(soc))
+                reserve, band_grid = self._settable_reserve(hold, soc, kind="target:{}".format(target))
+                return {"export_rule": "pv_only", "grid_charging": bool(band_grid), "reserve": reserve, "mode": "autonomous"}
+            # Charging: grid charging on for the tariff's cheap band to act on, at the reserve Predbat asked for
+            reserve, _ = self._settable_reserve(self.schedule.get("reserve", 20), soc, kind="charging")
+            return {"export_rule": "pv_only", "grid_charging": True, "reserve": reserve, "mode": "autonomous"}
         if self.in_window(minutes_now, discharge):
+            reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc, kind="export")
             target = int(discharge.get("soc", 10))
-            return {"export_rule": "battery_ok" if soc > target else "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
-        return {"export_rule": "pv_only", "grid_charging": False, "reserve": reserve, "mode": "autonomous"}
+            return {"export_rule": "battery_ok" if soc > target else "pv_only", "grid_charging": bool(band_grid), "reserve": reserve, "mode": "autonomous"}
+        reserve, band_grid = self._settable_reserve(self.schedule.get("reserve", 20), soc, kind="idle")
+        grid_charging = bool(band_grid)
+        charge_window, export_window = self._signal_windows(minutes_now)
+        mode = "autonomous" if (charge_window or export_window) else "self_consumption"
+        return {"export_rule": "pv_only", "grid_charging": grid_charging, "reserve": reserve, "mode": mode}
 
     def publish_schedule_entities(self):
         """Publish the schedule entities from the pending schedule (pending == committed after boot/apply).
@@ -849,6 +1012,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             )
         self.dashboard_item(self.entity("schedule_write", domain="switch"), "off", {"friendly_name": "Powerwall Schedule Write", "icon": "mdi:content-save-outline"}, app="teslemetry")
 
+    @writes
     async def apply_schedule(self):
         """Commit the pending schedule atomically, persist it, and assert the device state immediately rather than waiting up to 60s for the next run cycle."""
         self.schedule = copy.deepcopy(self.pending_schedule)
@@ -857,6 +1021,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if self.last_soc is not None and not self._is_read_only():
             await self.sync_tariff()
             await self.assert_device_state(self.evaluate_schedule(self.get_minutes_now(), self.last_soc))
+            await self.save_hold_state()
 
     async def save_schedule(self):
         """Persist the committed schedule via the Storage component (no-op when storage is unavailable)."""
@@ -875,6 +1040,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if isinstance(data, dict) and "charge" in data and "discharge" in data:
             self.schedule = data
         self.pending_schedule = copy.deepcopy(self.schedule)
+        await self.load_hold_state()
 
     def get_minutes_now(self):
         """Return minutes since local midnight from the live wall clock in the site's local timezone.
@@ -886,6 +1052,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         now = datetime.now(timezone.utc).astimezone(getattr(self, "local_tz", None) or timezone.utc)
         return now.hour * 60 + now.minute
 
+    @writes
     async def assert_device_state(self, desired, force=False):
         """Assert the desired device tuple (export rule, grid charging, reserve, mode); tariff is synced separately.
 
@@ -913,6 +1080,103 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if not all(results.values()):
             self.log("Warn: Teslemetry device-state assert incomplete: {}".format({key: value for key, value in results.items() if not value}))
         return all(results.values())
+
+    def _discovery_entities(self):
+        """Every setting automatic_config() binds, as discovery entity descriptors.
+
+        Entity ids come from the same self.entity() calls automatic_config() makes, so the two cannot
+        drift; tests/test_teslemetry.py checks they agree both ways. The four limits are bound only when
+        their entity exists - the test automatic_config() itself applies, since fetch_site_info()
+        publishes each only when site_info carried a basis for it. grid_power is published with the
+        opposite sign to Predbat's convention, hence invert; battery_power is not inverted.
+        """
+
+        def sensor(suffix, unit=None, domain="sensor", **fields):
+            """A read-only binding to one of the published sensors."""
+            descriptor = {"entity_id": self.entity(suffix, domain=domain), "access": "r", **fields}
+            if unit:
+                descriptor["unit"] = unit
+            return descriptor
+
+        def control(domain, suffix, **fields):
+            """A binding to one of the schedule control entities Predbat writes."""
+            return {"entity_id": self.entity(suffix, domain=domain), "access": "rw", "domain": domain, **fields}
+
+        entities = {
+            "soc_percent": sensor("soc", "%"),
+            "soc_max": sensor("soc_max", "kWh"),
+            "battery_power": sensor("battery_power", "W"),
+            "grid_power": sensor("grid_power", "W", invert=True),
+            "load_power": sensor("load_power", "W"),
+            "pv_power": sensor("solar_power", "W"),
+            "load_today": sensor("load_today", "kWh"),
+            "import_today": sensor("import_today", "kWh"),
+            "export_today": sensor("export_today", "kWh"),
+            "pv_today": sensor("solar_today", "kWh"),
+            "reserve": control("number", "schedule_reserve", unit="%"),
+            "charge_start_time": control("select", "schedule_charge_start_time", format="HH:MM:SS"),
+            "charge_end_time": control("select", "schedule_charge_end_time", format="HH:MM:SS"),
+            "charge_limit": control("number", "schedule_charge_soc", unit="%"),
+            "scheduled_charge_enable": control("switch", "schedule_charge_enable"),
+            "discharge_start_time": control("select", "schedule_discharge_start_time", format="HH:MM:SS"),
+            "discharge_end_time": control("select", "schedule_discharge_end_time", format="HH:MM:SS"),
+            "discharge_target_soc": control("number", "schedule_discharge_soc", unit="%"),
+            "scheduled_discharge_enable": control("switch", "schedule_discharge_enable"),
+            "schedule_write_button": control("switch", "schedule_write"),
+            "battery_export_permitted": sensor("battery_export_permitted", domain="binary_sensor"),
+        }
+        for limit_arg in ("battery_rate_max", "inverter_limit", "inverter_limit_charge", "export_limit"):
+            if self.get_state_wrapper(self.entity(limit_arg)) is not None:
+                entities[limit_arg] = sensor(limit_arg, "W")
+        return entities
+
+    def build_discovery(self):
+        """
+        Describe the Tesla energy site for the discovery catalogue.
+
+        One record for the site, keyed by its Backup Gateway (or, on a Powerwall 3, the Powerwall 3
+        itself, which site_info lists as the gateway), with the battery units behind it in serials and
+        composition "gateway". A Powerwall 2 is AC coupled - its solar is a separate inverter the
+        gateway only meters - so its functions are battery only; a Powerwall 3 is a hybrid inverter with
+        its own solar inputs. The energy site id is an account identifier and goes in account_ids,
+        published readable like every identifier.
+
+        Ratings are the figures site_info reports (nameplate energy and power, the configured export
+        limit). inverter_limit_charge is derived per battery unit and the battery_count capacity
+        estimate is a guess, so neither is a rating; both stay bound as entities where automatic_config()
+        binds them.
+
+        Never reported: the site name, address, timezone, gateway DINs and device UUIDs.
+
+        Returns None until site_info has been read.
+        """
+        if not self.site_info_done:
+            return None
+        components = self.site_components or {}
+        gateways = [gateway for gateway in components.get("gateways") or [] if isinstance(gateway, dict)]
+        gateway = gateways[0] if gateways else {}
+        batteries = [str(battery["serial_number"]) for battery in components.get("batteries") or [] if isinstance(battery, dict) and battery.get("serial_number")]
+        serial = gateway.get("serial_number")
+        info = {"vendor": "Tesla"}
+        if gateway.get("part_name"):
+            info["model"] = gateway["part_name"]
+        firmware = str(gateway.get("firmware_version") or self.site_version or "")
+        if firmware:
+            info["firmware"] = firmware
+        record = inverter_record(
+            "teslemetry:{}".format(serial) if serial else "teslemetry:site:{}".format(self.site_id),
+            inverter_type="TESLA",
+            composition="gateway" if batteries else "direct",
+            serials=batteries,
+            functions=["solar", "battery"] if self.powerwall_3 else ["battery"],
+            capabilities=dict(TESLA_CAPABILITIES),
+            hardware_ids={"serial": str(serial)} if serial else None,
+            account_ids={"energy_site_id": str(self.site_id)},
+            info=info,
+            ratings=dict(self.site_ratings or {}),
+            entities=self._discovery_entities(),
+        )
+        return {"automatic": self.automatic, "inverters": [record]}
 
     async def automatic_config(self):
         """Automatically wire Predbat's inverter args to this component's virtual entities (fox parity).
@@ -982,6 +1246,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.log("Info: Teslemetry setting {} {} ({})".format(hybrid_entity, "on" if hybrid else "off", reason))
         await self.set_state_external(hybrid_entity, hybrid)
 
+    @writes
     async def schedule_event(self, entity_id, value):
         """Stage a schedule entity write into pending_schedule; the write switch commits it.
 
@@ -1034,6 +1299,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return
         self.publish_schedule_entities()
 
+    @writes
     async def _command(self, path, body):
         """POST a command; return True only if both the transport and the application layer succeeded.
 
@@ -1093,10 +1359,12 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             self._last_sent[key] = signature
         return ok
 
+    @writes
     async def set_operation_mode(self, mode, force=False):
         """Set the Powerwall operation mode (self_consumption/autonomous/backup), deduped on write-on-change."""
         return await self._apply_command("operation_mode", mode, lambda: self._command("operation", {"default_real_mode": mode}), force=force)
 
+    @writes
     async def set_backup_reserve(self, percent, force=False):
         """Set the backup reserve percentage, deduped on write-on-change.
 
@@ -1109,14 +1377,17 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         percent = int(percent)
         return await self._apply_command("backup_reserve", percent, lambda: self._command("backup", {"backup_reserve_percent": percent}), force=force)
 
+    @writes
     async def set_grid_charging(self, allow, force=False):
         """Allow or disallow charging the battery from the grid, deduped on write-on-change."""
         return await self._apply_command("grid_charging", bool(allow), lambda: self._command("grid_import_export", {"disallow_charge_from_grid_with_solar_installed": not allow}), force=force)
 
+    @writes
     async def set_export_rule(self, rule, force=False):
         """Set the grid export rule (never/pv_only/battery_ok), deduped on write-on-change."""
         return await self._apply_command("export_rule", rule, lambda: self._command("grid_import_export", {"customer_preferred_export_rule": rule}), force=force)
 
+    @writes
     async def set_grid_import_export(self, export_rule, grid_charging, force=False):
         """Assert the export rule and grid-charging flag together in a SINGLE grid_import_export POST.
 
@@ -1419,9 +1690,33 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         """Return (start_min, end_min) for the committed discharge window when enabled, else None."""
         return self._committed_window("discharge")
 
+    @staticmethod
+    def _export_window_active(window, minutes_now):
+        """Return the export window while it is running, else None, so its boost band is only pushed once it starts (GH#5960).
+
+        Pushed any earlier, Tesla's optimiser sees an upcoming sale worth more than covering house load
+        and holds the battery through the run-up, so the house imports while Predbat's plan has the
+        battery serving it. The device acts on a tariff push within a couple of minutes, so starting
+        the band at the window start costs only that much of the export. Midnight wrap is supported.
+        """
+        if not window:
+            return None
+        start, end = window
+        if (minutes_now - start) % 1440 < (end - start) % 1440:
+            return window
+        return None
+
     def _charge_window(self):
         """Return (start_min, end_min) for the committed charge window when enabled, else None."""
         return self._committed_window("charge")
+
+    def _signal_windows(self, minutes_now):
+        """Return (charge_window, export_window) as they go into the signal tariff at minutes_now.
+
+        sync_tariff builds the tariff from these and evaluate_schedule_tbc picks the idle mode from
+        them, so the mode and the tariff cannot disagree about whether there is a band to act on.
+        """
+        return self._charge_window(), self._export_window_active(self._discharge_window(), minutes_now)
 
     @staticmethod
     def _window_intervals(window):
@@ -1546,6 +1841,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             **common,
         }
 
+    @writes
     async def set_tariff(self, tariff, force=False):
         """Push a prebuilt tariff via time_of_use_settings, deduped on the serialised tou_settings body.
 
@@ -1562,22 +1858,30 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         signature = json.dumps(body, sort_keys=True)
         return await self._apply_command("tariff", signature, lambda: self._command("time_of_use_settings", {"tou_settings": body}), force=force)
 
-    async def sync_tariff(self):
+    @writes
+    async def sync_tariff(self, force=False):
         """Build the tariff from current rates + committed discharge window and push it (deduped).
 
         Cheap to call every cycle: set_tariff only reaches the API when the serialised tariff changes,
         i.e. on a genuine rate-band, discharge-window or day-of-week change. Gated on read-only mode.
+        `force=True` bypasses that dedupe, for run()'s FORCED_ASSERT_SECONDS re-assert.
 
-        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one; it
-        depends only on the committed windows, so it re-pushes strictly less often.
+        With teslemetry_tbc_control set the signal tariff is pushed instead of the real-rate one. Its
+        discharge window only reaches the tariff while it is running (see _export_window_active), so it
+        depends on the committed windows and on whether the export window is live, which costs up to
+        two extra pushes per export window: one as the band appears and one as it is withdrawn.
+
+        The real-rate path keeps the whole committed window: it also uses it to keep the export slots
+        out of the band quantisation, and outside the window the device is in self_consumption, which
+        does not act on the tariff, so it has no run-up hold to avoid.
         """
         if self._is_read_only():
             return True
         if getattr(self, "tbc_control", self.DEFAULT_TBC_CONTROL):
-            tariff = self.build_signal_tariff(self._charge_window(), self._discharge_window())
+            tariff = self.build_signal_tariff(*self._signal_windows(self.get_minutes_now()))
         else:
             tariff = self.build_tariff(self._discharge_window())
-        return await self.set_tariff(tariff)
+        return await self.set_tariff(tariff, force=force)
 
     def _is_read_only(self):
         """Return True if Predbat is configured read-only, so device-write commands must not be sent.
@@ -1592,6 +1896,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             return False
         return bool(self.get_arg("set_read_only", False))
 
+    @writes
     async def select_event(self, entity_id, value):
         """Handle select changes routed from the service-hook loopback."""
         if "_schedule_" in entity_id:
@@ -1610,6 +1915,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         else:
             self.log("Warn: Teslemetry command failed for {} = {} (state not updated)".format(entity_id, value))
 
+    @writes
     async def number_event(self, entity_id, value):
         """Handle number changes routed from the service-hook loopback.
 
@@ -1632,6 +1938,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         else:
             self.log("Warn: Teslemetry unhandled number_event {} = {}".format(entity_id, value))
 
+    @writes
     async def switch_event(self, entity_id, service):
         """Handle switch service calls routed from the service-hook loopback."""
         if "_schedule_" in entity_id:

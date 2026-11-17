@@ -217,10 +217,15 @@ def test_automatic_config_maps_control_entities():
     if s.args_set.get("num_inverters") != 2:
         print(f"ERROR: num_inverters {s.args_set.get('num_inverters')}")
         failed = True
-    for arg in ("soc_percent", "battery_power", "grid_power", "load_power", "pv_power", "soc_max", "battery_rate_max", "inverter_limit", "battery_min_soc"):
+    for arg in ("soc_percent", "battery_power", "grid_power", "load_power", "pv_power", "soc_max_fallback", "battery_rate_max", "inverter_limit", "battery_min_soc"):
         if arg not in s.args_set:
             print(f"ERROR: sensor arg {arg} not mapped")
             failed = True
+    # The installer-entered Batt Capacity is only a fallback: binding soc_max would override an
+    # apps.yaml soc_max and stop find_battery_size() from correcting a wrong setting.
+    if "soc_max" in s.args_set:
+        print(f"ERROR: soc_max must never be bound, got {s.args_set['soc_max']}")
+        failed = True
     for arg in (
         "reserve",
         "charge_start_time",
@@ -245,6 +250,38 @@ def test_automatic_config_maps_control_entities():
     assert not failed, "test_automatic_config_maps_control_entities"
 
 
+def test_automatic_config_binds_bms_power_for_size_estimate():
+    """battery_size_power is bound to the BMS power sensor when every inverter has a BMS link, else left unset."""
+    failed = False
+    s = ConfigSunsynk()
+    s.device_list = ["INV1"]
+    s.device_values["INV1"] = {"soc": 50, "capacity": 150, "chargeVolt": 53.2, "bmsCurrent": 52.0, "bmsVolt": 50.1, "bmsSoc": 50.0}
+    run_async_local(s.automatic_config())
+    if s.args_set.get("battery_size_power") != [s._sensor_name("INV1", "battery_power_bms")]:
+        print(f"ERROR: battery_size_power should bind the BMS power sensor, got {s.args_set.get('battery_size_power')}")
+        failed = True
+    if s.args_set.get("battery_power") != [s._sensor_name("INV1", "battery_power")]:
+        print(f"ERROR: battery_power must stay bound to the inverter's own power, got {s.args_set.get('battery_power')}")
+        failed = True
+
+    no_link = ConfigSunsynk()
+    no_link.device_list = ["INV1"]
+    no_link.device_values["INV1"] = {"soc": 50, "capacity": 150, "chargeVolt": 53.2, "bmsCurrent": 0.0, "bmsVolt": 0.0, "bmsSoc": 0.0}
+    run_async_local(no_link.automatic_config())
+    if "battery_size_power" in no_link.args_set:
+        print(f"ERROR: without a BMS link battery_size_power must be left to fall back to battery_power, got {no_link.args_set['battery_size_power']}")
+        failed = True
+    # automatic_config() runs once a session, so a skipped binding must say so rather than leave the
+    # estimator silently on the biased battery_power
+    if not any("BMS current" in str(m) for m in no_link.log_messages):
+        print(f"ERROR: skipping battery_size_power must log a warning, got {no_link.log_messages}")
+        failed = True
+    if any("BMS current" in str(m) for m in s.log_messages):
+        print("ERROR: no BMS warning expected when battery_size_power is bound")
+        failed = True
+    assert not failed, "test_automatic_config_binds_bms_power_for_size_estimate"
+
+
 def test_automatic_config_skips_partial_capabilities():
     """An arg is only mapped when every inverter reports the underlying value."""
     failed = False
@@ -256,7 +293,7 @@ def test_automatic_config_skips_partial_capabilities():
     s.device_energy = {"INV1": {"pv_today": 1.0}, "INV2": {}}
     s.device_rated_power = {"INV1": 8000.0}
     run_async_local(s.automatic_config())
-    for arg in ("soc_max", "battery_rate_max", "inverter_limit", "pv_today"):
+    for arg in ("soc_max_fallback", "battery_rate_max", "inverter_limit", "pv_today"):
         if arg in s.args_set:
             print(f"ERROR: {arg} was mapped although not every inverter reports it")
             failed = True
@@ -398,7 +435,7 @@ def test_sunsynk_catalogue_describes_each_inverter():
         (record["ratings"]["inverter_limit"], 8000.0),
         (record["ratings"]["export_limit"], 7000.0),
         (record["ratings"]["battery_capacity_ah"], 200.0),
-        (record["entities"]["soc_max"]["entity_id"], s._sensor_name(SUNSYNK_LIVE_SERIAL, "battery_capacity")),
+        (record["entities"]["soc_max_fallback"]["entity_id"], s._sensor_name(SUNSYNK_LIVE_SERIAL, "battery_capacity")),
     ]
     for actual, expected in checks:
         if actual != expected:
@@ -406,7 +443,7 @@ def test_sunsynk_catalogue_describes_each_inverter():
             failed = True
     # Spec D14: the kWh is Predbat's derivation (Ah x an inferred or user-set pack voltage), so it is
     # bound as the battery_capacity sensor above but is not a rating
-    for old in ("inverter_w", "battery_kwh", "max_charge_w", "soc_max"):
+    for old in ("inverter_w", "battery_kwh", "max_charge_w", "soc_max", "soc_max_fallback"):
         if old in record["ratings"]:
             print("ERROR: rating {} must be absent (renamed, or a Predbat derivation): {}".format(old, record["ratings"]))
             failed = True
@@ -473,7 +510,7 @@ def test_sunsynk_catalogue_keeps_battery_ratings_through_a_partial_poll():
     # Nothing is invented for an inverter whose battery fields have never been seen
     s.device_list = [sn, "UNSEEN1"]
     unseen = {record["device_id"]: record for record in s.build_discovery()["inverters"]}["sunsynk:UNSEEN1"]
-    if {"soc_max", "battery_capacity_ah"} & set(unseen.get("ratings", {})) or "soc_max" in unseen.get("entities", {}):
+    if {"soc_max", "battery_capacity_ah"} & set(unseen.get("ratings", {})) or "soc_max_fallback" in unseen.get("entities", {}):
         print("ERROR: an inverter never polled must carry no battery rating or capacity binding: {}".format(unseen))
         failed = True
     return failed
@@ -605,11 +642,11 @@ def test_sunsynk_mixed_fleet_records_describe_each_device():
     """Spec D10: each record lists what its own device has, not what automatic_config()'s all-inverters gate allows.
 
     The second inverter reports no chargeVolt, charge current or PV counter, so automatic_config()
-    binds soc_max, battery_rate_max and pv_today for neither. The first inverter's record still
+    binds soc_max_fallback, battery_rate_max and pv_today for neither. The first inverter's record still
     carries all three; the second's carries none of them.
     """
     failed = False
-    per_device = ("soc_max", "battery_rate_max", "pv_today")
+    per_device = ("soc_max_fallback", "battery_rate_max", "pv_today")
     s = _sunsynk_driven_fleet(("2405116013", "2211093089"))
     s.device_values["2211093089"] = {"soc": 50, "capacity": 200}
     del s.device_energy["2211093089"]["pv_today"]
@@ -651,7 +688,7 @@ def test_sunsynk_record_keeps_sensor_bindings_through_a_partial_poll():
     fresh.device_values = {SUNSYNK_LIVE_SERIAL: {"soc": 50}}
     fresh.device_energy = {SUNSYNK_LIVE_SERIAL: {"load_today": 1.0}}
     entities = fresh.build_discovery()["inverters"][0]["entities"]
-    for setting in ("soc_max", "battery_rate_max", "pv_today", "import_today"):
+    for setting in ("soc_max_fallback", "battery_rate_max", "pv_today", "import_today"):
         if setting in entities:
             print("ERROR: {} was never reported, so no sensor exists to bind: {}".format(setting, entities[setting]))
             failed = True
@@ -1320,6 +1357,7 @@ def run_sunsynk_config_tests(my_predbat):
         ("automatic_config", test_automatic_config_maps_control_entities),
         ("sign_flags_claimed", test_sign_flags_are_claimed_not_inherited),
         ("export_limit_mapped", test_export_limit_is_auto_mapped_from_the_export_cap),
+        ("bms_power_for_size_estimate", test_automatic_config_binds_bms_power_for_size_estimate),
         ("partial_capabilities", test_automatic_config_skips_partial_capabilities),
         ("ignore_pv", test_automatic_config_respects_ignore_pv),
         ("run_first_cycle", test_run_first_cycle_polls_and_publishes),

@@ -1,20 +1,24 @@
-# Predbat config for the Hanchu iESS, via the hanchu-ess-ha HACS
-# integration (https://github.com/upton68/hanchu-ess-ha)
+# Predbat config for the Anker SOLIX X1, via the anker-x1-ha community integration
+# (local Modbus TCP, https://github.com/afewyards/anker-x1-ha, 0.7.0 or later)
+#
+# The X1 has no charge schedule, target SoC or reserve over Modbus, so this is a
+# custom inverter type controlled through Predbat's Service API: every service
+# below calls one Home Assistant script that writes the X1's battery power
+# setpoint in VPP mode. See the Anker SOLIX X1 section of the inverter setup docs.
 #
 # Copy this over your apps.yaml and:
-#   1. Install the "Hanchu iESS" integration via HACS and configure it
-#      with your Hanchu cloud account credentials.
-#   2. Create three helpers in Home Assistant (see inverter-setup docs).
-#   3. Create the bridge script (see inverter-setup docs).
-#   4. Add the soc_kw template sensor to configuration.yaml (see inverter-setup docs).
-#   5. Replace YOURSERIAL throughout with your device serial number as it
-#      appears in your HA entity IDs (set automatically by the integration).
-#   6. Adjust inverter_limit, inverter_limit_charge, inverter_limit_discharge,
-#      inverter_limit_export and battery_rate_max to match your hardware.
-#   7. Delete the template: True line below once you have configured this file.
-#
-# Note: The 5000W limits are set to the author's hardware — adjust these
-# to match your own inverter and battery rated capacity.
+#   1. Install the anker-x1-ha integration (not in the default catalogue: use
+#      Add from link in the Marketplace on Home Assistant 2026.11 or newer, or add
+#      it to HACS as a custom repository on 2026.10 or older) and check its
+#      sensors work.
+#   2. Install the Home Assistant package templates/anker_x1_package.yaml (the
+#      control script, rate helpers, house load and SoC sensors) and restart
+#      Home Assistant.
+#   3. Set soc_max to your battery size in kWh (5 per battery module).
+#   4. Check inverter_limit and battery_rate_max against your inverter model
+#      (sensor.anker_x1_model); 5000 is for the X1-H5K-S.
+#   5. Set reserve and battery_min_soc to the minimum SoC set in the Anker app.
+#   6. Delete the template: True line below once you have configured this file.
 ---
 pred_bat:
   module: predbat
@@ -28,114 +32,151 @@ pred_bat:
   # XXX: This is a configuration template, delete this line once you edit your configuration
   template: True
   load_filter_threshold: 30
-  # ─── Hanchu iESS daily energy sensors ─────────────────────────────────────
+
+  # ─── Anker SOLIX X1 energy sensors ────────────────────────────────────────
+  # Energy (kWh) sensors that only ever go up. Daily counters and lifetime
+  # totals both work: Predbat only uses how much they rose since midnight.
+  # The X1 reports no house load energy, so load_today is the energy balance
+  # sensor from anker_x1_package.yaml.
   load_today:
-    - sensor.hanchuess_YOURSERIAL_daily_load_energy
+    - sensor.anker_x1_house_load_today
+  # anker-x1-ha 0.7.0 renamed "Grid Bought Today" / "Grid Fed-in Today" to
+  # "Grid Bought" / "Grid Fed-in"; these match the entity under either name.
+  # They are lifetime totals on X1 firmware 1.0.19.16 and reset at midnight on
+  # 1.0.16.1, and both work here.
   import_today:
-    - sensor.hanchuess_YOURSERIAL_daily_grid_import
+    - 're:(sensor.anker_x1_grid_bought(_today|))'
   export_today:
-    - sensor.hanchuess_YOURSERIAL_daily_grid_export
+    - 're:(sensor.anker_x1_grid_fed_in(_today|))'
   pv_today:
-    - sensor.hanchuess_YOURSERIAL_daily_pv_energy
-  # ─── Hanchu iESS inverter definition ──────────────────────────────────────
+    - sensor.anker_x1_pv_energy_today
+
+  # ─── Anker SOLIX X1 inverter definition ───────────────────────────────────
+  # Every setting Predbat reads from an inverter definition is spelled out,
+  # because anything left out is copied from the GivEnergy one.
   num_inverters: 1
-  inverter_type: "HC"
+  balance_inverters_seconds: 0
+  inverter_type: "AX1"
   inverter:
-    name: "Hanchu iESS"
+    name: "Anker SOLIX X1"
     has_rest_api: false
     has_mqtt_api: false
     has_service_api: true
     output_charge_control: "power"
-    charge_control_immediate: true
+    charge_control_immediate: false
+    current_dp: 1
+    charge_discharge_with_rate: false
     has_charge_enable_time: false
     has_discharge_enable_time: false
+    # No target SoC or reserve register over Modbus: Predbat watches the SoC
+    # and stops the charge or export itself
     has_target_soc: false
+    target_soc_used_for_discharge: false
     has_reserve_soc: false
     has_timed_pause: false
-    charge_time_format: "S"
-    charge_time_entity_is_option: false
-    soc_units: "%"
-    num_load_entities: 1
-    has_ge_inverter_mode: false
     time_button_press: false
-    clock_time_format: "%d-%m-%y %H:%M:%S"
-    write_and_poll_sleep: 2
-    has_time_window: false
+    # A hold (0 W) stops the battery charging from solar too, which isn't what
+    # Predbat's freeze modes assume, so leave them off
     support_charge_freeze: false
     support_discharge_freeze: false
-  # ─── Hanchu iESS control surface (write) ──────────────────────────────────
-  # All four hooks call the same queued script, passing mode_action so it
-  # knows which state to apply. See inverter-setup docs for the full script.
+    support_feedin_first: false
+    has_ge_inverter_mode: false
+    has_ge_eco_toggle: false
+    has_idle_time: false
+    charge_time_format: "S"
+    charge_time_entity_is_option: false
+    can_span_midnight: true
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    num_load_entities: 1
+    soc_units: "%"
+    write_and_poll_sleep: 2
+
+  # ─── Anker SOLIX X1 control surface (write) ───────────────────────────────
+  # All through script.predbat_anker_x1_control (anker_x1_package.yaml):
+  #   charge / discharge -> VPP mode with a battery setpoint of -power / +power
+  #   hold               -> VPP mode at 0 W
+  #   auto               -> clear the setpoint and switch the X1 to Self-consumption
+  # The start and hold calls repeat on every Predbat run so control is taken
+  # back if the X1 drops out of VPP mode; the script skips unchanged writes.
   charge_start_service:
-    - service: script.hanchu_set_state_queued
-      data:
-        mode_action: charge_start
+    - service: script.predbat_anker_x1_control
+      command: charge
+      power: "{power}"
+      target_soc: "{target_soc}"
+      repeat: true
+  charge_freeze_service:
+    - service: script.predbat_anker_x1_control
+      command: hold
+      repeat: true
   charge_stop_service:
-    - service: script.hanchu_set_state_queued
-      data:
-        mode_action: charge_stop
+    - service: script.predbat_anker_x1_control
+      command: auto
   discharge_start_service:
-    - service: script.hanchu_set_state_queued
-      data:
-        mode_action: discharge_start
+    - service: script.predbat_anker_x1_control
+      command: discharge
+      power: "{power}"
+      target_soc: "{target_soc}"
+      repeat: true
   discharge_stop_service:
-    - service: script.hanchu_set_state_queued
-      data:
-        mode_action: discharge_stop
-  # ─── Hanchu iESS sensor entities (read) ───────────────────────────────────
+    - service: script.predbat_anker_x1_control
+      command: auto
+
+  # ─── Anker SOLIX X1 sensor entities (read) ────────────────────────────────
+  # Predbat writes the charge/discharge power it wants here (W) and passes it
+  # to the script as {power}
   charge_rate:
-    - number.hanchuess_YOURSERIAL_charge_power_limit
+    - input_number.predbat_anker_x1_charge_rate
   discharge_rate:
-    - number.hanchuess_YOURSERIAL_discharge_power_limit
-  battery_power:
-    - sensor.hanchuess_YOURSERIAL_battery_power
-  battery_power_invert:
-    - true  # Hanchu sign convention is opposite to Predbat's
-  pv_power:
-    - sensor.hanchuess_YOURSERIAL_power
-  load_power:
-    - sensor.hanchuess_YOURSERIAL_load_power
-  load_power_invert:
-    - false
-  grid_power:
-    - sensor.hanchuess_YOURSERIAL_grid_power
-  grid_power_invert:
-    - true  # Hanchu sign convention is opposite to Predbat's
+    - input_number.predbat_anker_x1_discharge_rate
+  # The X1's SoC through a filter that holds the last good reading for up to
+  # 15 minutes, so a dropout or a glitch to 0% doesn't make Predbat plan from
+  # an empty battery
   soc_percent:
-    - sensor.hanchuess_YOURSERIAL_battery_soc
+    - sensor.anker_x1_battery_soc_for_predbat
+  # Battery size in kWh: 5 per battery module (measured 5.2-5.3 kWh usable per
+  # module). A fixed number can't drop out the way the integration's Battery
+  # Nominal Capacity sensor can.
   soc_max:
-    - sensor.hanchuess_YOURSERIAL_battery_capacity_kwh  # Returns capacity in kWh, used to derive soc_kw
-  soc_kw:
-    - sensor.home_battery_state_of_charge_kwh  # Template sensor — see configuration.yaml step in inverter-setup docs
+    - 10
+  # Positive while discharging, negative while charging, as Predbat expects
+  battery_power:
+    - sensor.anker_x1_battery_power
+  battery_power_invert:
+    - false
+  pv_power:
+    - sensor.anker_x1_usable_pv_power
+  # The X1's external meter reads negative while exporting and Predbat wants
+  # export positive, hence the invert
+  grid_power:
+    - sensor.anker_x1_meter_total_power
+  grid_power_invert:
+    - true
+  # Solar + battery + grid, from anker_x1_package.yaml
+  load_power:
+    - sensor.anker_x1_house_load_power
+
+  # ─── Anker SOLIX X1 battery and inverter limits ───────────────────────────
+  # The X1 has no reserve setting over Modbus, so Predbat plans with its own
+  # Reserve (input_number.predbat_set_reserve_min). Neither setting changes
+  # where the X1 itself stops discharging (the minimum SoC in the Anker app),
+  # so set both to the same value as the app.
+  reserve:
+    - 4
   battery_min_soc:
-    - number.hanchuess_YOURSERIAL_minimum_discharge_soc
-  # ─── Hanchu iESS battery physical specs ───────────────────────────────────
-  # Adjust all limits to match your inverter and battery rated capacity in watts
-  inverter_battery_rate_min:
-    - 0  # Older firmware may require 500
-  inverter_limit:
-    - 5000
-  inverter_limit_charge:
-    - 5000
-  inverter_limit_discharge:
-    - 5000
-  inverter_limit_export:
-    - 5000
+    - 4
+  # Maximum battery charge/discharge power in W
   battery_rate_max:
     - 5000
-  # Charge/discharge power curves based on observed Hanchu iESS behaviour
-  battery_charge_power_curve:
-    97: 0.5
-    98: 0.2
-    99: 0.1
-  battery_discharge_power_curve:
-    4: 1.0
+  # Inverter AC limit in W: 5000 for the X1-H5K-S. sensor.anker_x1_dischargeable_power
+  # is the battery pack's DC capability (3300 W per module), not the AC output.
+  inverter_limit:
+    - 5000
   inverter_clock_skew_start: 0
   inverter_clock_skew_end: 0
   inverter_clock_skew_discharge_start: 0
   inverter_clock_skew_discharge_end: 0
-  inverter_can_charge_during_export: false  # Single inverter setup
   clock_skew: 0
+
   # ─── Solcast solar forecast ───────────────────────────────────────────────
   # Solcast cloud interface, set this or the local interface below
   #solcast_host: 'https://api.solcast.com.au/'
@@ -173,13 +214,6 @@ pred_bat:
     - 'locked'
     - 'plugged in'
     - 'waiting'
-
-  # car_charging_plugged can be set to a sensor that says only whether the car is plugged in - staying on after
-  # its charge has finished - matched against car_charging_planned_response. Predbat resets the manual car SoC
-  # (input_number.predbat_car_charging_manual_soc_kwh) to 0 when it reads unplugged, and with car_charging_energy
-  # set it tracks the SoC of a car that has no car_charging_soc sensor. One entry per car - e.g. for a myenergi Zappi:
-  #car_charging_plugged:
-  #  - 're:(sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
   # car_charging_now can be set to a sensor that shows the car is charging right now, so that
   # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
   # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
@@ -244,7 +278,7 @@ pred_bat:
   temperature_enable: true
   # ─── Notifications ────────────────────────────────────────────────────────
   #notify_devices:
-  #  - mobile_app_treforsiphone12_2
+  #  - mobile_app_my_phone
   # ─── Scaling ──────────────────────────────────────────────────────────────
   battery_scaling:
     - 1.0
@@ -281,6 +315,4 @@ pred_bat:
   #  - '{octopus_intelligent_slot}'
   #  - '{octopus_ready_time}'
   #  - '{octopus_charge_limit}'
-  #  - '{octopus_saving_session}'
   #  - '+[car_charging_planned]'
-  #  - '+[car_charging_soc]'
