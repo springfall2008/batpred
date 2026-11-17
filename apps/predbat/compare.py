@@ -801,7 +801,7 @@ class Compare:
         }
 
         # Midnight SOC fallback for tariffs with no prior result
-        soc_midnight_fallback = my_predbat.soc_kwh_history.get(my_predbat.minutes_now, my_predbat.soc_kw)
+        soc_midnight_fallback = my_predbat.soc_kwh_history.get(my_predbat.minutes_since_day_start(), my_predbat.soc_kw)
         today_date = datetime.now().strftime("%Y-%m-%d")
 
         # Snapshot config values for all keys that any tariff may override via fetch_config().

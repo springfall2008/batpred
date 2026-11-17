@@ -17,6 +17,7 @@ GH#5690: those sums were rounded to 2 dp on every per-minute addition. On a dull
 minutes at or above 0.005 kWh. The day factor then came out wrong - by 1.84x on the reporter's system - and the
 planner expected far more (or less) PV than the forecast said on exactly the days calibration matters most.
 """
+
 from tests.test_pv_calibration_clipping import bell, calibrate, check, flat
 
 # The history the calibration learns from: a 4 kW clear-sky week that delivered 85% of its forecast, so every

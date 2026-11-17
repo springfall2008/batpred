@@ -94,6 +94,16 @@ _STAGED_EXPIRY_SECONDS = 600
 _COMMIT_ATTEMPTS = 3
 _COMMIT_POLL_SECONDS = 0.5
 
+# How long a publish made from another event loop waits for the gateway's own loop to send it
+# (seconds). An MQTT publish is handed to the client almost at once, so this only matters when that
+# loop is stuck or gone: the caller is Predbat's control thread, which must not be held there.
+_PUBLISH_HANDOVER_SECONDS = 30
+
+# How long enabling read-only on the Hub waits for reset_inverter() to write the safe state first
+# (seconds). The reset runs at the next plan execution; one that never comes (Predbat stuck, plan
+# failing) must not leave the Hub writable indefinitely, so after this the command is sent anyway.
+_READ_ONLY_HANDOVER_WAIT_SECONDS = 15 * 60
+
 
 def _split_same_day_plan_entries(entries):
     """Split native EMS windows into same-day pieces on the plan's absolute timeline.
@@ -144,6 +154,50 @@ def _serial_suffix(serial):
 PLAN_MODE_AUTO = 0
 PLAN_MODE_CHARGE = 1
 PLAN_MODE_DISCHARGE = 2
+
+# Display timeline slot codes published in predbat_data "timeline"
+TIMELINE_IDLE = 0
+TIMELINE_CHARGE = 1
+TIMELINE_EXPORT = 2
+TIMELINE_SOLAR = 3
+TIMELINE_IMPORT = 4
+# Per-slot modifier published in "timeline_sub", naming the plan's mode for a charge or export slot.
+# Devices that do not read it draw the plain code, exactly as before.
+# The modifier says which mode the plan puts the slot in, not whether energy flows: a freeze-charge
+# window that starts below the reserve still charges up to the reserve before it holds.
+TIMELINE_SUB_NONE = 0  # Charge/export to a target, or a slot with no modifier
+TIMELINE_SUB_HOLD = 1  # Hold mode - charge target already met, or export target out of reach, so the slot holds
+TIMELINE_SUB_FREEZE = 2  # Freeze mode - charge-freeze (limit at the reserve, hold-at-reserve) or freeze export
+
+# Plan row raw state -> (timeline code, timeline_sub modifier)
+TIMELINE_STATE_CODES = {
+    "Chrg": (TIMELINE_CHARGE, TIMELINE_SUB_NONE),
+    "HoldChrg": (TIMELINE_CHARGE, TIMELINE_SUB_HOLD),
+    "FrzChrg": (TIMELINE_CHARGE, TIMELINE_SUB_FREEZE),
+    "Exp": (TIMELINE_EXPORT, TIMELINE_SUB_NONE),
+    "HoldExp": (TIMELINE_EXPORT, TIMELINE_SUB_HOLD),
+    "FrzExp": (TIMELINE_EXPORT, TIMELINE_SUB_FREEZE),
+}
+
+
+def timeline_slot_codes(state, pv_forecast):
+    """Return the (timeline, timeline_sub) display codes for one plan row.
+
+    Args:
+        state: Plan row raw state, e.g. "Chrg" or "HoldChrg".
+        pv_forecast: Forecast PV for the slot in kW.
+
+    Returns:
+        tuple: (code for "timeline", modifier for "timeline_sub").
+    """
+    if state in TIMELINE_STATE_CODES:
+        return TIMELINE_STATE_CODES[state]
+    try:
+        pv = float(pv_forecast or 0)
+    except (TypeError, ValueError):
+        pv = 0.0
+    return (TIMELINE_SOLAR if pv > 0.1 else TIMELINE_IMPORT), TIMELINE_SUB_NONE
+
 
 # GivEnergy holds the charge and discharge rates as a whole percent of nominal battery capacity,
 # rounded down - 1300W on a 13.41kWh battery reads back 1206W (#5324)
@@ -470,13 +524,6 @@ class GatewayMQTT(ComponentBase):
         self._mqtt_client = None
         self._mqtt_task = None
         self._mqtt_connected = False
-        # Event loop that owns self._mqtt_client (captured in run()). Control writes
-        # arrive via ha.py::run_async(), which runs on its own throwaway loop on the
-        # calling thread — publishing directly from there would bind the aiomqtt
-        # publish-confirmation Future to the wrong loop and stall for the client's
-        # ~10s default timeout instead of completing near-instantly. _publish_raw()
-        # dispatches onto this loop when called from elsewhere.
-        self._loop = None
         self._gateway_online = False
         self._last_telemetry_time = 0  # monotonic time (see monotonic()) of the last status with an inverter in it, 0 until one arrives
         self._last_ev_status = None  # the last /status that carried EV chargers, for EVC control
@@ -564,6 +611,9 @@ class GatewayMQTT(ComponentBase):
         # Latch so a gateway whose reported read-only state disagrees with what PredBat
         # requested is logged once per transition, not on every status cycle
         self._read_only_mismatch_logged = False
+        # Monotonic time enabling read-only was first held back for a pending handover reset
+        # (None when nothing is held back), bounding the wait to _READ_ONLY_HANDOVER_WAIT_SECONDS
+        self._read_only_held_since = None
 
         # Set once the first MQTT connection attempt has completed (success or failure)
         self._first_connection_attempted = False
@@ -850,11 +900,10 @@ class GatewayMQTT(ComponentBase):
         payload = {"command": "ev", "command_id": "PBAT" + str(self._next_command_id()), "charge_point_id": charge_point_id}
         payload.update(command)
         try:
-            await self._publish_raw(self.topic_command, json.dumps(payload).encode())
+            return await self._publish_raw(self.topic_command, json.dumps(payload).encode())
         except Exception as e:
             self.log(f"Warn: GatewayMQTT: Failed to publish EV command {command.get('action')} for '{charge_point_id}': {e}")
             return False
-        return True
 
     async def _startup_wait(self, ticks, ready):
         """Poll ``ready`` at 0.5 s intervals until it is true or the startup budget is spent.
@@ -905,9 +954,6 @@ class GatewayMQTT(ComponentBase):
             return False
 
         if first:
-            # Capture the loop that will own the MQTT client/listener task, so
-            # cross-loop callers (ha.py::run_async()) can dispatch onto it later.
-            self._loop = asyncio.get_running_loop()
             await self._load_discovery()
             # Start MQTT listener as a background task
             self._mqtt_task = asyncio.ensure_future(self._mqtt_loop())
@@ -2806,7 +2852,8 @@ class GatewayMQTT(ComponentBase):
             cost_today = self.get_state_wrapper(self.prefix + ".cost_today")
             avg_price = self.get_state_wrapper(self.prefix + ".ppkwh_today")
 
-            timeline = [0] * 12  # 12 x 30-min slots, default idle
+            timeline = [TIMELINE_IDLE] * 12  # 12 x 30-min slots, default idle
+            timeline_sub = [TIMELINE_SUB_NONE] * 12  # Per-slot hold/freeze modifier for timeline
             block_soc = []  # SOC % values for current plan block only
             block_state_name = ""  # Current block state for display label
 
@@ -2815,15 +2862,6 @@ class GatewayMQTT(ComponentBase):
             if plan_raw and isinstance(plan_raw, dict) and "rows" in plan_raw:
                 rows = plan_raw["rows"]
                 now = datetime.datetime.now(self.local_tz)
-
-                state_map = {
-                    "Chrg": 1,
-                    "FrzChrg": 1,
-                    "HoldChrg": 1,
-                    "Exp": 2,
-                    "HoldExp": 2,
-                    "FrzExp": 2,
-                }
 
                 slot_idx = 0
                 for row in rows:
@@ -2836,22 +2874,21 @@ class GatewayMQTT(ComponentBase):
                         continue
 
                     state = row.get("state", "")
-                    code = state_map.get(state, 0)
-                    if code == 0:
-                        pv = float(row.get("pv_forecast", 0) or 0)
-                        if pv > 0.1:
-                            code = 3  # Solar
-                        else:
-                            code = 4  # Grid import (consuming)
+                    code, sub = timeline_slot_codes(state, row.get("pv_forecast", 0))
 
                     if slot_idx < 12:
                         timeline[slot_idx] = code
+                        timeline_sub[slot_idx] = sub
 
                     if slot_idx == 0:
                         block_state_name = state
 
                     if slot_idx < 24:
-                        block_soc.append(int(float(row.get("soc_percent", 0) or 0)))
+                        try:
+                            block_soc.append(int(float(row.get("soc_percent", 0) or 0)))
+                        except (ValueError, TypeError):
+                            # One bad row must not drop the whole publish - repeat the previous SoC so the sparkline has no false dip
+                            block_soc.append(block_soc[-1] if block_soc else 0)
 
                     slot_idx += 1
 
@@ -2941,6 +2978,7 @@ class GatewayMQTT(ComponentBase):
                 "avg_price": round(float(avg_price or 0), 1),
                 "total_cost": round(float(cost_today or 0) / 100.0, 2),  # pence → pounds
                 "timeline": timeline,
+                "timeline_sub": timeline_sub,
                 "block_soc": block_soc,
                 "block_state": block_state_name,
                 "savings_yesterday": saving_yesterday,
@@ -3011,21 +3049,59 @@ class GatewayMQTT(ComponentBase):
         least every 30 minutes even when unchanged. The command is gateway-wide, so it
         carries no inverter serial. Gated only on an active MQTT connection — it does not
         depend on auto-config, so the state is established as early as possible.
+
+        Enabling read-only is held back while the switch's handover reset is still pending (see
+        _hold_read_only_for_reset), because the Hub rejects writes once it is read-only and the
+        reset's safe-state writes would never land. Disabling is never held back. If a new handover
+        reset is pending while the Hub is already read-only (the switch went off and on between two
+        cycles, so no change was seen), read-only is first disabled to reopen the Hub, then held.
         """
         if not self._mqtt_connected:
             # Force a re-send after reconnect (command is not retained).
             self._last_read_only = None
             return
         read_only = bool(self.get_arg("set_read_only", False))
+        reset_pending = getattr(self.base, "inverter_needs_reset_force", "") == "set_read_only"
+        if not read_only or not reset_pending:
+            self._read_only_held_since = None
         now = self.monotonic()
+        if read_only and reset_pending and self._last_read_only and self._read_only_held_since is None:
+            # The switch went off and on again between two cycles, so the Hub is still read-only from the
+            # earlier enable and would reject the new handover reset's writes: reopen it, then hold as usual.
+            await self.publish_command("set_read_only", enable=False)
+            self._last_read_only = False
+            self._last_read_only_sent_time = now
+            self.log("Info: GatewayMQTT: set_read_only command sent (read_only=False) so the inverter can be reset to a safe state")
         changed = read_only != self._last_read_only
         stale = not self._last_read_only_sent_time or now - self._last_read_only_sent_time >= 30 * 60
         if not changed and not stale:
+            return
+        if read_only and self._hold_read_only_for_reset(now):
             return
         await self.publish_command("set_read_only", enable=read_only)
         self._last_read_only = read_only
         self._last_read_only_sent_time = now
         self.log(f"Info: GatewayMQTT: set_read_only command sent (read_only={read_only})")
+
+    def _hold_read_only_for_reset(self, now):
+        """True while enabling read-only on the Hub should wait for reset_inverter()'s safe-state writes.
+
+        Turning the switch on arms inverter_needs_reset_force = "set_read_only", and reset_inverter()
+        clears it once it has written the safe state at the next plan execution. Until then the Hub
+        must stay writable. The wait is bounded by _READ_ONLY_HANDOVER_WAIT_SECONDS so a reset that
+        never runs does not leave the Hub writable indefinitely: after that this returns False even
+        though the reset is still pending.
+        """
+        if getattr(self.base, "inverter_needs_reset_force", "") != "set_read_only":
+            self._read_only_held_since = None
+            return False
+        if self._read_only_held_since is None:
+            self._read_only_held_since = now
+            self.log("Info: GatewayMQTT: set_read_only held back until the inverter has been reset to a safe state")
+        if now - self._read_only_held_since < _READ_ONLY_HANDOVER_WAIT_SECONDS:
+            return True
+        self.log(f"Warn: GatewayMQTT: inverter reset for read-only not done after {_READ_ONLY_HANDOVER_WAIT_SECONDS // 60} minutes, sending set_read_only anyway")
+        return False
 
     def _check_read_only_mismatch(self, reported):
         """Warn when the gateway's enforced read-only state differs from what PredBat asked for.
@@ -3267,6 +3343,11 @@ class GatewayMQTT(ComponentBase):
             command: Command name (set_charge_rate, set_reserve, etc.)
             command_id: Pre-allocated id number (from _next_command_id); allocated here when None.
             **kwargs: Command-specific fields (power_w, target_soc, etc.).
+
+        Returns:
+            True when the command was sent, False when it was not (not connected, display
+            mode, or handed to the gateway's loop and not sent in time). Callers that track the
+            command's ack re-send it when no ack arrives, so most of them need not check this.
         """
         if command_id is None:
             command_id = self._next_command_id()
@@ -3274,11 +3355,14 @@ class GatewayMQTT(ComponentBase):
 
         self.log("Info: GatewayMQTT: publish_command: command={}, payload={}".format(command, cmd_json))
 
-        if self._mqtt_connected:
-            await self._publish_raw(self.topic_command, cmd_json.encode("utf-8"))
-            self.log(f"Info: GatewayMQTT: Published command: {command} payload={cmd_json}")
-        else:
+        if not self._mqtt_connected:
             self.log(f"Warn: GatewayMQTT: Not connected — cannot publish command: {command}")
+            return False
+        if not await self._publish_raw(self.topic_command, cmd_json.encode("utf-8")):
+            self.log(f"Warn: GatewayMQTT: Command {command} was not sent")
+            return False
+        self.log(f"Info: GatewayMQTT: Published command: {command} payload={cmd_json}")
+        return True
 
     def _live_display_binding(self):
         """Validate only the server-issued binding for this selected display role."""
@@ -3316,13 +3400,11 @@ class GatewayMQTT(ComponentBase):
         if len(topic.encode()) + len(payload) + 16 > 1400:
             return
         try:
-            if self._loop is not None and self._loop is not asyncio.get_running_loop():
-                future = asyncio.run_coroutine_threadsafe(self._mqtt_client.publish(topic, payload, qos=1, retain=False), self._loop)
-                await asyncio.wrap_future(future)
-            else:
-                await self._mqtt_client.publish(topic, payload, qos=1, retain=False)
+            sent = await self._publish_on_component_loop(topic, payload, retain=False)
         except Exception as error:
             self.log(f"Warn: GatewayMQTT: Display binding publish failed: {error}")
+            return
+        if not sent:
             return
         self._last_live_binding = preference
         self._last_live_binding_publish = self.monotonic()
@@ -3330,14 +3412,7 @@ class GatewayMQTT(ComponentBase):
     async def _publish_raw(self, topic, payload, retain=False):
         """Publish raw bytes to an MQTT topic.
 
-        Must run the actual client.publish() on the event loop that owns
-        self._mqtt_client (self._loop). Callers reached via ha.py::run_async()
-        (i.e. every control write issued from the synchronous engine thread)
-        run on a different, throwaway loop — publishing directly from there
-        binds aiomqtt's publish-confirmation Future to the wrong loop and
-        stalls for the client's ~10s default timeout instead of completing
-        near-instantly. When we're already on the owning loop (e.g. internal
-        periodic publishes from run()/housekeeping), publish directly.
+        The publish runs on the gateway's own loop; see _publish_on_component_loop().
 
         Args:
             topic: MQTT topic string.
@@ -3346,7 +3421,8 @@ class GatewayMQTT(ComponentBase):
 
         Returns:
             True when the message was handed to the client, False when it was
-            blocked (display mode) or dropped (not connected).
+            blocked (display mode), dropped (not connected), or handed to the
+            gateway's loop and not sent within _PUBLISH_HANDOVER_SECONDS.
         """
         if self.gateway_display_only and (not self.gateway_display_enabled or topic != f"{self._topic_base}/predbat_data"):
             self.log(f"Warn: GatewayMQTT: Display mode blocked publish to {topic}")
@@ -3354,15 +3430,30 @@ class GatewayMQTT(ComponentBase):
         if not (self._mqtt_client and self._mqtt_connected):
             return False
 
-        if self._loop is not None and self._loop is not asyncio.get_running_loop():
-            future = asyncio.run_coroutine_threadsafe(
-                self._mqtt_client.publish(topic, payload, qos=1, retain=retain),
-                self._loop,
-            )
-            await asyncio.wrap_future(future)
-        else:
-            await self._mqtt_client.publish(topic, payload, qos=1, retain=retain)
-        return True
+        return await self._publish_on_component_loop(topic, payload, retain=retain)
+
+    async def _publish_on_component_loop(self, topic, payload, retain=False):
+        """Publish on the event loop that owns self._mqtt_client, returning True once it is sent.
+
+        Callers reached via ha.py::run_async() (every control write issued from the
+        synchronous engine thread) run on a different, throwaway loop. Publishing
+        directly from there binds aiomqtt's publish-confirmation Future to the wrong
+        loop and stalls for the client's ~10s default timeout instead of completing
+        near-instantly, so ComponentBase.on_component_loop() hands the publish over.
+        On the owning loop (periodic publishes from run()) it is sent in place.
+
+        Returns False when the handed-over publish was not sent within
+        _PUBLISH_HANDOVER_SECONDS, or the gateway's loop stopped first. A publish
+        that raises still raises here.
+        """
+        client = self._mqtt_client
+
+        async def publish():
+            """Send the message, reporting it as sent."""
+            await client.publish(topic, payload, qos=1, retain=retain)
+            return True
+
+        return await self.on_component_loop(publish(), timeout=_PUBLISH_HANDOVER_SECONDS, what="GatewayMQTT publish to {}".format(topic))
 
     def _update_display_health(self):
         """Report optional display connectivity separately from the component loop's health."""
@@ -3654,10 +3745,11 @@ class GatewayMQTT(ComponentBase):
         commit runs on the gateway's own loop. With no loop running (tests), or one that has
         closed with the component, it runs inline, where a stopped connection fails it at once.
         """
-        if self._loop is None or self._loop.is_closed():
+        loop = self.component_loop
+        if loop is None or loop.is_closed():
             await self._commit_staged(serial)
-        elif self._loop is not asyncio.get_running_loop():
-            asyncio.run_coroutine_threadsafe(self._commit_staged(serial), self._loop)
+        elif loop is not asyncio.get_running_loop():
+            asyncio.run_coroutine_threadsafe(self._commit_staged(serial), loop)
         else:
             task = asyncio.ensure_future(self._commit_staged(serial))
             self._commit_tasks.add(task)

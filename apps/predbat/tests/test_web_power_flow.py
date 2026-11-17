@@ -212,7 +212,7 @@ def run_power_flow_icon_tests(my_predbat, web):
         print("  ERROR: the House circle should still show its power reading alongside the icon")
         failed += 1
 
-    (my_predbat.car_charging_power_configured, my_predbat.car_charging_power, my_predbat.load_power) = saved
+    my_predbat.car_charging_power_configured, my_predbat.car_charging_power, my_predbat.load_power = saved
     return failed
 
 
@@ -246,7 +246,7 @@ def run_battery_icon_tests(my_predbat, web):
             print(f"  ERROR: at {description} the battery should be drawn as {icon_name} ({codepoint})")
             failed += 1
 
-    (my_predbat.soc_percent, my_predbat.battery_power) = saved
+    my_predbat.soc_percent, my_predbat.battery_power = saved
     return failed
 
 
@@ -326,7 +326,7 @@ def run_power_flow_geometry_tests(my_predbat, web):
         failed += check_arm_geometry(html, description, car_anchor=("Grid", GRID_CENTRE))
         failed += check_label_clearance(html, description)
 
-    (my_predbat.pv_power, my_predbat.load_power, my_predbat.battery_power, my_predbat.grid_power, my_predbat.car_charging_power, my_predbat.car_charging_power_configured) = saved
+    my_predbat.pv_power, my_predbat.load_power, my_predbat.battery_power, my_predbat.grid_power, my_predbat.car_charging_power, my_predbat.car_charging_power_configured = saved
     my_predbat.car_energy_reported_load = saved_reported
     return failed
 

@@ -24,6 +24,7 @@ Two halves are checked:
    of the freeze-on plan, and well ahead of planning no export at all.
 2. Execute: an export to a non-zero target force-exports above it and goes to Demand at and below it.
 """
+
 import io
 import contextlib
 from const import CLOUD_FACTOR_PV10, EXPORT_MODE_FREEZE, EXPORT_MODE_TARGET
