@@ -2879,7 +2879,7 @@ APPS_SCHEMA = {
     "battery_charge_power_curve_default": {"type": "int_float_dict"},
     "battery_discharge_power_curve_default": {"type": "int_float_dict"},
     "battery_rate_grid_auto": {"type": "boolean"},
-    "battery_temperature_model": {"type": "boolean"},
+    "battery_temperature_outdoor": {"type": "boolean"},
     "battery_rate_grid_history_days": {"type": "integer", "zero": False},
     "battery_rate_grid_scan_days": {"type": "integer", "zero": False},
     "pv_calibration_history_days": {"type": "integer", "zero": False},

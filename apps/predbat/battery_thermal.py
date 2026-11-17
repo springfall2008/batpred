@@ -183,28 +183,30 @@ def plan_power_minutes(power_by_stamp, now_utc, forecast_minutes, step):
     return power
 
 
-def thermal_fit(temperature, power, ambient, history_minutes, step):
+def thermal_statistics(temperature, power, ambient, history_minutes, step, newest_minute=None):
     """
-    Fit the thermal model to history by least squares on one step ahead temperature changes.
+    Least squares statistics of the thermal model over history: what thermal_fit_statistics() solves.
 
     The model, stepped by dt hours, is T[n+1] - T[n] = a (A[n] - T[n]) + b + h |P[n]|, with a = dt / tau,
-    b = a * offset and h = heat_rate * dt.
+    b = a * offset and h = heat_rate * dt. Keeping the sums rather than the samples lets evidence build up over months
+    in a few numbers (thermal_statistics_merge) without reading months of history.
 
     Args:
         temperature: battery temperature in degrees C keyed by minutes ago
         power: magnitude of the battery power in kW over the step starting at each minute ago (battery_power_from_soc)
         ambient: outdoor temperature in degrees C keyed by minutes ago
-        history_minutes: how far back to use
+        history_minutes: the oldest step to use, in minutes ago
         step: step length in minutes
+        newest_minute: the newest step to use, in minutes ago (default one step ago, the newest complete step)
 
     Returns:
-        dict with tau_hours, heat_rate, offset, samples and rmse (degrees C per step), or None when there is too
-        little history or the fit lies outside the plausible bounds
+        dict of xtx (3x3), xty (3), yty, weight (the number of steps, decayed once merged) and samples (steps added)
     """
     xtx = [[0.0] * 3 for _ in range(3)]
     xty = [0.0, 0.0, 0.0]
-    rows = []
-    for minute in range(step, history_minutes + 1, step):
+    yty = 0.0
+    samples = 0
+    for minute in range(newest_minute or step, history_minutes + 1, step):
         temp_now = temperature.get(minute)
         temp_next = temperature.get(minute - step)
         ambient_now = ambient.get(minute)
@@ -213,14 +215,61 @@ def thermal_fit(temperature, power, ambient, history_minutes, step):
             continue
         x = (ambient_now - temp_now, 1.0, power_now)
         y = temp_next - temp_now
-        rows.append((x, y))
+        samples += 1
+        yty += y * y
         for i in range(3):
             xty[i] += x[i] * y
             for j in range(3):
                 xtx[i][j] += x[i] * x[j]
+    return {"xtx": xtx, "xty": xty, "yty": yty, "weight": float(samples), "samples": samples}
 
-    if len(rows) * step < THERMAL_MIN_SAMPLES_MINUTES:
+
+def thermal_statistics_merge(stored, new, decay):
+    """
+    Add new statistics to stored ones, the stored evidence first scaled by decay (0 to 1) for its age.
+
+    Args:
+        stored: thermal_statistics() result (or a merge of them), or None
+        new: thermal_statistics() result
+        decay: the factor the stored evidence is scaled by
+
+    Returns:
+        The merged statistics; stored and new are left unchanged
+    """
+    if not valid_thermal_statistics(stored):
+        return {"xtx": [list(row) for row in new["xtx"]], "xty": list(new["xty"]), "yty": new["yty"], "weight": new["weight"], "samples": new["samples"]}
+    return {
+        "xtx": [[stored["xtx"][i][j] * decay + new["xtx"][i][j] for j in range(3)] for i in range(3)],
+        "xty": [stored["xty"][i] * decay + new["xty"][i] for i in range(3)],
+        "yty": stored["yty"] * decay + new["yty"],
+        "weight": stored["weight"] * decay + new["weight"],
+        "samples": stored.get("samples", 0) + new["samples"],
+    }
+
+
+def valid_thermal_statistics(stats):
+    """True when stats has the shape thermal_statistics() returns (as read back from storage)."""
+    try:
+        return len(stats["xtx"]) == 3 and all(len(row) == 3 for row in stats["xtx"]) and len(stats["xty"]) == 3 and float(stats["yty"]) >= 0 and float(stats["weight"]) >= 0
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
+def thermal_fit_statistics(stats, step):
+    """
+    Solve thermal statistics for the model.
+
+    Args:
+        stats: thermal_statistics() result (or a merge of them)
+        step: step length in minutes the statistics were gathered at
+
+    Returns:
+        dict with tau_hours, heat_rate, offset, samples (decayed step count, rounded) and rmse (degrees C per step), or None
+        when there is less than THERMAL_MIN_SAMPLES_MINUTES of evidence or the fit lies outside the plausible bounds
+    """
+    if not valid_thermal_statistics(stats) or stats["weight"] * step < THERMAL_MIN_SAMPLES_MINUTES:
         return None
+    xtx, xty = stats["xtx"], stats["xty"]
     solution = solve_linear_3(xtx, xty)
     if solution is None:
         return None
@@ -233,14 +282,32 @@ def thermal_fit(temperature, power, ambient, history_minutes, step):
     heat_rate = h / dt_hours
     if not (THERMAL_TAU_HOURS_MIN <= tau_hours <= THERMAL_TAU_HOURS_MAX) or not (0 <= heat_rate <= THERMAL_HEAT_RATE_MAX) or abs(offset) > THERMAL_OFFSET_MAX:
         return None
-    sum_squares = sum((y - (a * x[0] + b + h * x[2])) ** 2 for x, y in rows)
+    # Residual sum of squares from the sums: y'y - 2 s'X'y + s'X'X s
+    sum_squares = stats["yty"] - 2 * sum(solution[i] * xty[i] for i in range(3)) + sum(solution[i] * xtx[i][j] * solution[j] for i in range(3) for j in range(3))
     return {
         "tau_hours": round(tau_hours, 3),
         "heat_rate": round(heat_rate, 4),
         "offset": round(offset, 3),
-        "samples": len(rows),
-        "rmse": round((sum_squares / len(rows)) ** 0.5, 4),
+        "samples": int(round(stats["weight"])),
+        "rmse": round((max(sum_squares, 0.0) / stats["weight"]) ** 0.5, 4),
     }
+
+
+def thermal_fit(temperature, power, ambient, history_minutes, step):
+    """
+    Fit the thermal model to one window of history (thermal_statistics then thermal_fit_statistics).
+
+    Args:
+        temperature: battery temperature in degrees C keyed by minutes ago
+        power: magnitude of the battery power in kW over the step starting at each minute ago (battery_power_from_soc)
+        ambient: outdoor temperature in degrees C keyed by minutes ago
+        history_minutes: how far back to use
+        step: step length in minutes
+
+    Returns:
+        thermal_fit_statistics() result, or None
+    """
+    return thermal_fit_statistics(thermal_statistics(temperature, power, ambient, history_minutes, step), step)
 
 
 def thermal_forecast(current_temp, model, ambient, power, forecast_minutes, step):

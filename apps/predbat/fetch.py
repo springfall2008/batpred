@@ -37,7 +37,7 @@ from utils import (
     is_entity_id,
     intelligent_device_is_charger,
 )
-from battery_thermal import ambient_from_results, battery_power_from_soc, plan_power_minutes, thermal_fit, thermal_forecast
+from battery_thermal import ambient_from_results, battery_power_from_soc, plan_power_minutes, thermal_fit_statistics, thermal_forecast, thermal_statistics, thermal_statistics_merge, valid_thermal_statistics
 from battery_rate_grid import clean_rate_grid_samples, combine_rate_grid, fit_rate_grid, manual_rate_grid, merge_rate_grid_samples, rate_grid_table
 from battery_curve import charge_day
 from const import (
@@ -88,10 +88,16 @@ import re
 BATTERY_TEMPERATURE_HISTORY_DAYS = 2
 # A battery temperature history reading exactly 0 for this long is taken as a dead sensor (GH#6193)
 BATTERY_TEMPERATURE_STUCK_MINUTES = 24 * 60
-# Battery thermal model (GH#5919): days of history it is fitted on, and how often it is refitted (or retried after a failed fit)
+# Battery thermal model (GH#5919): its least squares sums are kept in storage under BATTERY_THERMAL_STORE_KEY and grow each cycle,
+# halving every BATTERY_THERMAL_HALF_LIFE_DAYS; an empty store is seeded from BATTERY_THERMAL_FIT_DAYS of history (retried hourly)
+BATTERY_THERMAL_STORE_KEY = "battery_thermal"
 BATTERY_THERMAL_FIT_DAYS = 7
-BATTERY_THERMAL_FIT_MINUTES = 24 * 60
 BATTERY_THERMAL_RETRY_MINUTES = 60
+BATTERY_THERMAL_HALF_LIFE_DAYS = 30
+BATTERY_THERMAL_SAVE_MINUTES = 60
+# A store that never reads back is only treated as empty after this many cycles over this many minutes, as for the rate grids
+BATTERY_THERMAL_LOAD_ATTEMPTS = 3
+BATTERY_THERMAL_LOAD_WAIT_MINUTES = 10
 
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
@@ -1808,6 +1814,10 @@ class Fetch:
                 can_modify_history=True,  # soc_kwh_data is not accessed after this point, so minute_data can freely modify it
             )
 
+        # Battery thermal model: after the SoC history, so both histories are keyed from this cycle's now (GH#5919)
+        if "battery_temperature_history" in self.args:
+            self.battery_thermal_update(soc_fresh=bool(soc_kwh_data))
+
         # Fetch sensor data for cars, e.g. car plan, car energy, car sessions etc.
         self.dispatch_timeline_pending = []
         self.fetch_sensor_data_cars(save=save)
@@ -2969,7 +2979,6 @@ class Fetch:
         # models one combined battery, and the rate grid learner reads the same average (average_temperature_minutes)
         entity_ids = battery_temperature_entities(self.get_arg("battery_temperature_history", indirect=False))
         self.battery_temperature_history = average_temperature_minutes([self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, entity_id, scale=1.0, increment=False, smoothing=False) for entity_id in entity_ids])
-        self.battery_thermal_update()
         self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
         self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
         self.check_battery_temperature_history_stuck(self.battery_temperature_history)
@@ -3084,43 +3093,109 @@ class Fetch:
         data, _ = minute_data(history[0], days, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0, required_unit=required_unit, pad=False)
         return data
 
-    def battery_thermal_update(self):
+    def battery_thermal_update(self, soc_fresh):
         """
-        Fit the battery thermal model (GH#5919) once a day, or within the hour after a fit that failed.
+        Grow the battery thermal model's evidence and refit it (GH#5919). Only runs with battery_temperature_outdoor on.
 
-        It is fitted on BATTERY_THERMAL_FIT_DAYS of the battery temperature history, the battery power derived from the
-        battery level history (soc_kw_h0) and the outdoor temperature from the temperature component. A failed fit keeps
-        the previous model. Only runs with battery_temperature_model on.
+        The model's least squares sums (battery_thermal.thermal_statistics) are kept in storage, so the fit builds up over
+        months without reading months of history. Each cycle adds the steps since the last one from the in-memory battery
+        temperature and battery level (soc_kw_h0) histories, with the outdoor temperature from the temperature component,
+        and scales the older evidence to halve every BATTERY_THERMAL_HALF_LIFE_DAYS. With nothing stored yet the sums are
+        seeded from BATTERY_THERMAL_FIT_DAYS of history, retried hourly until that finds data.
+
+        As for the rate grids, an empty store and a failed read both come back as None, so a store that never reads back
+        is only treated as empty (and saved over) after BATTERY_THERMAL_LOAD_ATTEMPTS cycles over BATTERY_THERMAL_LOAD_WAIT_MINUTES.
+
+        Args:
+            soc_fresh: True when the battery level history was read this cycle (otherwise its minutes are a cycle out)
         """
-        if not self.battery_temperature_model:
+        from ha import run_async
+
+        if not self.battery_temperature_outdoor:
             self.battery_thermal_model = None
             return
-        last_fit = self.battery_thermal_last_fit
-        succeeded = last_fit is not None and self.battery_thermal_last_success is not None and self.battery_thermal_last_success >= last_fit
-        interval = BATTERY_THERMAL_FIT_MINUTES if succeeded else BATTERY_THERMAL_RETRY_MINUTES
-        if last_fit is not None and (self.now_utc - last_fit) < timedelta(minutes=interval):
-            return
-        self.battery_thermal_last_fit = self.now_utc
+        storage = self.components.get_component("storage") if self.components else None
+        if not self.battery_thermal_loaded:
+            data = None
+            if storage:
+                try:
+                    data = run_async(storage.load("predbat", BATTERY_THERMAL_STORE_KEY))
+                except Exception as e:
+                    self.log("Warn: {}: failed to load the stored evidence: {}".format(BATTERY_THERMAL_STORE_KEY, e))
+            else:
+                self.battery_thermal_loaded = True
+            if isinstance(data, dict):
+                self.battery_thermal_loaded = True
+                self.battery_thermal_load_failures = []
+                stats = data.get("stats")
+                last = None
+                try:
+                    last = str2time(data.get("last"))
+                except (ValueError, TypeError):
+                    pass
+                if valid_thermal_statistics(stats) and last is not None:
+                    # The stored evidence replaces any seeded in memory while the store could not be read
+                    self.battery_thermal_stats = stats
+                    self.battery_thermal_last = last
+            elif storage:
+                self.battery_thermal_load_failures.append(self.now_utc)
 
-        history_minutes = BATTERY_THERMAL_FIT_DAYS * 24 * 60
-        entity_id = self.get_arg("battery_temperature_history", "", indirect=False)
-        if isinstance(entity_id, list):
-            entity_id = entity_id[0] if entity_id else ""
-        temperature = self.battery_thermal_history(entity_id, BATTERY_THERMAL_FIT_DAYS) if entity_id else {}
-        soc_kwh = self.battery_thermal_history(self.prefix + ".soc_kw_h0", BATTERY_THERMAL_FIT_DAYS, required_unit="kWh")
-        ambient, _ = self.battery_thermal_ambient(history_minutes, 0)
-        power = battery_power_from_soc(soc_kwh, history_minutes, PREDICT_STEP)
-        model = thermal_fit(temperature, power, ambient, history_minutes, PREDICT_STEP)
-        if model:
-            self.battery_thermal_model = model
-            self.battery_thermal_last_success = self.now_utc
+        step = PREDICT_STEP
+        if self.battery_thermal_stats is None:
+            if self.battery_thermal_last_seed is None or (self.now_utc - self.battery_thermal_last_seed) >= timedelta(minutes=BATTERY_THERMAL_RETRY_MINUTES):
+                self.battery_thermal_last_seed = self.now_utc
+                history_minutes = BATTERY_THERMAL_FIT_DAYS * 24 * 60
+                entity_id = self.get_arg("battery_temperature_history", "", indirect=False)
+                if isinstance(entity_id, list):
+                    entity_id = entity_id[0] if entity_id else ""
+                temperature = self.battery_thermal_history(entity_id, BATTERY_THERMAL_FIT_DAYS) if entity_id else {}
+                soc_kwh = self.battery_thermal_history(self.prefix + ".soc_kw_h0", BATTERY_THERMAL_FIT_DAYS, required_unit="kWh")
+                ambient, _ = self.battery_thermal_ambient(history_minutes, 0)
+                stats = thermal_statistics(temperature, battery_power_from_soc(soc_kwh, history_minutes, step), ambient, history_minutes, step)
+                if stats["samples"]:
+                    self.battery_thermal_stats = stats
+                    self.battery_thermal_last = self.now_utc
+                    self.battery_thermal_dirty = True
+                self.log("Battery thermal model seeded from {} steps of history ({} temperature, {} battery level and {} outdoor temperature minutes)".format(stats["samples"], len(temperature), len(soc_kwh), len(ambient) * step))
+        elif soc_fresh and self.battery_thermal_last is not None:
+            elapsed_minutes = (self.now_utc - self.battery_thermal_last).total_seconds() / 60.0
+            # The steps that start at or after the last update, as far back as the in-memory histories reach
+            oldest = min(int(elapsed_minutes // step) * step, BATTERY_TEMPERATURE_HISTORY_DAYS * 24 * 60 - step)
+            if oldest >= step:
+                ambient, _ = self.battery_thermal_ambient(oldest, 0)
+                power = battery_power_from_soc(self.soc_kwh_history, oldest, step)
+                new = thermal_statistics(self.battery_temperature_history, power, ambient, oldest, step)
+                decay = 0.5 ** (elapsed_minutes / (24 * 60) / BATTERY_THERMAL_HALF_LIFE_DAYS)
+                self.battery_thermal_stats = thermal_statistics_merge(self.battery_thermal_stats, new, decay)
+                self.battery_thermal_last = self.now_utc
+                self.battery_thermal_dirty = True
+
+        previous = self.battery_thermal_model
+        self.battery_thermal_model = thermal_fit_statistics(self.battery_thermal_stats, step) if self.battery_thermal_stats else None
+        model = self.battery_thermal_model
+        if model and previous is None:
             self.log("Battery thermal model fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, offset {} °C, step error {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["offset"], model["rmse"]))
-        else:
-            self.log(
-                "Warn: Battery thermal model could not be fitted ({} temperature, {} battery power and {} outdoor temperature minutes of history), {}".format(
-                    len(temperature), len(power) * PREDICT_STEP, len(ambient) * PREDICT_STEP, "keeping the previous fit" if self.battery_thermal_model else "using the history look back"
-                )
-            )
+        elif previous and not model:
+            self.log("Warn: Battery thermal model no longer fits its evidence, using the history look back")
+
+        failures = self.battery_thermal_load_failures
+        store_ready = self.battery_thermal_loaded or (len(failures) >= BATTERY_THERMAL_LOAD_ATTEMPTS and (self.now_utc - failures[0]) >= timedelta(minutes=BATTERY_THERMAL_LOAD_WAIT_MINUTES))
+        due = self.battery_thermal_last_save is None or (self.now_utc - self.battery_thermal_last_save) >= timedelta(minutes=BATTERY_THERMAL_SAVE_MINUTES)
+        if storage and store_ready and self.battery_thermal_dirty and due and self.battery_thermal_stats:
+            if not self.battery_thermal_loaded:
+                self.log("Info: {}: the stored evidence has not read back for {} cycles, treating the store as empty".format(BATTERY_THERMAL_STORE_KEY, len(failures)))
+                self.battery_thermal_loaded = True
+                failures.clear()
+            try:
+                if run_async(storage.save("predbat", BATTERY_THERMAL_STORE_KEY, {"stats": self.battery_thermal_stats, "last": self.battery_thermal_last.strftime(TIME_FORMAT), "model": model}, format="json")):
+                    self.battery_thermal_last_save = self.now_utc
+                    self.battery_thermal_dirty = False
+                    if model:
+                        self.log("Battery thermal model saved, fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, offset {} °C, step error {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["offset"], model["rmse"]))
+                else:
+                    self.log("Warn: {}: failed to save the evidence".format(BATTERY_THERMAL_STORE_KEY))
+            except Exception as e:
+                self.log("Warn: {}: failed to save the evidence: {}".format(BATTERY_THERMAL_STORE_KEY, e))
 
     def battery_thermal_forecast(self, current_temp, step):
         """
@@ -3129,7 +3204,7 @@ class Fetch:
         Returns:
             The forecast keyed by minutes ahead, or None when the model is off, not fitted or there is no outdoor forecast
         """
-        if not self.battery_temperature_model or not self.battery_thermal_model:
+        if not self.battery_temperature_outdoor or not self.battery_thermal_model:
             return None
         _, ambient = self.battery_thermal_ambient(0, self.forecast_minutes)
         if not ambient:
@@ -5254,7 +5329,7 @@ class Fetch:
         self.battery_temperature_charge_curve = self.validate_curve(self.args.get("battery_temperature_charge_curve", {}), "battery_temperature_charge_curve")
         self.battery_temperature_discharge_curve = self.validate_curve(self.args.get("battery_temperature_discharge_curve", {}), "battery_temperature_discharge_curve")
         self.battery_rate_grid_auto = bool(self.get_arg("battery_rate_grid_auto", True))
-        self.battery_temperature_model = bool(self.get_arg("battery_temperature_model", False))
+        self.battery_temperature_outdoor = bool(self.get_arg("battery_temperature_outdoor", False))
         # How much history the rate grid scans read: the first (and any until one succeeds) and the daily ones
         self.battery_rate_grid_history_days = max(int(self.get_arg("battery_rate_grid_history_days", BATTERY_RATE_GRID_FIRST_SCAN_DAYS)), 1)
         self.battery_rate_grid_scan_days = max(int(self.get_arg("battery_rate_grid_scan_days", BATTERY_RATE_GRID_DAILY_SCAN_DAYS)), 1)
