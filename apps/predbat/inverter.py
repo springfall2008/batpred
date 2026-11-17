@@ -604,6 +604,10 @@ class Inverter(BatteryCurve):
         # stops discharge but still lets PV charge the battery (Sigenergy, #5358). Defaults False so an inverter
         # type has to opt in.
         self.inv_reserve_via_discharge_rate = INVERTER_DEF[self.inverter_type].get("reserve_via_discharge_rate", False)
+        # True when the charge rate only limits charging inside a charge slot, not solar charging outside one
+        # (HanchuCloud, #6190), so execute_plan() can write a low-power rate together with a window it arms
+        # ahead of its start and the window opens at that rate. Defaults False so an inverter type has to opt in.
+        self.inv_charge_rate_ahead_of_window = INVERTER_DEF[self.inverter_type].get("charge_rate_ahead_of_window", False)
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]

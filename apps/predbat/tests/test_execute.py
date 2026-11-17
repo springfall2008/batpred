@@ -50,6 +50,7 @@ class ActiveTestInverter:
         self.inv_reserve_above_soc_charges_from_grid = False
         self.inv_reserve_full_only_above_80 = False
         self.inv_reserve_via_discharge_rate = False
+        self.inv_charge_rate_ahead_of_window = False
         self.reserve_hold_active = False
         self.inv_has_discharge_enable_time = True
         self.inv_has_ge_eco_toggle = False
@@ -245,6 +246,7 @@ def run_execute_test(
     reserve_above_soc_charges_from_grid=False,
     reserve_full_only_above_80=False,
     reserve_via_discharge_rate=False,
+    charge_rate_ahead_of_window=False,
     has_target_soc=True,
     has_charge_enable_time=True,
     has_ge_eco_toggle=False,
@@ -361,6 +363,7 @@ def run_execute_test(
         inverter.inv_reserve_above_soc_charges_from_grid = reserve_above_soc_charges_from_grid
         inverter.inv_reserve_full_only_above_80 = reserve_full_only_above_80
         inverter.inv_reserve_via_discharge_rate = reserve_via_discharge_rate
+        inverter.inv_charge_rate_ahead_of_window = charge_rate_ahead_of_window
         inverter.inv_has_target_soc = has_target_soc
         inverter.inv_has_charge_enable_time = has_charge_enable_time
         inverter.inv_has_ge_eco_toggle = has_ge_eco_toggle
@@ -2136,6 +2139,39 @@ def test_reserve_full_only_above_80_reaches_the_inverter(my_predbat):
     return failed
 
 
+def test_charge_rate_ahead_of_window_inverter_types(my_predbat):
+    """Only HanchuCloud writes a low-power rate with a window armed ahead of its start, and the flag reaches a real Inverter (#6190)."""
+    from config import INVERTER_DEF
+    from inverter import Inverter
+
+    failed = False
+    opted_in = sorted(name for name, idef in INVERTER_DEF.items() if idef.get("charge_rate_ahead_of_window", False))
+    if opted_in != ["HanchuCloud"]:
+        print("ERROR: charge_rate_ahead_of_window should be set for HanchuCloud only, got {}".format(opted_in))
+        failed = True
+
+    orig_inverter_type = my_predbat.args.get("inverter_type")
+    orig_rest = my_predbat.args.get("givtcp_rest")
+    my_predbat.args["givtcp_rest"] = None
+    try:
+        for inverter_type, expected in (("HanchuCloud", True), ("GE", False)):
+            my_predbat.args["inverter_type"] = [inverter_type]
+            inverter = Inverter(my_predbat, 0, quiet=True)
+            if inverter.inv_charge_rate_ahead_of_window is not expected:
+                print("ERROR: {} inverter has inv_charge_rate_ahead_of_window {}, expected {}".format(inverter_type, inverter.inv_charge_rate_ahead_of_window, expected))
+                failed = True
+    finally:
+        if orig_inverter_type is None:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = orig_inverter_type
+        if orig_rest is None:
+            my_predbat.args.pop("givtcp_rest", None)
+        else:
+            my_predbat.args["givtcp_rest"] = orig_rest
+    return failed
+
+
 def test_reserve_via_discharge_rate_inverter_types(my_predbat):
     """Only Sigenergy (SIG) holds its reserve with a zero discharge rate, and the flag reaches a real Inverter from INVERTER_DEF (#5358)."""
     from config import INVERTER_DEF
@@ -2277,6 +2313,7 @@ def run_execute_tests(my_predbat):
     failed |= test_reserve_full_only_above_80_inverter_types()
     failed |= test_reserve_full_only_above_80_reaches_the_inverter(my_predbat)
     failed |= test_reserve_via_discharge_rate_inverter_types(my_predbat)
+    failed |= test_charge_rate_ahead_of_window_inverter_types(my_predbat)
     if failed:
         return failed
 
@@ -4226,6 +4263,69 @@ def run_execute_tests(my_predbat):
         assert_status="Demand",
         assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+    )
+    if failed:
+        return failed
+
+    # A low-power window armed ahead of its start opens at full power on most inverters, as the rate is
+    # only worked out once it runs (#6190). Where the rate only limits charging inside a slot
+    # (charge_rate_ahead_of_window, HanchuCloud), it is written with the early arm instead.
+    charge_window_best_long = [{"start": my_predbat.minutes_now + 30, "end": my_predbat.minutes_now + 150, "average": 1}]
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_later_low_power_rate_ahead",
+        charge_window_best=charge_window_best_long,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        charge_rate_ahead_of_window=True,
+        assert_status="Demand",
+        assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 150,
+        battery_max_rate=2000,
+        # 1 kWh per inverter in 120 minutes less the 10 minute margin: 600 W, the rate the running window would pick
+        soc_kw=8,
+        assert_charge_rate=600,
+    )
+    if failed:
+        return failed
+
+    # Without the capability the early-armed window keeps the inverter's maximum, as before.
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_later_low_power_no_rate_ahead",
+        charge_window_best=charge_window_best_long,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        set_charge_low_power=True,
+        assert_status="Demand",
+        assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 150,
+        battery_max_rate=2000,
+        soc_kw=8,
+    )
+    if failed:
+        return failed
+
+    # Low power off: the capability changes nothing, the early-armed window is at maximum.
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_later_rate_ahead_no_low_power",
+        charge_window_best=charge_window_best_long,
+        charge_limit_best=charge_limit_best,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        charge_rate_ahead_of_window=True,
+        assert_status="Demand",
+        assert_charge_start_time_minutes=my_predbat.minutes_now + 30,
+        assert_charge_end_time_minutes=my_predbat.minutes_now + 150,
+        battery_max_rate=2000,
+        soc_kw=8,
     )
     if failed:
         return failed

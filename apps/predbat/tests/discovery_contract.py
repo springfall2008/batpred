@@ -29,6 +29,7 @@ ROW_DEFAULTS = {
     "reserve_above_soc_charges_from_grid": False,
     "reserve_full_only_above_80": False,
     "reserve_via_discharge_rate": False,
+    "charge_rate_ahead_of_window": False,
 }
 
 # Row fields the record is not expected to rebuild: the display name, and two fields nothing reads

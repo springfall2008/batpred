@@ -159,6 +159,10 @@ HANCHU_CAPABILITIES = {
     "charge_discharge_with_rate": False,
     "charge_control_immediate": False,
     "target_soc_used_for_discharge": True,
+    # CHG_PWR_LMT only caps charging while a charge slot is running (the same reason as
+    # support_discharge_freeze above), so the low-power rate can go out with the early-armed window
+    # without holding back solar before it (batpred#6190).
+    "charge_rate_ahead_of_window": True,
 }
 
 
