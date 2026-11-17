@@ -748,11 +748,11 @@ def replay_forward(my_predbat, debug_file, log_file, until=None, quiet=False, si
     # The yaml's own day counters stand in for the run before the first one
     yaml_today = (my_predbat.load_minutes_now, my_predbat.import_today_now, my_predbat.export_today_now, my_predbat.pv_today_now)
     install_logged_load_divergence(my_predbat)
+    if not runs:
+        raise ValueError("No runs after the yaml's time in {} that this replay can read (a run needs a 'PredBat - update at' line and an inverter SoC line)".format(log_file))
     # The yaml's battery temperature forecast is minutes from its own moment, so it moves with the clock until the log has a line
     yaml_degrees = forecast_grid_temperatures(my_predbat.battery_temperature_prediction or {}, PREDICT_STEP)
     my_predbat.replay_temperature_line = (my_predbat.minutes_now, PREDICT_STEP, yaml_degrees) if yaml_degrees else None
-    if not runs:
-        raise ValueError("No runs after the yaml's time in {} that this replay can read (a run needs a 'PredBat - update at' line and an inverter SoC line)".format(log_file))
     # A log that records the inverter's state replaces the reconstruction of it from other lines
     my_predbat.replay_inverter_logged = any(run.get("inverter") for run in runs)
     # A log with rates lines has the dispatch-adjusted rates already; an older one has them rebuilt from its dispatch list

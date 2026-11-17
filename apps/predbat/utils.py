@@ -320,7 +320,7 @@ DEBUG_EXCLUDE_LIST = [
     "battery_discharge_rate_grid",
     # What the replay log last wrote for these two: a copy of the learned grids and of the temperature forecast, which a
     # replay reads from the dump's own attributes and the log, not from here
-    "replay_rate_grids_text",
+    "replay_rate_grids_signature",
     "replay_temperature_logged",
 ]
 

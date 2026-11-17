@@ -1525,7 +1525,8 @@ class Fetch:
                 return
             if logged is not None and logged[0] == self.midnight_utc:
                 current = {index * PREDICT_STEP: degree for index, degree in enumerate(degrees)}
-                if shift_grid_temperatures(logged[2], self.minutes_now - logged[1], self.forecast_minutes, PREDICT_STEP) == current:
+                # Over the forecast's own length, so a forecast shorter than the horizon still matches its shifted line
+                if degrees and shift_grid_temperatures(logged[2], self.minutes_now - logged[1], len(degrees) * PREDICT_STEP, PREDICT_STEP) == current:
                     return
             self.replay_temperature_logged = (self.midnight_utc, self.minutes_now, degrees)
             self.log("Replay input: battery temperature forecast changed, whole degrees every {} minutes from {} {}".format(PREDICT_STEP, self.replay_clock(self.minutes_now), value_runs(degrees)))
@@ -1550,7 +1551,8 @@ class Fetch:
             ast.literal_eval(text)
             return "Replay input: rate grids learned changed {}".format(text)
 
-        self.log_replay_changed("replay_rate_grids_text", lambda: repr(learned()), build, "learned rate grids")
+        # The grids are replaced, never changed in place, when refitted: compare the objects (identity first) rather than encode them every cycle
+        self.log_replay_changed("replay_rate_grids_signature", lambda: (self.battery_rate_grid_learned.get("charge"), self.battery_rate_grid_learned.get("discharge")), build, "learned rate grids")
 
     def fetch_pv_forecast_and_dawn(self, save=True):
         """

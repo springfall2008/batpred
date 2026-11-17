@@ -1255,11 +1255,11 @@ def test_grid_degrees_plan_alike():
 def test_rate_grids_round_trip(my_predbat):
     """A learned grid logged live is the one the replay plans with: the engine grid rate_grids() builds from it matches live's."""
     missing = object()
-    saved = {key: my_predbat.__dict__.get(key, missing) for key in ("battery_rate_grid_learned", "replay_rate_grids_text", "battery_rate_grid_auto")}
+    saved = {key: my_predbat.__dict__.get(key, missing) for key in ("battery_rate_grid_learned", "replay_rate_grids_signature", "battery_rate_grid_auto")}
     failed = 0
     try:
         my_predbat.battery_rate_grid_auto = True
-        my_predbat.replay_rate_grids_text = None
+        my_predbat.replay_rate_grids_signature = None
         charge = {"temp_low": 5, "rows": [[1.0] * 80 + [0.4] * 21, [1.0] * 90 + [0.5] * 11], "cells": 40, "days": 5, "segments": 300, "temp_range": [5, 6]}
         charge["zero_row"] = charge["rows"][-1]
         my_predbat.battery_rate_grid_learned = {"charge": charge, "discharge": None}

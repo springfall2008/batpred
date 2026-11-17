@@ -580,6 +580,15 @@ def test_battery_temperature_logged_on_change(my_predbat):
     if len(capture(my_predbat, my_predbat.log_replay_battery_temperature)) != 1:
         print("ERROR: a forecast whose degrees change should be logged")
         failed += 1
+    # A forecast shorter than the horizon is compared over its own length, so it is not logged again every cycle
+    my_predbat.battery_temperature_prediction = {0: 15.0, 5: 15.0}
+    short_first = capture(my_predbat, my_predbat.log_replay_battery_temperature)
+    my_predbat.minutes_now += 5
+    short_second = capture(my_predbat, my_predbat.log_replay_battery_temperature)
+    my_predbat.minutes_now -= 5
+    if len(short_first) != 1 or short_second:
+        print("ERROR: a short forecast should be logged once, got {} then {}".format(short_first, short_second))
+        failed += 1
     # A forecast that goes away is logged once as empty, so the replay drops it too
     my_predbat.battery_temperature_prediction = {}
     first = capture(my_predbat, my_predbat.log_replay_battery_temperature)
@@ -605,7 +614,7 @@ def test_battery_temperature_logged_on_change(my_predbat):
 
 def test_rate_grids_logged_on_change(my_predbat):
     """The learned rate grids are logged as a dict that reads back to the same grids, and only when they change."""
-    my_predbat.replay_rate_grids_text = None
+    my_predbat.replay_rate_grids_signature = None
     charge = {"temp_low": 10, "rows": [[1.0] * 90 + [0.5] * 11, [1.0] * 95 + [0.6] * 6], "cells": 40, "days": 5, "segments": 300, "temp_range": [10, 11]}
     charge["zero_row"] = charge["rows"][-1]
     my_predbat.battery_rate_grid_learned = {"charge": charge, "discharge": None}
@@ -637,7 +646,7 @@ def test_rate_grids_logged_on_change(my_predbat):
 def run_log_replay_inputs_tests(my_predbat):
     """Run the replay-input logging tests, restoring the shared fixture afterwards."""
     missing = object()
-    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature", "replay_rates_signature", "replay_rate_sessions_signature", "replay_dispatch_signature", "replay_cars_text", "replay_inverter_text", "replay_load_empty", "replay_baseline_text", "replay_temperature_logged", "replay_rate_grids_text")}
+    saved = {key: getattr(my_predbat, key, missing) for key in SAVED + ("replay_pv_signature", "replay_ml_signature", "replay_rates_signature", "replay_rate_sessions_signature", "replay_dispatch_signature", "replay_cars_text", "replay_inverter_text", "replay_load_empty", "replay_baseline_text", "replay_temperature_logged", "replay_rate_grids_signature")}
     failed = 0
     try:
         failed += test_pv_forecast_logged_on_change(my_predbat)
