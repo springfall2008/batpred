@@ -2612,19 +2612,23 @@ max: 10
     - number.solax_remotecontrol_duration
     - number.solax_remotecontrol_timeout
     - number.solax_remotecontrol_autorepeat_duration
-    - select.solax_inverter_remotecontrol_timeout_next_motion_mode_1_9
+    - select.solax_remotecontrol_timeout_next_motion_mode_1_9
     - select.solax_remotecontrol_power_control_mode
     - button.solax_powercontrolmode8_trigger
     - sensor.solax_house_load_alt
+
+- If you have a second energy meter, also ensure the following entity is enabled:
+
     - sensor.solax_meter_2_measured_power
 
-- Mode 8 control also needs the 'House Load Alt' sensor (`sensor.solax_house_load_alt`) and the 'Meter 2 Measured Power' sensor (`sensor.solax_meter_2_measured_power`), one of the inputs House Load Alt is calculated from, to stay enabled.
-  As with the other entities, the prefix may differ on your system (e.g. `sensor.solax_inverter_house_load_alt`).
-  Recent versions of the Solax Modbus integration treat House Load Alt as a required input to the Mode 8 trigger: if it is disabled or unavailable the integration stops the trigger and sets the inverter's power control mode back to 'Disabled' straight after Predbat sends each command,
-  so the inverter ignores Predbat. House Load Alt is disabled by default, and both sensors have been found disabled after a Solax Modbus update, so re-check them after updating the integration.
-  The Home Assistant log then shows `SolaX: stopping powercontrolmode8_trigger because a required control input is invalid: ['house_load_alt']` (see [issue #6059](https://github.com/springfall2008/batpred/issues/6059)).
+      Starting with version 2026.10.01 of the Solax Modbus integration, House Load Alt (`sensor.solax_house_load_alt`) is a required input to the Mode 8 trigger: unless it's enabled, Predbat's commands sent to the inverter will be ignored. If you have a second power meter, the 'Meter 2 Measured Power' sensor (`sensor.solax_meter_2_measured_power`) is also required, as this is one of the inputs House Load Alt is calculated from if you have multiple power meters.
 
-- Predbat needs a 'Todays House Load' sensor, this can be created from inverter-supplied information by creating two custom helper entities:
+      As with the other entities, the prefix may differ on your system (e.g. `sensor.solax_inverter_house_load_alt`). Please note some of these entities may have very different names if the integration was first added on newer versions of Home Assistant due to changes in the way HA generates entity IDs.
+
+- Predbat needs a 'Todays House Load' sensor.
+Home Assistant 2026.10 and newer can provide this for you by enabling the "Enable Dashboard Virtual Device" option in the HA configuration. This will provide a sensor called "Home Consumption Energy" (`sensor.solax_energy_dashboard_solax_home_consumption_power`) which can be used for this purpose.
+
+  Or you can create your own:
 
     - Create a helper entity of type 'Integral', set the Name to 'Todays House Load Integral', Metric Prefix to 'k (kilo)', Time unit to 'Hours', Input sensor to 'House Load', Integration method to 'Trapezoidal', Precision to '2'
     and Max sub-interval to '0:05:00'

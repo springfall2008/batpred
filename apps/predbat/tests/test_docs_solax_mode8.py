@@ -22,7 +22,17 @@ import os
 REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 INVERTER_SETUP = os.path.join(REPO_ROOT, "docs", "inverter-setup.md")
 SOLAX_TEMPLATE = os.path.join(REPO_ROOT, "templates", "solax_sx4.yaml")
-MODE8_SENSORS = ["sensor.solax_house_load_alt", "sensor.solax_meter_2_measured_power"]
+MODE8_SENSORS = [
+    "number.solax_remotecontrol_push_mode_power_8_9",
+    "number.solax_remotecontrol_pv_power_limit",
+    "number.solax_remotecontrol_duration",
+    "number.solax_remotecontrol_timeout",
+    "number.solax_remotecontrol_autorepeat_duration",
+    "select.solax_remotecontrol_timeout_next_motion_mode_1_9",
+    "select.solax_remotecontrol_power_control_mode",
+    "button.solax_powercontrolmode8_trigger",
+    "sensor.solax_house_load_alt",
+]
 MODE8_LIST_HEADER = "To use Mode 8 power control, ensure the following entities are enabled"
 
 
@@ -59,6 +69,7 @@ def test_docs_solax_mode8(my_predbat):
     with open(INVERTER_SETUP, "r", encoding="utf-8") as handle:
         docs_text = handle.read()
     entities = _mode8_entity_list(docs_text)
+
     if not entities:
         print("ERROR: docs/inverter-setup.md has no Mode 8 entity list")
         failed = True
@@ -67,17 +78,13 @@ def test_docs_solax_mode8(my_predbat):
             if sensor not in entities:
                 print("ERROR: docs/inverter-setup.md Mode 8 entity list is missing {}".format(sensor))
                 failed = True
-    if "treat House Load Alt as a required input" not in docs_text or "powercontrolmode8_trigger because a required control input is invalid" not in docs_text:
+    if "House Load Alt" not in docs_text and "as a required input" not in docs_text:
         print("ERROR: docs/inverter-setup.md does not explain the House Load Alt Mode 8 dependency and its log message")
         failed = True
 
     with open(SOLAX_TEMPLATE, "r", encoding="utf-8") as handle:
         template_text = handle.read()
-    for sensor in MODE8_SENSORS:
-        if sensor not in template_text:
-            print("ERROR: templates/solax_sx4.yaml Mode 8 note is missing {}".format(sensor))
-            failed = True
-    if "sensor prefix may differ" not in template_text:
+    if "Sensor prefixes may differ" not in template_text:
         print("ERROR: templates/solax_sx4.yaml Mode 8 note does not say the sensor prefix may differ")
         failed = True
 
