@@ -1874,7 +1874,7 @@ class Inverter(BatteryCurve):
 
     def battery_min_soc_is_reserve(self):
         """
-        Return True, with a warning, when this inverter's battery_min_soc names a reserve entity.
+        Return True, with a warning, when this inverter's battery_min_soc names a reserve entity or Predbat's own set_reserve_min.
 
         battery_min_soc is a floor that refresh_config() raises set_reserve_min to and never lowers. If
         it names a reserve entity, it reads back whatever Predbat last wrote to that reserve: a hold
@@ -1885,6 +1885,10 @@ class Inverter(BatteryCurve):
         of inverters that exist, as Predbat never writes the rest (older Growatt Solar Assistant
         templates list a second reserve entity for one inverter, and point battery_min_soc at it).
 
+        Predbat's own set_reserve_min entities count too: that is the setting the raise writes and the
+        floor published as its min, so bound to it the min follows the value up and can never be
+        lowered (GH#6266).
+
         Warns, on the status sensor too, on the first cycle only, then logs at Info, so a lasting
         misconfiguration does not bury other warnings.
         """
@@ -1892,15 +1896,26 @@ class Inverter(BatteryCurve):
         if not is_entity_id(min_soc_entity):
             self.battery_min_soc_is_reserve_warned = False
             return False
+        num_inverters = max(int(self.base.get_arg("num_inverters", 1)), 1)
         reserve_entities = self.base.get_arg("reserve", indirect=False)
         if isinstance(reserve_entities, list):
-            reserve_entities = reserve_entities[: max(int(self.base.get_arg("num_inverters", 1)), 1)]
+            reserve_entities = reserve_entities[:num_inverters]
         else:
             reserve_entities = [reserve_entities]
-        if min_soc_entity.lower() not in [entity.lower() for entity in reserve_entities if isinstance(entity, str)]:
+        reserve_min_entities = []
+        for inverter_id in range(num_inverters):
+            item = self.base.config_index.get("set_reserve_min" + ("" if inverter_id == 0 else "_" + str(inverter_id)), None)
+            if item and item.get("entity", None):
+                reserve_min_entities.append(item["entity"])
+        min_soc_entity_lower = min_soc_entity.lower()
+        if min_soc_entity_lower in [entity.lower() for entity in reserve_min_entities]:
+            kind = "Predbat's own set_reserve_min entity"
+        elif min_soc_entity_lower in [entity.lower() for entity in reserve_entities if isinstance(entity, str)]:
+            kind = "a reserve entity"
+        else:
             self.battery_min_soc_is_reserve_warned = False
             return False
-        message = "Inverter {} battery_min_soc is set to {}, which is a reserve entity; ignoring battery_min_soc. Point it at a fixed minimum or remove it from apps.yaml, and lower set_reserve_min if it was raised".format(self.id, min_soc_entity)
+        message = "Inverter {} battery_min_soc is set to {}, which is {}; ignoring battery_min_soc. Point it at a fixed minimum or remove it from apps.yaml, and lower set_reserve_min if it was raised".format(self.id, min_soc_entity, kind)
         if self.battery_min_soc_is_reserve_warned:
             self.base.log("Info: " + message)
         else:
