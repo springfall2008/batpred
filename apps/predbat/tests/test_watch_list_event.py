@@ -159,8 +159,10 @@ def test_watch_list_sensor_state_change(my_predbat=None):
 
 def test_watch_list_event_loopback_shape(my_predbat=None):
     """
-    The loopback path passes the attributes dict as `attribute` instead of a
-    name; identical refires through that shape must still be ignored.
+    The loopback path calls trigger_watch_list() with the attributes dict as
+    the `attribute` argument (ha.py set_state_external), rather than the
+    attribute name the websocket path passes; identical refires through that
+    call shape must still be ignored.
     """
     print("\n=== Testing watch_list event refire via loopback call shape (#6105) ===")
     failed = 0
@@ -238,12 +240,14 @@ def test_watch_list_event_raw_new_value(my_predbat=None):
 
 def test_watch_list_event_survives_config_reload(my_predbat=None):
     """
-    Fingerprints survive load_user_config(): it runs on every update cycle,
-    so resetting them there would make every refire look like a first sight.
+    Fingerprints survive load_user_config(register=True): it runs on every
+    update cycle and re-reads watch_list, so resetting the fingerprints
+    there would make every refire look like a first sight.
     """
     print("\n=== Testing watch_list fingerprints survive config reload (#6105) ===")
     failed = 0
 
+    my_predbat.args["watch_list"] = [EVENT_ENTITY]
     my_predbat.watch_list = [EVENT_ENTITY]
     my_predbat.watch_list_fingerprints = {}
     events = _free_electricity_events()
@@ -253,9 +257,12 @@ def test_watch_list_event_survives_config_reload(my_predbat=None):
     triggered = 0
     if _fire(my_predbat, EVENT_ENTITY, None, None, first):
         triggered += 1
-    my_predbat.load_user_config()
+    # TestHAInterface defines no websocket_active; the register path reads it,
+    # so pin it off to skip service registration (not what this test covers).
+    my_predbat.ha_interface.websocket_active = False
+    my_predbat.load_user_config(register=True)
     if EVENT_ENTITY not in my_predbat.watch_list:
-        print("ERROR: load_user_config() dropped the watched entity from watch_list")
+        print("ERROR: load_user_config(register=True) dropped the watched entity from watch_list")
         failed += 1
     if _fire(my_predbat, EVENT_ENTITY, None, first, second):
         triggered += 1

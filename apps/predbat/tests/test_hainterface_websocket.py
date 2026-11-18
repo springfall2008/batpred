@@ -258,6 +258,107 @@ def test_hainterface_socketloop_state_changed(my_predbat=None):
     return failed
 
 
+def test_hainterface_socketloop_state_changed_event_attributes(my_predbat=None):
+    """Test socketLoop() passes an event entity's attribute-only change to trigger_watch_list (#6105)"""
+    print("\n=== Testing HAInterface socketLoop() event attribute-only change (#6105) ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key", ha_url="http://localhost:8123")
+
+    # Track trigger_watch_list calls
+    mock_base.trigger_watch_list_calls = []
+    async def mock_trigger_watch_list(entity_id, attribute, old_state, new_state):
+        mock_base.trigger_watch_list_calls.append((entity_id, attribute, old_state, new_state))
+    mock_base.trigger_watch_list = mock_trigger_watch_list
+
+    mock_ws = MagicMock()
+    mock_ws.send_json = AsyncMock()
+
+    event_old = {"entity_id": "event.test", "state": "2026-11-10T05:11:14.032+00:00", "attributes": {"events": [{"start": "2026-11-01T00:30:00+00:00"}]}}
+    event_new = {"entity_id": "event.test", "state": "2026-11-10T05:11:14.032+00:00", "attributes": {"events": [{"start": "2026-11-01T00:30:00+00:00"}, {"start": "2026-11-10T12:00:00+00:00"}]}}
+
+    messages = [
+        create_mock_websocket_message(WSMsgType.TEXT, {"type": "auth_ok"}),
+        # Same state, changed attributes: the gate must let this through
+        create_mock_websocket_message(WSMsgType.TEXT, {
+            "type": "event",
+            "event": {
+                "event_type": "state_changed",
+                "data": {
+                    "old_state": event_old,
+                    "new_state": event_new
+                }
+            }
+        }),
+        # Same state, identical attributes: the gate must drop this
+        create_mock_websocket_message(WSMsgType.TEXT, {
+            "type": "event",
+            "event": {
+                "event_type": "state_changed",
+                "data": {
+                    "old_state": event_new,
+                    "new_state": event_new
+                }
+            }
+        }),
+        # Sensor attribute-only change: still dropped, as before
+        create_mock_websocket_message(WSMsgType.TEXT, {
+            "type": "event",
+            "event": {
+                "event_type": "state_changed",
+                "data": {
+                    "old_state": {"entity_id": "sensor.test", "state": "100", "attributes": {}},
+                    "new_state": {"entity_id": "sensor.test", "state": "100", "attributes": {"unit": "W"}}
+                }
+            }
+        }),
+    ]
+
+    # Mock receive() method instead of __aiter__
+    message_index = [0]
+    async def mock_receive():
+        if message_index[0] < len(messages):
+            msg = messages[message_index[0]]
+            message_index[0] += 1
+            return msg
+        ha_interface.api_stop = True
+        return create_mock_websocket_message(WSMsgType.CLOSED, None)
+
+    mock_ws.receive = mock_receive
+
+    async def mock_sleep(delay):
+        ha_interface.api_stop = True
+
+    with patch("aiohttp.ClientSession") as mock_session_class:
+        mock_session = MagicMock()
+        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
+        mock_session.__aexit__ = AsyncMock()
+        mock_session.ws_connect = MagicMock()
+        mock_session.ws_connect.return_value.__aenter__ = AsyncMock(return_value=mock_ws)
+        mock_session.ws_connect.return_value.__aexit__ = AsyncMock()
+        mock_session_class.return_value = mock_session
+
+        with patch("ha.asyncio.sleep", new=mock_sleep):
+            run_async(ha_interface.socketLoop())
+
+    if len(mock_base.trigger_watch_list_calls) != 1:
+        print("ERROR: Expected 1 trigger_watch_list call (event attribute-only change), got {}".format(len(mock_base.trigger_watch_list_calls)))
+        failed += 1
+    else:
+        entity_id, attribute, old_state, new_state = mock_base.trigger_watch_list_calls[0]
+        if entity_id != "event.test":
+            print(f"ERROR: Expected entity_id 'event.test'")
+            failed += 1
+        elif new_state.get("attributes", {}).get("events", []) != event_new["attributes"]["events"]:
+            print(f"ERROR: Expected new_state to carry the changed events attribute")
+            failed += 1
+        else:
+            print("✓ trigger_watch_list called for event attribute-only change, dropped when identical")
+
+    return failed
+
+
 def test_hainterface_socketloop_call_service(my_predbat=None):
     """Test socketLoop() call_service event handling"""
     print("\n=== Testing HAInterface socketLoop() call_service ===")
@@ -1093,6 +1194,7 @@ def run_hainterface_websocket_tests(my_predbat):
     failed += test_hainterface_socketloop_auth_ok(my_predbat)
     failed += test_hainterface_socketloop_auth_invalid(my_predbat)
     failed += test_hainterface_socketloop_state_changed(my_predbat)
+    failed += test_hainterface_socketloop_state_changed_event_attributes(my_predbat)
     failed += test_hainterface_socketloop_call_service(my_predbat)
     failed += test_hainterface_socketloop_result_failed(my_predbat)
     failed += test_hainterface_socketloop_message_closed(my_predbat)

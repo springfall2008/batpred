@@ -1172,7 +1172,7 @@ class UserInterface:
                     ha_value = history[-1].get("state", None)
         return ha_value
 
-    def watch_list_fingerprint(self, entity_id, attribute, new):
+    def watch_list_fingerprint(self, entity_id, new):
         """
         Fingerprint a watched entity's new state for change detection.
 
@@ -1182,10 +1182,6 @@ class UserInterface:
         state. For every other entity the fingerprint is the state, exactly as
         the old state-only check behaved, so an attribute-only change still
         does not trigger a replan.
-
-        The `attribute` argument is the attributes dict on the loopback path
-        (ha.py set_state_external) and is only used when the new state carries
-        no attributes of its own.
         """
         if entity_id.split(".", 1)[0] == "event":
             if not isinstance(new, dict):
@@ -1196,8 +1192,6 @@ class UserInterface:
                 except (TypeError, ValueError):
                     return repr(new)
             attributes = new.get("attributes", None)
-            if attributes is None and isinstance(attribute, dict):
-                attributes = attribute
             if attributes is None:
                 attributes = {}
             try:
@@ -1218,12 +1212,10 @@ class UserInterface:
         handler and the loopback set_state_external path in ha.py - share one
         rule and no longer depend on what HA reports as the old state.
         """
-        fingerprints = getattr(self, "watch_list_fingerprints", None)
-        if fingerprints is None:
-            fingerprints = self.watch_list_fingerprints = {}
+        fingerprints = self.watch_list_fingerprints
         for entity in self.watch_list:
             if entity_id == entity:
-                fingerprint = self.watch_list_fingerprint(entity, attribute, new)
+                fingerprint = self.watch_list_fingerprint(entity, new)
                 if entity in fingerprints and fingerprints[entity] == fingerprint:
                     self.log("Watched event: {} unchanged, ignoring".format(entity))
                     continue
