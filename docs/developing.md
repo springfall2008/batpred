@@ -819,7 +819,7 @@ cd coverage
 ./run_all --debug_file <predbat_debug.yaml> --replay_log <predbat.log> [--replay_until HH:MM]
 ```
 
-For each Predbat run in the log it sets the clock, SoC, the load/PV/import/export history and the inverter's programmed export window from the log, then re-plans on the runs where the log shows a re-plan. It prints the first export window the log recorded next to the one it computed, and a summary of how many re-plans matched. The PV forecast is the one in the yaml, because the log records only its total.
+For each Predbat run in the log it sets the clock, SoC, the load/PV/import/export history and the inverter's programmed export window from the log, then re-plans on the runs where the log shows a re-plan. It prints the first export window the log recorded next to the one it computed, and a summary of how many re-plans matched. On a log without the `Replay input:` lines described below, the PV forecast is the one in the yaml, because the human-readable lines record only its total.
 
 Newer Predbat versions also log `Replay input:` lines, and the replay uses them wherever a run has them. They carry the load and PV forecasts, the values each plan starts from (SoC, in-day adjustment, cost so far, the day counters, the charge and discharge rates in force and the battery temperature) at full precision, the exact load divergence, and, whenever they change, the rates, the car state, the inverter's programmed state, the learned battery rate grids and the battery temperature forecast. The temperature forecast is logged as the whole degree the rate grids read at each step, and only when moving the last line on to now would not give the live forecast. Without them, the replay drifts from the live plans as the day goes on.
 
@@ -839,6 +839,24 @@ In simulated mode the replay also prints the RMS difference between its simulate
 The replay carries on across midnight, so a yaml from late evening can be replayed through the whole of the next day. At midnight it moves everything held as minutes from midnight (rates, forecasts, plan windows) back a day, and the start-of-day re-plan happens as it does live. Rates the live system fetched after the yaml was written, such as the next day-ahead prices, are not in the yaml. The replay takes them from the log's `Replay input: rates changed` lines; a log without those lines plans on rates that run out early. `--replay_until HH:MM` stops at the first such time after the yaml.
 
 Where the replay matches the log it can be used for what-if experiments; where it does not, the first run that diverges shows what the log carries that the yaml did not. The log should come from a similar Predbat version; a version change part way through is marked, and the plans after it are counted separately.
+
+#### Keeping the replay working when the plan gains an input
+
+The replay can only reproduce a plan if everything the plan reads is either in the debug yaml at the moment it was taken, or in the log. A new input breaks that when it changes during the day and the replay can't rebuild it. Examples are a value refitted once a day from history (the learned battery rate grids), a forecast rebuilt every cycle (the battery temperature forecast), or state fetched from a cloud API. The symptom is a replay that matches until the value first changes, then diverges for the rest of the log.
+
+Before adding anything, check whether an existing line already covers the input. PV calibration, for example, is applied before the PV forecast is logged, so the existing PV forecast line already carries it. A value the plan derives from inputs that are already logged needs nothing either.
+
+Otherwise, a new input needs four things:
+
+1. **A log line.** Add a `log_replay_<name>()` method to `Fetch` in `fetch.py`, and call it where the value is final for the cycle: after the fetch that produces it, or next to `log_replay_state()` in `plan_once()` in `predbat.py`. Build the line with `log_replay_changed(attribute, signature_of, build, what)`. It writes the line only when the signature changes, and again on each new day even when it doesn't. Values keyed in minutes from midnight are moved back a day at midnight, so a new day that repeated yesterday's values would otherwise leave the replay a day short. It also turns a logging fault into a single `Warn:` per change instead of raising on the main loop. Start the line with `Replay input: <name> changed`. Write the value so it reads back exactly: a `repr()` that `ast.literal_eval` accepts, with long series as `[value, count]` runs (`value_runs()` and `expand_runs()` in `battery_rate_grid.py`). Check the line's size on realistic data, because a large line that changes every cycle swells every user's log.
+2. **Keep the bookkeeping out of debug dumps.** Add the attribute that holds the last logged signature to `DEBUG_EXCLUDE_LIST` in `utils.py`.
+3. **The replay reads and applies it.** In `tests/replay_forward.py`:
+    - add a `<NAME>_INPUT_RE` pattern and its `(pattern, store)` entry in `parse_log()`;
+    - add the store to `REPLAY_INPUT_STORES`;
+    - if the line is written only on a change, add the store to `CARRIED_STORES` too, so a change logged by a run the replay drops still reaches the next run it keeps;
+    - if the value is held in minutes from midnight, move it back a day in `roll_over_midnight()`;
+    - apply it in `apply_run()` through an `apply_logged_<name>()` function, and remove any attribute that exists only for the replay in the `finally` block of `replay_forward()`.
+4. **Tests.** In `tests/test_log_replay_inputs.py`, check that the line is written, written again only on a change and on a new day, and warns instead of raising on bad data. In `tests/test_replay_forward.py`, add a round trip: write the lines with the live logging code, replay them, and check that the replay ends up with the value live had, across midnight and past a dropped run. Then run `./run_all --test replay_roundtrip_day`, which replays a whole recorded day of the main loop and expects every re-plan to match.
 
 ### The dummy inverter
 
