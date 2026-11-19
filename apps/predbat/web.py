@@ -3030,8 +3030,18 @@ chart.render();
         """
         postdata = await request.post()
 
+        guard_entity = "select." + self.prefix + "_load_ml_guard_mode"
+        guard_submitted = False
+        for field in postdata:
+            if field.replace("__", ".") == guard_entity:
+                if postdata[field] not in ("off", "monitor", "auto"):
+                    raise web.HTTPBadRequest(text="Choose Off, Monitoring only or Automatic fallback")
+                guard_submitted = True
+
         # Process only the submitted form data
         for pitem in postdata:
+            if pitem == "_load_ml_guard_return_chart":
+                continue
             new_value = postdata[pitem]
             if pitem:
                 pitem = pitem.replace("__", ".")
@@ -3048,6 +3058,13 @@ chart.render();
             self.log("Web interface setting {} to {}".format(pitem, new_value))
             await self.set_state_external(pitem, new_value)
 
+        if guard_submitted:
+            # Use the normal persisted Config setting, so the choice survives an
+            # immediate restart and an old apps.yaml default does not pin it back.
+            self.base.save_current_config()
+            return_chart = postdata.get("_load_ml_guard_return_chart")
+            if return_chart in ("LoadML", "LoadMLPower"):
+                raise web.HTTPFound("./charts?chart=" + return_chart)
         raise web.HTTPFound("./config")
 
     def render_delete_button(self, nested_row_id):
@@ -3975,6 +3992,151 @@ chart.render();
 
         return text
 
+    def get_load_ml_accuracy_html(self, chart="LoadML"):
+        """Readable accuracy status and prospective error scores above the LoadML charts."""
+        mode = self.base.get_arg("load_ml_guard_mode", "monitor")
+        mode = mode if mode in ("off", "monitor", "auto") else "monitor"
+        try:
+            raw = self.get_state_wrapper("sensor." + self.prefix + "_load_ml_accuracy", raw=True)
+        except Exception:
+            raw = {"attributes": {"reason": "report_unavailable"}}
+        raw = raw if isinstance(raw, dict) else {}
+        attributes = raw.get("attributes")
+        attributes = attributes if isinstance(attributes, dict) else {}
+        reason = attributes.get("reason", "")
+        reason = reason if isinstance(reason, str) else ""
+        source_key = attributes.get("selected_source", "")
+        source_key = source_key if isinstance(source_key, str) else ""
+        recommendation_key = attributes.get("recommended_source", "")
+        recommendation_key = recommendation_key if isinstance(recommendation_key, str) else ""
+        source = {"ml": "LoadML", "classic": "Historical forecast", "external": "External forecast"}.get(source_key, "Awaiting first report")
+        recommendation = {"ml": "LoadML earned selection", "classic": "Historical forecast"}.get(recommendation_key, "Collecting evidence")
+        headline, tone = "Collecting evidence", "info"
+        explanations = {
+            "measuring": "Recording forecasts and waiting for their actual consumption. Decisions need results from several days.",
+            "historical_preferred": "LoadML has not shown a clear, sustained improvement over the historical forecast on both the 8-hour and 24-hour checks.",
+            "ml_earned": "LoadML earned selection by consistently beating historical on both the 8-hour and 24-hour checks. Its accuracy is still being monitored.",
+            "within_limits": "No sustained error above the guard limits. The table shows which forecast has been closer to actual load.",
+            "ml_worse_than_classic": "LoadML has repeatedly been less accurate than the historical forecast.",
+            "classic_unavailable": "The historical forecast cannot be built. Valid ML data is kept instead of replacing it with empty load.",
+            "stale_or_short_forecast": "The ML forecast is out of date or has too little future coverage.",
+            "invalid_forecast": "The ML forecast contains missing or invalid values.",
+            "guard_unavailable": "PredBat could not evaluate the guard and is using the configured load sources. See the PredBat log for details.",
+            "report_unavailable": "The accuracy report could not be read. You can still change the guard mode below.",
+        }
+        explanation = explanations.get(reason, "Waiting for the first accuracy report from a PredBat planning cycle.")
+        if reason == "within_limits":
+            headline = "Within guard limits"
+        elif reason == "ml_earned":
+            headline = "LoadML earned selection"
+        elif reason == "historical_preferred":
+            headline = "Historical preferred"
+        elif reason == "ml_worse_than_classic":
+            headline, tone = ("Historical fallback active" if mode == "auto" and attributes.get("selected_source") == "classic" else "Warning: ML is less accurate"), "warning"
+            horizon = attributes.get("fallback_horizon_hours")
+            if horizon in (8, 24):
+                explanation += " The {}-hour check triggered the warning.".format(horizon)
+        elif reason == "guard_unavailable":
+            headline, tone = "Accuracy guard unavailable", "warning"
+            source, recommendation = "Configured load sources", "Unavailable"
+        elif reason == "report_unavailable":
+            headline, tone = "Accuracy report unavailable", "warning"
+            source, recommendation = "Unavailable", "Unavailable"
+        elif reason in ("classic_unavailable", "stale_or_short_forecast", "invalid_forecast"):
+            headline, tone = "Forecast warning", "warning"
+        elif reason.startswith("model_") or reason == "ml_unavailable":
+            headline = "ML unavailable"
+            explanation = "ML is training or currently unavailable. The planning source shown below is the source reported by the guard."
+        if reason == "measuring":
+            recommendation = "Collecting evidence"
+        if mode == "monitor":
+            explanation += " Monitoring records and warns; it does not automatically change forecast selection."
+        elif mode == "auto" and reason not in ("guard_unavailable", "report_unavailable"):
+            explanation += " Automatic mode starts with historical and only permits LoadML after it earns selection. ML must also be enabled as a planning source."
+        stale = False
+        report_time = attributes.get("updated_at") or raw.get("last_updated")
+        if report_time:
+            try:
+                age = (self.now_utc - str2time(report_time)).total_seconds()
+                stale = age > 15 * 60 or age < -5 * 60
+            except (ValueError, TypeError):
+                stale = True
+        if stale:
+            headline, tone = "Report out of date", "warning"
+            explanation = "There is no recent, reliable accuracy report. Sources and scores below are the last recorded values; wait for a new planning cycle."
+            recommendation = "Awaiting a fresh report"
+        if mode == "off":
+            headline, tone = "Monitoring off", "info"
+            explanation = "Accuracy recording is disabled. Select a monitoring mode below or in Config to collect real-world comparisons."
+            source, recommendation = "Not reported", "Monitoring is off"
+        scores = attributes.get("scores")
+        scores = scores if isinstance(scores, dict) and mode != "off" else {}
+
+        def error_value(value):
+            """A finite, non-negative energy error, or None for missing/malformed scores."""
+            return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else None
+
+        text = """<style>
+.load-accuracy {margin:16px 0 22px;padding:18px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;color:#172033;max-width:1100px;box-sizing:border-box;}
+.load-accuracy h2 {display:block;margin:0 0 12px;font-size:22px;}
+.load-accuracy p {white-space:normal;margin:10px 0;line-height:1.5;}
+.load-accuracy .la-status {display:inline-block;padding:6px 12px;border-radius:6px;font-weight:bold;background:#dbeafe;color:#164178;}
+.load-accuracy .la-warning {background:#fff1c2;color:#713f12;}
+.load-accuracy .la-cards {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:16px 0;}
+.load-accuracy .la-card {padding:12px;background:#fff;border:1px solid #dbe2ea;border-radius:8px;}
+.load-accuracy .la-label {display:block;font-size:13px;color:#475569;margin-bottom:5px;}
+.load-accuracy .la-mode-form {display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+.load-accuracy select,.load-accuracy button {font:inherit;font-size:14px;padding:6px 8px;border:1px solid #94a3b8;border-radius:5px;}
+.load-accuracy select {background:#fff;color:#172033;max-width:100%;}
+.load-accuracy button {background:#dbeafe;color:#164178;cursor:pointer;}
+.load-accuracy .la-table {overflow-x:auto;}
+.load-accuracy table {width:100%;border:0;padding:0;border-collapse:collapse;text-align:left;}
+.load-accuracy th,.load-accuracy td {padding:10px 12px;border-bottom:1px solid #dbe2ea;white-space:normal;}
+.load-accuracy th {background:transparent;color:inherit;}
+.load-accuracy thead th {background:#e2e8f0;}
+.load-accuracy small {display:block;font-weight:normal;color:#475569;margin-top:4px;}
+.load-accuracy .la-best {font-weight:bold;color:#166534;}
+body.dark-mode .load-accuracy {background:#1e293b;border-color:#475569;color:#f1f5f9;}
+body.dark-mode .load-accuracy .la-card {background:#263449;border-color:#475569;}
+body.dark-mode .load-accuracy select {background:#1e293b;color:#f1f5f9;}
+body.dark-mode .load-accuracy .la-label,body.dark-mode .load-accuracy small {color:#cbd5e1;}
+body.dark-mode .load-accuracy th,body.dark-mode .load-accuracy td {border-color:#475569;}
+body.dark-mode .load-accuracy th {background:transparent;color:inherit;}
+body.dark-mode .load-accuracy thead th {background:#334155;}
+body.dark-mode .load-accuracy .la-best {color:#86efac;}
+@media(max-width:600px) {.load-accuracy {padding:12px;} .load-accuracy th,.load-accuracy td {padding:8px 6px;font-size:13px;}}
+</style>
+<section class="load-accuracy" aria-label="Load forecast accuracy"><h2>Load forecast accuracy</h2>"""
+        text += '<div class="la-status la-{}" role="status">{}</div><p>{}</p>'.format(tone, html_module.escape(headline), html_module.escape(explanation))
+        text += '<div class="la-cards">'
+        for label, value in (("Mode", {"off": "Off", "monitor": "Monitoring only", "auto": "Automatic fallback"}[mode]), ("Planning source (last report)" if stale else "Planning source", source), ("Guard recommendation", recommendation)):
+            if label == "Mode":
+                field = html_module.escape("select__" + self.prefix + "_load_ml_guard_mode", quote=True)
+                return_chart = chart if chart in ("LoadML", "LoadMLPower") else "LoadML"
+                text += '<div class="la-card"><label class="la-label" for="load-ml-guard-mode">Mode</label><form class="la-mode-form" method="post" action="./config">'
+                text += '<input type="hidden" name="_load_ml_guard_return_chart" value="{}"><select id="load-ml-guard-mode" name="{}">'.format(return_chart, field)
+                for option, title in (("off", "Off"), ("monitor", "Monitoring only"), ("auto", "Automatic fallback")):
+                    text += '<option value="{}"{}>{}</option>'.format(option, " selected" if option == mode else "", title)
+                text += '</select><button type="submit">Apply mode</button></form><small>Saved immediately; no restart needed. Guard mode does not enable ML for planning.</small></div>'
+                continue
+            text += '<div class="la-card"><span class="la-label">{}</span><strong>{}</strong></div>'.format(html_module.escape(label), html_module.escape(value))
+        text += '</div><p>Average energy error over the past seven days. Lower is better.</p><div class="la-table"><table><thead><tr><th scope="col">Forecast window</th><th scope="col">LoadML error</th><th scope="col">Historical error</th><th scope="col">Closer forecast</th></tr></thead><tbody>'
+        for horizon in (1, 8, 24):
+            row = scores.get("{}h".format(horizon), {})
+            row = row if isinstance(row, dict) else {}
+            count = row.get("samples", 0)
+            count = count if type(count) is int and count >= 0 else 0
+            ml, classic = error_value(row.get("ml_mae_kwh")), error_value(row.get("classic_mae_kwh"))
+            ready = count > 0 and ml is not None and classic is not None
+            winner = "Waiting for results" if not ready else "Similar" if abs(ml - classic) < 0.005 else "LoadML" if ml < classic else "Historical"
+            ml_text = "{:.2f} kWh".format(ml) if ready else "&mdash;"
+            classic_text = "{:.2f} kWh".format(classic) if ready else "&mdash;"
+            text += '<tr><th scope="row">{} hour{}<small>{} completed windows</small></th><td class="{}">{}</td><td class="{}">{}</td><td>{}</td></tr>'.format(
+                horizon, "s" if horizon != 1 else "", count, "la-best" if winner == "LoadML" else "", ml_text, "la-best" if winner == "Historical" else "", classic_text, winner
+            )
+        text += '</tbody></table></div><p>Scores appear after each forecast window has elapsed. Hourly windows overlap; automatic fallback uses evidence from separate days. These compare unadjusted household forecasts with later measured load.</p><a href="./log">Open PredBat log</a></section>'
+        return text
+
     async def html_charts(self, request):
         """
         Render apps.yaml as an HTML page
@@ -4006,6 +4168,8 @@ chart.render();
             text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
+        if chart in ("LoadML", "LoadMLPower"):
+            text += self.get_load_ml_accuracy_html(chart)
         if chart not in ("MarginalCosts", "Curves", "PVCalibration", "PVAccuracy"):
             text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
@@ -4882,8 +5046,8 @@ chart.render();
                     text += '<select name="{}" id="{}" onchange="saveFilterValue(); this.form.submit();">'.format(useid, useid)
                     for option in options:
                         selected = option == value
-                        option_label = option if option else "None"
-                        text += '<option value="{}" label="{}" {}>{}</option>'.format(option, option_label, "selected" if selected else "", option)
+                        option_label = item.get("option_labels", {}).get(str(option), option if option else "None")
+                        text += '<option value="{}" label="{}" {}>{}</option>'.format(option, option_label, "selected" if selected else "", option_label)
                     text += "</select>\n"
                     text += f"</form></td>\n"
                 else:

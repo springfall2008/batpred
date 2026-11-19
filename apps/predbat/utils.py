@@ -292,6 +292,7 @@ class MinuteArray:
 # The rate grid evidence (a year of samples) and the grids derived from the learned ones are rebuilt on replay
 # (rate_grids()), so only battery_rate_grid_learned is dumped - every debug_history snapshot would otherwise carry them.
 DEBUG_EXCLUDE_LIST = [
+    "load_forecast_guard",  # Runtime evidence helper; its public summary is on load_ml_accuracy.
     "ha_interface",
     "components",
     "coordinator",
