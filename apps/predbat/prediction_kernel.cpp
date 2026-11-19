@@ -81,7 +81,9 @@
 // Parity 20: below a manual_soc or alert floor the keep penalty's import rate, and above a manual_soc_max
 // ceiling its export rate, is at least PK_KEEP_TARGET_MIN_RATE, so a target in a free or negative-price
 // slot still costs something to miss (#5162).
-#define PK_PARITY_REVISION 23
+// Parity 24: with reserve control on, a charge window holding at its limit (a freeze included) lets the
+// battery leak battery_rate_min below the limit each step, rather than holding it exactly (GH#6269).
+#define PK_PARITY_REVISION 24
 #define PK_MAX_CARS 8
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_KEEP_TARGET_MIN_RATE 1.0 // const.py KEEP_TARGET_MIN_RATE
@@ -928,8 +930,9 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 // Charge freeze via reserve
                 charge_limit_n = std::max(soc, reserve);
             }
+            // The reserve is the charge limit minus the minimum battery rate, as it can leak a little (GH#6269)
             if (c->set_reserve_enable && (soc >= charge_limit_n)) {
-                reserve_expected = std::max(charge_limit_n, reserve);
+                reserve_expected = std::max(charge_limit_n - battery_rate_min * step, reserve);
             }
         }
 

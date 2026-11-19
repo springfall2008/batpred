@@ -868,9 +868,9 @@ class Prediction(PredictionBatch):
                     charge_limit_n = max(soc, reserve)
 
                 # When set reserve enable is on pretend the reserve is the charge limit minus the
-                # minimum battery rate modelled as it can leak a little
+                # minimum battery rate modelled as it can leak a little (GH#6269)
                 if set_reserve_enable and (soc >= charge_limit_n):
-                    reserve_expected = max(charge_limit_n, reserve)
+                    reserve_expected = max(charge_limit_n - battery_rate_min * step, reserve)
 
             # Outside the recording window?
             if record and minute >= end_record:

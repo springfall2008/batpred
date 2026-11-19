@@ -557,6 +557,8 @@ def run_edge_case_tests(my_predbat):
             forecast_minutes,
         ),
         ("charge_freeze", {"soc_kw": 50.0, "reserve": 4.0, "set_charge_freeze": True}, [4.0], full_window, [], [], 1.0, 0.5, forecast_minutes),
+        # A freeze with reserve control leaks battery_rate_min below the held SoC each step (GH#6269)
+        ("charge_freeze_leak", {"soc_kw": 50.0, "reserve": 4.0, "set_charge_freeze": True, "set_reserve_enable": True, "battery_rate_min": 0.075 / 60.0}, [4.0], full_window, [], [], 0, 0.5, forecast_minutes),
         ("charge_hybrid_pv", {"inverter_hybrid": True, "battery_rate_max_charge_dc": 2 / 60.0}, [100.0], full_window, [], [], 3.0, 0.5, forecast_minutes),
         # A manual cold cap stays absolute on a hybrid's DC path above the rated rate (entry 102 of the curve row)
         (
