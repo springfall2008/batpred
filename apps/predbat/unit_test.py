@@ -269,7 +269,7 @@ from tests.test_octopus_day_night_rates import test_octopus_day_night_rates_wrap
 from tests.test_octopus_tou_windows import test_octopus_tou_windows_wrapper
 from tests.test_basic_rates_utc import test_basic_rates_utc
 from tests.test_fetch_octopus_rates import test_fetch_octopus_rates
-from tests.test_fetch_spot_rates import test_fetch_spot_rates, test_octopus_auto_rates
+from tests.test_fetch_spot_rates import test_fetch_spot_rates, test_octopus_auto_rates, test_rate_sources, test_fetch_rate_sources, test_auto_config_precedence
 from tests.test_fetch_tariffs import test_fetch_tariffs
 from tests.test_fetch_url_cached import test_fetch_url_cached
 from tests.test_load_free_slot import test_load_free_slot
@@ -689,6 +689,9 @@ def main():
         ("fetch_octopus_rates", test_fetch_octopus_rates, "Fetch Octopus rates tests", False),
         ("fetch_spot_rates", test_fetch_spot_rates, "Fetch generic spot rates tests", False),
         ("octopus_auto_rates", test_octopus_auto_rates, "Octopus auto-config keeps user-chosen rate sources", False),
+        ("rate_sources", test_rate_sources, "Rate source precedence list", False),
+        ("fetch_rate_sources", test_fetch_rate_sources, "Import and export rate source selection", False),
+        ("auto_config_precedence", test_auto_config_precedence, "Octopus auto-config keeps the user's rate source", False),
         ("fetch_tariffs", test_fetch_tariffs, "Fetch tariffs tests", False),
         ("fetch_url_cached", test_fetch_url_cached, "Fetch URL cached tests", False),
         ("fetch_config_options", test_fetch_config_options, "Fetch config options tests", False),

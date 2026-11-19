@@ -300,7 +300,7 @@ If more than one import rate source is configured, Predbat uses the first of the
 Export follows the same order with the `export` names.
 If you configure both `metric_octopus_*` and `metric_spot_*`, the `metric_octopus_*` entry is used and a warning is logged.
 
-If the Predbat Octopus component is set to auto-configure your rates but you have set `metric_spot_*`, `metric_energidataservice_*` or `metric_stromligning_*` yourself in `apps.yaml`, your entry is kept and the Octopus rates are not auto-configured for that direction (import or export).
+If the Predbat Octopus or Kraken (EDF / E.ON) component is set to auto-configure your rates but you have set `metric_spot_*`, `metric_energidataservice_*` or `metric_stromligning_*` yourself in `apps.yaml`, your entry is kept and the rates are not auto-configured for that direction (import or export).
 
 A full list of available Octopus products is at <https://api.octopus.energy/v1/products/>.
 
@@ -429,12 +429,13 @@ Times are ISO 8601 format with a timezone offset, e.g. `2025-01-01T00:00:00+01:0
 
 There are different allowable key formats for each slot and Predbat picks the format from the keys of the **first** entry in the `raw_today` / `raw_tomorrow` list:
 
-| Slot keys                                                     | Rate unit                     | What Predbat does       |
-| ------------------------------------------------------------- | ----------------------------- | ----------------------- |
-| `start`, `end`, `value`                                       | currency per kWh (e.g. €/kWh) | multiplies by 100       |
-| `from`, `till`, `price`                                       | currency per kWh              | multiplies by 100       |
-| `from`, `to`, `rate`                                          | pence / cents per kWh         | uses the value as is    |
-| `valid_from`, `valid_to`, `value_inc_vat`                     | pence / cents per kWh         | uses the value as is    |
+| Slot keys | Rate unit | What Predbat does |
+| --------- | --------- | ----------------- |
+| `start`, `end`, `value` | currency per kWh (e.g. €/kWh) | multiplies by 100 |
+| `from`, `till`, `price` | currency per kWh | multiplies by 100 |
+| `start`, `end`, `price` | currency per kWh | multiplies by 100 |
+| `from`, `to`, `rate` | pence / cents per kWh | uses the value as is |
+| `valid_from`, `valid_to`, `value_inc_vat` | pence / cents per kWh | uses the value as is |
 
 The first format is recommended for new sensors. **The most common mistake is feeding cents into a `value` or `price` sensor, which then makes every price 100 times too high.**
 Use one format consistently within a sensor, and the same unit for the whole list.

@@ -36,6 +36,8 @@ from utils import (
     strptime_aware,
     is_entity_id,
     intelligent_device_is_charger,
+    rate_source,
+    rate_slot_keys,
 )
 from battery_rate_grid import clean_rate_grid_samples, combine_rate_grid, fit_rate_grid, manual_rate_grid, merge_rate_grid_samples, rate_grid_table
 from battery_curve import charge_day
@@ -1603,6 +1605,7 @@ class Fetch:
         gives the same rates under either apps.yaml name:
         - start / end / value        - value is currency per kWh and is multiplied by 100
         - from / till / price        - price is currency per kWh and is multiplied by 100 (Nord Pool style)
+        - start / end / price        - price is currency per kWh and is multiplied by 100
         - from / to / rate           - rate is already in pence/cents, no scaling
         - valid_from / valid_to / value_inc_vat - already in pence/cents, no scaling
 
@@ -1627,27 +1630,133 @@ class Fetch:
                 data_all += data_tomorrow
 
         if data_all:
-            rate_key = "rate"
-            from_key = "from"
-            to_key = "to"
-            scale = 1.0
-            if rate_key not in data_all[0]:
-                rate_key = "value_inc_vat"
-                from_key = "valid_from"
-                to_key = "valid_to"
-            if from_key not in data_all[0]:
-                from_key = "start"
-                to_key = "end"
-                scale = 100.0
-            if rate_key not in data_all[0]:
-                rate_key = "value"
-            if rate_key not in data_all[0]:
-                rate_key = "price"
-                from_key = "from"
-                to_key = "till"
+            rate_key, from_key, to_key, scale = rate_slot_keys(data_all[0])
             rate_data, _ = minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, scale=scale)
+            if not rate_data:
+                self.spot_rates_warn_once(
+                    "layout:" + str(entity_id),
+                    "Warn: Spot rates: sensor {} has slots with the keys {} which do not match a supported layout (start/end/value, start/end/price, from/till/price, from/to/rate or valid_from/valid_to/value_inc_vat), so no rates were read".format(
+                        entity_id, sorted(data_all[0])
+                    ),
+                )
 
         return rate_data
+
+    def fetch_import_rates(self):
+        """
+        Fetch the import rates from whichever rate source is configured.
+
+        The rate source is the first of RATE_SOURCES that is set in apps.yaml, see rate_source(). Then the
+        basic rates_import list is the fallback when that source gave no rates.
+
+        :return: dict of import rates keyed by minutes from midnight_utc, empty if there are none
+        """
+        import_rates = {}
+        source = rate_source(self.args, "import")
+
+        if source == "rates_import_octopus_url":
+            # Fixed URL for rate import
+            self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
+            # Need to take a copy, as saving sessions will repeatedly increment cached import rates
+            import_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False)))
+        elif source == "metric_octopus_import":
+            # Octopus import rates
+            if "metric_spot_import" in self.args:
+                self.spot_rates_warn_once("both:import", "Warn: Both metric_octopus_import and metric_spot_import are set in apps.yaml, metric_octopus_import is used and metric_spot_import is ignored")
+            entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
+            import_rates = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted", spot_arg="metric_spot_import")
+            if not import_rates:
+                self.log("Error: metric_octopus_import is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+        elif source == "metric_spot_import":
+            # Generic spot import rates (raw_today / raw_tomorrow), never seen by Agile / AgilePredict
+            entity_id = self.get_arg("metric_spot_import", None, indirect=False)
+            import_rates = self.fetch_spot_rates(entity_id)
+            if not import_rates:
+                self.log("Error: metric_spot_import is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_spot_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+        elif source == "metric_energidataservice_import":
+            # Energi Data Service import rates
+            entity_id = self.get_arg("metric_energidataservice_import", None, indirect=False)
+            import_rates = self.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
+            if not import_rates:
+                self.log("Error: metric_energidataservice_import is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_energidataservice_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+        elif source == "metric_stromligning_import_today":
+            # Strømligning import rates
+            entity_id_today = self.get_arg("metric_stromligning_import_today", None, indirect=False)
+            entity_id_tomorrow = self.get_arg("metric_stromligning_import_tomorrow", None, indirect=False)
+            import_rates = self.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow, adjust_key="is_intelligent_adjusted")
+            if not import_rates:
+                self.log("Error: metric_stromligning_import sensors are not set correctly or no energy rates can be read")
+                self.record_status(message="Error: metric_stromligning_import sensors not set correctly or no energy rates can be read", had_errors=True)
+
+        # Fallback if no other rate types are set
+        if not import_rates:
+            # Basic rates defined by user over time
+            rate_import_dict = self.get_arg("rates_import", [], indirect=False)
+            if rate_import_dict:
+                import_rates = self.basic_rates(rate_import_dict, "rates_import")
+
+        return import_rates
+
+    def fetch_export_rates(self):
+        """
+        Fetch the export rates from whichever rate source is configured.
+
+        The rate source is the first of RATE_SOURCES that is set in apps.yaml, see rate_source(). Then the
+        basic rates_export list is the fallback when that source gave no rates.
+
+        :return: dict of export rates keyed by minutes from midnight_utc, empty if there are none
+        """
+        export_rates = {}
+        source = rate_source(self.args, "export")
+
+        if source == "rates_export_octopus_url":
+            # Fixed URL for rate export
+            self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
+            # Need to take a copy, as saving sessions will repeatedly increment cached export rates
+            export_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False)))
+        elif source == "metric_octopus_export":
+            # Octopus export rates
+            if "metric_spot_export" in self.args:
+                self.spot_rates_warn_once("both:export", "Warn: Both metric_octopus_export and metric_spot_export are set in apps.yaml, metric_octopus_export is used and metric_spot_export is ignored")
+            entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
+            export_rates = self.fetch_octopus_rates(entity_id, spot_arg="metric_spot_export")
+            if not export_rates:
+                self.log("Warning: metric_octopus_export is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_octopus_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+        elif source == "metric_spot_export":
+            # Generic spot export rates (raw_today / raw_tomorrow), never seen by Agile / AgilePredict
+            entity_id = self.get_arg("metric_spot_export", None, indirect=False)
+            export_rates = self.fetch_spot_rates(entity_id)
+            if not export_rates:
+                self.log("Warning: metric_spot_export is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_spot_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+        elif source == "metric_energidataservice_export":
+            # Energi Data Service export rates
+            entity_id = self.get_arg("metric_energidataservice_export", None, indirect=False)
+            export_rates = self.fetch_energidataservice_rates(entity_id)
+            if not export_rates:
+                self.log("Warning: metric_energidataservice_export is not set correctly in apps.yaml, or no energy rates can be read")
+                self.record_status(message="Error: metric_energidataservice_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
+        elif source == "metric_stromligning_export_today":
+            # Strømligning export rates
+            entity_id_today = self.get_arg("metric_stromligning_export_today", None, indirect=False)
+            entity_id_tomorrow = self.get_arg("metric_stromligning_export_tomorrow", None, indirect=False)
+            export_rates = self.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow)
+            if not export_rates:
+                self.log("Warning: metric_stromligning_export sensors are not set correctly or no energy rates can be read")
+                self.record_status(message="Error: metric_stromligning_export sensors not set correctly or no energy rates can be read", had_errors=True)
+
+        # Fallback if no other rate types are set
+        if not export_rates:
+            # Basic rates defined by user over time
+            rate_export_dict = self.get_arg("rates_export", [], indirect=False)
+            # Allow all zero export rates, as some users have a feed-in tariff that is zero
+            export_rates = self.basic_rates(rate_export_dict, "rates_export")
+
+        return export_rates
 
     def fetch_sensor_data(self, save=True):
         """
@@ -1799,49 +1908,7 @@ class Fetch:
         m.data_age_days.set(self.load_minutes_age)
         m.data_age_required_days.set(max(self.max_days_previous - 1, 0))
 
-        if "rates_import_octopus_url" in self.args:
-            # Fixed URL for rate import
-            self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
-            # Need to take a copy, as saving sessions will repeatedly increment cached import rates
-            import_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False)))
-        elif "metric_octopus_import" in self.args:
-            # Octopus import rates
-            if "metric_spot_import" in self.args:
-                self.spot_rates_warn_once("both:import", "Warn: Both metric_octopus_import and metric_spot_import are set in apps.yaml, metric_octopus_import is used and metric_spot_import is ignored")
-            entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
-            import_rates = self.fetch_octopus_rates(entity_id, adjust_key="is_intelligent_adjusted", spot_arg="metric_spot_import")
-            if not import_rates:
-                self.log("Error: metric_octopus_import is not set correctly in apps.yaml, or no energy rates can be read")
-                self.record_status(message="Error: metric_octopus_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
-        elif "metric_spot_import" in self.args:
-            # Generic spot import rates (raw_today / raw_tomorrow), never seen by Agile / AgilePredict
-            entity_id = self.get_arg("metric_spot_import", None, indirect=False)
-            import_rates = self.fetch_spot_rates(entity_id)
-            if not import_rates:
-                self.log("Error: metric_spot_import is not set correctly in apps.yaml, or no energy rates can be read")
-                self.record_status(message="Error: metric_spot_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
-        elif "metric_energidataservice_import" in self.args:
-            # Energi Data Service import rates
-            entity_id = self.get_arg("metric_energidataservice_import", None, indirect=False)
-            import_rates = self.fetch_energidataservice_rates(entity_id, adjust_key="is_intelligent_adjusted")
-            if not import_rates:
-                self.log("Error: metric_energidataservice_import is not set correctly in apps.yaml, or no energy rates can be read")
-                self.record_status(message="Error: metric_energidataservice_import not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
-        elif "metric_stromligning_import_today" in self.args or "metric_stromligning_import_tomorrow" in self.args:
-            # Strømligning import rates
-            entity_id_today = self.get_arg("metric_stromligning_import_today", None, indirect=False)
-            entity_id_tomorrow = self.get_arg("metric_stromligning_import_tomorrow", None, indirect=False)
-            import_rates = self.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow, adjust_key="is_intelligent_adjusted")
-            if not import_rates:
-                self.log("Error: metric_stromligning_import sensors are not set correctly or no energy rates can be read")
-                self.record_status(message="Error: metric_stromligning_import sensors not set correctly or no energy rates can be read", had_errors=True)
-
-        # Fallback if no other rate types are set
-        if not import_rates:
-            # Basic rates defined by user over time
-            rate_import_dict = self.get_arg("rates_import", [], indirect=False)
-            if rate_import_dict:
-                import_rates = self.basic_rates(rate_import_dict, "rates_import")
+        import_rates = self.fetch_import_rates()
 
         # Gas rates if set
         if "metric_octopus_gas" in self.args:
@@ -1895,49 +1962,7 @@ class Fetch:
                 self.update_pending = True
         octopus_surplus_changed = False
 
-        if "rates_export_octopus_url" in self.args:
-            # Fixed URL for rate export
-            self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
-            # Need to take a copy, as saving sessions will repeatedly increment cached export rates
-            export_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False)))
-        elif "metric_octopus_export" in self.args:
-            # Octopus export rates
-            if "metric_spot_export" in self.args:
-                self.spot_rates_warn_once("both:export", "Warn: Both metric_octopus_export and metric_spot_export are set in apps.yaml, metric_octopus_export is used and metric_spot_export is ignored")
-            entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
-            export_rates = self.fetch_octopus_rates(entity_id, spot_arg="metric_spot_export")
-            if not export_rates:
-                self.log("Warning: metric_octopus_export is not set correctly in apps.yaml, or no energy rates can be read")
-                self.record_status(message="Error: metric_octopus_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
-        elif "metric_spot_export" in self.args:
-            # Generic spot export rates (raw_today / raw_tomorrow), never seen by Agile / AgilePredict
-            entity_id = self.get_arg("metric_spot_export", None, indirect=False)
-            export_rates = self.fetch_spot_rates(entity_id)
-            if not export_rates:
-                self.log("Warning: metric_spot_export is not set correctly in apps.yaml, or no energy rates can be read")
-                self.record_status(message="Error: metric_spot_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
-        elif "metric_energidataservice_export" in self.args:
-            # Energi Data Service export rates
-            entity_id = self.get_arg("metric_energidataservice_export", None, indirect=False)
-            export_rates = self.fetch_energidataservice_rates(entity_id)
-            if not export_rates:
-                self.log("Warning: metric_energidataservice_export is not set correctly in apps.yaml, or no energy rates can be read")
-                self.record_status(message="Error: metric_energidataservice_export not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
-        elif "metric_stromligning_export_today" in self.args or "metric_stromligning_export_tomorrow" in self.args:
-            # Strømligning export rates
-            entity_id_today = self.get_arg("metric_stromligning_export_today", None, indirect=False)
-            entity_id_tomorrow = self.get_arg("metric_stromligning_export_tomorrow", None, indirect=False)
-            export_rates = self.fetch_stromligning_rates(entity_id_today, entity_id_tomorrow)
-            if not export_rates:
-                self.log("Warning: metric_stromligning_export sensors are not set correctly or no energy rates can be read")
-                self.record_status(message="Error: metric_stromligning_export sensors not set correctly or no energy rates can be read", had_errors=True)
-
-        # Fallback if no other rate types are set
-        if not export_rates:
-            # Basic rates defined by user over time
-            rate_export_dict = self.get_arg("rates_export", [], indirect=False)
-            # Allow all zero export rates, as some users have a feed-in tariff that is zero
-            export_rates = self.basic_rates(rate_export_dict, "rates_export")
+        export_rates = self.fetch_export_rates()
 
         # Fetch Axle sessions first so Octopus auto-join can skip saving sessions that overlap an Axle VPP session
         self.axle_sessions = fetch_axle_sessions(self)

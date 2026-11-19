@@ -32,7 +32,7 @@ from utils import (
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
 )
 from mock_base import MockBase as KrakenMockBase
-from utils import str2time
+from utils import str2time, rate_sources_below_octopus
 
 # Auth strategy selection — OAuthMixin for SaaS OAuth, KrakenAuthMixin for local auth.
 # Both may ship in the same release package.  _KrakenAuthMixin is stored at module level
@@ -2001,10 +2001,10 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
 
         # Wire import into fetch.py once tariff is discovered (retries until successful)
         if not self.wired and self.current_tariff:
-            self.set_arg("metric_octopus_import", self.get_entity_name("sensor", "import_rates"))
-            self.set_arg("metric_standing_charge", self.get_entity_name("sensor", "import_standing"))
+            # A rate source the user chose in apps.yaml that ranks below metric_octopus_import is kept, not out-ranked
+            if self.set_arg_unless_user_set("metric_octopus_import", self.get_entity_name("sensor", "import_rates"), rate_sources_below_octopus("import")):
+                self.set_arg("metric_standing_charge", self.get_entity_name("sensor", "import_standing"))
             self.wired = True
-
         # Wire export into fetch.py once export rates are actually available.
         # An export tariff can be discovered (e.g. EDF SEG tariffs registered on the
         # meter point) while the standard-unit-rates endpoint returns HTTP 404, so no
@@ -2013,7 +2013,7 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # manual rates_export fallback, zeroing out all export in the plan. Only wire once
         # we have real export rate data.
         if not self.export_wired and self.export_tariff and self.export_rates_available:
-            self.set_arg("metric_octopus_export", self.get_entity_name("sensor", "export_rates"))
+            self.set_arg_unless_user_set("metric_octopus_export", self.get_entity_name("sensor", "export_rates"), rate_sources_below_octopus("export"))
             self.export_wired = True
 
         # Publish account status

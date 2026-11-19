@@ -24,6 +24,10 @@ def make_mock_base():
     base.now_utc = datetime.now(timezone.utc).replace(second=0, microsecond=0)
     # Unconfigured settings fall back to their defaults, as the real get_arg() does
     base.get_arg = MagicMock(side_effect=lambda arg, default=None, **kwargs: default)
+    # No apps.yaml entries by default, as on a real PredBat. set_arg_unless_user_set() reads these, and on a MagicMock
+    # they would read as "the user has set every competing rate source", so the rates would never be wired
+    base.args_from_apps_yaml = {}
+    base.apps_yaml_override_warned = set()
     # No storage component by default — the `storage` property returns None, so cache
     # load/save are no-ops. Tests that exercise caching inject a fake storage explicitly.
     base.components = None
@@ -2769,6 +2773,63 @@ def test_kraken_run_files_report_every_cycle():
     api.report_discovery = filed.append
     assert asyncio.run(api.run(0, True)) is True
     assert len(filed) == 1 and filed[0]["meters"][0]["device_id"] == "kraken:import", filed
+
+
+def _run_wiring(user_args, export=False):
+    """run() once on a fresh api whose apps.yaml holds user_args. Returns (api, names set_arg was called with, log lines)."""
+    api = make_kraken_api()
+    api.base.args_from_apps_yaml = dict(user_args)
+    discovered = {"tariff_code": "E-1R-IMP-01", "product_code": "IMP-01"}
+
+    async def find_tariffs_side_effect():
+        api.current_tariff = discovered
+        if export:
+            api.export_tariff = {"tariff_code": "E-1R-EXPORT-01", "product_code": "EXPORT-01"}
+        return discovered
+
+    api.async_find_tariffs = AsyncMock(side_effect=find_tariffs_side_effect)
+    api.async_discover_smart_devices = AsyncMock()
+    api.async_fetch_rates = AsyncMock(return_value=[{"value_inc_vat": 24.5}])
+    api.async_fetch_standing_charges = AsyncMock(return_value=53.0)
+    api.dashboard_item = MagicMock()
+    api.set_arg = MagicMock()
+    api.update_success_timestamp = MagicMock()
+    assert asyncio.run(api.run(0, True)) is True
+    return api, [c.args[0] for c in api.set_arg.call_args_list if c.args], [str(c.args[0]) for c in api.log.call_args_list if c.args]
+
+
+def test_run_keeps_user_import_rate_source():
+    """A rate source the user set in apps.yaml that ranks below metric_octopus_import is kept, not out-ranked by the Kraken sensor."""
+    for key in ["metric_spot_import", "metric_energidataservice_import", "metric_stromligning_import_today", "metric_stromligning_import_tomorrow"]:
+        api, set_names, logs = _run_wiring({key: "sensor.user_rates"})
+        assert "metric_octopus_import" not in set_names, "{} set: metric_octopus_import must not be wired, got {}".format(key, set_names)
+        assert "metric_standing_charge" not in set_names, "{} set: the standing charge must be left to the user, got {}".format(key, set_names)
+        assert api.wired is True, "{} set: wiring must still be marked done so it is not retried every cycle".format(key)
+        assert any(line.startswith("Info: apps.yaml sets '{}".format(key)) for line in logs), "{} set: expected a note, got {}".format(key, logs)
+
+
+def test_run_keeps_user_export_rate_source():
+    """The same for export: the user's source is kept, import is unaffected, and the export latch is still set."""
+    for key in ["metric_spot_export", "metric_energidataservice_export", "metric_stromligning_export_today", "metric_stromligning_export_tomorrow"]:
+        api, set_names, logs = _run_wiring({key: "sensor.user_rates"}, export=True)
+        assert "metric_octopus_export" not in set_names, "{} set: metric_octopus_export must not be wired, got {}".format(key, set_names)
+        assert "metric_octopus_import" in set_names and "metric_standing_charge" in set_names, "{} set: import should still be wired, got {}".format(key, set_names)
+        assert api.export_wired is True, "{} set: the export latch must still be set".format(key)
+        assert any(line.startswith("Info: apps.yaml sets '{}".format(key)) for line in logs), "{} set: expected a note, got {}".format(key, logs)
+
+
+def test_run_user_import_source_does_not_block_export():
+    """A user import source holds back only the import wiring, not the export wiring."""
+    api, set_names, _ = _run_wiring({"metric_spot_import": "sensor.user_rates"}, export=True)
+    assert "metric_octopus_import" not in set_names and "metric_octopus_export" in set_names, set_names
+    assert api.wired is True and api.export_wired is True
+
+
+def test_run_wires_when_user_set_only_basic_or_octopus_rates():
+    """The user's own rates_import list, or their own metric_octopus_import entry, do not stop Kraken wiring as before."""
+    api, set_names, logs = _run_wiring({"rates_import": [{"rate": 20.0}], "metric_octopus_import": "re:(sensor.octopus_energy_electricity_[0-9a-z]+_current_rate)"})
+    assert "metric_octopus_import" in set_names and "metric_standing_charge" in set_names, set_names
+    assert not [line for line in logs if line.startswith("Info: apps.yaml sets")], logs
 
 
 def run_kraken_tests(my_predbat=None):

@@ -263,6 +263,102 @@ def test_run_all_restores_when_config_restore_raises(my_predbat):
             my_predbat.args["compare_list"] = saved_compare_list
 
 
+def test_compare_rate_sources(my_predbat):
+    """
+    fetch_rates() picks each tariff's import and export rate source in the same order as fetch_sensor_data()
+    (rate_source() over RATE_SOURCES), including metric_spot_import / metric_spot_export, and a tariff that sets one is costed
+    against it - not silently against the live tariff, which is what an unrecognised key used to give (triage bot review of the metric_spot PR).
+
+    The fetchers are stubbed and return no rates, so only which one was called, with what, and whether the side was
+    replaced is checked. A replaced side clears the live saving minutes for it, a side left on the live rates keeps them.
+    """
+    failed = 0
+    print("**** Running compare rate source tests ****")
+    cmp, pb = _make_compare()
+    pb.minutes_now = 0
+    pb.forecast_minutes = 0
+    pb.io_adjusted = {}
+    pb.basic_rates = lambda *args, **kwargs: {}
+    pb.resolve_arg = lambda arg, value, **kwargs: value
+    pb.octopus_strip_withdrawn_feed_rates = lambda rates, **kwargs: rates
+    calls = []
+
+    def make_stub(name):
+        """A fetcher that records its call and returns no rates"""
+
+        def stub(*args, **kwargs):
+            calls.append((name, args))
+            return {}
+
+        return stub
+
+    pb.download_octopus_rates = make_stub("download")
+    pb.fetch_octopus_rates = make_stub("octopus")
+    pb.fetch_spot_rates = make_stub("spot")
+    pb.fetch_energidataservice_rates = make_stub("eds")
+    pb.fetch_stromligning_rates = make_stub("strom")
+    messages = []
+    cmp.log = messages.append
+
+    def run(tariff):
+        """Run fetch_rates() for one tariff from live rates with live saving minutes, return (calls, import replaced, export replaced)"""
+        del calls[:]
+        del messages[:]
+        cmp.live_saving_state = {"import_minutes": {1}, "export_minutes": {2}, "import_pre_saving": {}, "export_pre_saving": {}}
+        cmp.fetch_rates(dict(tariff, id="t"), {}, {}, {})
+        return list(calls), pb.rate_import_saving_minutes == set(), pb.rate_export_saving_minutes == set()
+
+    for direction in ["import", "export"]:
+        sources = [
+            ("rates_{}_octopus_url".format(direction), "download"),
+            ("metric_octopus_{}".format(direction), "octopus"),
+            ("metric_spot_{}".format(direction), "spot"),
+            ("metric_energidataservice_{}".format(direction), "eds"),
+            ("metric_stromligning_{}_tomorrow".format(direction), "strom"),
+        ]
+        for index, (key, name) in enumerate(sources):
+            # Every source from this one down is set: this one must win, alone
+            tariff = {k: "{}-value".format(k) for k, _ in sources[index:]}
+            made, import_replaced, export_replaced = run(tariff)
+            replaced = import_replaced if direction == "import" else export_replaced
+            other_replaced = export_replaced if direction == "import" else import_replaced
+            if [call[0] for call in made] != [name]:
+                print("ERROR compare {}: with {} set expected only {} to be called, got {}".format(direction, [k for k, _ in sources[index:]], name, made))
+                failed += 1
+            elif not replaced or other_replaced:
+                print("ERROR compare {}: {} should replace only the {} side, got import {} export {}".format(direction, name, direction, import_replaced, export_replaced))
+                failed += 1
+
+        # What each source is called with
+        made, _, _ = run({"metric_spot_{}".format(direction): "sensor.spot"})
+        if made != [("spot", ("sensor.spot",))]:
+            print("ERROR compare {}: metric_spot should call fetch_spot_rates with its sensor, got {}".format(direction, made))
+            failed += 1
+        made, _, _ = run({"metric_stromligning_{}_tomorrow".format(direction): "sensor.tomorrow"})
+        if made != [("strom", (None, "sensor.tomorrow"))]:
+            print("ERROR compare {}: Strømligning with only its tomorrow sensor should be called with (None, 'sensor.tomorrow'), got {}".format(direction, made))
+            failed += 1
+
+        # An entity id that does not resolve keeps the live rates, and says so
+        resolve = pb.resolve_arg
+        pb.resolve_arg = lambda *args, **kwargs: None
+        made, import_replaced, export_replaced = run({"metric_spot_{}".format(direction): "sensor.missing"})
+        pb.resolve_arg = resolve
+        if made != [] or import_replaced or export_replaced or not any("bad spot rate entity id" in msg for msg in messages):
+            print("ERROR compare {}: an unresolved metric_spot entity should keep the live rates and warn, got {} {} {} {}".format(direction, made, import_replaced, export_replaced, messages))
+            failed += 1
+
+    # A tariff that sets neither side leaves both on the live rates
+    made, import_replaced, export_replaced = run({})
+    if made != [] or import_replaced or export_replaced:
+        print("ERROR compare: a tariff with no rate keys should keep the live rates, got {} {} {}".format(made, import_replaced, export_replaced))
+        failed += 1
+
+    if not failed:
+        print("PASS compare rate sources: each tariff side uses the first rate source set, metric_spot_* included")
+    return failed
+
+
 def test_compare(my_predbat):
     """Run all compare unit tests."""
     failed = 0
@@ -271,6 +367,7 @@ def test_compare(my_predbat):
     failed += test_plan_state_covered(my_predbat)
     failed += test_run_all_keeps_pending_replan(my_predbat)
     failed += test_run_all_restores_when_config_restore_raises(my_predbat)
+    failed += test_compare_rate_sources(my_predbat)
 
     # ------------------------------------------------------------------
     # T1: apply_hardware_overrides – soc_max override

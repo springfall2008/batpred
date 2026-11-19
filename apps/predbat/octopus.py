@@ -54,6 +54,8 @@ from utils import (
     GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS,
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
     strptime_aware,
+    rate_slot_keys,
+    rate_sources_below_octopus,
 )
 from component_base import ComponentBase, new_http_session
 from billing import BillingReader, billing_slot_key, saving_session_rate
@@ -1709,26 +1711,10 @@ class OctopusAPI(ComponentBase):
         self.set_arg("octopus_saving_session", self.get_entity_name("binary_sensor", "saving_session"))
         self.set_arg("octopus_saving_session_join", self.get_entity_name("select", "saving_session_join"))
         self.set_arg("octopus_free_electricity", self.get_entity_name("sensor", "free_electricity"))
-        # Rate sources that rank below metric_octopus_xxx in fetch_sensor_data(). If the user has set one of
-        # these in apps.yaml they chose it deliberately, so it is kept rather than being silently out-ranked
-        # by the rates discovered from the Octopus account
-        competing_rate_args = {
-            "import": ["metric_spot_import", "metric_energidataservice_import", "metric_stromligning_import_today", "metric_stromligning_import_tomorrow"],
-            "export": ["metric_spot_export", "metric_energidataservice_export", "metric_stromligning_export_today", "metric_stromligning_export_tomorrow"],
-        }
-        raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
-        warned = getattr(self.base, "apps_yaml_override_warned", None)
         for tariff in tariffs:
-            user_rate_args = [arg for arg in competing_rate_args.get(tariff, []) if raw_args.get(arg) is not None]
-            if user_rate_args:
-                octopus_arg = "metric_octopus_{}".format(tariff)
-                warn_key = "competing:" + octopus_arg
-                if warned is not None and warn_key not in warned:
-                    warned.add(warn_key)
-                    self.log("Info: apps.yaml sets '{}: {}' - keeping your apps.yaml setting rather than auto-discovering '{}: {}'".format(user_rate_args[0], raw_args[user_rate_args[0]], octopus_arg, self.get_entity_name("sensor", tariff + "_rates")))
-                continue
-            self.set_arg("metric_octopus_{}".format(tariff), self.get_entity_name("sensor", tariff + "_rates"))
-            if tariff == "import":
+            # A rate source the user chose in apps.yaml that ranks below metric_octopus_xxx is kept, not out-ranked
+            bound = self.set_arg_unless_user_set("metric_octopus_{}".format(tariff), self.get_entity_name("sensor", tariff + "_rates"), rate_sources_below_octopus(tariff))
+            if bound and tariff == "import":
                 self.set_arg("metric_standing_charge", self.get_entity_name("sensor", tariff + "_standing"))
         devices = self.get_intelligent_devices()
         # Also enter this block when the device set has emptied, so the slot args are cleared rather
@@ -5449,24 +5435,7 @@ class Octopus:
                     raw_used = True
 
         if data_all:
-            rate_key = "rate"
-            from_key = "from"
-            to_key = "to"
-            scale = 1.0
-            if rate_key not in data_all[0]:
-                rate_key = "value_inc_vat"
-                from_key = "valid_from"
-                to_key = "valid_to"
-            if from_key not in data_all[0]:
-                from_key = "start"
-                to_key = "end"
-                scale = 100.0
-            if rate_key not in data_all[0]:
-                rate_key = "value"
-            if rate_key not in data_all[0]:
-                rate_key = "price"
-                from_key = "from"
-                to_key = "till"
+            rate_key, from_key, to_key, scale = rate_slot_keys(data_all[0])
             rate_data, io_adjusted = minute_data(data_all, self.forecast_days + 1, self.midnight_utc, rate_key, from_key, backwards=False, to_key=to_key, adjust_key=adjust_key, scale=scale)
             # A fetch without adjust_key has no markers to give, so it must not wipe the ones an earlier
             # import fetch found (#5286)

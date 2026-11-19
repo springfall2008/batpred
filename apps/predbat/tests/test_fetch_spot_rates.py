@@ -12,6 +12,7 @@ from datetime import datetime
 
 from futurerate import FutureRate
 from octopus import OctopusAPI
+from utils import rate_source, rate_sources_below_octopus, rate_slot_keys
 
 
 def _capture_log(my_predbat, func):
@@ -95,6 +96,22 @@ def test_fetch_spot_rates(my_predbat):
         else:
             print("Test 2 passed")
 
+        # Test 2b: start / end / price (a Nord Pool variant) is scaled by 100 - this layout used to read nothing
+        print("*** Test 2b: start/end/price is scaled by 100")
+        my_predbat.ha_interface.dummy_items["sensor.spot_start_end_price"] = {
+            "state": "0.155",
+            "raw_today": [
+                {"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-01T00:15:00+00:00", "price": 0.155},
+                {"start": "2025-01-01T00:15:00+00:00", "end": "2025-01-01T00:30:00+00:00", "price": 0.2},
+            ],
+        }
+        rate_data = my_predbat.fetch_spot_rates("sensor.spot_start_end_price")
+        if abs(rate_data.get(0, -1) - 15.5) > 0.001 or abs(rate_data.get(14, -1) - 15.5) > 0.001 or abs(rate_data.get(15, -1) - 20.0) > 0.001 or 30 in rate_data:
+            print("ERROR: Test 2b expected 15.5 for minutes 0-14 and 20.0 for 15-29 only, got {} / {} / {} / {}".format(rate_data.get(0), rate_data.get(14), rate_data.get(15), rate_data.get(30)))
+            failed = True
+        else:
+            print("Test 2b passed")
+
         # Test 3: rate/from/to and value_inc_vat/valid_from/valid_to are already pence/cents - not scaled
         print("*** Test 3: rate/from/to and value_inc_vat/valid_from/valid_to are not scaled")
         my_predbat.ha_interface.dummy_items["sensor.spot_rate"] = {
@@ -176,7 +193,7 @@ def test_fetch_spot_rates(my_predbat):
         # Test 8: The same sensor gives the same rates through fetch_octopus_rates() - moving to the new name is a pure rename
         print("*** Test 8: fetch_spot_rates() matches fetch_octopus_rates() for the same sensor")
         mismatch = False
-        for entity_id in ["sensor.spot_start_end", "sensor.spot_price", "sensor.spot_rate", "sensor.spot_vat", "sensor.spot_tomorrow"]:
+        for entity_id in ["sensor.spot_start_end", "sensor.spot_start_end_price", "sensor.spot_price", "sensor.spot_rate", "sensor.spot_vat", "sensor.spot_tomorrow"]:
             if my_predbat.fetch_spot_rates(entity_id) != my_predbat.fetch_octopus_rates(entity_id):
                 print("ERROR: Test 8 {} gives different rates through the spot and Octopus paths".format(entity_id))
                 mismatch = True
@@ -278,6 +295,25 @@ def test_fetch_spot_rates(my_predbat):
             failed = True
         else:
             print("Test 13 passed")
+
+        # Test 14: A layout that matches nothing gives a warning naming the keys it found, once - not just a generic error
+        print("*** Test 14: unsupported slot layout is diagnosed")
+        my_predbat.spot_rates_warned = set()
+        my_predbat.ha_interface.dummy_items["sensor.spot_odd_layout"] = {
+            "state": "0.1",
+            "raw_today": [{"start": "2025-01-01T00:00:00+00:00", "end": "2025-01-01T00:30:00+00:00", "cost": 0.1}],
+        }
+        results_and_messages = _capture_log(my_predbat, lambda: [my_predbat.fetch_spot_rates("sensor.spot_odd_layout"), my_predbat.fetch_spot_rates("sensor.spot_odd_layout")])
+        results, messages = results_and_messages
+        layout_warnings = [msg for msg in messages if "do not match a supported layout" in msg]
+        if results != [{}, {}]:
+            print("ERROR: Test 14 expected no rates for an unsupported layout, got {}".format(results))
+            failed = True
+        elif len(layout_warnings) != 1 or "'cost'" not in layout_warnings[0] or "'start'" not in layout_warnings[0] or "sensor.spot_odd_layout" not in layout_warnings[0]:
+            print("ERROR: Test 14 expected one warning naming the sensor and its keys, got {}".format(messages))
+            failed = True
+        else:
+            print("Test 14 passed")
 
     finally:
         my_predbat.forecast_days = old_forecast_days
@@ -412,6 +448,22 @@ def test_octopus_auto_rates(my_predbat):
         else:
             print("Test 6 passed")
 
+        print("*** Test 7: set_arg_unless_user_set() reports whether it bound, and metric_octopus_gas is never held back")
+        set_args, infos = run_case({"metric_spot_import": "sensor.my_spot_import", "metric_spot_export": "sensor.my_spot_export"}, tariffs=("import", "export", "gas"))
+        api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
+        bound_free = api.set_arg_unless_user_set("metric_octopus_gas_probe", "sensor.probe", [])
+        bound_held = api.set_arg_unless_user_set("metric_octopus_import_probe", "sensor.probe", ["metric_spot_import"])
+        my_predbat.args.pop("metric_octopus_gas_probe", None)
+        my_predbat.args.pop("metric_octopus_import_probe", None)
+        if bound_free is not True or bound_held is not False:
+            print("ERROR: Test 7 expected True with nothing to hold it back and False when the user set metric_spot_import, got {} / {}".format(bound_free, bound_held))
+            failed = True
+        elif "metric_octopus_gas" not in my_predbat.args or "metric_octopus_import" in my_predbat.args or "metric_octopus_export" in my_predbat.args:
+            print("ERROR: Test 7 expected gas bound and both rates held back, got {}".format({key: my_predbat.args.get(key) for key in ["metric_octopus_gas", "metric_octopus_import", "metric_octopus_export"]}))
+            failed = True
+        else:
+            print("Test 7 passed")
+
     finally:
         my_predbat.args.clear()
         my_predbat.args.update(old_args)
@@ -431,4 +483,325 @@ def test_octopus_auto_rates(my_predbat):
     else:
         print("**** Some octopus_auto_rates tests FAILED ****")
 
+    return failed
+
+
+def test_rate_sources(my_predbat=None):
+    """
+    The single ordered list of rate sources (RATE_SOURCES) that fetch_sensor_data(), Compare and the components that
+    auto-configure metric_octopus_xxx all use. Pins the documented precedence in one place:
+
+    rates_xxx_octopus_url, metric_octopus_xxx, metric_spot_xxx, metric_energidataservice_xxx, metric_stromligning_xxx_today/_tomorrow
+    """
+    print("**** Running rate_sources tests ****")
+    failed = False
+
+    for direction in ["import", "export"]:
+        order = ["rates_{}_octopus_url".format(direction), "metric_octopus_{}".format(direction), "metric_spot_{}".format(direction), "metric_energidataservice_{}".format(direction), "metric_stromligning_{}_today".format(direction)]
+        keys = order + ["metric_stromligning_{}_tomorrow".format(direction)]
+
+        print("*** {} Test 1: the first source set wins, whatever else is set".format(direction))
+        for index, expected in enumerate(order):
+            args = {key: "sensor.x" for key in keys[index:]}
+            if rate_source(args, direction) != expected:
+                print("ERROR: {} with {} set expected {}, got {}".format(direction, sorted(args), expected, rate_source(args, direction)))
+                failed = True
+
+        print("*** {} Test 2: Strømligning is one source whichever of its two keys is set".format(direction))
+        for key in ["metric_stromligning_{}_today".format(direction), "metric_stromligning_{}_tomorrow".format(direction)]:
+            if rate_source({key: "sensor.x"}, direction) != order[-1]:
+                print("ERROR: {} {} alone expected {}, got {}".format(direction, key, order[-1], rate_source({key: "sensor.x"}, direction)))
+                failed = True
+
+        print("*** {} Test 3: nothing set, or only the basic rates list, selects no source".format(direction))
+        if rate_source({}, direction) is not None or rate_source({"rates_{}".format(direction): [{"rate": 1}]}, direction) is not None:
+            print("ERROR: {} expected no source when nothing but rates_{} is set".format(direction, direction))
+            failed = True
+
+        print("*** {} Test 4: the sources below metric_octopus_{} are exactly the ones ranked after it".format(direction, direction))
+        expected_below = order[2:-1] + ["metric_stromligning_{}_today".format(direction), "metric_stromligning_{}_tomorrow".format(direction)]
+        if rate_sources_below_octopus(direction) != expected_below:
+            print("ERROR: {} expected {} below metric_octopus, got {}".format(direction, expected_below, rate_sources_below_octopus(direction)))
+            failed = True
+
+    print("*** Test 5: gas and unknown directions have no sources")
+    if rate_sources_below_octopus("gas") != [] or rate_source({"metric_octopus_gas": "sensor.x"}, "gas") is not None:
+        print("ERROR: gas must not be affected by the rate source order")
+        failed = True
+
+    print("*** Test 6: a Compare tariff works as well as the args, as both just need 'key in'")
+    if rate_source({"id": "x", "metric_spot_import": "sensor.x"}, "import") != "metric_spot_import":
+        print("ERROR: a Compare tariff with metric_spot_import should select it")
+        failed = True
+
+    print("*** Test 7: slot layouts - the five that work")
+    layouts = [
+        ({"rate": 1, "from": 1, "to": 1}, ("rate", "from", "to", 1.0)),
+        ({"value_inc_vat": 1, "valid_from": 1, "valid_to": 1}, ("value_inc_vat", "valid_from", "valid_to", 1.0)),
+        ({"value": 1, "start": 1, "end": 1}, ("value", "start", "end", 100.0)),
+        ({"price": 1, "from": 1, "till": 1}, ("price", "from", "till", 100.0)),
+        ({"price": 1, "start": 1, "end": 1}, ("price", "start", "end", 100.0)),
+    ]
+    for slot, expected in layouts:
+        if rate_slot_keys(slot) != expected:
+            print("ERROR: slot {} expected {}, got {}".format(sorted(slot), expected, rate_slot_keys(slot)))
+            failed = True
+
+    print("*** Test 8: layouts next to the new one are not changed by it")
+    unchanged = [
+        # Nord Pool from / till / price, even when start / end are present as well
+        ({"price": 1, "from": 1, "till": 1, "start": 1, "end": 1}, ("price", "from", "till", 100.0)),
+        # a price with only one of start / end, or with another layout's time keys, is not read as start / end / price
+        ({"price": 1, "start": 1}, ("price", "from", "till", 100.0)),
+        ({"price": 1, "end": 1}, ("price", "from", "till", 100.0)),
+        ({"price": 1, "valid_from": 1, "valid_to": 1}, ("price", "from", "till", 1.0)),
+    ]
+    for slot, expected in unchanged:
+        if rate_slot_keys(slot) != expected:
+            print("ERROR: slot {} expected {} (unchanged), got {}".format(sorted(slot), expected, rate_slot_keys(slot)))
+            failed = True
+    # start / end / price wins over another layout's leftover key, which used to send it to from / till
+    if rate_slot_keys({"price": 1, "start": 1, "end": 1, "valid_from": 1}) != ("price", "start", "end", 100.0):
+        print("ERROR: price / start / end with a stray valid_from should still be price / start / end, got {}".format(rate_slot_keys({"price": 1, "start": 1, "end": 1, "valid_from": 1})))
+        failed = True
+    if not failed:
+        print("**** All rate_sources tests PASSED ****")
+    else:
+        print("**** Some rate_sources tests FAILED ****")
+    return failed
+
+
+_SOURCE_FETCHERS = {
+    "download_octopus_rates": "download",
+    "fetch_octopus_rates": "octopus",
+    "fetch_spot_rates": "spot",
+    "fetch_energidataservice_rates": "eds",
+    "fetch_stromligning_rates": "strom",
+}
+
+
+def test_fetch_rate_sources(my_predbat):
+    """
+    fetch_import_rates() / fetch_export_rates(): the rate source each one calls, the fallback to the basic rates list,
+    the both-names-set warning and the errors. The fetchers are stubbed so only the selection and wiring is tested, and
+    removing a metric_spot_xxx branch, or changing the order, fails here.
+    """
+    print("**** Running fetch_rate_sources tests ****")
+    failed = False
+
+    old_args = my_predbat.args
+    old_warned = getattr(my_predbat, "spot_rates_warned", set())
+    calls = []
+    statuses = []
+    results = {}
+    seen_kwargs = {}
+
+    def make_stub(name):
+        """A fetcher that records the call and returns whatever results[name] says"""
+
+        def stub(*args, **kwargs):
+            calls.append((name, args))
+            seen_kwargs[name] = kwargs
+            return dict(results.get(name, {}))
+
+        return stub
+
+    for method, name in _SOURCE_FETCHERS.items():
+        setattr(my_predbat, method, make_stub(name))
+    my_predbat.basic_rates = lambda rate_dict, name, *args, **kwargs: (calls.append(("basic", name)), {0: 9.0})[1]
+    my_predbat.record_status = lambda message=None, had_errors=False, **kwargs: statuses.append((message, had_errors))
+
+    def run(direction, args, returns):
+        """Run one fetch with the given apps.yaml args and stub results; return (rates, calls, statuses, log messages)"""
+        my_predbat.args = dict(args)
+        my_predbat.spot_rates_warned = set()
+        results.clear()
+        results.update(returns)
+        del calls[:]
+        del statuses[:]
+        fetch = my_predbat.fetch_import_rates if direction == "import" else my_predbat.fetch_export_rates
+        rates, messages = _capture_log(my_predbat, fetch)
+        return rates, list(calls), list(statuses), messages
+
+    try:
+        for direction in ["import", "export"]:
+            sources = [
+                ("rates_{}_octopus_url".format(direction), "download"),
+                ("metric_octopus_{}".format(direction), "octopus"),
+                ("metric_spot_{}".format(direction), "spot"),
+                ("metric_energidataservice_{}".format(direction), "eds"),
+                ("metric_stromligning_{}_today".format(direction), "strom"),
+            ]
+            everything = {name: {0: float(index + 1)} for index, (_, name) in enumerate(sources)}
+
+            print("*** {} Test 1: each source is used when it is the first one set".format(direction))
+            for index, (key, name) in enumerate(sources):
+                args = {k: "sensor.{}".format(k) for k, _ in sources[index:]}
+                rates, made, _, _ = run(direction, args, everything)
+                if [call[0] for call in made] != [name] or rates != {0: float(index + 1)}:
+                    print("ERROR: {} with {} set expected only {} to be called, got {} and rates {}".format(direction, [k for k, _ in sources[index:]], name, [call[0] for call in made], rates))
+                    failed = True
+
+            print("*** {} Test 2: a source that gives no rates falls back to the basic rates list".format(direction))
+            for key, name in sources:
+                args = {key: "sensor.x", "rates_{}".format(direction): [{"rate": 1}]}
+                rates, made, _, _ = run(direction, args, {})
+                if rates != {0: 9.0} or made[-1] != ("basic", "rates_{}".format(direction)):
+                    print("ERROR: {} {} giving nothing expected the basic rates {}, got {} / {}".format(direction, name, {0: 9.0}, rates, made))
+                    failed = True
+
+            print("*** {} Test 3: no source set uses only the basic rates list".format(direction))
+            rates, made, _, _ = run(direction, {"rates_{}".format(direction): [{"rate": 1}]}, everything)
+            if [call[0] for call in made] != ["basic"] or rates != {0: 9.0}:
+                print("ERROR: {} expected only the basic rates, got {} / {}".format(direction, made, rates))
+                failed = True
+            # Nothing set: import has no basic rates list to read so makes no call, export always builds its basic rates
+            # (an all zero export is valid, e.g. a zero feed-in tariff)
+            rates, made, _, _ = run(direction, {}, everything)
+            if direction == "import" and (rates != {} or made != []):
+                print("ERROR: import with nothing set expected no rates and no fetch, got {} / {}".format(made, rates))
+                failed = True
+            elif direction == "export" and made != [("basic", "rates_export")]:
+                print("ERROR: export with nothing set expected only the basic rates to be built, got {}".format(made))
+                failed = True
+
+            print("*** {} Test 4: Strømligning is used when only its tomorrow sensor is set".format(direction))
+            rates, made, _, _ = run(direction, {"metric_stromligning_{}_tomorrow".format(direction): "sensor.tomorrow"}, everything)
+            if made != [("strom", (None, "sensor.tomorrow"))]:
+                print("ERROR: {} expected Strømligning called with (None, 'sensor.tomorrow'), got {}".format(direction, made))
+                failed = True
+
+            print("*** {} Test 5: both metric_octopus and metric_spot set - Octopus is used and the warning is logged once".format(direction))
+            my_predbat.args = {"metric_octopus_{}".format(direction): "sensor.o", "metric_spot_{}".format(direction): "sensor.s"}
+            my_predbat.spot_rates_warned = set()
+            results.clear()
+            results.update(everything)
+            del calls[:]
+            fetch = my_predbat.fetch_import_rates if direction == "import" else my_predbat.fetch_export_rates
+            _, messages = _capture_log(my_predbat, lambda: [fetch(), fetch(), fetch()])
+            both = [msg for msg in messages if msg.startswith("Warn: Both metric_octopus_{}".format(direction))]
+            if len(both) != 1 or {call[0] for call in calls} != {"octopus"}:
+                print("ERROR: {} expected one warning and only Octopus called, got {} / {}".format(direction, both, calls))
+                failed = True
+
+            print("*** {} Test 6: metric_spot_{} that gives no rates is reported as an error".format(direction, direction))
+            _, _, made_status, messages = run(direction, {"metric_spot_{}".format(direction): "sensor.s"}, {})
+            if not any("metric_spot_{} is not set correctly".format(direction) in msg for msg in messages) or not any(had_errors and "metric_spot_{}".format(direction) in (message or "") for message, had_errors in made_status):
+                print("ERROR: {} expected a log and a status error for a failed metric_spot_{}, got {} / {}".format(direction, direction, messages, made_status))
+                failed = True
+
+        print("*** Test 7: the Octopus fetches name their metric_spot replacement (drives the deprecation warning) and import keeps its adjusted markers")
+        _, made, _, _ = run("import", {"metric_octopus_import": "sensor.o"}, everything)
+        if made != [("octopus", ("sensor.o",))] or seen_kwargs.get("octopus") != {"adjust_key": "is_intelligent_adjusted", "spot_arg": "metric_spot_import"}:
+            print("ERROR: Test 7 unexpected Octopus import call {} {}".format(made, seen_kwargs.get("octopus")))
+            failed = True
+        _, made, _, _ = run("export", {"metric_octopus_export": "sensor.o"}, everything)
+        if made != [("octopus", ("sensor.o",))] or seen_kwargs.get("octopus") != {"spot_arg": "metric_spot_export"}:
+            print("ERROR: Test 7 unexpected Octopus export call {} {}".format(made, seen_kwargs.get("octopus")))
+            failed = True
+    finally:
+        for method in list(_SOURCE_FETCHERS) + ["basic_rates", "record_status"]:
+            my_predbat.__dict__.pop(method, None)
+        my_predbat.args = old_args
+        my_predbat.spot_rates_warned = old_warned
+
+    if not failed:
+        print("**** All fetch_rate_sources tests PASSED ****")
+    else:
+        print("**** Some fetch_rate_sources tests FAILED ****")
+    return failed
+
+
+def test_auto_config_precedence(my_predbat):
+    """
+    End to end, the point of the auto-config guard: with the Octopus component auto-configuring, a rate source the user set
+    in apps.yaml is the one that is fetched - not the auto-discovered Octopus sensor that out-ranks it in fetch_sensor_data().
+
+    Runs the real OctopusAPI.automatic_config() and then the real fetch_import_rates() / fetch_export_rates(), with only the
+    fetchers stubbed. Covers metric_spot, Energi Data Service and Strømligning (either of its two sensors), for import and
+    export, each against a control with nothing set, where the Octopus sensor must still be the one fetched.
+    """
+    print("**** Running auto_config_precedence tests ****")
+    failed = False
+
+    old_args = dict(my_predbat.args)
+    old_raw = getattr(my_predbat, "args_from_apps_yaml", _NOT_SET)
+    old_warned = getattr(my_predbat, "apps_yaml_override_warned", _NOT_SET)
+    old_spot_warned = getattr(my_predbat, "spot_rates_warned", set())
+    calls = []
+
+    def make_stub(name):
+        """A fetcher that records the call and returns some rates"""
+
+        def stub(*args, **kwargs):
+            calls.append(name)
+            return {0: 1.0}
+
+        return stub
+
+    for method, name in _SOURCE_FETCHERS.items():
+        setattr(my_predbat, method, make_stub(name))
+
+    def configure_and_fetch(direction, user_args):
+        """apps.yaml has user_args, the Octopus component auto-configures, then the rates are fetched: return what was called"""
+        for key in _AUTO_ARGS + _COMPETING_ARGS + ["rates_import_octopus_url", "rates_export_octopus_url"]:
+            my_predbat.args.pop(key, None)
+        my_predbat.args.update(user_args)
+        my_predbat.args_from_apps_yaml = dict(user_args)
+        my_predbat.apps_yaml_override_warned = set()
+        my_predbat.spot_rates_warned = set()
+        api = OctopusAPI(my_predbat, key="", account_id="", automatic=True)
+        api.tariffs = {}
+        api.log = lambda *args, **kwargs: None
+        api.automatic_config({"import": {}, "export": {}})
+        del calls[:]
+        if direction == "import":
+            my_predbat.fetch_import_rates()
+        else:
+            my_predbat.fetch_export_rates()
+        return list(calls)
+
+    try:
+        for direction in ["import", "export"]:
+            print("*** {} Test 1: control - with nothing else set the auto-configured Octopus sensor is fetched".format(direction))
+            made = configure_and_fetch(direction, {})
+            if made != ["octopus"]:
+                print("ERROR: {} control expected only the Octopus sensor, got {}".format(direction, made))
+                failed = True
+
+            print("*** {} Test 2: the user's own source is fetched, not the Octopus one".format(direction))
+            cases = [
+                ("metric_spot_{}".format(direction), "spot"),
+                ("metric_energidataservice_{}".format(direction), "eds"),
+                ("metric_stromligning_{}_today".format(direction), "strom"),
+                ("metric_stromligning_{}_tomorrow".format(direction), "strom"),
+            ]
+            for key, expected in cases:
+                made = configure_and_fetch(direction, {key: "sensor.user_rates"})
+                other = "export" if direction == "import" else "import"
+                if made != [expected]:
+                    print("ERROR: {} with {} set expected only {} to be fetched, got {}".format(direction, key, expected, made))
+                    failed = True
+                elif "metric_octopus_{}".format(direction) in my_predbat.args:
+                    print("ERROR: {} with {} set, metric_octopus_{} should not have been auto-configured".format(direction, key, direction))
+                    failed = True
+                elif "metric_octopus_{}".format(other) not in my_predbat.args:
+                    print("ERROR: {} with {} set, the {} side should still be auto-configured".format(direction, key, other))
+                    failed = True
+    finally:
+        for method in _SOURCE_FETCHERS:
+            my_predbat.__dict__.pop(method, None)
+        my_predbat.args.clear()
+        my_predbat.args.update(old_args)
+        for name, old in (("args_from_apps_yaml", old_raw), ("apps_yaml_override_warned", old_warned)):
+            if old is _NOT_SET:
+                my_predbat.__dict__.pop(name, None)
+            else:
+                setattr(my_predbat, name, old)
+        my_predbat.spot_rates_warned = old_spot_warned
+
+    if not failed:
+        print("**** All auto_config_precedence tests PASSED ****")
+    else:
+        print("**** Some auto_config_precedence tests FAILED ****")
     return failed

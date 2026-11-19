@@ -351,6 +351,31 @@ class ComponentBase(ABC):
             return None
         return self.set_arg(arg, value)
 
+    def set_arg_unless_user_set(self, arg, value, other_args):
+        """
+        Like set_arg(), for auto-discovery code binding `arg` when the user may have chosen a different apps.yaml key to
+        supply the same thing from another source. set_arg_auto() only compares a key with itself, so it cannot see that.
+
+        If the user's own apps.yaml sets any of other_args, `arg` is left alone, so the user's choice is not silently
+        out-ranked by the auto-discovered one, and a note is logged once. Otherwise `arg` is bound exactly as set_arg() does.
+
+        :param arg: The apps.yaml key to bind
+        :param value: The auto-discovered value
+        :param other_args: apps.yaml keys that, when the user has set one, mean `arg` must not be bound
+        :return: True if `arg` was bound, False if it was left alone
+        """
+        raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
+        user_args = [other for other in other_args if raw_args.get(other) is not None]
+        if user_args:
+            warned = getattr(self.base, "apps_yaml_override_warned", None)
+            warn_key = "unless_user_set:" + arg
+            if warned is not None and warn_key not in warned:
+                warned.add(warn_key)
+                self.log(f"Info: apps.yaml sets '{user_args[0]}: {raw_args[user_args[0]]}' - keeping your apps.yaml setting rather than auto-discovering '{arg}: {value}'")
+            return False
+        self.set_arg(arg, value)
+        return True
+
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
         Retrieve a configuration argument from the base system.
