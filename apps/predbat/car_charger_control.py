@@ -12,7 +12,7 @@ read only mode or its control switch is turned off. CarChargerControl owns that 
 once; a component supplies only what is specific to its charger.
 """
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from component_base import writes
 from utils import parse_car_plan_windows, in_car_plan_window, strptime_aware
@@ -355,7 +355,21 @@ class CarChargerControl:
         self.dashboard_item(
             entity,
             state="on" if self.charger_control_guest else "off",
-            attributes={"friendly_name": "{} Guest Charging".format(self.charger_control_noun), "icon": "mdi:account-arrow-right"},
+            attributes={
+                "friendly_name": "{} Guest Charging".format(self.charger_control_noun),
+                "icon": "mdi:account-arrow-right",
+                # Guest ON is an intent: it can be published before the release runs. Direct
+                # clients must wait until all held chargers were released and that state saved.
+                "manual_ready": bool(
+                    self.charger_control_loaded
+                    and self.charger_control_guest
+                    and self.charger_control_guest_since is not None
+                    and self.charger_control_released == "Guest charging"
+                    and not self.charger_control_state
+                    and not self.charger_control_save_pending
+                ),
+                "manual_until": (self.charger_control_guest_since + timedelta(hours=GUEST_CHARGING_MAX_HOURS)).isoformat() if self.charger_control_guest and self.charger_control_guest_since else None,
+            },
             app=app,
         )
 
@@ -596,14 +610,14 @@ class CarChargerControl:
             if why:
                 self.charger_control_set_guest(False, why)
         reason = None
-        if self.charger_control_read_only_now():
+        if self.charger_control_guest:
+            reason = "Guest charging"
+        elif self.charger_control_read_only_now():
             reason = "Read only mode"
         elif not self.charger_control_enabled:
             reason = "The {} control switch".format(self.charger_control_noun)
-        elif self.charger_control_guest:
-            reason = "Guest charging"
         if reason:
-            if self.charger_control_released is None:
+            if self.charger_control_released != reason:
                 self.log("Info: {}: releasing the {} because of: {}".format(self.charger_control_log_name, self.charger_control_noun, reason))
                 self.charger_control_released = reason
             # Every cycle while the reason holds, not just the first: a charger that refused, or could not
