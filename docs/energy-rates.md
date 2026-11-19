@@ -300,7 +300,7 @@ If more than one import rate source is configured, Predbat uses the first of the
 Export follows the same order with the `export` names.
 If you configure both `metric_octopus_*` and `metric_spot_*`, the `metric_octopus_*` entry is used and a warning is logged.
 
-If the Predbat Octopus or Kraken (EDF / E.ON) component is set to auto-configure your rates but you have set `metric_spot_*`, `metric_energidataservice_*` or `metric_stromligning_*` yourself in `apps.yaml`, your entry is kept and the rates are not auto-configured for that direction (import or export).
+If the Predbat Octopus or Kraken (EDF / E.ON) component is set to auto-configure your rates but you have set `metric_spot_*`, `metric_energidataservice_*` or `metric_stromligning_*` yourself in `apps.yaml`, your entry is kept and the rates are not auto-configured for that direction (import or export).  Additionally, for import, `metric_standing_charge` is not wired either, so it stays at its default of 0 rather than the supplier's figure.
 
 A full list of available Octopus products is at <https://api.octopus.energy/v1/products/>.
 

@@ -2330,8 +2330,8 @@ There are a number of configuration items in `apps.yaml` for telling Predbat wha
 These are described in detail in [Energy Rates](energy-rates.md) and are listed here just for completeness:
 
 - **plan_interval_minutes** - Sets time duration of the slots used by Predbat for planning
-- **metric_octopus_import** - Import rates from the Octopus Energy integration (also enables Agile future rate prediction)
-- **metric_octopus_export** - Export rates from the Octopus Energy integration (also enables Agile future rate prediction)
+- **metric_octopus_import** - Import rates from the Octopus Energy integration (also enables Agile future rate prediction).  You can still use `raw_today` / `raw_tomorrow` configuration with `metric_octopus_import` but this is deprecated (will provide a warning message in the log file), in preference of using `metric_spot_import` for any other supplier's energy rates.
+- **metric_octopus_export** - Export rates from the Octopus Energy integration (also enables Agile future rate prediction). Similar to `metric_octopus_import`, `raw_today` / `raw_tomorrow` will work with `metric_octopus_export`, but this is deprecated and will log a warning; `metric_spot_export` should be used instead.
 - **metric_octopus_gas** - Gas rates from the Octopus Energy integration
 - **metric_spot_import** - Import rates from any other supplier, a sensor with `raw_today` / `raw_tomorrow` attributes (see [Other Energy Spot Rate sensor integrations](energy-rates.md#other-energy-spot-rate-sensor-integrations))
 - **metric_spot_export** - Export rates from any other supplier, same format as metric_spot_import
