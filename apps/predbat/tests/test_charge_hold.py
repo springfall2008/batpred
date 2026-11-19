@@ -8,16 +8,19 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
-"""Tests that a charge freeze actually holds the battery in the model.
+"""Tests that a charge freeze holds the battery in the model, less any inverter_battery_rate_min leak.
 
-It is easy to read prediction.py and conclude the hold depends on set_reserve_enable, because that is
-what gates reserve_expected at prediction.py:649. It does not. During a freeze the charge limit equals
-the SoC, which trips the discharge-rate branch at prediction.py:812 and zeroes the discharge rate
-outright - so the battery is held whether or not Predbat owns the reserve register.
+It is easy to read run_prediction and conclude the hold depends on set_reserve_enable, because that is
+what gates reserve_expected. It does not. During a freeze the charge limit equals the SoC, which trips
+the discharge-during-charge branch and caps the discharge rate at battery_rate_min - so the battery is
+held whether or not Predbat owns the reserve register. The hold is exact only when battery_rate_min is 0
+(the default); otherwise the battery leaks at that rate, and with reserve control on reserve_expected
+sits battery_rate_min * step below the limit so the leak can happen (GH#6269).
 
 That distinction matters for inverters driven by service hooks rather than a reserve entity, where
-set_reserve_enable is forced off (execute.py:828) but the hardware still holds. These tests pin the
-behaviour so a future change to either branch cannot quietly un-hold those setups.
+set_reserve_enable is forced off (in execute.py, when the inverter has no reserve SoC) but the hardware
+still holds. These tests pin the behaviour so a future change to either branch cannot quietly un-hold
+those setups, or hide the leak again.
 
 Driven directly rather than through simple_scenario, which renders a matplotlib figure on any assertion
 failure and blocks.
