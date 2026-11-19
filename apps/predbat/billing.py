@@ -40,7 +40,9 @@ BILLING_SLOT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 BILLING_LEGS = ("import", "export")
 # A past day is read again each refresh until it is complete, but once it is this many days old one more read settles it:
 # import is published within a day or two but export can lag several days behind it, so a half-hour still missing by then
-# (or a meter that publishes nothing) is not coming
+# (or a meter that publishes nothing) is not coming. A complete day is read again once a day until then too, as its costs
+# can still change: Octopus first prices an Intelligent dispatch's half-hours at the standard rate and reprices them at
+# the dispatch rate a day or so later (#6252)
 BILLING_SETTLE_DAYS = 5
 # The measurements query asks for Europe/London days, and the supplier spreads each London day's standing charge over its half-hours
 BILLING_TZ = ZoneInfo("Europe/London")
@@ -242,10 +244,13 @@ def merge_slots(cache, leg, new_slots, now_utc, tz):
     return merged
 
 
-def days_to_fetch(cache, leg, now_utc, tz, settled=()):
-    """Return the local dates in the window that are not yet complete for leg, leaving out settled ones (YYYY-MM-DD)."""
+def days_to_fetch(cache, leg, now_utc, tz, settled=(), recheck=False):
+    """Return the local dates in the window to read for leg, leaving out settled ones (YYYY-MM-DD).
+
+    Those not yet complete, and with recheck the complete ones as well, whose costs may since have been revised.
+    """
     slots = (cache or {}).get(leg) or {}
-    return [day for day in _window_days(now_utc, tz) if day.isoformat() not in settled and not _day_complete(slots, day, tz)]
+    return [day for day in _window_days(now_utc, tz) if day.isoformat() not in settled and (recheck or not _day_complete(slots, day, tz))]
 
 
 def _complete_until(slots):
@@ -442,6 +447,8 @@ class BillingReader:
         self.mpans = None
         # Per leg, the days (YYYY-MM-DD) read when already BILLING_SETTLE_DAYS old, which are not read again
         self.settled = {leg: [] for leg in BILLING_LEGS}
+        # Per leg, the local date (YYYY-MM-DD) its complete, unsettled days were last read again, so that happens once a day
+        self.rechecked = {leg: None for leg in BILLING_LEGS}
         # Set by the owner from plan_random_delay: hold back the first read and pace the day queries in the background
         self.random_delay = False
         # When the first read after this start may go ahead, picked on the first due() check while random_delay is on
@@ -466,6 +473,8 @@ class BillingReader:
         self.mpans = data.get("mpans")
         settled = data.get("settled") or {}
         self.settled = {leg: list(settled.get(leg) or []) for leg in BILLING_LEGS}
+        rechecked = data.get("rechecked") or {}
+        self.rechecked = {leg: rechecked.get(leg) for leg in BILLING_LEGS}
         fetched_at = data.get("fetched_at")
         if isinstance(fetched_at, str):
             try:
@@ -480,7 +489,7 @@ class BillingReader:
         storage = self.owner.storage
         if not storage:
             return
-        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "settled": self.settled, "credits": self.credits, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
+        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "settled": self.settled, "rechecked": self.rechecked, "credits": self.credits, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
         await storage.save(self.storage_app, self.storage_name, blob, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=BILLING_DAYS * 2))
 
     def running(self):
@@ -537,7 +546,8 @@ class BillingReader:
     async def refresh(self, query_fn, mpans, now_utc, pace_seconds=0):
         """Read every day in the window that is not complete yet, for each configured leg.
 
-        mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
+        The first refresh of each local day also reads the complete days again until they settle, as their
+        costs can be revised after they first arrive; a failed read leaves that to the next refresh. mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
         query_fn(query, context) returns the GraphQL data, or None for a failed read; a failed read
         marks the leg False and leaves what was cached alone. A day read once it is BILLING_SETTLE_DAYS old
         is settled and not read again, however much of it arrived. With pace_seconds, each query after the
@@ -553,7 +563,9 @@ class BillingReader:
             self.owner.log("Billing: meters changed, discarding the billing read for the previous meters")
             self.cache = {}
             self.settled = {leg: [] for leg in BILLING_LEGS}
+            self.rechecked = {leg: None for leg in BILLING_LEGS}
         self.mpans = meters
+        today = now_utc.astimezone(tz).date().isoformat()
         queried = False
         for leg in BILLING_LEGS:
             settled = [name for name in self.settled.get(leg) or [] if name in window]
@@ -564,7 +576,8 @@ class BillingReader:
                 continue
             account_id, mpan = target
             ok = True
-            for day in days_to_fetch(self.cache, leg, now_utc, tz, settled):
+            recheck = self.rechecked.get(leg) != today
+            for day in days_to_fetch(self.cache, leg, now_utc, tz, settled, recheck=recheck):
                 starts = day_slot_starts(day, tz)
                 query = BILLING_MEASUREMENTS_QUERY.format(
                     account_id=account_id,
@@ -588,6 +601,8 @@ class BillingReader:
                         self.owner.log("Warn: Billing: the {} billing for {} on MPAN ...{} is still incomplete after {} days, so it won't be read again".format(leg, day.isoformat(), str(mpan)[-4:], BILLING_SETTLE_DAYS))
             self.settled[leg] = settled
             self.legs[leg] = ok
+            if ok and recheck:
+                self.rechecked[leg] = today
             if not ok:
                 self.owner.log("Warn: Billing: could not read the {} billing for MPAN ...{}, keeping what was already read".format(leg, str(mpan)[-4:]))
         self.cache = merge_slots(self.cache, "import", {}, now_utc, tz)

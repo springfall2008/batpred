@@ -4334,9 +4334,10 @@ class Output:
 
     @staticmethod
     def history_billing_mark(billing):
-        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a credited event or its credit changes, or an Axle event or saving session changes; None without billing."""
+        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a billed half-hour's cost is revised, a credited event or its credit changes, or an Axle event or saving session changes; None without billing."""
         slots = (billing or {}).get("slots") or {}
-        mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] for leg in ("import", "export")]
+        # The cost total catches a half-hour re-priced in place, as Octopus does to an Intelligent dispatch's a day or so later (#6252)
+        mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None), round(sum((slot or {}).get("cost") or 0.0 for slot in (slots.get(leg) or {}).values()), 4)] for leg in ("import", "export")]
         mark.append([[event.get("start"), event.get("credit")] for event in (billing or {}).get("credit_events") or []])
         # Only Axle events over the billed half-hours: a managed price curve adds future ones every few minutes and an old one ages out every
         # half-hour, neither of which changes a billed row
