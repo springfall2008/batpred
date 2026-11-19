@@ -878,6 +878,74 @@ def test_guest_charging_releases_and_resumes():
     assert component.commands[-1] == ("a", "off", 0), component.commands
 
 
+def test_guest_manual_ready_waits_for_release():
+    """Guest intent is not an acknowledgement until held chargers have been released."""
+    component = _guest_component()
+    published = []
+    component.prefix = "predbat"
+    component.dashboard_item = lambda entity, **kwargs: published.append(kwargs)
+    run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_on"))
+    component.charger_control_publish_guest("fake")
+    assert published[-1]["state"] == "on"
+    assert published[-1]["attributes"]["manual_ready"] is False
+    component.refusing.add("a")
+    try:
+        run_async(component.charger_control_tick(_now()))
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("A refused release must remain a failure")
+    component.charger_control_publish_guest("fake")
+    assert published[-1]["attributes"]["manual_ready"] is False
+    component.refusing.clear()
+    run_async(component.charger_control_tick(_now()))
+    component.charger_control_publish_guest("fake")
+    assert published[-1]["attributes"]["manual_ready"] is True
+    assert datetime.datetime.fromisoformat(published[-1]["attributes"]["manual_until"]) == _now() + datetime.timedelta(hours=12)
+    component.charger_control_save_pending = True
+    component.charger_control_publish_guest("fake")
+    assert published[-1]["attributes"]["manual_ready"] is False
+    component.charger_control_save_pending = False
+    run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_off"))
+    component.charger_control_publish_guest("fake")
+    assert published[-1]["attributes"]["manual_ready"] is False
+    assert published[-1]["attributes"]["manual_until"] is None
+
+
+def test_guest_manual_ready_after_an_earlier_release():
+    """A previous read-only or control-switch release cannot leave guest acknowledgement stuck."""
+    for reason in ["Read only mode", "The charger control switch"]:
+        component = _guest_component()
+        published = []
+        component.prefix = "predbat"
+        component.dashboard_item = lambda entity, **kwargs: published.append(kwargs)
+        component.charger_control_released = reason
+        component.charger_control_enabled = False
+        run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_on"))
+        run_async(component.charger_control_tick(_now()))
+        component.charger_control_publish_guest("fake")
+        assert published[-1]["attributes"]["manual_ready"] is True
+
+
+def test_guest_manual_ready_waits_for_storage_restore():
+    """Unknown persisted holds cannot acknowledge manual ownership after a failed storage load."""
+    storage = FakeStorage({("fake", "control_state"): {"enabled": True, "held": {"a": False}}}, fail=True)
+    component = FakeComponent([FakeCharger("a")], storage=storage)
+    component.charger_control_switch_prefix = "fake"
+    published = []
+    component.prefix = "predbat"
+    component.dashboard_item = lambda entity, **kwargs: published.append(kwargs)
+    run_async(component.charger_control_guest_event("switch.predbat_fake_guest_charging", "turn_on"))
+    run_async(component.charger_control_tick(_now()))
+    component.charger_control_publish_guest("fake")
+    assert published[-1]["attributes"]["manual_ready"] is False
+    storage.fail = False
+    run_async(component.charger_control_tick(_now()))
+    component.charger_control_publish_guest("fake")
+    assert component.commands == [("a", "release", False)], component.commands
+    assert published[-1]["attributes"]["manual_ready"] is True
+
+
 def test_guest_charging_ends_when_the_car_is_unplugged():
     """A charger that can tell ends guest charging when a connected car is unplugged - but not
     before the guest has plugged in."""
@@ -1184,6 +1252,9 @@ def run_car_charger_control_tests(my_predbat=None):
     test_unpublished_plan_dispatch_charge_stops_when_the_dispatch_ends()
     test_plan_that_goes_missing_keeps_its_last_windows()
     test_guest_charging_releases_and_resumes()
+    test_guest_manual_ready_waits_for_release()
+    test_guest_manual_ready_after_an_earlier_release()
+    test_guest_manual_ready_waits_for_storage_restore()
     test_guest_charging_ends_when_the_car_is_unplugged()
     test_guest_charging_survives_the_owner_unplugging()
     test_guest_charging_times_out()
