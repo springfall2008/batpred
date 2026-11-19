@@ -1836,7 +1836,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         charge in pence. Each carries the metric_octopus_* binding run() makes for it, under the same
         condition as the set_arg (export rates only once they are actually available) but regardless
         of the one-shot wired latches, since the record describes the account, not whether wiring
-        already happened. No tariff flags: Kraken exposes nothing to derive them from.
+        already happened - except that a rate source the user chose in apps.yaml ranking below metric_octopus_*
+        is kept by run(), so then the rate bindings (and for import the standing charge) are not claimed.
+        No tariff flags: Kraken exposes nothing to derive them from.
 
         cars: one record per LIVE SmartFlex EV (every entry in intelligent_devices), bound to the
         intelligent_dispatch slot sensor _publish_dispatch_sensors() wires octopus_intelligent_slot to.
@@ -1848,8 +1850,8 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         from cached sessions before any fetch, and a transient server error does not undo) or the last
         Flextras fetch succeeded. Never bound and never fetched successfully, or an E.ON account, gives none.
 
-        Every binding is filtered to entities Home Assistant has seen. Kraken has no automatic flag -
-        every set_arg it makes is unconditional - so "automatic" is always True. Identifiers are
+        Every binding is filtered to entities Home Assistant has seen. Kraken has no automatic flag, so
+        "automatic" is always True; a binding the user has overridden in apps.yaml is simply not listed. Identifiers are
         published readable; credentials (API key, login email, password, tokens) and the account
         address are never read.
 
@@ -1863,12 +1865,22 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return {setting: {"entity_id": self.get_entity_name(domain, suffix), "domain": domain, "access": "r"}}
 
         import_mpan = self.import_mpan or self.configured_mpan
-        import_meter = self._discovery_meter("import", self.current_tariff, import_mpan, self.account_id, {**sensor("metric_octopus_import", "import_rates"), **sensor("metric_standing_charge", "import_standing")})
+        # run() keeps a lower-ranked rate source the user chose in apps.yaml and binds neither the rates nor the standing charge, so they are not described as bound
+        import_wired = not self.user_set_arg(rate_sources_below_octopus("import"))
+        import_meter = self._discovery_meter("import", self.current_tariff, import_mpan, self.account_id, {**sensor("metric_octopus_import", "import_rates"), **sensor("metric_standing_charge", "import_standing")} if import_wired else {})
         if self.import_standing_charge is not None:
             import_meter["ratings"] = {"standing_charge_p": round(self.import_standing_charge * 100, 4)}
         meters = [import_meter]
         if self.export_tariff:
-            meters.append(self._discovery_meter("export", self.export_tariff, self.export_mpan, self.export_account_id or self.account_id, sensor("metric_octopus_export", "export_rates") if self.export_rates_available else {}))
+            meters.append(
+                self._discovery_meter(
+                    "export",
+                    self.export_tariff,
+                    self.export_mpan,
+                    self.export_account_id or self.account_id,
+                    sensor("metric_octopus_export", "export_rates") if self.export_rates_available and not self.user_set_arg(rate_sources_below_octopus("export")) else {},
+                )
+            )
 
         cars = []
         for device_id, device in self.intelligent_devices.items():

@@ -351,6 +351,19 @@ class ComponentBase(ABC):
             return None
         return self.set_arg(arg, value)
 
+    def user_set_arg(self, other_args):
+        """
+        Return the first of other_args the user's own apps.yaml sets, or None.
+
+        Read-only: it binds and logs nothing. It is the check set_arg_unless_user_set() applies, exposed so a component can
+        describe what it would bind (for discovery) with exactly the same test, rather than repeating it.
+        """
+        raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
+        for other in other_args:
+            if raw_args.get(other) is not None:
+                return other
+        return None
+
     def set_arg_unless_user_set(self, arg, value, other_args):
         """
         Like set_arg(), for auto-discovery code binding `arg` when the user may have chosen a different apps.yaml key to
@@ -364,14 +377,14 @@ class ComponentBase(ABC):
         :param other_args: apps.yaml keys that, when the user has set one, mean `arg` must not be bound
         :return: True if `arg` was bound, False if it was left alone
         """
-        raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
-        user_args = [other for other in other_args if raw_args.get(other) is not None]
-        if user_args:
+        user_arg = self.user_set_arg(other_args)
+        if user_arg:
+            raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
             warned = getattr(self.base, "apps_yaml_override_warned", None)
             warn_key = "unless_user_set:" + arg
             if warned is not None and warn_key not in warned:
                 warned.add(warn_key)
-                self.log(f"Info: apps.yaml sets '{user_args[0]}: {raw_args[user_args[0]]}' - keeping your apps.yaml setting rather than auto-discovering '{arg}: {value}'")
+                self.log(f"Info: apps.yaml sets '{user_arg}: {raw_args[user_arg]}' - keeping your apps.yaml setting rather than auto-discovering '{arg}: {value}'")
             return False
         self.set_arg(arg, value)
         return True

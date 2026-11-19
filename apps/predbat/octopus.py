@@ -5432,7 +5432,6 @@ class Octopus:
                 data_import = self.get_state_wrapper(entity_id=current_rate_id, attribute="raw_tomorrow")
                 if data_import:
                     data_all += data_import
-                    raw_used = True
 
         if data_all:
             rate_key, from_key, to_key, scale = rate_slot_keys(data_all[0])

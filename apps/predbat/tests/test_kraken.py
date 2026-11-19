@@ -2665,6 +2665,35 @@ def test_kraken_discovery_export_meter_uses_export_account():
     assert "entities" not in meter, "an export tariff with no rates is never wired, so its binding is not claimed"
 
 
+def test_kraken_discovery_omits_bindings_for_user_set_rate_source():
+    """A lower-ranked rate source in apps.yaml is kept by run(), so discovery must not claim the Kraken rate or standing charge bindings."""
+    api = _discovery_kraken()
+    api.base.args_from_apps_yaml = {"metric_spot_import": "sensor.nordpool_raw"}
+    meters = {record["direction"]: record for record in api.build_discovery()["meters"]}
+    assert "entities" not in meters["import"], "import rate and standing charge are not bound, so not claimed"
+    assert meters["import"]["ratings"] == {"standing_charge_p": 53.21}, "the tariff's own standing charge is still reported"
+    assert "metric_octopus_export" in meters["export"]["entities"], "an import source does not block export"
+
+    api.base.args_from_apps_yaml = {"metric_spot_export": "sensor.nordpool_raw"}
+    meters = {record["direction"]: record for record in api.build_discovery()["meters"]}
+    assert "metric_octopus_import" in meters["import"]["entities"] and "metric_standing_charge" in meters["import"]["entities"], meters
+    assert "entities" not in meters["export"], "export rate is not bound"
+
+    api.base.args_from_apps_yaml = {"metric_octopus_import": "sensor.mine"}
+    meters = {record["direction"]: record for record in api.build_discovery()["meters"]}
+    assert "metric_octopus_import" in meters["import"]["entities"], "a same-rank or higher source does not stop Kraken wiring"
+
+
+def test_user_set_arg_is_read_only():
+    """user_set_arg() reports the first user-set key and binds and logs nothing."""
+    api = make_kraken_api()
+    api.base.args_from_apps_yaml = {"metric_spot_import": "sensor.x"}
+    assert api.user_set_arg(["metric_energidataservice_import", "metric_spot_import"]) == "metric_spot_import"
+    assert api.user_set_arg(["metric_energidataservice_import"]) is None
+    assert not api.base.set_arg.called, "must not bind"
+    assert not api.base.apps_yaml_override_warned, "must not record a warning"
+
+
 def test_kraken_discovery_cars():
     """Each LIVE SmartFlex car is a cars record bound to the dispatch slot sensor _publish_dispatch_sensors() publishes."""
     car = _discovery_kraken().build_discovery()["cars"][0]

@@ -289,9 +289,21 @@ def test_fetch_spot_rates(my_predbat):
         _, messages_real = _capture_log(my_predbat, lambda: my_predbat.fetch_octopus_rates("sensor.octopus_real", spot_arg="metric_spot_import"))
         _, messages_prices = _capture_log(my_predbat, lambda: my_predbat.fetch_octopus_rates("sensor.frank_like", spot_arg="metric_spot_import"))
         _, messages_no_arg = _capture_log(my_predbat, lambda: my_predbat.fetch_octopus_rates("sensor.spot_start_end"))
+        my_predbat.ha_interface.dummy_items["sensor.prices_plus_tomorrow"] = {
+            "state": "0.1",
+            "prices": [{"price": 0.1, "from": "2025-01-01T00:00:00+00:00", "till": "2025-01-01T00:30:00+00:00"}],
+            "raw_tomorrow": [{"start": "2025-01-02T00:00:00+00:00", "end": "2025-01-02T00:30:00+00:00", "value": 0.2}],
+        }
+        my_predbat.ha_interface.dummy_items["sensor.rates_plus_tomorrow"] = {
+            "state": "15.5",
+            "rates": [{"value_inc_vat": 15.5, "valid_from": "2025-01-01T00:00:00+00:00", "valid_to": "2025-01-01T00:30:00+00:00"}],
+            "raw_tomorrow": [{"start": "2025-01-02T00:00:00+00:00", "end": "2025-01-02T00:30:00+00:00", "value": 0.2}],
+        }
+        _, messages_prices_tomorrow = _capture_log(my_predbat, lambda: my_predbat.fetch_octopus_rates("sensor.prices_plus_tomorrow", spot_arg="metric_spot_import"))
+        _, messages_rates_tomorrow = _capture_log(my_predbat, lambda: my_predbat.fetch_octopus_rates("sensor.rates_plus_tomorrow", spot_arg="metric_spot_import"))
         _, messages_missing = _capture_log(my_predbat, lambda: my_predbat.fetch_octopus_rates("sensor.spot_nonexistent", spot_arg="metric_spot_import"))
-        if any("metric_spot" in msg for msg in messages_real + messages_prices + messages_no_arg + messages_missing):
-            print("ERROR: Test 13 unexpected deprecation warning: {}".format(messages_real + messages_prices + messages_no_arg + messages_missing))
+        if any("metric_spot" in msg for msg in messages_real + messages_prices + messages_no_arg + messages_missing + messages_prices_tomorrow + messages_rates_tomorrow):
+            print("ERROR: Test 13 unexpected deprecation warning: {}".format(messages_real + messages_prices + messages_no_arg + messages_missing + messages_prices_tomorrow + messages_rates_tomorrow))
             failed = True
         else:
             print("Test 13 passed")
