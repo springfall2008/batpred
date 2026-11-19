@@ -676,6 +676,7 @@ sigen
 sigencloud
 sigenergy
 sigenstor
+sizeof
 skynet
 Slee
 slugified
