@@ -92,6 +92,8 @@ pred_bat:
   # Optional: coldest cell temperature, if your BMS exposes it, plus a charge curve (C rate per °C)
   #battery_temperature:
   #  - sensor.battery_minimum_cell_temperature
+  #battery_temperature_history:
+  #  - sensor.battery_minimum_cell_temperature
   #battery_temperature_charge_curve:
   #  20: 0.50
   #  10: 0.30
