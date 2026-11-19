@@ -222,9 +222,10 @@ def test_days_to_fetch_recheck():
     now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
     cache = {"import": _slots_for_day(date(2026, 10, 31))}
     cache["import"].update(_slots_for_day(date(2026, 10, 27)))
-    days = days_to_fetch(cache, "import", now_utc, LONDON, settled=("2026-10-27",), recheck=True)
-    if date(2026, 10, 31) not in days or date(2026, 10, 27) in days or date(2026, 11, 2) not in days:
-        print("ERROR: a recheck should ask for complete 31 Oct but not settled 27 Oct, got {}".format(days))
+    cache["import"].update(_slots_for_day(date(2026, 10, 30)))
+    days = days_to_fetch(cache, "import", now_utc, LONDON, settled=("2026-10-27",), rechecked={"2026-10-30": "2026-11-02", "2026-10-31": "2026-11-01"})
+    if date(2026, 10, 31) not in days or date(2026, 10, 30) in days or date(2026, 10, 27) in days or date(2026, 11, 2) not in days:
+        print("ERROR: should ask for complete 31 Oct (last read yesterday) but not 30 Oct (read today) or settled 27 Oct, got {}".format(days))
         return True
     return False
 
@@ -374,7 +375,7 @@ def test_reader_fetches_only_incomplete_days():
     owner = _Owner(_FakeStorage())
     reader = BillingReader(owner, "octopus_user", "billing")
     reader.cache = {"import": _slots_for_day(date(2026, 10, 31))}
-    reader.rechecked = {"import": "2026-11-02", "export": None}
+    reader.rechecked = {"import": {"2026-10-31": "2026-11-02"}, "export": {}}
     queries = []
 
     async def query_fn(query, context):
@@ -1113,8 +1114,8 @@ def test_reader_settles_old_days():
 
 
 def test_reader_rechecks_complete_days():
-    """A complete day is read again on the first refresh of each local day until it settles, so a half-hour Octopus re-prices
-    after it first arrived (an Intelligent dispatch billed at the standard rate, then at the dispatch rate, #6252) is corrected."""
+    """A complete day is read again once a local day until it settles, so a half-hour Octopus re-prices after it first
+    arrived (an Intelligent dispatch billed at the standard rate, then at the dispatch rate, #6252) is corrected."""
     import asyncio
     from billing import BillingReader
 
@@ -1124,61 +1125,71 @@ def test_reader_rechecks_complete_days():
     monday = date(2026, 11, 16)
     # Monday was read complete, its half-hours at the standard rate; Octopus now has them at the dispatch rate
     reader.cache = {"import": _slots_for_day(monday, kwh=1.0, cost=35.61)}
-    repriced = {"cost": 6.6}
+    state = {"cost": 6.6, "fail": None, "now": None}
     asked = []
-    fail = {"on": False}
 
     async def query_fn(query, context):
-        """Answer every day with a full day of billing at the current price, or fail when told to."""
-        if fail["on"]:
-            return None
+        """Answer with the day's billing up to now at the current price, or fail for the day told to."""
         day = _query_day(query)
         asked.append(day)
-        return _day_response(day, kwh=1.0, cost=repriced["cost"] if day == monday else 10.0)
+        if day == state["fail"]:
+            return None
+        response = _day_response(day, kwh=1.0, cost=state["cost"] if day == monday else 10.0)
+        edges = response["account"]["properties"][0]["measurements"]["edges"]
+        edges[:] = [edge for edge in edges if datetime.fromisoformat(edge["node"]["startAt"]) + timedelta(minutes=30) <= state["now"]]
+        return response
+
+    def refresh(which, when):
+        """Refresh which reader at when, with the fake's clock set to it."""
+        state["now"] = when
+        asked.clear()
+        return asyncio.run(which.refresh(query_fn, mpans, when))
 
     def monday_cost(which):
         """Monday's billed import cost in which reader's cache."""
-        return sum(slot["cost"] for key, slot in which.cache["import"].items() if key in {start.strftime("%Y-%m-%dT%H:%M:%SZ") for start in day_slot_starts(monday, LONDON)})
+        keys = {start.strftime("%Y-%m-%dT%H:%M:%SZ") for start in day_slot_starts(monday, LONDON)}
+        return sum(slot["cost"] for key, slot in which.cache["import"].items() if key in keys)
 
     tuesday = datetime(2026, 11, 17, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
-    asyncio.run(reader.refresh(query_fn, mpans, tuesday))
-    if monday not in asked or not _close(monday_cost(reader), 48 * 6.6) or reader.rechecked["import"] != "2026-11-17":
-        print("ERROR: the first refresh of the day should read complete Monday again and take its re-priced cost, asked {} cost {} rechecked {}".format(asked, monday_cost(reader), reader.rechecked))
+    refresh(reader, tuesday)
+    if monday not in asked or not _close(monday_cost(reader), 48 * 6.6) or reader.rechecked["import"].get("2026-11-16") != "2026-11-17":
+        print("ERROR: the day's first refresh should read complete Monday again and take its re-priced cost, asked {} cost {} rechecked {}".format(asked, monday_cost(reader), reader.rechecked))
         return True
 
-    # Later the same day only incomplete days are read - none here, as the fake answers every day in full
-    asked.clear()
-    repriced["cost"] = 7.0
-    asyncio.run(reader.refresh(query_fn, mpans, tuesday + timedelta(hours=3)))
-    if asked:
-        print("ERROR: a later refresh the same day should not read complete days again, asked {}".format(asked))
+    # Later the same day today, still incomplete, is read but complete Monday is not; nothing changed, so no change is reported
+    state["cost"] = 7.0
+    changed = refresh(reader, tuesday + timedelta(hours=3))
+    if asked != [date(2026, 11, 17)] or changed is not True:
+        print("ERROR: a later refresh the same day should read only incomplete today (whose new half-hours are a change), asked {} changed {}".format(asked, changed))
+        return True
+    changed = refresh(reader, tuesday + timedelta(hours=3))
+    if changed is not False:
+        print("ERROR: a refresh that read nothing new should report no change, got {}".format(changed))
         return True
 
-    # A failed read leaves the recheck to the next refresh
-    fail["on"] = True
+    # A failed re-read of complete Monday doesn't stop the newer days, keeps Monday as cached, and is tried again next refresh
+    state["fail"] = monday
     wednesday = datetime(2026, 11, 18, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
-    asyncio.run(reader.refresh(query_fn, mpans, wednesday))
-    if reader.rechecked["import"] != "2026-11-17":
-        print("ERROR: a failed read should not count as the day's recheck, got {}".format(reader.rechecked))
+    refresh(reader, wednesday)
+    if date(2026, 11, 18) not in asked or reader.legs["import"] is not True or reader.rechecked["import"].get("2026-11-16") != "2026-11-17" or not _close(monday_cost(reader), 48 * 6.6):
+        print("ERROR: a failed Monday re-read should leave Monday as cached and still read today, asked {} legs {} rechecked {}".format(asked, reader.legs, reader.rechecked))
         return True
 
-    # The recheck date survives a restart, and the next day's first refresh reads Monday again
-    fail["on"] = False
+    # The recheck dates survive a restart, and the next refresh reads Monday again
+    state["fail"] = None
     restarted = BillingReader(_Owner(storage), "octopus_user", "billing")
     asyncio.run(restarted.load())
-    if restarted.rechecked["import"] != "2026-11-17":
-        print("ERROR: the recheck date should be restored after a restart, got {}".format(restarted.rechecked))
+    if restarted.rechecked["import"] != reader.rechecked["import"]:
+        print("ERROR: the recheck dates should be restored after a restart, got {}".format(restarted.rechecked))
         return True
-    asked.clear()
-    asyncio.run(restarted.refresh(query_fn, mpans, wednesday + timedelta(hours=3)))
-    if monday not in asked or not _close(monday_cost(restarted), 48 * 7.0):
-        print("ERROR: Wednesday's first good refresh should read Monday again, asked {} cost {}".format(asked, monday_cost(restarted)))
+    refresh(restarted, wednesday + timedelta(hours=3))
+    if monday not in asked or not _close(monday_cost(restarted), 48 * 7.0) or date(2026, 11, 17) in asked:
+        print("ERROR: the refresh after the failure should read Monday again, but not Tuesday (already read today), asked {} cost {}".format(asked, monday_cost(restarted)))
         return True
 
     # Once Monday has been read at BILLING_SETTLE_DAYS old it is settled and not read again
-    asyncio.run(restarted.refresh(query_fn, mpans, datetime(2026, 11, 21, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)))
-    asked.clear()
-    asyncio.run(restarted.refresh(query_fn, mpans, datetime(2026, 11, 22, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)))
+    refresh(restarted, datetime(2026, 11, 21, 10, 0, tzinfo=LONDON).astimezone(timezone.utc))
+    refresh(restarted, datetime(2026, 11, 22, 10, 0, tzinfo=LONDON).astimezone(timezone.utc))
     if "2026-11-16" not in restarted.settled["import"] or monday in asked:
         print("ERROR: Monday should settle on 21 Nov and not be read on 22 Nov, settled {} asked {}".format(restarted.settled, asked))
         return True
@@ -1845,6 +1856,9 @@ def test_history_billing_mark():
     # A half-hour re-priced in place, same keys, changes the mark too (#6252)
     if Output.history_billing_mark(_billing_attrs({_key(480): _slot(1.0, 6.6), _key(510): _slot(1.0, 30.0)})) == plain:
         print("ERROR: a re-priced half-hour should change the mark")
+        return True
+    if Output.history_billing_mark(_billing_attrs({_key(480): _slot(1.2, 30.0), _key(510): _slot(1.0, 30.0)})) == plain:
+        print("ERROR: a half-hour whose kWh is revised at the same cost should change the mark")
         return True
     return False
 
