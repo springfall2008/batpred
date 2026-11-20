@@ -64,6 +64,9 @@ class MockBase:
         self.had_errors = False
         self.components = None
         self.num_cars = 0
+        # As reset() leaves them: no car force-held off by a charger, and none a charger can hold (see car_charger_control.py)
+        self.car_force_hold_until = {}
+        self.car_force_holdable = {}
         # As reset() leaves it: no Axle VPP event is forcing read only
         self.set_read_only_axle = False
         self.currency_symbols = "£p"
