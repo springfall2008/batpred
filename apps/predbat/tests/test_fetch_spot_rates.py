@@ -13,6 +13,7 @@ from datetime import datetime
 from futurerate import FutureRate
 from octopus import OctopusAPI
 from utils import rate_source, rate_sources_below_octopus, rate_slot_keys
+from const import RATE_SOURCES
 
 
 def _capture_log(my_predbat, func):
@@ -702,6 +703,16 @@ def test_fetch_rate_sources(my_predbat):
             if made != [("strom", (None, "sensor.tomorrow"))]:
                 print("ERROR: {} expected Strømligning called with (None, 'sensor.tomorrow'), got {}".format(direction, made))
                 failed = True
+
+            print("*** {} Test 4b: every RATE_SOURCES entry is handled by the fetch".format(direction))
+            groups = RATE_SOURCES[direction]
+            for index, group in enumerate(groups):
+                # This group and every later one is set, so this one must win and be fetched, whatever its fetcher is called
+                args = {key: "sensor.{}".format(key) for later in groups[index:] for key in later}
+                rates, made, _, _ = run(direction, args, everything)
+                if len([call for call in made if call[0] != "basic"]) != 1:
+                    print("ERROR: {} RATE_SOURCES entry {} is not handled by the fetch (expected exactly one source fetched), got {}".format(direction, group, made))
+                    failed = True
 
             print("*** {} Test 5: both metric_octopus and metric_spot set - Octopus is used and the warning is logged once".format(direction))
             my_predbat.args = {"metric_octopus_{}".format(direction): "sensor.o", "metric_spot_{}".format(direction): "sensor.s"}

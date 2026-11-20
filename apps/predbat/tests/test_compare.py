@@ -30,7 +30,7 @@ import tempfile
 from unittest.mock import MagicMock, patch
 
 from compare import Compare, check_compare_list, valid_compare_list, COMPARE_HARDWARE_STATE, COMPARE_PLAN_STATE, COMPARE_RESTORED_STATE, COMPARE_RESTORED_COPIES
-from const import MINUTE_WATT
+from const import MINUTE_WATT, RATE_SOURCES
 
 
 class _FakePredbat:
@@ -347,6 +347,20 @@ def test_compare_rate_sources(my_predbat):
         if made != [] or import_replaced or export_replaced or not any("bad spot rate entity id" in msg for msg in messages):
             print("ERROR compare {}: an unresolved metric_spot entity should keep the live rates and warn, got {} {} {} {}".format(direction, made, import_replaced, export_replaced, messages))
             failed += 1
+
+    # Every source in RATE_SOURCES must be handled by fetch_rates(). Derived from the table rather than hand-listed above, so a source
+    # added there without a branch in Compare fails here: it would otherwise fall through to "Using existing rate data" and the tariff
+    # would be costed against the live rates while labelled as the compared tariff.
+    for direction in ["import", "export"]:
+        groups = RATE_SOURCES[direction]
+        for index, group in enumerate(groups):
+            # This group and every later one is set, so this one must win and be fetched
+            tariff = {key: "sensor.{}".format(key) for later in groups[index:] for key in later}
+            made, import_replaced, export_replaced = run(tariff)
+            replaced = import_replaced if direction == "import" else export_replaced
+            if len(made) != 1 or not replaced:
+                print("ERROR compare {}: RATE_SOURCES entry {} is not handled by fetch_rates() (expected one fetch and the side replaced, got {} / replaced {})".format(direction, group, made, replaced))
+                failed += 1
 
     # A tariff that sets neither side leaves both on the live rates
     made, import_replaced, export_replaced = run({})
