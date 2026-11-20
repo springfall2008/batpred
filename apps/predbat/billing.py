@@ -567,7 +567,8 @@ class BillingReader:
         arrives. mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
         query_fn(query, context) returns the GraphQL data, or None for a failed read. A failed read of an incomplete
         day marks the leg False and leaves what was cached alone; a failed re-read of a complete day keeps its cached
-        figures and leaves it, and the complete days after it, to the next refresh. A day read once it is
+        figures and counts as that day's re-read (settling it if it is old enough), leaving the complete days after it
+        to the next refresh. A day read once it is
         BILLING_SETTLE_DAYS old is settled and not read again, however much of it arrived. With pace_seconds, each
         query after the first waits a random 0 to pace_seconds first. With credits_account set, the account's event
         credits are read too (one query; a failed read keeps the ones already read). Returns True when a half-hour
@@ -616,8 +617,13 @@ class BillingReader:
                 slots = parse_measurements(await query_fn(query, "billing-{}-{}".format(leg, day.isoformat())))
                 if slots is None:
                     if complete:
-                        # What is cached for a complete day stands, so a failed re-read of one doesn't stop the newer days
+                        # What is cached for a complete day stands, so a failed re-read of one doesn't stop the newer days. It counts as
+                        # read today, and settles once old enough, so a day whose query keeps failing is tried once a day rather than
+                        # every refresh, and can't hold back the complete days after it (oldest first) for the rest of the window
                         recheck_failed = day.isoformat()
+                        rechecked[day.isoformat()] = today
+                        if day.isoformat() <= settle_by:
+                            settled.append(day.isoformat())
                         continue
                     ok = False
                     break
@@ -636,7 +642,8 @@ class BillingReader:
                 self.owner.log("Warn: Billing: could not read the {} billing for MPAN ...{}, keeping what was already read".format(leg, str(mpan)[-4:]))
             if recheck_failed:
                 # The leg stays healthy, so say so here or a re-read that keeps failing would leave no trace that revisions stopped landing
-                self.owner.log("Warn: Billing: could not read the {} billing for {} on MPAN ...{} again, keeping what was cached and leaving it and the complete days after it to the next refresh".format(leg, recheck_failed, str(mpan)[-4:]))
+                when = "won't be read again, as it is {} days old".format(BILLING_SETTLE_DAYS) if recheck_failed in settled else "will be tried again tomorrow"
+                self.owner.log("Warn: Billing: could not read the {} billing for {} on MPAN ...{} again, keeping what was cached; it {}, and the complete days after it are left to the next refresh".format(leg, recheck_failed, str(mpan)[-4:], when))
         self.cache = merge_slots(self.cache, "import", {}, now_utc, tz)
         if self.credits_account:
             credits = parse_credits(await query_fn(BILLING_CREDITS_QUERY.format(account_id=self.credits_account), "billing-credits"), now_utc)

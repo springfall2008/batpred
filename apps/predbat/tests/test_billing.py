@@ -1167,15 +1167,15 @@ def test_reader_rechecks_complete_days():
         print("ERROR: a refresh that read nothing new should report no change, got {}".format(changed))
         return True
 
-    # A failed re-read of complete Monday doesn't stop the newer days, keeps Monday as cached, and is tried again next refresh
+    # A failed re-read of complete Monday doesn't stop the newer days, keeps Monday as cached, and counts as today's re-read
     state["fail"] = monday
     wednesday = datetime(2026, 11, 18, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
     refresh(reader, wednesday)
-    if date(2026, 11, 18) not in asked or reader.legs["import"] is not True or reader.rechecked["import"].get("2026-11-16") != "2026-11-17" or not _close(monday_cost(reader), 48 * 6.6):
+    if date(2026, 11, 18) not in asked or reader.legs["import"] is not True or reader.rechecked["import"].get("2026-11-16") != "2026-11-18" or not _close(monday_cost(reader), 48 * 6.6):
         print("ERROR: a failed Monday re-read should leave Monday as cached and still read today, asked {} legs {} rechecked {}".format(asked, reader.legs, reader.rechecked))
         return True
 
-    # The recheck dates survive a restart, and the next refresh reads Monday again
+    # The recheck dates survive a restart, so the next refresh the same day asks for neither Monday nor Tuesday
     state["fail"] = None
     restarted = BillingReader(_Owner(storage), "octopus_user", "billing")
     asyncio.run(restarted.load())
@@ -1183,8 +1183,14 @@ def test_reader_rechecks_complete_days():
         print("ERROR: the recheck dates should be restored after a restart, got {}".format(restarted.rechecked))
         return True
     refresh(restarted, wednesday + timedelta(hours=3))
-    if monday not in asked or not _close(monday_cost(restarted), 48 * 7.0) or date(2026, 11, 17) in asked:
-        print("ERROR: the refresh after the failure should read Monday again, but not Tuesday (already read today), asked {} cost {}".format(asked, monday_cost(restarted)))
+    if monday in asked or date(2026, 11, 17) in asked or not _close(monday_cost(restarted), 48 * 6.6):
+        print("ERROR: the refresh after the failure should leave Monday and Tuesday until tomorrow, asked {} cost {}".format(asked, monday_cost(restarted)))
+        return True
+
+    # The next day Monday is read again and takes the re-price it missed
+    refresh(restarted, datetime(2026, 11, 19, 10, 0, tzinfo=LONDON).astimezone(timezone.utc))
+    if monday not in asked or not _close(monday_cost(restarted), 48 * 7.0):
+        print("ERROR: the day after the failure Monday should be read again, asked {} cost {}".format(asked, monday_cost(restarted)))
         return True
 
     # Once Monday has been read at BILLING_SETTLE_DAYS old it is settled and not read again
@@ -1197,8 +1203,9 @@ def test_reader_rechecks_complete_days():
 
 
 def test_reader_failed_recheck_skips_complete_days():
-    """A failed re-read of a complete day leaves the complete days after it to the next refresh, says so in the log,
-    keeps their cached figures and the leg healthy, and still reads the incomplete days."""
+    """A failed re-read of a complete day keeps its cached figures and the leg healthy, says so in the log, still reads the
+    incomplete days, and leaves the complete days after it to the next refresh. It counts as that day's re-read, so a day
+    whose query keeps failing is tried once a day until it settles and can't hold the newer days back for the rest of the window."""
     import asyncio
     from billing import BillingReader
 
@@ -1206,45 +1213,57 @@ def test_reader_failed_recheck_skips_complete_days():
     reader = BillingReader(owner, "octopus_user", "billing")
     mpans = {"import": ("A-1", "IMP"), "export": None}
     sunday, monday, tuesday = date(2026, 11, 15), date(2026, 11, 16), date(2026, 11, 17)
-    # Sunday and Monday are complete and were last read yesterday, so both are due a re-read today
+    # Sunday and Monday are complete and were last read yesterday, so both are due a re-read today; Sunday's query always fails
     reader.cache = {"import": {**_slots_for_day(sunday, cost=35.61), **_slots_for_day(monday, cost=35.61)}}
     reader.rechecked = {"import": {"2026-11-15": "2026-11-16", "2026-11-16": "2026-11-16"}, "export": {}}
-    state = {"fail": sunday}
     asked = []
 
     async def query_fn(query, context):
-        """Answer every day at 6.6p a half-hour, or fail for the day told to."""
+        """Answer every day at 6.6p a half-hour, but fail every read of Sunday."""
         day = _query_day(query)
         asked.append(day)
-        return None if day == state["fail"] else _day_response(day, cost=6.6)
+        return None if day == sunday else _day_response(day, cost=6.6)
 
     def day_cost(day):
         """The day's billed import cost in the cache."""
         keys = {start.strftime("%Y-%m-%dT%H:%M:%SZ") for start in day_slot_starts(day, LONDON)}
         return sum(slot["cost"] for key, slot in reader.cache["import"].items() if key in keys)
 
-    now_utc = datetime(2026, 11, 17, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
-    asyncio.run(reader.refresh(query_fn, mpans, now_utc))
-    if sunday not in asked or monday in asked or tuesday not in asked:
-        print("ERROR: after Sunday's re-read fails, complete Monday should wait for the next refresh while incomplete today is still read, asked {}".format(asked))
+    def refresh(day, hour):
+        """Refresh at hour o'clock London time on day, returning the days asked for."""
+        asked.clear()
+        asyncio.run(reader.refresh(query_fn, mpans, datetime(2026, 11, day, hour, 0, tzinfo=LONDON).astimezone(timezone.utc)))
+        return list(asked)
+
+    first = refresh(17, 10)
+    if sunday not in first or monday in first or tuesday not in first:
+        print("ERROR: after Sunday's re-read fails, complete Monday should wait for the next refresh while incomplete today is still read, asked {}".format(first))
         return True
     if reader.legs["import"] is not True or not _close(day_cost(monday), 48 * 35.61) or not _close(day_cost(sunday), 48 * 35.61):
         print("ERROR: a failed re-read should keep the leg healthy and the cached figures, legs {} Sunday {} Monday {}".format(reader.legs, day_cost(sunday), day_cost(monday)))
         return True
-    if reader.rechecked["import"].get("2026-11-15") != "2026-11-16" or reader.rechecked["import"].get("2026-11-16") != "2026-11-16":
-        print("ERROR: neither Sunday nor Monday should count as re-read today, got {}".format(reader.rechecked))
+    if reader.rechecked["import"].get("2026-11-15") != "2026-11-17" or reader.rechecked["import"].get("2026-11-16") != "2026-11-16":
+        print("ERROR: the failed Sunday should count as re-read today and the skipped Monday should not, got {}".format(reader.rechecked))
         return True
-    warnings = [line for line in owner.logged if line.startswith("Warn:") and "2026-11-15" in line and "again" in line]
+    warnings = [line for line in owner.logged if line.startswith("Warn:") and "2026-11-15" in line and "tried again tomorrow" in line]
     if len(warnings) != 1 or "could not read the import billing for MPAN" in " ".join(owner.logged):
         print("ERROR: the failed re-read should be logged once, naming the day, and not as a failed leg, got {}".format(owner.logged))
         return True
 
-    # The next refresh reads both of them again and takes the re-priced cost
-    state["fail"] = None
-    asked.clear()
-    asyncio.run(reader.refresh(query_fn, mpans, now_utc + timedelta(hours=3)))
-    if sunday not in asked or monday not in asked or not _close(day_cost(sunday), 48 * 6.6) or not _close(day_cost(monday), 48 * 6.6):
-        print("ERROR: the refresh after the failure should re-read Sunday and Monday, asked {} Sunday {} Monday {}".format(asked, day_cost(sunday), day_cost(monday)))
+    # The next refresh re-reads Monday and takes its re-priced cost, without asking for Sunday again today
+    second = refresh(17, 13)
+    if sunday in second or monday not in second or not _close(day_cost(monday), 48 * 6.6) or not _close(day_cost(sunday), 48 * 35.61):
+        print("ERROR: the refresh after the failure should re-read Monday but not Sunday, asked {} Sunday {} Monday {}".format(second, day_cost(sunday), day_cost(monday)))
+        return True
+
+    # Over the following days Sunday is tried once a day until it settles at 5 days old (20 Nov), and Monday is still re-read each day until it settles
+    for day in (18, 19, 20, 21):
+        asked_today = refresh(day, 10) + refresh(day, 13)
+        if asked_today.count(sunday) != (1 if day <= 20 else 0) or asked_today.count(monday) != 1 or reader.legs["import"] is not True:
+            print("ERROR: on {} Nov Sunday should be asked for {} and Monday once, asked {} legs {}".format(day, 1 if day <= 20 else 0, asked_today, reader.legs))
+            return True
+    if "2026-11-15" not in reader.settled["import"] or not any("2026-11-15" in line and "won't be read again" in line for line in owner.logged):
+        print("ERROR: Sunday should settle on 20 Nov despite its failing reads, settled {}".format(reader.settled))
         return True
     return False
 
