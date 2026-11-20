@@ -316,3 +316,25 @@ MCP_DEFAULT_SECRET = "predbat_mcp_secret"
 
 # Names of the temperature scales, after temperature_scale() has stripped degree marks and case
 TEMPERATURE_SCALES = {"c": "C", "celsius": "C", "f": "F", "fahrenheit": "F", "k": "K", "kelvin": "K"}
+
+# The rate sources fetch_sensor_data() and Compare try, highest priority first: the first group that has a key set in
+# apps.yaml (or in a Compare tariff) is used, and the first key of the group names the source. The basic rates_import /
+# rates_export lists are not here, they are the fallback when no source gives any rates.
+# The Octopus and Kraken components auto-configure metric_octopus_import / metric_octopus_export, so they must leave alone
+# any source ranked below that which the user set, see rate_sources_below_octopus() in utils.py
+RATE_SOURCES = {
+    "import": [
+        ("rates_import_octopus_url",),
+        ("metric_octopus_import",),
+        ("metric_spot_import",),
+        ("metric_energidataservice_import",),
+        ("metric_stromligning_import_today", "metric_stromligning_import_tomorrow"),
+    ],
+    "export": [
+        ("rates_export_octopus_url",),
+        ("metric_octopus_export",),
+        ("metric_spot_export",),
+        ("metric_energidataservice_export",),
+        ("metric_stromligning_export_today", "metric_stromligning_export_tomorrow"),
+    ],
+}

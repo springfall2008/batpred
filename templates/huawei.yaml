@@ -33,11 +33,11 @@ pred_bat:
   # Basic setup
   # ------------------------------------------------------------------
   prefix: predbat
-  timezone: Europe/Stockholm
+  timezone: Europe/London
 
   currency_symbols:
-  - "Kr"
-  - "öre"
+    - '£'
+    - 'p'
 
   threads: auto
   load_filter_threshold: 30
@@ -268,17 +268,63 @@ pred_bat:
   car_charging_soc:
   - sensor.june_battery_level
 
-  # ------------------------------------------------------------------
-  # Energy rates from Nordpool package sensors
-  #
-  # These should expose today + tomorrow prices.
-  # They should NOT be only current price sensors.
-  # ------------------------------------------------------------------
-  metric_octopus_import: sensor.predbat_import_nordpool
-  metric_octopus_export: sensor.predbat_export_nordpool
+  # Set import and export entity to point to the Octopus Energy plugin import and export sensors
+  # automatically matches your meter number assuming you have only one (no need to edit the below)
+  # Will be ignored if you don't have the sensor but will error if you do have one and it's incorrect
+  # Note: To get detailed energy rates you need to go in and manually enable the following events in HA
+  #       event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_current_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+  # and if you have export enable:
+  #       event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+  # Predbat will automatically find the event. entities from the link below to the sensors
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
 
-  # Standing charge disabled for Sweden/Nordpool setup.
-  # metric_standing_charge: 0
+  # Standing charge in pounds, can be set to a sensor or manually entered (e.g. 0.50 is 50p)
+  # The default below will pick up the standing charge from the Octopus Plugin
+  # The standing charge only impacts the cost graphs and doesn't change the way Predbat plans
+  # If you don't want to show the standing charge then just delete this line or set to zero
+  metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+
+  # Or set your actual rates across time for import and export
+  # If start/end is missing it's assumed to be a fixed rate
+  # Gaps are filled with zero rate
+  #rates_import:
+  #  - start: "00:30:00"
+  #    end: "04:30:00"
+  #    rate: 7.5
+  #  - start: "04:30:00"
+  #    end: "00:30:00"
+  #    rate: 40.0
+  #
+  #rates_export:
+  #  - rate: 4.2
+
+  # Can be used instead of the plugin to get import rates directly online
+  # Overrides metric_octopus_import and rates_import
+  # See the 'energy rates' part of the documentation for instructions on how to find the correct URL for your tariff and DNO region
+  #
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates"
+
+  # Overrides metric_octopus_export and rates_export
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-A/standard-unit-rates"
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+
+  # Import rates can be overridden with rate_import_override
+  # Export rates can be overridden with rate_export_override
+  # Use the same format as above, but a date can be included if it just applies for a set day (e.g. Octopus power ups)
+  # This will override even the Octopus plugin rates if enabled
+  #
+  #rates_import_override:
+  #  - date: '2023-09-10'
+  #    start: '14:00:00'
+  #    end: '14:30:00'
+  #    rate: 112
+  #    load_scaling: 0.8
 
   # ------------------------------------------------------------------
   # Load history and forecast horizon

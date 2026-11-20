@@ -573,6 +573,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_max_rate_bad_warned = set()  # car indexes whose cap sensor read as non-numeric text, warned once
         self.car_charging_max_rate_logged = {}  # car index -> the cap last logged, so a change is logged once
         self.car_charging_max_rate_saved = None  # the held caps last written to storage, so a write only happens on a change
+        self.spot_rates_warned = set()  # one-off spot rate warnings already logged, keyed by message type
         self.car_charging_loss = 1.0
         self.export_window = []
         self.export_limits = []

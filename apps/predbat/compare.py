@@ -17,7 +17,7 @@ import os
 import math
 from datetime import datetime
 from const import MINUTE_WATT
-from utils import dp0, dp2
+from utils import dp0, dp2, rate_source
 import yaml
 import copy
 
@@ -220,13 +220,15 @@ class Compare:
         pb.rate_import_pre_saving = dict(live_saving.get("import_pre_saving", {}))
         pb.rate_export_pre_saving = dict(live_saving.get("export_pre_saving", {}))
 
-        # Fetch rates from Octopus Energy API
-        if "rates_import_octopus_url" in tariff:
+        # Fetch rates from Octopus Energy API, the source is picked in the same order as fetch_sensor_data() does
+        import_source = rate_source(tariff, "import")
+        export_source = rate_source(tariff, "export")
+        if import_source == "rates_import_octopus_url":
             # Fixed URL for rate import
             import_url = pb.resolve_arg("rates_import_octopus_url", tariff["rates_import_octopus_url"], indirect=False)
             pb.rate_import = pb.download_octopus_rates(import_url)
             import_replaced = True
-        elif "metric_octopus_import" in tariff:
+        elif import_source == "metric_octopus_import":
             # Octopus import rates
             entity_id = pb.resolve_arg("metric_octopus_import", tariff["metric_octopus_import"], indirect=False)
             if entity_id:
@@ -237,7 +239,15 @@ class Compare:
                 import_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
-        elif "metric_energidataservice_import" in tariff:
+        elif import_source == "metric_spot_import":
+            # Generic spot import rates (raw_today / raw_tomorrow)
+            entity_id = pb.resolve_arg("metric_spot_import", tariff["metric_spot_import"], indirect=False)
+            if entity_id:
+                pb.rate_import = pb.fetch_spot_rates(entity_id)
+                import_replaced = True
+            else:
+                self.log("Warn: Compare tariff {} bad spot rate entity id {}".format(tariff.get("id", ""), entity_id))
+        elif import_source == "metric_energidataservice_import":
             # Energi Data Service import rates
             entity_id = pb.resolve_arg("metric_energidataservice_import", tariff["metric_energidataservice_import"], indirect=False)
             if entity_id:
@@ -245,7 +255,7 @@ class Compare:
                 import_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Energidata entity id {}".format(tariff.get("id", ""), entity_id))
-        elif "metric_stromligning_import_today" in tariff or "metric_stromligning_import_tomorrow" in tariff:
+        elif import_source == "metric_stromligning_import_today":
             # Strømligning import rates
             entity_id_today = pb.resolve_arg("metric_stromligning_import_today", tariff.get("metric_stromligning_import_today"))
             entity_id_tomorrow = pb.resolve_arg("metric_stromligning_import_tomorrow", tariff.get("metric_stromligning_import_tomorrow"))
@@ -262,11 +272,11 @@ class Compare:
         if not import_replaced:
             pb.io_adjusted = copy.deepcopy(io_adjusted_base)
 
-        if "rates_export_octopus_url" in tariff:
+        if export_source == "rates_export_octopus_url":
             # Fixed URL for rate export
             pb.rate_export = pb.download_octopus_rates(pb.resolve_arg("rates_export_octopus_url", tariff["rates_export_octopus_url"], indirect=False))
             export_replaced = True
-        elif "metric_octopus_export" in tariff:
+        elif export_source == "metric_octopus_export":
             # Octopus export rates
             entity_id = pb.resolve_arg("metric_octopus_export", tariff["metric_octopus_export"], indirect=False)
             if entity_id:
@@ -274,7 +284,15 @@ class Compare:
                 export_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Octopus entity id {}".format(tariff.get("id", ""), entity_id))
-        elif "metric_energidataservice_export" in tariff:
+        elif export_source == "metric_spot_export":
+            # Generic spot export rates (raw_today / raw_tomorrow)
+            entity_id = pb.resolve_arg("metric_spot_export", tariff["metric_spot_export"], indirect=False)
+            if entity_id:
+                pb.rate_export = pb.fetch_spot_rates(entity_id)
+                export_replaced = True
+            else:
+                self.log("Warn: Compare tariff {} bad spot rate entity id {}".format(tariff.get("id", ""), entity_id))
+        elif export_source == "metric_energidataservice_export":
             # Energi Data Service export rates
             entity_id = pb.resolve_arg("metric_energidataservice_export", tariff["metric_energidataservice_export"], indirect=False)
             if entity_id:
@@ -282,7 +300,7 @@ class Compare:
                 export_replaced = True
             else:
                 self.log("Warn: Compare tariff {} bad Energidata entity id {}".format(tariff.get("id", ""), entity_id))
-        elif "metric_stromligning_export_today" in tariff or "metric_stromligning_export_tomorrow" in tariff:
+        elif export_source == "metric_stromligning_export_today":
             # Strømligning export rates
             entity_id_today = pb.resolve_arg("metric_stromligning_export_today", tariff.get("metric_stromligning_export_today"))
             entity_id_tomorrow = pb.resolve_arg("metric_stromligning_export_tomorrow", tariff.get("metric_stromligning_export_tomorrow"))

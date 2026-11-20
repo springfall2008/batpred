@@ -33,6 +33,23 @@ If your energy provider prices on the basis of smaller (or larger) intervals the
   plan_interval_minutes: duration
 ```
 
+## Which rate source is used
+
+If more than one import rate source is configured, Predbat uses the first of these (in order) that is set:
+`rates_import_octopus_url`, `metric_octopus_import`, `metric_spot_import`, `metric_energidataservice_import`, `metric_stromligning_import_today`/`_tomorrow`, then `rates_import`.
+Export follows the same order with the `export` names.
+If you configure both `metric_octopus_*` and `metric_spot_*`, the `metric_octopus_*` entry is used and a warning is logged.
+
+`metric_octopus_*` is meant for the Octopus Energy integration or Predbat's Octopus / Kraken components. Supplying `raw_today` / `raw_tomorrow` rates through it still works but is **deprecated**
+(Predbat logs a one-off warning): please move those entries to [`metric_spot_import` / `metric_spot_export`](#other-energy-spot-rate-sensor-integrations).
+
+The Predbat Octopus and Kraken (EDF / E.ON) components auto-configure `metric_octopus_*`. If you have set `metric_spot_*`, `metric_energidataservice_*` or `metric_stromligning_*` yourself in `apps.yaml`,
+your entry is kept and the rates for that direction (import or export) are not auto-configured, and a note is logged once. The other direction is still auto-configured.
+
+A `metric_octopus_*` entry of your own is not treated as a different source, so auto-configuration still replaces it.
+
+The [standing charge](#standing-charge) is not a rate source and is handled separately.
+
 ## Octopus Energy direct
 
 If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information is to connect Predbat directly to Octopus.
@@ -135,18 +152,23 @@ Note: Predbat using the Octopus integration rates relies upon the day rate event
 There have been occasions with some Octopus Integration installations where the event name is as above but the sensor name has a different prefix, e.g. sensor.electricity_METER_NUMBER_current_rate and not sensor.octopus_energy_electricity_METER_NUMBER_current_rate.<BR>
 If this is the case then the sensor must be renamed to the correct format so that Predbat can function correctly.
 
+**Note:** `metric_octopus_import` and `metric_octopus_export` are for sensors from the Octopus Energy integration (or the Predbat Octopus / Kraken component). They are what Predbat uses to detect an Agile tariff and to work out your AgilePredict region automatically.
+
+For any other supplier use [metric_spot_import / metric_spot_export](#other-energy-spot-rate-sensor-integrations) - see [Which rate source is used](#which-rate-source-is-used).
+
 ### Standing charge
 
 Predbat can also (optionally) include the daily standing charge in cost predictions.
 The following configuration item in `apps.yaml` defaults to obtaining the standing charge from the Octopus Energy integration:
 
-- **metric_standing_charge** - Standing charge in pounds. By default points to the Octopus Energy integration sensor sensor.octopus_energy_electricity_METER_NUMBER_current_standing_charge
+- **metric_standing_charge** - Standing charge in major currency unit (pounds, euros, etc). By default points to the Octopus Energy integration sensor sensor.octopus_energy_electricity_METER_NUMBER_current_standing_charge
 
-You can manually change this to a standing charge in pounds, e.g. 0.50 is 50p, or delete this line from `apps.yaml`, or set it to zero
+The Predbat Octopus and Kraken components set `metric_standing_charge` from your supplier's figure whichever rate source you use, including `metric_spot_*`.
+
+This overrides the default `re:(...)` pattern in the `apps.yaml` template. If you set `metric_standing_charge` to a fixed value yourself in `apps.yaml` (a standing charge in major currency unit, or a sensor name), your value is kept.
+
+You can set it to a standing charge in major currency unit, e.g. 0.50 is 50p, or set it to zero
 if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.
-
-Note that this configuration option to suppress the standing charge only applies if you are using the Octopus Integration from Predbat.
-If you are using the Octopus Energy direct method of Predbat directly connecting to Octopus then the standing charge will always be included in the plan and charts.
 
 ### Octopus Saving sessions (Power Down events)
 
@@ -297,8 +319,7 @@ e.g. (for DNO region A)
   rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
 ```
 
-If you configure the rates_import_octopus_url then Predbat will use this instead of metric_octopus or rates_import.
-Similarly, rates_export_octopus_url takes precedence over metric_octopus_export or rates_export.
+If you configure `rates_import_octopus_url` (or `rates_export_octopus_url`) Predbat uses it in preference to every other rate source - see [Which rate source is used](#which-rate-source-is-used).
 
 A full list of available Octopus products is at <https://api.octopus.energy/v1/products/>.
 
@@ -397,19 +418,82 @@ Example configuration in `apps.yaml`:
 
 ## Other Energy Spot Rate sensor integrations
 
-Different spot rate integrations that include forecast prices may be used.
-Because integrations format their attribute data differently, a template sensor is required to convert the attribute data into a new sensor with the correctly formatted attributes: raw_today and raw_tomorrow.
+Predbat can use the spot (and forecast) prices of any energy supplier or country. Different spot rate integrations format their attribute data differently, so a template sensor
+is normally needed to convert them into a sensor with `raw_today` and (optionally) `raw_tomorrow` attributes, which are then configured in `apps.yaml`:
 
 ```yaml
-  metric_octopus_import: 'sensor.current_buy_electricity_price_raw'
-  metric_octopus_export: 'sensor.current_sell_electricity_price_raw'
+  metric_spot_import: 'sensor.current_buy_electricity_price_raw'
+  metric_spot_export: 'sensor.current_sell_electricity_price_raw'
+  metric_standing_charge: 0.50
 ```
+
+- **metric_spot_import** - Import rates, a sensor with `raw_today` / `raw_tomorrow` attributes as described below
+- **metric_spot_export** - Export rates, same format (optional)
+
+These are read independently of the Octopus handling. A `metric_spot_*` sensor is never treated as an Octopus tariff: Agile detection (`futurerate_adjust_auto`) and the automatic AgilePredict region lookup only look at `metric_octopus_*`, so a spot sensor cannot trigger either.
+
+The AgilePredict forecast is designed for Octopus Agile tariffs and should be left off for other suppliers. (It can only be used alongside spot rates if you explicitly turn on `futurerate_agilepredict` and `futurerate_adjust_import` / `futurerate_adjust_export` and set `futurerate_agilepredict_region` yourself).
+
+The separate Nord Pool day-ahead future rate options (`futurerate_url` with `futurerate_adjust_import` / `futurerate_adjust_export`) are independent of the rate settings, and work with whichever import and export rates Predbat has loaded.
+
+!!!
+    `metric_octopus_import` and `metric_octopus_export` also accept sensors in this format, but that is deprecated - see [Which rate source is used](#which-rate-source-is-used).
+    Predbat logs a one-off warning and you should move to using `metric_spot_import` / `metric_spot_export`.
+
+### Sensor data format
+
+`raw_today` is a list with one entry per slot. `raw_tomorrow` is optional and holds the next day's slots, which many suppliers only publish part way through the day.
+The slots must cover the whole period with no overlaps, and must match your [plan interval](#plan-interval): for 15 minute rates add `plan_interval_minutes: 15` to `apps.yaml`.
+Times are ISO 8601 format with a timezone offset, e.g. `2025-01-01T00:00:00+01:00`.
+
+There are different allowable key formats for each slot and Predbat picks the format from the keys of the **first** entry in the `raw_today` / `raw_tomorrow` list:
+
+| Slot keys | Rate unit | What Predbat does |
+| --------- | --------- | ----------------- |
+| `start`, `end`, `value` | currency per kWh (e.g. €/kWh) | multiplies by 100 |
+| `from`, `till`, `price` | currency per kWh | multiplies by 100 |
+| `start`, `end`, `price` | currency per kWh | multiplies by 100 |
+| `from`, `to`, `rate` | pence / cents per kWh | uses the value as is |
+| `valid_from`, `valid_to`, `value_inc_vat` | pence / cents per kWh | uses the value as is |
+
+The first format is recommended for new sensors. **The most common mistake is feeding cents into a `value` or `price` sensor, which then makes every price 100 times too high.**
+Use one format consistently within a sensor, and the same unit for the whole list.
+
+An example of the structure of the attribute, with prices in €/kWh:
+
+```yaml
+raw_today:
+  - start: "2025-01-01T00:00:00+01:00"
+    end: "2025-01-01T00:15:00+01:00"
+    value: 0.1234
+  - start: "2025-01-01T00:15:00+01:00"
+    end: "2025-01-01T00:30:00+01:00"
+    value: 0.1198
+  # ...one entry per slot until the end of the day
+raw_tomorrow:
+  - start: "2025-01-02T00:00:00+01:00"
+    end: "2025-01-02T00:15:00+01:00"
+    value: 0.1105
+  # ...
+```
+
+The sensor itself must be available and have a `raw_today` attribute. A sensor with no `raw_today` data is reported in the Predbat log and its rates are not used.
+Template sensors that carry up to ~200 slots can [exceed Home Assistant's recorder attribute size limit (16 KB), in which case HA warns that the attributes are not stored](faq.md#predbat-is-causing-exceed-maximum-size-warning-messages-in-the-home-assistant-core-log). Predbat reads the live state, so you can exclude these sensors from the recorder.
 
 ### Czech Republic example
 
 Czech republic has moved to 15 minute spot pricing.
 
 To make sure Predbat calculates 15-minute pricing correctly, add `plan_interval_minutes: 15` to `apps.yaml`.
+
+```yaml
+  metric_spot_import: 'sensor.current_buy_electricity_price_raw'
+  metric_spot_export: 'sensor.current_sell_electricity_price_raw'
+  plan_interval_minutes: 15
+```
+
+The template below produces the `start` / `end` / `value` format (prices in CZK/kWh, which Predbat multiplies by 100).
+
 <https://github.com/rnovacek/homeassistant_cz_energy_spot_prices>
 
 ```yaml
@@ -457,7 +541,7 @@ A template sensor can be used to manipulate the rates provided by the integratio
           {% endfor %}
           {{ (price - fee) | round(5) }}
         attributes:
-          prices: >
+          raw_today: >
             {% set src = 'sensor.frank_energie_prices_current_electricity_market_price' %}
             {% set fee = states('input_number.frank_export_fee_eur_per_kwh') | float(0.0115) %}
             {% set arr = state_attr(src, 'prices') or [] %}
@@ -468,6 +552,12 @@ A template sensor can be used to manipulate the rates provided by the integratio
               {% set out.list = out.list + [item] %}
             {% endfor %}
             {{ out.list | tojson }}
+```
+
+Then configure Predbat to use the sensor for export rates (the sensor's `from` / `till` / `price` slots are in €/kWh and are multiplied by 100):
+
+```yaml
+  metric_spot_export: 'sensor.frank_export_price_schedule_eur_kwh'
 ```
 
 ## Rate Bands to manually configure Energy Rates
