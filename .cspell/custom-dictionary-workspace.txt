@@ -786,6 +786,7 @@ tzpath
 tzset
 unasserted
 uncalibrated
+uncancellable
 uncompilable
 unconfigured
 underivable
