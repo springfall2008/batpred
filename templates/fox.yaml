@@ -177,6 +177,9 @@ pred_bat:
     - input_number.battery_min_soc
   battery_temperature:
     - sensor.foxess_battery_temp
+  # Temperature history for the rate grids (Charts -> Curves) and the temperature prediction; without it the grids are learned with no temperature
+  battery_temperature_history:
+    - sensor.foxess_battery_temp
 
   # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
   # If you have a second inverter for PV only please add the two values together

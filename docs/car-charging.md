@@ -636,6 +636,8 @@ Predbat then registers each charger on the account as a car and sets **car_charg
 
 See [Wallbox Charger](components.md#wallbox-charger-wallbox) for the entities it publishes and how Predbat-led charging behaves.
 
+Predbat can also hold a Wallbox off while a car charging slot is cancelled for an export (**car_charging_cancel_for_export**), even when Octopus Intelligent is the one charging the car. A charger run by an OCPP backend is switched off OCPP with `switch.predbat_wallbox_<id>_ocpp` and then paused, and switched back on at the end of the hold; see [Holding a charger off for an export](components.md#holding-a-charger-off-for-an-export-wallbox). Every Wallbox can be held this way.
+
 If you would rather use the Home Assistant Wallbox integration, see [Wallbox Pulsar](devices.md#wallbox-pulsar).
 
 ## Hypervolt car charger direct integration
@@ -1075,6 +1077,214 @@ mode: single
 
 Note: [Multiple cars](car-charging.md#multiple-electric-cars) can be planned with Predbat.
 
+### Cancelling a car slot for an export
+
+Some exports are worth far more than charging the car at the same time, an Octopus saving session being the usual example.
+With **switch.predbat_car_charging_from_battery** Off, Predbat never plans an export over a car charging slot.
+Turn on **switch.predbat_car_charging_cancel_for_export** (default Off) to let the plan export over a car slot instead; the car then does not charge in that slot.
+
+What a cancellation costs:
+
+- The plan values the car energy given up as if it had to be bought back at 1.1 times the highest base import rate in the forecast, which leaves out saving sessions, free sessions, Intelligent dispatches and rate overrides.
+A cancelled 10kWh slot with a 30p peak rate adds 10 x 33p = 330p to the plan's metric. The car no longer buying its 10kWh at the slot rate comes off the cost, so the export has to earn more than the difference.
+With a 7p slot and a 30p peak that is about 26p for each kWh the car gives up, so a saving session wins and a normal export rate does not.
+- Each cancelled slot is charged as if the car had charged at its full **car_charging_rate** for the whole slot, even when it was planned to take less: a 30-minute slot planned at 0.4kWh on a 7.4kW charger is charged as 3.7kWh.
+- The extra 10% and this minimum stop a slot from being cancelled for nothing. Without them, a slot already at the peak rate, or one planned to take very little, cost almost nothing to give up, and the plan could cancel it with an export of almost nothing just to stop the battery holding for the car for the whole slot.
+- Only the energy the car still has room for is counted: cancelling a slot in which a nearly full car would take 1kWh costs 1kWh at the buy-back rate.
+- The charge is part of the plan's metric only. It never shows in the predicted cost.
+- An Intelligent Octopus dispatch that is cancelled outside 23:30-05:30 is costed at the peak rate rather than the dispatch rate, see [Intelligent dispatches cancelled for an export](energy-rates.md#intelligent-dispatches-cancelled-for-an-export).
+
+Which slots can be cancelled:
+
+- Slots of a Predbat-led car, as Predbat's own car plan drives its charger and leaving the slot out is enough.
+- Slots of a car whose charger Predbat can hold off, whoever plans its slots (Octopus Intelligent included). Today that is a Wallbox, see [Holding a charger off for an export](components.md#holding-a-charger-off-for-an-export-wallbox).
+- Any other car keeps its slots, and no export is planned over them.
+- A car that is already charged to its limit is never cancelled, as giving up its slot would cost the plan nothing and any export would do it. A charger already holding it off still holds it until the hold ends.
+- An export that overlaps any part of a slot cancels the whole slot. Only a full export cancels: freeze export and idle windows never do.
+- The optimiser's levels pass and freeze export never cancel a slot; the detailed passes that follow can. Freeze export is never planned over a car slot, as it would hold the battery without cancelling the slot.
+- A slot added because **car_charging_now** reports the car charging with no slot planned is never cancelled, nor is a slot with no energy in it. Only the first 64 cancellable slots in the forecast can be cancelled.
+- The decision is made afresh every time the plan is calculated, so a cancellation that stops being worth it falls away by itself. The exception is a car a charger is already holding off: the hold is kept until the end of its slot, and the plan treats every slot of that car ending by then as cancelled meanwhile.
+A slot that runs on past the hold's end, for example a dispatch Octopus extends during the hold, is judged afresh like any other: the hold carries on into it only if the plan still exports over it, and otherwise ends on time so the car can charge.
+
+What a cancellation looks like:
+
+- **binary_sensor.predbat_car_charging_slot** (and **binary_sensor.predbat_car_charging_slot_1** etc. for further cars) leaves a cancelled slot out of its `planned` attribute and its `kwh` and `cost` totals, and lists it in a `cancelled_for_export` attribute instead, as a `start` and `end` in the same format as `planned`.
+The sensor stays off during a cancelled slot, so a Predbat-led charger does not start, and a charger that can hold the car off reads the attribute to do so.
+- The sensor is also refreshed when new data is fetched, just before the plan is calculated. That refresh only keeps cancellations the plan has already made: a slot whose times have changed since, such as a dispatch Octopus has re-cut or extended, is listed in `planned` until the plan has looked at it again.
+- The plan table shows the slot's car kWh as cancelled, with a "?".
+- Predbat does not hold the house battery for the car during a cancelled slot, as the car is not charging.
+
+## Charging from solar surplus
+
+Predbat plans car charging from energy rates. It will not start your car because the sun came out.
+Two sensors let you do that yourself in a Home Assistant automation, or switch a charger into its own solar mode:
+
+| Entity | Meaning |
+| --- | --- |
+| **predbat.solar_surplus_power** | kW a load could take right now without importing or draining the battery, totalled over all inverters. Nothing about it is car-specific. An immersion heater or any other load you can divert to can use it |
+| **binary_sensor.predbat_force_export_slot** | 'on' when the plan has a force export slot running, so the solar is worth more sold than put in the car |
+
+The surplus is:
+
+```text
+min(max(0, grid_power + car_charging_power - max(0, battery_power)), max(0, pv_power))
+```
+
+**car_charging_power** is added back because a charger inside the CT clamp sits behind the grid meter, so export collapses to zero as soon as the car starts.
+Without the add-back the sensor would drop to nothing the moment you acted on it.
+The add-back only applies when **switch.predbat_car_energy_reported_load** is On.
+With it Off the charger is outside the clamp, the grid reading never saw the car, and adding it would invent a surplus equal to the whole charger draw.
+The **car_charging_power_included** attribute tells you which applies.
+
+Battery discharge is subtracted, so battery power is never reported as solar.
+When cloud arrives mid-charge the sensor falls to the real surplus and your automation turns the car down instead of emptying the battery.
+
+Battery *charging* power is not added back, so a charging battery takes the solar first and the sensor reads what is left.
+On a sunny morning with the battery filling, that is often 0.0.
+The sensor itself is capped at **pv_power**. Nothing can be spare that was never generated.
+With correct sign conventions the arithmetic already comes to PV minus house load, so the cap never clips a real surplus.
+
+To give the car priority over the battery instead, work the figure out again from the attributes.
+Don't add the battery's charging power to the sensor's state: the state has already clamped any grid import to 0, so a battery charging from the grid would be counted as solar.
+That would report a 3kW surplus at night during a 3kW cheap-rate battery charge.
+**battery_power** is negative while charging, so subtracting it gives the battery's charging power to the car, and the PV cap still applies:
+
+```text
+{% set s = 'predbat.solar_surplus_power' %}
+{% set car = state_attr(s, 'car_charging_power') | float(0) if state_attr(s, 'car_charging_power_included') else 0 %}
+{{ [[state_attr(s, 'grid_power') | float(0) + car - state_attr(s, 'battery_power') | float(0), 0] | max,
+    [state_attr(s, 'pv_power') | float(0), 0] | max] | min }}
+```
+
+This comes to PV minus house load, whether the battery is charging or discharging.
+
+The sensor is always published. With no **car_charging_power** configured it is the grid export clamped at zero, and **car_charging_power_configured** is False.
+Set **car_charging_power** in `apps.yaml` to keep the reading up while the car charges. See [configure apps.yaml for your car charging](#configure-appsyaml-for-your-car-charging).
+It must measure the charger at your house. A vehicle-side sensor from the car maker's cloud also reports charging away from home.
+
+Attributes carry the inputs: **grid_power**, **battery_power**, **pv_power**, **car_charging_power**, **car_charging_power_configured** and **car_charging_power_included**.
+To divert to something other than the car, take the car's share back off, but only when it was added.
+While the car is taking the surplus this goes to 0, never below it:
+
+```text
+{{ [states('predbat.solar_surplus_power') | float(0)
+    - (state_attr('predbat.solar_surplus_power', 'car_charging_power') | float(0)
+       if state_attr('predbat.solar_surplus_power', 'car_charging_power_included') else 0), 0] | max }}
+```
+
+### Check these before driving a load from it
+
+A wrong reading here spends money rather than showing a wrong number.
+
+- **Grid sensor sign.** Watch **predbat.grid_power** while importing. It must go negative. If it goes positive, set **grid_power_invert** in `apps.yaml`. See the [FAQ](faq.md). The PV cap bounds the error and forces 0 after dark, but cannot fix the sign in daylight: importing 3kW under 6kW of sun still reads a 3kW surplus.
+- **PV inventory.** The cap is only as high as the PV Predbat can see. An AC-coupled battery inverter reporting no PV, or a GivEnergy Cloud setup with a separate solar inverter, holds the sensor at 0.0 despite real export. **ge_cloud_automatic_split_pv** is off by default and excludes standalone PV. Add the missing inverters or sensors to **pv_power**.
+- **One CT-clamp setting covers every charger.** **switch.predbat_car_energy_reported_load** is a single switch, so one charger inside the clamp and one outside cannot both be described. Set it Off if any charger is outside.
+- **Freshness.** If Predbat stops updating, Home Assistant serves the last value forever and your charger keeps acting on it. Gate the automation on the entity age.
+
+```yaml
+  - condition: template
+    value_template: "{{ (now() - states.predbat.solar_surplus_power.last_updated).total_seconds() < 600 }}"
+```
+
+### Example automation
+
+Start the car when there has been a sustained surplus above 1.4kW (6A at 230V, the minimum most chargers will take) and Predbat is not force exporting, or when Predbat has planned a cheap rate charging slot:
+
+```yaml
+alias: Car charging on solar surplus
+triggers:
+  - trigger: numeric_state
+    entity_id: predbat.solar_surplus_power
+    above: 1.4
+    for: "00:05:00"
+  - trigger: numeric_state
+    entity_id: predbat.solar_surplus_power
+    below: 1.2
+    for: "00:05:00"
+  - trigger: state
+    entity_id: binary_sensor.predbat_car_charging_slot
+    to: "on"
+  - trigger: state
+    entity_id: binary_sensor.predbat_car_charging_slot
+    to: "off"
+  - trigger: state
+    entity_id: binary_sensor.predbat_force_export_slot
+    to: "on"
+  - trigger: state
+    entity_id: binary_sensor.predbat_force_export_slot
+    to: "off"
+actions:
+  - choose:
+      - conditions:
+          - condition: or
+            conditions:
+              # Predbat planned this slot, so charge regardless of the sun
+              - condition: state
+                entity_id: binary_sensor.predbat_car_charging_slot
+                state: "on"
+              - condition: and
+                conditions:
+                  - condition: numeric_state
+                    entity_id: predbat.solar_surplus_power
+                    above: 1.2
+                  - condition: state
+                    entity_id: binary_sensor.predbat_force_export_slot
+                    state: "off"
+        sequence:
+          <commands to turn on your car charger>
+    default:
+      <commands to turn off your car charger>
+mode: single
+```
+
+Every trigger is paired with a `to:` state and every condition reads the entity rather than the trigger that fired.
+A bare `state` trigger fires when a slot *ends* as well as when it starts, and a trigger-id condition would then match and turn the charger on at the end of the cheap slot.
+Triggering on both edges of `force_export_slot` is what lets charging resume when an export slot finishes: a `numeric_state` trigger only fires when the value *crosses* its threshold, so a surplus that sat above 1.4kW throughout the export slot would never re-fire on its own.
+
+The 1.4kW trigger and 1.2kW condition give the charger something to sit in, so passing cloud does not switch it on and off repeatedly.
+Use the `for:` duration to suit how fast your inverter reports - five minutes is a reasonable start.
+
+If your charger can vary its current, set the amps from the surplus rather than switching it on and off.
+Below the 6A minimum there is no current to set, so the charger still has to be turned off, and the export slot still has to be respected:
+
+```yaml
+  - choose:
+      - conditions:
+          - condition: numeric_state
+            entity_id: predbat.solar_surplus_power
+            above: 1.4          # 6A at 230V
+          - condition: state
+            entity_id: binary_sensor.predbat_force_export_slot
+            state: "off"
+        sequence:
+          - action: number.set_value
+            target:
+              entity_id: number.my_charger_current
+            data:
+              value: >
+                {{ [[(states('predbat.solar_surplus_power') | float(0) * 1000 / 230)
+                     | int, 6] | max, 32] | min }}
+    default:
+      <commands to turn off your car charger>
+```
+
+The amps are rounded down, so the charger never draws more than the surplus.
+This assumes a single-phase charger at 230V.
+For a three-phase charger, divide by 690 (3 x 230V) instead of 230, set the minimum to 4.1kW (6A on each phase), and use your charger's own maximum current.
+
+A charger with its own solar mode (Zappi Eco+, Hypervolt Super Eco, Ohme) does not need any of this - use the sensors to switch the charger into and out of that mode, and leave the current modulation to the charger.
+
+### Which sensor to use
+
+Four entities look similar and are easy to mix up:
+
+| Entity | What it tells you |
+| --- | --- |
+| **predbat.solar_surplus_power** | Spare solar *right now*, updated about every minute (`INVERTER_QUICK_UPDATE_SECONDS`), and longer while a plan is being calculated |
+| **binary_sensor.predbat_export_trigger_NAME** | Export *predicted* in the plan for a future slot - see [Triggers in apps.yaml](apps-yaml.md#triggers) |
+| **binary_sensor.predbat_force_export_slot** | A force export slot in the plan is running now, including freeze export slots where only the solar is being sold |
+| **binary_sensor.predbat_exporting** | Predbat is *commanding* the inverter to export at this moment. Off in read-only mode and while exporting is being held, so it is not a reliable way to tell that a slot is running |
+
 ## Additional Car charging configurations
 
 - **switch.predbat_car_charging_from_battery** - When set to On the car can drain the home battery, Predbat will manage the correct level of battery accordingly.
@@ -1085,6 +1295,8 @@ The home battery can still charge from the grid/solar in either case. Only use t
 e.g. you are using Intelligent Octopus or you use the car slots in Predbat to control your car charging.
 
   *Note:* If **switch.predbat_car_energy_reported_load** is set to Off (car outside the CT clamp), this setting has no effect as the battery cannot supply the car directly. Predbat will automatically treat the car as being supplied from the grid/export.
+
+- **switch.predbat_car_charging_cancel_for_export** (default Off) - lets the plan export over a car charging slot, which cancels the slot, when the export is worth more than buying the car's energy back at the peak rate - see [Cancelling a car slot for an export](#cancelling-a-car-slot-for-an-export).
 
 - **input_number.predbat_car_charging_loss** gives the percentage amount of energy lost when charging the car (load in the home vs energy added to the battery).
 A good setting is 0.08 which is 8%.

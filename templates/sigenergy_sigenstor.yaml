@@ -67,6 +67,9 @@ pred_bat:
     - sensor.sigen_plant_rated_energy_capacity
   battery_temperature:
     - sensor.sigen_inverter_battery_average_cell_temperature
+  # Temperature history for the rate grids (Charts -> Curves) and the temperature prediction; without it the grids are learned with no temperature
+  battery_temperature_history:
+    - sensor.sigen_inverter_battery_average_cell_temperature
   battery_min_soc:
     - 0
   reserve:
