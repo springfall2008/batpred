@@ -67,6 +67,8 @@ from prediction_batch import export_end_soc_from_series, prediction_cache_key
 from prediction_kernel import kernel_status_summary, set_window_start
 from predbat_metrics import metrics
 import time
+from math import ceil
+from car_cancel import build_car_cancel_table, cancellable_slots, cancelled_mask, cancelled_windows
 
 # How many windows the post-settle plan pass revisits when calculate_second_pass is off. The near-term
 # windows are the ones about to be executed, so a small budget keeps the common path cheap; raising it
@@ -712,6 +714,61 @@ class Plan:
             return self.minutes_now
         return max(self.minutes_now, int((confirmed - self.midnight_utc).total_seconds() // 60))
 
+    def car_force_held(self, car_n, now):
+        """
+        Whether a charger component is force-holding car_n off at now (car_force_hold_until).
+        """
+        hold_until = self.car_force_hold_until.get(car_n)
+        return hold_until is not None and hold_until > now
+
+    def car_cancel_enabled(self):
+        """Whether a car slot may be cancelled for an export: the switch is on and there are cars."""
+        return bool(self.get_arg("car_charging_cancel_for_export", False)) and self.num_cars > 0
+
+    def car_cancellable_cars(self):
+        """The cars whose slots an export may cancel: those Predbat plans and those a charger can force-hold off."""
+        if not self.car_cancel_enabled():
+            return set()
+        return self.car_planned_by_predbat | set(self.car_force_holdable)
+
+    def car_cancel_slots(self):
+        """The car slots an export may cancel this cycle, see car_cancel.cancellable_slots()."""
+        if not self.car_cancel_enabled():
+            return []
+        held_until = {}
+        for car_n, end in self.car_force_hold_until.items():
+            minute = ceil((end - self.midnight_utc).total_seconds() / 60)
+            if minute > self.minutes_now:
+                held_until[car_n] = minute
+        now_slots = self.car_charging_now_slots
+        now_slot_counts = [len(now_slots[car_n]) if car_n < len(now_slots) else 0 for car_n in range(len(self.car_charging_slots))]
+        # A car already at its limit would give nothing up, so cancelling its slot would cost nothing and any export
+        # would do it: its slots keep the hard block. A hold under way on it still keeps the slots it covers.
+        soc, limit = self.car_charging_soc, self.car_charging_limit
+        cancellable_cars = {car_n for car_n in self.car_cancellable_cars() if not (car_n < len(soc) and car_n < len(limit) and soc[car_n] >= limit[car_n])}
+        return cancellable_slots(self.car_charging_slots_model(), now_slot_counts, cancellable_cars, held_until, self.minutes_now)
+
+    def car_cancelled_for_export_windows(self, after_plan=True):
+        """
+        The (start, end) of each car's slots the plan as it stands cancels for an export, car_n -> list. Always
+        derived fresh from export_window_best and export_limits_best; empty when the switch is off.
+
+        With after_plan False - the publish at fetch, before this cycle's plan - the plan is last cycle's while the
+        slots are rebuilt, so only a forced slot or one the last publish cancelled (car_cancelled_for_export) is
+        kept: a dispatch Octopus has re-cut or extended under last cycle's export has not been judged yet. A slot
+        under way whose start has only walked forward to now, as the car plan and Octopus both trim it, is the
+        same slot.
+        """
+        slots = self.car_cancel_slots()
+        if not slots:
+            return {}
+        mask = cancelled_mask(slots, self.export_window_best, self.export_limits_best)
+        if not after_plan:
+            for j, slot in enumerate(slots):
+                if mask & (1 << j) and not slot.forced and not any(end == slot.end and (start == slot.start or start < slot.start <= self.minutes_now) for start, end in self.car_cancelled_for_export.get(slot.car_n, [])):
+                    mask &= ~(1 << j)
+        return cancelled_windows(slots, mask)
+
     def dynamic_load_car_target(self, car_n, minute, now, record=True):
         """
         Whether car_n's slots should be cancelled at minute and now (both on the exact clock).
@@ -722,6 +779,8 @@ class Plan:
         - Inside a slot, charging: trusted, straight away.
         - Inside a slot, not charging for the grace period (see dynamic_load_car_evidence()): cancelled.
         - Otherwise (still inside the grace period, or no evidence): unchanged, starting from the default.
+        - A car a charger is force-holding off (car_force_held()) is left alone: it is not charging because it
+          was told not to, so the check is paused and its grace clock cleared.
 
         With record True the "not charging since" clock is started and cleared; with record False
         (compare.py runs) it is only read.
@@ -729,6 +788,10 @@ class Plan:
         active = self.dynamic_load_car_active(car_n)
         default_cancelled = active and not self.dynamic_load_car_trusted_by_default(car_n)
         cancelled = self.dynamic_load_car_cancelled.get(car_n, default_cancelled)
+        if self.car_force_held(car_n, now):
+            if record:
+                self.dynamic_load_car_since.pop(car_n, None)
+            return cancelled
         dispatch = self.dynamic_load_car_dispatch(car_n, minute) if active else None
         if dispatch is None:
             if record:
@@ -2385,8 +2448,14 @@ class Plan:
             self.calculate_yesterday()
             self.calculate_history_days()
 
-        # Creation prediction object
-        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90, car_charging_slots=self.car_charging_slots_model())
+        # The car slots an export may cancel this cycle, which the detailed passes' export gate lets through
+        cancel_slots = self.car_cancel_slots()
+        self.car_cancel_keys = frozenset((slot.car_n, slot.index) for slot in cancel_slots)
+
+        # Creation prediction object, with the table that lets its target exports cancel those slots (None with the switch off)
+        car_slots_model = self.car_charging_slots_model()
+        car_cancel = build_car_cancel_table(self, car_slots_model, cancel_slots)
+        self.prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, load_minutes_step, load_minutes_step10, pv_forecast_minute90_step, load_minutes_step90, car_charging_slots=car_slots_model, car_cancel=car_cancel)
         # The kernel spreads one batched fan-out across threads with the GIL released for the whole
         # call, so these are real cores - unlike a Python ThreadPool, which peaked at 1.15x on two
         # threads and then degraded below serial (perf/threadpool-prototype).
@@ -2672,6 +2741,9 @@ class Plan:
             if publish:
                 self.publish_charge_limit(self.charge_limit_best, self.charge_window_best, best=True, soc=self.predict_soc_best)
                 self.publish_export_limit(self.export_window_best, self.export_limits_best, best=True)
+                # Only when cancelling for export is on: the slots it cancels have just changed, and the fetch-time publish covers the rest
+                if self.car_cancel_enabled():
+                    self.publish_car_plan(after_plan=True)
 
                 # Compute marginal energy cost matrix (what-if extra load scenarios)
                 self.calculate_marginal_costs()
@@ -4313,8 +4385,12 @@ class Plan:
                 if not self.allow_this_export_window(window_n):
                     continue
 
-                snapshot = self.plan_window_snapshot(typ, window_n)
                 window = self.export_window_best[window_n]
+                no_freeze = self.export_freeze_over_car(window.get("start_orig", window["start"]), window["end"])
+                if no_freeze and self.set_export_freeze_only:
+                    continue
+
+                snapshot = self.plan_window_snapshot(typ, window_n)
                 baseline_penalty = self.export_threshold_penalty(self.export_limits_best[window_n], window["start"], window["end"])
                 set_window_start(self.export_window_best[window_n], self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"]))
                 best_soc, best_start, best_metric, best_cost, soc_min, soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan = self.optimise_export(
@@ -4325,6 +4401,7 @@ class Plan:
                     self.export_window_best,
                     self.export_limits_best,
                     end_record=end_record,
+                    allow_freeze=not no_freeze,
                 )
                 self.export_limits_best[window_n] = best_soc
                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
@@ -4530,9 +4607,12 @@ class Plan:
                     continue
                 if not self.allow_this_export_window(window_n):
                     continue
+                no_freeze = self.export_freeze_over_car(window_start, self.export_window_best[window_n]["end"])
+                if no_freeze and self.set_export_freeze_only:
+                    continue
 
                 new_soc, new_start, new_metric, new_cost, new_soc_min, new_soc_min_minute, new_keep, new_cycle, new_carbon, new_import, new_metric_plan = self.optimise_export(
-                    window_n, record_export_windows, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
+                    window_n, record_export_windows, self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record, allow_freeze=not no_freeze
                 )
                 self.export_limits_best[window_n] = new_soc
                 self.export_window_best[window_n]["start_orig"] = self.export_window_best[window_n].get("start_orig", self.export_window_best[window_n]["start"])
@@ -4601,7 +4681,7 @@ class Plan:
                         continue
 
                     # Can not swap into car charging slot
-                    if not self.car_charging_from_battery and self.hit_car_window(window_start_target, self.export_window_best[window_n_target]["end"]):
+                    if not self.car_charging_from_battery and self.hit_uncancellable_car_window(window_start_target, self.export_window_best[window_n_target]["end"]):
                         continue
 
                     # Try to drop the target
@@ -4921,7 +5001,7 @@ class Plan:
                     # Check exact alignment of start and end times, as we allow export to replace entire charge window
                     if not ((self.export_window_best[export_window_n]["start"] <= self.charge_window_best[hit_charge]["start"]) and (self.export_window_best[export_window_n]["end"] >= self.charge_window_best[hit_charge]["end"])):
                         return False
-            if not self.car_charging_from_battery and self.hit_car_window(self.export_window_best[export_window_n]["start"], self.export_window_best[export_window_n]["end"]):
+            if not self.car_charging_from_battery and self.hit_uncancellable_car_window(self.export_window_best[export_window_n]["start"], self.export_window_best[export_window_n]["end"]):
                 return False
             if not self.iboost_on_export and self.iboost_enable and self.iboost_plan and (self.hit_charge_window(self.iboost_plan, self.export_window_best[export_window_n]["start"], self.export_window_best[export_window_n]["end"]) >= 0):
                 return False
@@ -5173,6 +5253,13 @@ class Plan:
                                 self.log("Skip low window {} best limit {} price_set {} price {} level {}".format(window_n, self.export_limits_best[window_n], price_key, price, best_price_export_level))
                             continue
 
+                        # Freeze cancels nothing, so over a car slot only a full export may be tried - and a freeze-only trial is skipped
+                        window = self.export_window_best[window_n]
+                        no_freeze = self.export_freeze_over_car(window.get("start_orig", window["start"]), window["end"])
+                        freeze_only = (typ == "df") or pass_type == "freeze"
+                        if no_freeze and (freeze_only or self.set_export_freeze_only):
+                            continue
+
                         if self.allow_this_export_window(window_n):
                             if not printed_set and self.debug_enable:
                                 self.log(
@@ -5215,8 +5302,8 @@ class Plan:
                                 self.export_window_best,
                                 self.export_limits_best,
                                 end_record=self.end_record,
-                                freeze_only=(typ == "df") or pass_type == "freeze",
-                                allow_freeze=True,
+                                freeze_only=freeze_only,
+                                allow_freeze=not no_freeze,
                             )
                             set_window_start(self.export_window_best[window_n], keep_start)
                             # The export trim pass may only reduce export, never add it, so the cheapest slots
@@ -6596,13 +6683,17 @@ class Plan:
     def car_charge_slot_kwh(self, minute_start, minute_end, car_n=None):
         """
         Work out car charging amount in KWh for given self.plan_interval_minutes-minute slot, for all cars or just car_n
+        (slots cancelled for an export are left out, see car_charge_slot_kwh_cancelled())
         """
         car_charging_kwh = 0.0
         if self.num_cars > 0:
             for car_n in range(self.num_cars) if car_n is None else [car_n]:
+                cancelled = self.car_cancelled_for_export.get(car_n, [])
                 for window in self.car_charging_slots[car_n]:
                     start = window["start"]
                     end = window["end"]
+                    if (start, end) in cancelled:
+                        continue
                     if start < minute_end and end > minute_start:
                         kwh = 0
                         if end != start:
@@ -6617,13 +6708,17 @@ class Plan:
         """
         Car charging in kWh that dynamic load has cancelled for the given self.plan_interval_minutes-minute
         slot - the car was not charging, so the plan does not count on it, but it is still shown with a "?".
+        A slot cancelled for an export is shown the same way, with all of its kWh.
         """
         car_charging_kwh = 0.0
         for car_n in range(self.num_cars):
+            cancelled = self.car_cancelled_for_export.get(car_n, [])
             for window in self.car_charging_slots[car_n] if car_n < len(self.car_charging_slots) else []:
                 start = window["start"]
                 end = window["end"]
                 kwh_cancelled = window.get("kwh_cancelled", 0)
+                if (start, end) in cancelled:
+                    kwh_cancelled += window.get("kwh", 0)
                 if kwh_cancelled and start < minute_end and end > minute_start and end != start:
                     kwh = dp2(kwh_cancelled) / (end - start)
                     for minute_offset in range(minute_start, minute_end, PREDICT_STEP):
@@ -6661,6 +6756,32 @@ class Plan:
         if total_kwh > 0.0001:
             return dp2(total_cost / total_kwh)
         return None
+
+    def export_freeze_over_car(self, window_start, window_end):
+        """
+        Whether freeze export must not be tried in this export window: cancelling for export is on and the window
+        is over a car slot. The export gate admits such a window only because a full export over it cancels the
+        slot; freeze cancels nothing, so it keeps the hard block hit_car_window() gives it elsewhere.
+
+        With the switch off car_cancel_keys is empty and this is one test: the gate already turns such windows away.
+        """
+        return bool(self.car_cancel_keys) and not self.car_charging_from_battery and self.hit_car_window(window_start, window_end)
+
+    def hit_uncancellable_car_window(self, window_start, window_end):
+        """Does this window intersect a car charging window that an export may not cancel?
+
+        The same scan as hit_car_window() without the cache, skipping the slots in car_cancel_keys. The
+        keys index the car_charging_slots_model() lists, which are the lists scanned here.
+        """
+        if self.num_cars <= 0:
+            return False
+
+        car_slots = self.car_charging_slots_model()
+        for car_n in range(self.num_cars):
+            for index, window in enumerate(car_slots[car_n]):
+                if window["end"] > window_start and window["start"] < window_end and dp2(window["kwh"]) > 0 and (car_n, index) not in self.car_cancel_keys:
+                    return True
+        return False
 
     def hit_car_window(self, window_start, window_end, cache=None):
         """Does this window intersect a car charging window?
