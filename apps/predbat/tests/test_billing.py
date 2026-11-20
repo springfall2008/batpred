@@ -206,13 +206,30 @@ def test_day_slot_starts_clock_change():
     return failed
 
 
-def test_days_to_fetch_skips_complete():
-    """Complete days are never asked for again; incomplete ones in the window are."""
+def test_days_to_fetch_complete_days():
+    """Incomplete days are always asked for; a complete day only when its last read is BILLING_REREAD_MINUTES old, or unrecorded."""
+    from billing import BILLING_REREAD_MINUTES
+
     now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
-    cache = {"import": _slots_for_day(date(2026, 10, 31))}
-    days = days_to_fetch(cache, "import", now_utc, LONDON)
-    if date(2026, 10, 31) in days or date(2026, 11, 1) not in days or date(2026, 11, 2) not in days or min(days) < date(2026, 10, 26):
-        print("ERROR: unexpected days to fetch {}".format(days))
+    cache = {"import": dict(_slots_for_day(date(2026, 10, 30)), **_slots_for_day(date(2026, 10, 31)), **_slots_for_day(date(2026, 10, 29)))}
+    recent = (now_utc - timedelta(minutes=BILLING_REREAD_MINUTES - 1)).isoformat()
+    stale = (now_utc - timedelta(minutes=BILLING_REREAD_MINUTES)).isoformat()
+    # 29 Oct has no stamp at all, as in a cache saved before the read times were kept; 30 Oct's stamp can't be read
+    read_at = {"2026-10-30": "not a time", "2026-10-31": recent}
+    days = days_to_fetch(cache, "import", now_utc, LONDON, read_at=read_at)
+    if date(2026, 10, 31) in days or date(2026, 10, 30) not in days or date(2026, 10, 29) not in days or date(2026, 11, 1) not in days or date(2026, 11, 2) not in days or min(days) < date(2026, 10, 26):
+        print("ERROR: a complete day read recently should be skipped and the rest asked for, got {}".format(days))
+        return True
+    days = days_to_fetch(cache, "import", now_utc, LONDON, read_at=dict(read_at, **{"2026-10-31": stale}))
+    if date(2026, 10, 31) not in days:
+        print("ERROR: a complete day last read BILLING_REREAD_MINUTES ago should be read again, got {}".format(days))
+        return True
+    days = days_to_fetch(cache, "import", now_utc, LONDON, settled=["2026-10-29", "2026-10-31"], read_at=dict(read_at, **{"2026-10-31": stale}))
+    if date(2026, 10, 29) in days or date(2026, 10, 31) in days:
+        print("ERROR: a settled day is never read again, got {}".format(days))
+        return True
+    if BILLING_REREAD_MINUTES != 24 * 60:
+        print("ERROR: a complete day should be read again once a day, got {} minutes".format(BILLING_REREAD_MINUTES))
         return True
     return False
 
@@ -354,7 +371,7 @@ def _query_day(query):
 
 
 def test_reader_fetches_only_incomplete_days():
-    """A refresh asks only for days that are not complete yet, one query per day."""
+    """A refresh asks only for days that are not complete yet, or complete but not read today, one query per day."""
     import asyncio
     from billing import BillingReader
 
@@ -362,6 +379,7 @@ def test_reader_fetches_only_incomplete_days():
     owner = _Owner(_FakeStorage())
     reader = BillingReader(owner, "octopus_user", "billing")
     reader.cache = {"import": _slots_for_day(date(2026, 10, 31))}
+    reader.read_at = {"import": {"2026-10-31": (now_utc - timedelta(hours=3)).isoformat()}, "export": {}}
     queries = []
 
     async def query_fn(query, context):
@@ -372,13 +390,85 @@ def test_reader_fetches_only_incomplete_days():
     changed = asyncio.run(reader.refresh(query_fn, {"import": ("A-1", "MPAN-IMP"), "export": None}, now_utc))
     asked = sorted(_query_day(query) for query in queries)
     if not changed or date(2026, 10, 31) in asked or date(2026, 11, 1) not in asked or date(2026, 11, 2) not in asked or len(asked) != len(set(asked)):
-        print("ERROR: refresh should skip complete 31 Oct and ask once for each other day, asked {}".format(asked))
+        print("ERROR: refresh should skip complete 31 Oct, read 3 hours ago, and ask once for each other day, asked {}".format(asked))
         return True
     if any("readingDirection: CONSUMPTION" not in query or 'marketSupplyPointId: "MPAN-IMP"' not in query or 'accountNumber: "A-1"' not in query for query in queries):
         print("ERROR: import queries should name the import MPAN, the account and the CONSUMPTION direction")
         return True
     if ("octopus_user", "billing") not in owner.storage.data:
         print("ERROR: refresh should save the cache to storage")
+        return True
+    return False
+
+
+def test_reader_reads_re_rated_day_again():
+    """Octopus first bills a dispatch evening at the standard rate and re-rates it later; a complete day is read again once a day until it settles, so the re-rating lands."""
+    import asyncio
+    from billing import BillingReader
+
+    storage = _FakeStorage()
+    reader = BillingReader(_Owner(storage), "octopus_user", "billing")
+    mpans = {"import": ("A-1", "MPAN-IMP"), "export": None}
+    day = date(2026, 11, 16)
+    rated = {"label": "Home Standard Rate", "cost": 36.0}
+    asked = []
+
+    async def query_fn(query, context):
+        """16 Nov answers with whatever rating Octopus has published so far; other days are plain."""
+        asked.append(_query_day(query))
+        if _query_day(query) == day:
+            return _day_response(day, kwh=1.0, cost=rated["cost"], label=rated["label"])
+        return _day_response(_query_day(query))
+
+    def at(day_offset, hour):
+        """A refresh time: hour on the day day_offset days after 16 Nov, local time."""
+        return datetime(2026, 11, 16 + day_offset, hour, 0, tzinfo=LONDON).astimezone(timezone.utc)
+
+    def labels():
+        """The bucket labels cached for 16 Nov."""
+        keys = [start.strftime("%Y-%m-%dT%H:%M:%SZ") for start in day_slot_starts(day, LONDON)]
+        return {label for key in keys for label in reader.cache["import"][key]["buckets"]}
+
+    asyncio.run(reader.refresh(query_fn, mpans, at(1, 9)))
+    if labels() != {"Home Standard Rate"}:
+        print("ERROR: the first read should cache the standard rating, got {}".format(labels()))
+        return True
+
+    rated.update(label="EV Low Rate", cost=6.6)
+    asked.clear()
+    asyncio.run(reader.refresh(query_fn, mpans, at(1, 12)))
+    if day in asked or labels() != {"Home Standard Rate"}:
+        print("ERROR: a complete day read 3 hours ago should not be read again yet, asked {}".format(sorted(asked)))
+        return True
+
+    # A restart in between keeps the read times
+    restarted = BillingReader(_Owner(storage), "octopus_user", "billing")
+    asyncio.run(restarted.load())
+    if restarted.read_at.get("import", {}).get(day.isoformat()) != at(1, 9).isoformat():
+        print("ERROR: the read times should be saved and restored, got {}".format(restarted.read_at))
+        return True
+    reader = restarted
+    asked.clear()
+    asyncio.run(reader.refresh(query_fn, mpans, at(2, 9)))
+    if day not in asked or labels() != {"EV Low Rate"}:
+        print("ERROR: a day later the complete day should be read again and pick up the re-rating, asked {} labels {}".format(sorted(asked), labels()))
+        return True
+    if abs(reader.sensor("octopus", at(2, 9))[1]["days"][day.isoformat()]["import_cost"] - 6.6 * 48) > 0.01:
+        print("ERROR: the day's billed cost should follow the re-rating")
+        return True
+
+    # Once it is BILLING_SETTLE_DAYS old it is read one last time, then never again
+    asyncio.run(reader.refresh(query_fn, mpans, at(5, 9)))
+    if day.isoformat() not in reader.settled["import"]:
+        print("ERROR: 16 Nov should settle once read at 5 days old, got {}".format(reader.settled))
+        return True
+    asked.clear()
+    asyncio.run(reader.refresh(query_fn, mpans, at(7, 9)))
+    if day in asked:
+        print("ERROR: a settled complete day is not read again, asked {}".format(sorted(asked)))
+        return True
+    if min(reader.read_at["import"]) < "2026-11-16":
+        print("ERROR: read times should be dropped as days leave the window, got {}".format(sorted(reader.read_at["import"])))
         return True
     return False
 
@@ -1759,6 +1849,22 @@ def test_history_billing_mark():
     return False
 
 
+def test_history_billing_mark_re_rated():
+    """The History views' rebuild mark changes when a billed half-hour's cost changes with the same slots, as when Octopus re-rates a dispatch evening."""
+    from output import Output
+
+    standard = {_key(m): _slot(5.5, 200.0, label="Home Standard Rate") for m in (1140, 1170)}
+    re_rated = {_key(m): _slot(5.5, 36.0, label="EV Low Rate") for m in (1140, 1170)}
+    if Output.history_billing_mark(_billing_attrs(standard)) == Output.history_billing_mark(_billing_attrs(re_rated)):
+        print("ERROR: a re-rated half-hour should change the mark")
+        return True
+    exports = {_key(1140): _slot(1.0, -15.0, label="GENERATION")}
+    if Output.history_billing_mark(_billing_attrs(standard, exports)) == Output.history_billing_mark(_billing_attrs(standard, {_key(1140): _slot(1.0, -16.0, label="GENERATION")})):
+        print("ERROR: a re-priced export half-hour should change the mark")
+        return True
+    return False
+
+
 def test_history_billing_mark_axle():
     """The History views rebuild when an Axle event appears or changes."""
     from output import Output
@@ -1822,7 +1928,7 @@ def run_billing_tests(my_predbat):
         test_parse_bucket_mismatch_drops_slot,
         test_parse_none_vs_empty,
         test_day_slot_starts_clock_change,
-        test_days_to_fetch_skips_complete,
+        test_days_to_fetch_complete_days,
         test_merge_prunes_old,
         test_sensor_shape,
         test_sensor_no_data,
@@ -1833,6 +1939,7 @@ def run_billing_tests(my_predbat):
             failed = True
     for test in (
         test_reader_fetches_only_incomplete_days,
+        test_reader_reads_re_rated_day_again,
         test_reader_failed_read_marks_leg,
         test_reader_restart_restores_cache,
         test_reader_random_first_read_delay,
@@ -1868,6 +1975,7 @@ def run_billing_tests(my_predbat):
         test_attach_credits,
         test_attach_credits_straddle,
         test_history_billing_mark,
+        test_history_billing_mark_re_rated,
         test_parse_axle_events,
         test_attach_axle,
         test_history_billing_mark_axle,

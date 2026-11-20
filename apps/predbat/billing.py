@@ -42,6 +42,9 @@ BILLING_LEGS = ("import", "export")
 # import is published within a day or two but export can lag several days behind it, so a half-hour still missing by then
 # (or a meter that publishes nothing) is not coming
 BILLING_SETTLE_DAYS = 5
+# A complete day is read again this often until it settles: Octopus first bills a dispatch evening on Intelligent Octopus Go
+# at Home Standard Rate and only re-rates it to EV/Home Low Rate a day or so later, with the same kWh in every half-hour
+BILLING_REREAD_MINUTES = 24 * 60
 # The measurements query asks for Europe/London days, and the supplier spreads each London day's standing charge over its half-hours
 BILLING_TZ = ZoneInfo("Europe/London")
 
@@ -242,10 +245,26 @@ def merge_slots(cache, leg, new_slots, now_utc, tz):
     return merged
 
 
-def days_to_fetch(cache, leg, now_utc, tz, settled=()):
-    """Return the local dates in the window that are not yet complete for leg, leaving out settled ones (YYYY-MM-DD)."""
+def _read_due(read_at, day, now_utc):
+    """True when a complete day was last read BILLING_REREAD_MINUTES ago or more, or its last read isn't known."""
+    stamp = (read_at or {}).get(day.isoformat())
+    try:
+        when = datetime.fromisoformat(stamp) if isinstance(stamp, str) else None
+    except ValueError:
+        when = None
+    if when is None or when.tzinfo is None:
+        return True
+    return now_utc - when >= timedelta(minutes=BILLING_REREAD_MINUTES)
+
+
+def days_to_fetch(cache, leg, now_utc, tz, settled=(), read_at=None):
+    """Return the local dates in the window to read for leg, leaving out settled ones (settled and read_at are keyed YYYY-MM-DD).
+
+    A day not yet complete is always read. A complete one is read again when its last read (read_at, an ISO time per day)
+    is BILLING_REREAD_MINUTES old or unknown, because the supplier can re-rate half-hours it has already published.
+    """
     slots = (cache or {}).get(leg) or {}
-    return [day for day in _window_days(now_utc, tz) if day.isoformat() not in settled and not _day_complete(slots, day, tz)]
+    return [day for day in _window_days(now_utc, tz) if day.isoformat() not in settled and (not _day_complete(slots, day, tz) or _read_due(read_at, day, now_utc))]
 
 
 def _complete_until(slots):
@@ -442,6 +461,8 @@ class BillingReader:
         self.mpans = None
         # Per leg, the days (YYYY-MM-DD) read when already BILLING_SETTLE_DAYS old, which are not read again
         self.settled = {leg: [] for leg in BILLING_LEGS}
+        # Per leg, when each day in the window was last read (YYYY-MM-DD -> ISO time), so a complete day is read again once a day
+        self.read_at = {leg: {} for leg in BILLING_LEGS}
         # Set by the owner from plan_random_delay: hold back the first read and pace the day queries in the background
         self.random_delay = False
         # When the first read after this start may go ahead, picked on the first due() check while random_delay is on
@@ -466,6 +487,9 @@ class BillingReader:
         self.mpans = data.get("mpans")
         settled = data.get("settled") or {}
         self.settled = {leg: list(settled.get(leg) or []) for leg in BILLING_LEGS}
+        # A cache saved before the read times were kept has none, so its complete days are read again on the next refresh
+        read_at = data.get("read_at") if isinstance(data.get("read_at"), dict) else {}
+        self.read_at = {leg: dict(read_at.get(leg) or {}) for leg in BILLING_LEGS}
         fetched_at = data.get("fetched_at")
         if isinstance(fetched_at, str):
             try:
@@ -480,7 +504,7 @@ class BillingReader:
         storage = self.owner.storage
         if not storage:
             return
-        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "settled": self.settled, "credits": self.credits, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
+        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "settled": self.settled, "read_at": self.read_at, "credits": self.credits, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
         await storage.save(self.storage_app, self.storage_name, blob, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=BILLING_DAYS * 2))
 
     def running(self):
@@ -535,7 +559,7 @@ class BillingReader:
             self.task.cancel()
 
     async def refresh(self, query_fn, mpans, now_utc, pace_seconds=0):
-        """Read every day in the window that is not complete yet, for each configured leg.
+        """Read every day in the window that is not complete yet, or complete but last read a day ago, for each configured leg.
 
         mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
         query_fn(query, context) returns the GraphQL data, or None for a failed read; a failed read
@@ -553,18 +577,21 @@ class BillingReader:
             self.owner.log("Billing: meters changed, discarding the billing read for the previous meters")
             self.cache = {}
             self.settled = {leg: [] for leg in BILLING_LEGS}
+            self.read_at = {leg: {} for leg in BILLING_LEGS}
         self.mpans = meters
         queried = False
         for leg in BILLING_LEGS:
             settled = [name for name in self.settled.get(leg) or [] if name in window]
+            read_at = {name: stamp for name, stamp in (self.read_at.get(leg) or {}).items() if name in window}
             target = mpans.get(leg)
             if not target:
                 self.legs[leg] = None
                 self.settled[leg] = settled
+                self.read_at[leg] = read_at
                 continue
             account_id, mpan = target
             ok = True
-            for day in days_to_fetch(self.cache, leg, now_utc, tz, settled):
+            for day in days_to_fetch(self.cache, leg, now_utc, tz, settled, read_at):
                 starts = day_slot_starts(day, tz)
                 query = BILLING_MEASUREMENTS_QUERY.format(
                     account_id=account_id,
@@ -582,11 +609,13 @@ class BillingReader:
                     break
                 changed = changed or bool(slots)
                 self.cache = merge_slots(self.cache, leg, slots, now_utc, tz)
+                read_at[day.isoformat()] = now_utc.isoformat()
                 if day.isoformat() <= settle_by:
                     settled.append(day.isoformat())
                     if not _day_complete(self.cache.get(leg) or {}, day, tz):
                         self.owner.log("Warn: Billing: the {} billing for {} on MPAN ...{} is still incomplete after {} days, so it won't be read again".format(leg, day.isoformat(), str(mpan)[-4:], BILLING_SETTLE_DAYS))
             self.settled[leg] = settled
+            self.read_at[leg] = read_at
             self.legs[leg] = ok
             if not ok:
                 self.owner.log("Warn: Billing: could not read the {} billing for MPAN ...{}, keeping what was already read".format(leg, str(mpan)[-4:]))
