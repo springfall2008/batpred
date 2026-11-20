@@ -65,6 +65,16 @@ def test_fit_steady_bias():
     return failed
 
 
+def test_fit_reports_day_to_day_spread():
+    """spread_day is the weighted standard deviation of the per-day log ratios, not the standard error of their mean."""
+    model = fit({day_before(k): make_day(0.8 if k % 2 else 1.25) for k in range(1, 29)})
+    expected = abs(math.log(1.25) - math.log(0.8)) / 2  # alternate days either side of the mean
+    failed = check("spread present", model is not None and "spread_day" in model, model and list(model))
+    failed |= check("spread value", model is not None and abs(model.get("spread_day", 0) - expected) < 0.03, model and (model.get("spread_day"), expected))
+    failed |= check("spread above se", model is not None and model.get("spread_day", 0) > 3 * model["se_day"], model and (model.get("spread_day"), model["se_day"]))
+    return failed
+
+
 def test_fit_calibrated_noise_stays_near_one():
     """Day ratios alternating 0.6 / 1.4 (mean 1, no consistent bias) leave the factor near 1."""
     model = fit({day_before(k): make_day(0.6 if k % 2 else 1.4) for k in range(1, 29)})
@@ -142,7 +152,13 @@ def test_band_matches_old_arithmetic():
 def test_peak():
     """The peak comes from the window of recent days only."""
     evidence = {day_before(20): make_day(0.9, peak=6.0), day_before(2): make_day(0.9, peak=3.0), day_before(5): make_day(0.9, peak=3.2)}
-    return check("peak", evidence_peak_kw(evidence, TODAY, 7) == 3.2, evidence_peak_kw(evidence, TODAY, 7))
+    return check("peak", evidence_peak_kw(evidence, TODAY, 7, 1.0) == 3.2, evidence_peak_kw(evidence, TODAY, 7, 1.0))
+
+
+def test_peak_skips_down_days():
+    """A down day's measured peak is not evidence of what the array produces, as before the store."""
+    evidence = {day_before(2): make_day(0.9, peak=3.0), day_before(3): make_day(0.05, peak=4.5)}
+    return check("peak down day", evidence_peak_kw(evidence, TODAY, 7, 1.0) == 3.0, evidence_peak_kw(evidence, TODAY, 7, 1.0))
 
 
 def test_merge_replaces_and_ages():
@@ -203,6 +219,7 @@ def run_pv_calibration_tests(my_predbat=None):
     for test in (
         test_fit_steady_bias,
         test_fit_calibrated_noise_stays_near_one,
+        test_fit_reports_day_to_day_spread,
         test_fit_large_tau_is_ratio_of_sums,
         test_fit_down_days_excluded,
         test_fit_needs_three_days,
@@ -211,6 +228,7 @@ def run_pv_calibration_tests(my_predbat=None):
         test_fit_clamps,
         test_band_matches_old_arithmetic,
         test_peak,
+        test_peak_skips_down_days,
         test_merge_replaces_and_ages,
         test_merge_drops_today_and_future,
         test_clean_drops_malformed,

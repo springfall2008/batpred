@@ -482,6 +482,74 @@ def test_settings_warn_once():
     return failed
 
 
+def test_scan_no_forecast_history_skips_generation_read():
+    """With no forecast history the scan fails before the long pv_today read, so an hourly retry stays cheap."""
+    test_api = create_test_solar_api()
+    try:
+        build_history(test_api, 3, bell(4.0), bell(4.0))
+        test_api.solar.get_history_wrapper = lambda *args, **kwargs: []
+        test_api.mock_base.minute_data_import_export = no_history
+        with test_api.patch_now_utc_exact():
+            evidence = test_api.solar.pv_calibration_scan(3)
+        failed = check("no forecast history", evidence is None, evidence)
+    finally:
+        test_api.cleanup()
+    return failed
+
+
+def test_scan_slots_in_local_time_across_clock_change():
+    """Days before the autumn clock change keep their local half-hours: generation from 10:00 BST shows at 10:00, not 09:00."""
+    from datetime import datetime, timedelta
+
+    import pytz
+
+    test_api = create_test_solar_api()
+    try:
+        base = test_api.mock_base
+        london = pytz.timezone("Europe/London")
+        base.local_tz = london
+        test_api.solar.local_tz = london
+        base.now_utc = datetime(2025, 10, 28, 12, 0, tzinfo=pytz.utc)  # GMT, two days after the change
+        base.now_utc_exact = base.now_utc
+        base.midnight_utc = datetime(2025, 10, 28, 0, 0, tzinfo=pytz.utc)
+        base.minutes_now = 12 * 60
+        days = 5
+
+        def local_minute(instant):
+            """Local wall-clock minute of day."""
+            local = instant.astimezone(london)
+            return local.hour * 60 + local.minute
+
+        actual_kw = lambda minute: 2.0 if 600 <= minute < 960 else 0.0  # noqa: E731
+        pv_today = {}
+        cumulative = 0.0
+        last_date = None
+        for minutes_ago in range((days + 1) * 1440, -1, -5):
+            instant = base.now_utc - timedelta(minutes=minutes_ago)
+            local_date = instant.astimezone(london).date()
+            if local_date != last_date:
+                cumulative, last_date = 0.0, local_date
+            pv_today[minutes_ago] = cumulative
+            cumulative += actual_kw(local_minute(instant)) * 5 / 60.0
+        entries = []
+        for step in range((days + 2) * 48):
+            instant = base.now_utc - timedelta(days=days + 2) + timedelta(minutes=30 * step + 7)
+            entries.append({"last_updated": instant.strftime("%Y-%m-%dT%H:%M:%S+0000"), "state": str(2.0 if 600 <= local_minute(instant + timedelta(minutes=15)) < 960 else 0.0), "attributes": {}})
+        test_api.solar.pv_scaling = 1.0
+        base.minute_data_import_export = lambda max_days, now_utc, key, *args, **kwargs: dict(pv_today) if key == "pv_today" else {}
+        test_api.solar.get_history_wrapper = lambda entity_id, days, required=False, **kwargs: [entries] if entity_id.endswith("_pv_forecast_h0_uncalibrated") else []
+        with test_api.patch_now_utc_exact():
+            evidence = test_api.solar.pv_calibration_scan(days)
+        before = evidence.get("2025-10-24") if evidence else None
+        failed = check("BST day stored", before is not None, evidence and sorted(evidence))
+        if before:
+            failed |= check("BST day nothing at 09:30 local", before["slots"][570][1] == 0, before["slots"][570])
+            failed |= check("BST day generation from 10:00 local", before["slots"][600][1] > 0, before["slots"][600])
+    finally:
+        test_api.cleanup()
+    return failed
+
+
 def run_pv_calibration_scan_tests(my_predbat=None):
     """Run the PV calibration history scan and settings tests."""
     failed = False
@@ -509,6 +577,8 @@ def run_pv_calibration_scan_tests(my_predbat=None):
         test_scan_skips_day_forecast_starts_after_generation,
         test_scan_generation_on_its_own_minutes,
         test_settings_warn_once,
+        test_scan_no_forecast_history_skips_generation_read,
+        test_scan_slots_in_local_time_across_clock_change,
     ):
         print("**** {} ****".format(test.__name__))
         failed = test() or failed

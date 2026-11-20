@@ -1255,7 +1255,8 @@ class SolarAPI(ComponentBase):
     def pv_calibration_scan(self, days, tracked=True):
         """
         The last `days` complete days of history as calibration evidence, {local date: {"slots": {minute of day: [forecast kWh,
-        actual kWh]}, "peak_kw", "clipped_minutes"}}, or None when the pv_today history could not be read.
+        actual kWh]}, "peak_kw", "clipped_minutes"}}, or None when the forecast history or the pv_today history could not be read
+        (the forecast is read first, so a site whose forecast sensor is not recorded never pays for the long pv_today read).
 
         The forecast is the uncalibrated one with pv_scaling taken back out, so a later pv_scaling change applies to the whole
         store at once. The actual is as measured; a slot with minutes at the inverter's clipping ceiling also carries those
@@ -1267,6 +1268,14 @@ class SolarAPI(ComponentBase):
             self.log("SolarAPI: PV Calibration: pv_scaling is {} - there is no forecast to calibrate against, so no evidence was scanned".format(self.pv_scaling))
             return {}
         reader_kwargs = {} if tracked else {"tracked": False}
+        # The uncalibrated forecast, never the calibrated h0 state (GH#5116), by minutes ago. Read a day further back than the
+        # days scanned: the minute data is cut to the whole days its history spans, so days + 1 from mid-day misses part of the oldest day
+        pv_forecast, pv_forecast_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(self.pv_forecast_history(days + 2, tracked=tracked), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True), whole_span=True)
+        if not pv_forecast:
+            # A failed read, not an empty one: returning None keeps the first scan's full-length read for the retry. Read first,
+            # so a site whose forecast sensor is not recorded does not repeat the long generation read every retry
+            self.log("Warn: SolarAPI: PV Calibration: no forecast history could be read, so no evidence was scanned")
+            return None
         pv_today_hist = self.base.minute_data_import_export(days + 1, self.now_utc, "pv_today", required_unit="kWh", pad=False, **reader_kwargs)
         if not pv_today_hist:
             self.log("Warn: SolarAPI: PV Calibration: no pv_today history could be read, so no evidence was scanned")
@@ -1287,21 +1296,43 @@ class SolarAPI(ComponentBase):
             for sub_minute in range(0, 5):
                 pv_power_hist[minute - sub_minute] = power_amount
 
-        # The uncalibrated forecast, never the calibrated h0 state (GH#5116), by minutes ago. Read a day further back than the
-        # days scanned: the minute data is cut to the whole days its history spans, so days + 1 from mid-day misses part of the oldest day
-        pv_forecast, pv_forecast_days = history_attribute_to_minute_data(self.now_utc_exact, prune_today(self.pv_forecast_history(days + 2, tracked=tracked), self.now_utc_exact, self.midnight_utc, prune=False, intermediate=True), whole_span=True)
-        if not pv_forecast:
-            # A failed read, not an empty one: returning None keeps the first scan's full-length read for the retry
-            self.log("Warn: SolarAPI: PV Calibration: no forecast history could be read, so no evidence was scanned")
-            return None
         pv_power_hist_calibrate = self.impute_clipped_pv_history(pv_power_hist, pv_forecast)
         oldest_forecast_minute = max(pv_forecast.keys()) if pv_forecast else -1
 
         slot_minutes = self.plan_interval_minutes
         per_day = {}
+        # minutes_now is local wall-clock time and the history is keyed by real minutes, so a minute's local time is shifted by
+        # however much the UTC offset then differs from now's: zero except across a clock change (GH#5760)
+        offset_now = self.now_utc.astimezone(self.local_tz).utcoffset() if self.local_tz else None
+        offset_cache = {}
+
+        def clock_shift(minutes_ago):
+            """Minutes to add to minutes_now - minutes_ago to get the local wall-clock time of that minute."""
+            if offset_now is None:
+                return 0
+            hour = minutes_ago // 60
+            if hour not in offset_cache:
+                offset_then = (self.now_utc - timedelta(minutes=hour * 60)).astimezone(self.local_tz).utcoffset()
+                offset_cache[hour] = int((offset_then - offset_now).total_seconds() // 60)
+            return offset_cache[hour]
+
+        def local_midnight_minutes_ago(days_prev):
+            """
+            Minutes ago of the local midnight that started the day days_prev days ago, on the same minutes_now basis as the
+            slots above, with the UTC offset taken at that midnight itself - not at a point an hour either side of it, which
+            on a clock-change day can fall on the wrong side of the change.
+            """
+            minutes_ago = self.minutes_now + days_prev * 24 * 60
+            if offset_now is None:
+                return minutes_ago
+            local_date = self.now_utc.astimezone(self.local_tz).date() - timedelta(days=days_prev)
+            naive = datetime.combine(local_date, datetime.min.time())
+            midnight = self.local_tz.localize(naive) if hasattr(self.local_tz, "localize") else naive.replace(tzinfo=self.local_tz)
+            return minutes_ago + int((midnight.utcoffset() - offset_now).total_seconds() // 60)
+
         for source, field in ((pv_forecast, "forecast"), (pv_power_hist_calibrate, "actual")):
             for minute, value in source.items():
-                minute_absolute = self.minutes_now - minute
+                minute_absolute = self.minutes_now - minute + clock_shift(minute)
                 if minute_absolute >= 0:
                     continue
                 days_prev = (-minute_absolute + 24 * 60 - 1) // (24 * 60)  # 00:00 yesterday is day 1, 23:59 two days ago is day 2
@@ -1326,7 +1357,7 @@ class SolarAPI(ComponentBase):
 
         evidence = {}
         for days_prev, record in per_day.items():
-            day_start_minutes_ago = self.minutes_now + days_prev * 24 * 60
+            day_start_minutes_ago = local_midnight_minutes_ago(days_prev)
             # The pv_today history must reach the start of the day (a partly recorded day would read as forecast error), and the
             # forecast history must span it; the forecast itself may leave out zero periods, so its slots are not counted
             if oldest_minute < day_start_minutes_ago or days_prev > pv_forecast_days:
@@ -1355,8 +1386,13 @@ class SolarAPI(ComponentBase):
     async def pv_calibration_update_evidence(self):
         """
         Keep the calibration evidence (pv_calibration_evidence) up to date: read the store, scan the history when due and
-        merge it in, and save. Until a scan has succeeded it reads pv_calibration_history_days; after that once a day it
-        reads pv_calibration_scan_days (more after a gap); a failed read is tried again after PV_CALIBRATION_RETRY_MINUTES.
+        merge it in, and save. Until a scan has succeeded it reads pv_calibration_history_days; after that it reads the days
+        since the last success (at least pv_calibration_scan_days). The last success is saved with the evidence, so a
+        restart carries on from it rather than reading the whole history again (unless the store was discarded).
+
+        A scan is due a day after the last success; an hour after a failed read (PV_CALIBRATION_RETRY_MINUTES); just after
+        local midnight when yesterday is not stored yet; and at once when the next scan is more than a day ahead, which
+        only a host clock moving backwards can cause (daylight saving changes neither now_utc nor the schedule).
 
         An empty store and a failed read both come back as None, so a store that has never read back is only treated as
         empty once its reads have failed PV_CALIBRATION_LOAD_ATTEMPTS times over PV_CALIBRATION_LOAD_WAIT_MINUTES: until
@@ -1385,7 +1421,8 @@ class SolarAPI(ComponentBase):
             if not isinstance(data, dict):
                 return False
             self.pv_calibration_loaded = True
-            if data.get("slot_minutes") != slot_minutes:
+            discarded = data.get("slot_minutes") != slot_minutes
+            if discarded:
                 self.log("SolarAPI: PV Calibration: the stored evidence was recorded in {} minute slots, not {}, so it is discarded and rebuilt from history".format(data.get("slot_minutes"), slot_minutes))
                 stored = {}
                 merged_on_load = True
@@ -1396,6 +1433,13 @@ class SolarAPI(ComponentBase):
                 stored = merge_pv_calibration_evidence(stored, self.pv_calibration_evidence, today, history_days)
                 merged_on_load = True
             self.pv_calibration_evidence = merge_pv_calibration_evidence(stored, {}, today, history_days)
+            # The last successful scan, so the first scan after a restart reads only the days since then
+            # (not for a discarded store: its last success describes evidence that is gone, and the rebuild must read it all)
+            if not discarded and self.pv_calibration_last_success is None and isinstance(data.get("last_success"), str):
+                try:
+                    self.pv_calibration_last_success = strptime_aware(data["last_success"], TIME_FORMAT)
+                except ValueError:
+                    pass
             return True
 
         if not self.pv_calibration_loaded:
@@ -1407,7 +1451,10 @@ class SolarAPI(ComponentBase):
         # is not stored yet, so a completed day is calibrated from that morning rather than whenever the daily scan falls
         yesterday = (date.fromisoformat(today) - timedelta(days=1)).isoformat()
         new_day = self.pv_calibration_last_success is not None and pv_day(self.pv_calibration_last_success, 0, self.local_tz) < today and yesterday not in self.pv_calibration_evidence
-        if self.pv_calibration_next_scan is None or self.now_utc >= self.pv_calibration_next_scan or new_day:
+        # A next scan more than a day ahead means the host clock moved back since it was set (NTP on a container with no RTC,
+        # a VM restore - not daylight saving, which moves neither now_utc nor the schedule): don't wait for it
+        clock_moved_back = self.pv_calibration_next_scan is not None and self.pv_calibration_next_scan - self.now_utc > timedelta(minutes=PV_CALIBRATION_SCAN_MINUTES)
+        if self.pv_calibration_next_scan is None or self.now_utc >= self.pv_calibration_next_scan or new_day or clock_moved_back:
             self.pv_calibration_last_scan = self.now_utc
             days = pv_calibration_scan_length(self.pv_calibration_last_success, self.now_utc, history_days, settings["scan_days"])
             try:
@@ -1452,6 +1499,7 @@ class SolarAPI(ComponentBase):
                 "days": {day: {"slots": {str(minute): pair for minute, pair in record["slots"].items()}, "peak_kw": record.get("peak_kw", 0), "clipped_minutes": record.get("clipped_minutes", 0)} for day, record in self.pv_calibration_evidence.items()},
                 "updated": self.now_utc.strftime(TIME_FORMAT),
                 "last_scan": self.pv_calibration_last_scan.strftime(TIME_FORMAT) if self.pv_calibration_last_scan else None,
+                "last_success": self.pv_calibration_last_success.strftime(TIME_FORMAT) if self.pv_calibration_last_success else None,
             }
             try:
                 if await storage.save("solcast", PV_CALIBRATION_STORE_KEY, document, format="json", expiry=self.now_utc + timedelta(days=PV_CALIBRATION_STORE_EXPIRY_DAYS)):
@@ -1556,7 +1604,7 @@ class SolarAPI(ComponentBase):
             # calibration: the default band, as the 7-day calibration used when it had too few days
             worst_day_scaling = 0.7
             best_day_scaling = 1.3
-        max_pv_power_hist = evidence_peak_kw(evidence, today, PV_CALIBRATION_BAND_DAYS)
+        max_pv_power_hist = evidence_peak_kw(evidence, today, PV_CALIBRATION_BAND_DAYS, self.pv_scaling)
         self.log(
             "SolarAPI: PV Calibration: Worst day scaling factor {}, best day scaling factor {} average day scaling factor {} max historical power {}".format(dp2(worst_day_scaling), dp2(best_day_scaling), dp2(average_day_scaling), dp2(max_pv_power_hist))
         )
