@@ -4367,9 +4367,10 @@ class Output:
 
     @staticmethod
     def history_billing_mark(billing):
-        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a credited event or its credit changes, or an Axle event or saving session changes; None without billing."""
+        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a billed half-hour's cost is revised, a credited event or its credit changes, or an Axle event or saving session changes; None without billing."""
         slots = (billing or {}).get("slots") or {}
-        mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] for leg in ("import", "export")]
+        # The totals catch a half-hour revised in place, as when Octopus re-prices an Intelligent dispatch's a day or so later (#6252)
+        mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] + [round(sum((slot or {}).get(field) or 0.0 for slot in (slots.get(leg) or {}).values()), 4) for field in ("cost", "kwh", "standing")] for leg in ("import", "export")]
         mark.append([[event.get("start"), event.get("credit")] for event in (billing or {}).get("credit_events") or []])
         # Only Axle events over the billed half-hours: a managed price curve adds future ones every few minutes and an old one ages out every
         # half-hour, neither of which changes a billed row
@@ -4602,7 +4603,8 @@ class Output:
     def calculate_history_days(self):
         """Build the History view for the days before yesterday, for the day picker, and publish them as predbat.plan_history.
 
-        Rebuilt once per local date, or sooner when new billing has been published (its complete_until moves on).
+        Rebuilt once per local date, or sooner when the billing changes: new billing published (its complete_until moves on)
+        or a billed half-hour revised in place, as when Octopus re-prices an Intelligent dispatch a day or so later.
         Only days the loaded load history reaches (max_days_previous) and the recorded rates cover are built.
         """
         today = self.now_utc.astimezone(self.local_tz).date()
