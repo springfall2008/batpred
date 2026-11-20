@@ -35,6 +35,10 @@ BILLING_REFRESH_MINUTES = 180
 # fleet restarted together doesn't send its whole first fill to Kraken at once
 BILLING_FIRST_READ_DELAY_SECONDS = 30 * 60
 BILLING_DAY_PACE_SECONDS = 60
+# With plan_random_delay set, each wait between reads is also BILLING_REFRESH_MINUTES give or take up to this fraction, picked
+# afresh after every read. The last read time survives a restart, so without it a fleet whose reads ever lined up (one restarted
+# together before the first-read delay existed) would keep reading in step forever; with it, their read times drift apart
+BILLING_REFRESH_JITTER = 0.15
 BILLING_ENTITY_SUFFIX = "billing"
 BILLING_SLOT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 BILLING_LEGS = ("import", "export")
@@ -455,6 +459,8 @@ class BillingReader:
         self.random_delay = False
         # When the first read after this start may go ahead, picked on the first due() check while random_delay is on
         self.first_read_after = None
+        # The minutes to wait after the last read while random_delay is on, picked by refresh_minutes() and cleared by each read
+        self.refresh_after = None
         # The background read started by read() while random_delay is on, so a second one isn't started over it
         self.task = None
         # Event credits read from the account (parse_credits()), and the account to read them from, or None not to
@@ -499,7 +505,7 @@ class BillingReader:
         return self.task is not None and not self.task.done()
 
     def due(self, now_utc):
-        """True when the billing has never been read, or was last read BILLING_REFRESH_MINUTES ago.
+        """True when the billing has never been read, or was last read refresh_minutes() ago.
 
         With random_delay on, the first read after a start also waits until a random moment up to
         BILLING_FIRST_READ_DELAY_SECONDS after the first check, and nothing is due while a read is running.
@@ -515,7 +521,16 @@ class BillingReader:
                 return False
         if self.fetched_at is None:
             return True
-        return now_utc - self.fetched_at >= timedelta(minutes=BILLING_REFRESH_MINUTES)
+        return now_utc - self.fetched_at >= timedelta(minutes=self.refresh_minutes())
+
+    def refresh_minutes(self):
+        """The minutes to wait after a read before the next: BILLING_REFRESH_MINUTES, or with random_delay on a random
+        moment within BILLING_REFRESH_JITTER of it, picked once per read so many installations don't stay in step."""
+        if not self.random_delay:
+            return BILLING_REFRESH_MINUTES
+        if self.refresh_after is None:
+            self.refresh_after = BILLING_REFRESH_MINUTES * random.uniform(1 - BILLING_REFRESH_JITTER, 1 + BILLING_REFRESH_JITTER)  # nosec B311 - jitter, not security
+        return self.refresh_after
 
     async def read(self, query_fn, mpans, now_utc, supplier, app):
         """Refresh the billing and publish it.
@@ -602,7 +617,7 @@ class BillingReader:
                 if slots is None:
                     if complete:
                         # What is cached for a complete day stands, so a failed re-read of one doesn't stop the newer days
-                        recheck_failed = True
+                        recheck_failed = day.isoformat()
                         continue
                     ok = False
                     break
@@ -619,6 +634,9 @@ class BillingReader:
             self.rechecked[leg] = rechecked
             if not ok:
                 self.owner.log("Warn: Billing: could not read the {} billing for MPAN ...{}, keeping what was already read".format(leg, str(mpan)[-4:]))
+            if recheck_failed:
+                # The leg stays healthy, so say so here or a re-read that keeps failing would leave no trace that revisions stopped landing
+                self.owner.log("Warn: Billing: could not read the {} billing for {} on MPAN ...{} again, keeping what was cached and leaving it and the complete days after it to the next refresh".format(leg, recheck_failed, str(mpan)[-4:]))
         self.cache = merge_slots(self.cache, "import", {}, now_utc, tz)
         if self.credits_account:
             credits = parse_credits(await query_fn(BILLING_CREDITS_QUERY.format(account_id=self.credits_account), "billing-credits"), now_utc)
@@ -628,6 +646,7 @@ class BillingReader:
                 changed = changed or credits != self.credits
                 self.credits = credits
         self.fetched_at = now_utc
+        self.refresh_after = None
         await self.save()
         return changed
 

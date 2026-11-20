@@ -1196,6 +1196,109 @@ def test_reader_rechecks_complete_days():
     return False
 
 
+def test_reader_failed_recheck_skips_complete_days():
+    """A failed re-read of a complete day leaves the complete days after it to the next refresh, says so in the log,
+    keeps their cached figures and the leg healthy, and still reads the incomplete days."""
+    import asyncio
+    from billing import BillingReader
+
+    owner = _Owner(_FakeStorage())
+    reader = BillingReader(owner, "octopus_user", "billing")
+    mpans = {"import": ("A-1", "IMP"), "export": None}
+    sunday, monday, tuesday = date(2026, 11, 15), date(2026, 11, 16), date(2026, 11, 17)
+    # Sunday and Monday are complete and were last read yesterday, so both are due a re-read today
+    reader.cache = {"import": {**_slots_for_day(sunday, cost=35.61), **_slots_for_day(monday, cost=35.61)}}
+    reader.rechecked = {"import": {"2026-11-15": "2026-11-16", "2026-11-16": "2026-11-16"}, "export": {}}
+    state = {"fail": sunday}
+    asked = []
+
+    async def query_fn(query, context):
+        """Answer every day at 6.6p a half-hour, or fail for the day told to."""
+        day = _query_day(query)
+        asked.append(day)
+        return None if day == state["fail"] else _day_response(day, cost=6.6)
+
+    def day_cost(day):
+        """The day's billed import cost in the cache."""
+        keys = {start.strftime("%Y-%m-%dT%H:%M:%SZ") for start in day_slot_starts(day, LONDON)}
+        return sum(slot["cost"] for key, slot in reader.cache["import"].items() if key in keys)
+
+    now_utc = datetime(2026, 11, 17, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    asyncio.run(reader.refresh(query_fn, mpans, now_utc))
+    if sunday not in asked or monday in asked or tuesday not in asked:
+        print("ERROR: after Sunday's re-read fails, complete Monday should wait for the next refresh while incomplete today is still read, asked {}".format(asked))
+        return True
+    if reader.legs["import"] is not True or not _close(day_cost(monday), 48 * 35.61) or not _close(day_cost(sunday), 48 * 35.61):
+        print("ERROR: a failed re-read should keep the leg healthy and the cached figures, legs {} Sunday {} Monday {}".format(reader.legs, day_cost(sunday), day_cost(monday)))
+        return True
+    if reader.rechecked["import"].get("2026-11-15") != "2026-11-16" or reader.rechecked["import"].get("2026-11-16") != "2026-11-16":
+        print("ERROR: neither Sunday nor Monday should count as re-read today, got {}".format(reader.rechecked))
+        return True
+    warnings = [line for line in owner.logged if line.startswith("Warn:") and "2026-11-15" in line and "again" in line]
+    if len(warnings) != 1 or "could not read the import billing for MPAN" in " ".join(owner.logged):
+        print("ERROR: the failed re-read should be logged once, naming the day, and not as a failed leg, got {}".format(owner.logged))
+        return True
+
+    # The next refresh reads both of them again and takes the re-priced cost
+    state["fail"] = None
+    asked.clear()
+    asyncio.run(reader.refresh(query_fn, mpans, now_utc + timedelta(hours=3)))
+    if sunday not in asked or monday not in asked or not _close(day_cost(sunday), 48 * 6.6) or not _close(day_cost(monday), 48 * 6.6):
+        print("ERROR: the refresh after the failure should re-read Sunday and Monday, asked {} Sunday {} Monday {}".format(asked, day_cost(sunday), day_cost(monday)))
+        return True
+    return False
+
+
+def test_reader_refresh_jitter():
+    """Without random_delay a read is due exactly BILLING_REFRESH_MINUTES after the last; with it, within
+    BILLING_REFRESH_JITTER of that, picked afresh after every read so installations in step drift apart."""
+    import asyncio
+    from unittest.mock import patch
+    from billing import BillingReader
+
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    reader = BillingReader(_Owner(_FakeStorage()), "octopus_user", "billing")
+    reader.fetched_at = now_utc
+    if reader.due(now_utc + timedelta(minutes=179)) or not reader.due(now_utc + timedelta(minutes=180)):
+        print("ERROR: without random_delay the next read should be due exactly 180 minutes after the last")
+        return True
+    if billing.BILLING_REFRESH_JITTER != 0.15:
+        print("ERROR: the refresh jitter should be 15%, got {}".format(billing.BILLING_REFRESH_JITTER))
+        return True
+
+    async def query_fn(query, context):
+        """Answer every day with a full day of billing."""
+        return _day_response(_query_day(query))
+
+    reader.random_delay = True
+    reader.first_read_after = now_utc
+    with patch.object(billing.random, "uniform", return_value=1.15) as uniform:
+        if reader.due(now_utc + timedelta(minutes=206)) or not reader.due(now_utc + timedelta(minutes=207)):
+            print("ERROR: with the longest jitter the next read should be due 207 minutes after the last")
+            return True
+        if uniform.call_count != 1 or uniform.call_args.args != (1 - billing.BILLING_REFRESH_JITTER, 1 + billing.BILLING_REFRESH_JITTER):
+            print("ERROR: the wait should be picked once per read from 0.85 to 1.15, got {} calls {}".format(uniform.call_count, uniform.call_args))
+            return True
+    # A read clears the pick, so the next wait is drawn again
+    asyncio.run(reader.refresh(query_fn, {"import": ("A-1", "IMP"), "export": None}, now_utc))
+    if reader.refresh_after is not None:
+        print("ERROR: a read should clear the picked wait, got {}".format(reader.refresh_after))
+        return True
+    with patch.object(billing.random, "uniform", return_value=0.85):
+        if reader.due(now_utc + timedelta(minutes=152)) or not reader.due(now_utc + timedelta(minutes=153)):
+            print("ERROR: with the shortest jitter the next read should be due 153 minutes after the last")
+            return True
+    # Unpatched, the picks spread over the whole range
+    picks = set()
+    for _ in range(50):
+        reader.refresh_after = None
+        picks.add(round(reader.refresh_minutes(), 3))
+    if min(picks) < 153 or max(picks) > 207 or len(picks) < 10:
+        print("ERROR: the picked waits should vary between 153 and 207 minutes, got {}".format(sorted(picks)))
+        return True
+    return False
+
+
 def test_sensor_needs_export_when_configured():
     """With an export meter whose read failed, a day isn't complete on import alone, so the state never quietly becomes import-only."""
     now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
@@ -1939,6 +2042,8 @@ def run_billing_tests(my_predbat):
     for test in (
         test_reader_fetches_only_incomplete_days,
         test_reader_rechecks_complete_days,
+        test_reader_failed_recheck_skips_complete_days,
+        test_reader_refresh_jitter,
         test_reader_failed_read_marks_leg,
         test_reader_restart_restores_cache,
         test_reader_random_first_read_delay,
