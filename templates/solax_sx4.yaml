@@ -125,6 +125,9 @@ pred_bat:
 
   battery_temperature:
     - re:(sensor.solax([a-z_]+|)_battery(_1|)_temperature)
+  # Temperature history for the rate grids (Charts -> Curves) and the temperature prediction; without it the grids are learned with no temperature
+  battery_temperature_history:
+    - re:(sensor.solax([a-z_]+|)_battery(_1|)_temperature)
 
   battery_power:
     - re:(sensor.solax([a-z_]+|)_battery_power_charge)
