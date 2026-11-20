@@ -361,6 +361,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Forecast.solar API request metrics for monitoring
         self.currency_symbols = self.args.get("currency_symbols", "£p")
         self.watch_list = []
+        # Last seen fingerprint per watched entity, see trigger_watch_list().
+        # Initialised here, not where watch_list is loaded: load_user_config()
+        # runs on every update cycle, so resetting the fingerprints there would
+        # make every refire look like a first sight and defeat the check.
+        self.watch_list_fingerprints = {}
         self.restart_active = False
         self.clock_skew_warn_time = {}  # Per-inverter time the moderate clock-skew warning was last logged, so it repeats hourly rather than every cycle
         self.control_ledger = ControlLedger()

@@ -929,6 +929,54 @@ def test_hainterface_set_state_external_no_change(my_predbat=None):
     return failed
 
 
+def test_hainterface_set_state_external_event_attributes(my_predbat=None):
+    """Test set_state_external() passes an event entity's attribute-only change to the watch list (#6105)"""
+    print("\n=== Testing HAInterface set_state_external() event attribute-only change (#6105) ===")
+    failed = 0
+
+    mock_base = MockBase()
+    ha_interface = create_ha_interface(mock_base, ha_key="test_key")
+
+    # Mock set_state to prevent API calls
+    def mock_set_state(entity_id, state, attributes=None):
+        if attributes is None:
+            attributes = {}
+        ha_interface.state_data[entity_id.lower()] = {"state": state, "attributes": attributes}
+    ha_interface.set_state = mock_set_state
+
+    # Track trigger_watch_list calls
+    mock_base.trigger_watch_list_calls = []
+    async def mock_trigger_watch_list(entity_id, attributes, old_state, new_state):
+        mock_base.trigger_watch_list_calls.append((entity_id, attributes, old_state, new_state))
+    mock_base.trigger_watch_list = mock_trigger_watch_list
+
+    # Set initial state
+    ha_interface.state_data["event.test"] = {"state": "2026-11-10T05:11:14.032+00:00", "attributes": {"events": [{"start": "2026-11-01T00:30:00+00:00"}]}}
+
+    # Same state, same attributes: no trigger
+    run_async(ha_interface.set_state_external("event.test", "2026-11-10T05:11:14.032+00:00", {"events": [{"start": "2026-11-01T00:30:00+00:00"}]}))
+    # Same state, changed attributes: trigger
+    run_async(ha_interface.set_state_external("event.test", "2026-11-10T05:11:14.032+00:00", {"events": [{"start": "2026-11-01T00:30:00+00:00"}, {"start": "2026-11-10T12:00:00+00:00"}]}))
+    # Same state, identical attributes again: no trigger
+    run_async(ha_interface.set_state_external("event.test", "2026-11-10T05:11:14.032+00:00", {"events": [{"start": "2026-11-01T00:30:00+00:00"}, {"start": "2026-11-10T12:00:00+00:00"}]}))
+
+    if len(mock_base.trigger_watch_list_calls) != 1:
+        print("ERROR: Expected 1 watch_list trigger (attribute-only change), got {}".format(len(mock_base.trigger_watch_list_calls)))
+        failed += 1
+    else:
+        entity_id, attributes, old_state, new_state = mock_base.trigger_watch_list_calls[0]
+        if entity_id != "event.test":
+            print(f"ERROR: Expected entity_id 'event.test'")
+            failed += 1
+        elif new_state.get("attributes", {}).get("events", []) != [{"start": "2026-11-01T00:30:00+00:00"}, {"start": "2026-11-10T12:00:00+00:00"}]:
+            print(f"ERROR: Expected new_state to carry the changed events attribute")
+            failed += 1
+        else:
+            print("✓ watch_list triggered on event attribute-only change, ignored when identical")
+
+    return failed
+
+
 def run_hainterface_service_tests(my_predbat):
     """Run all HAInterface service tests"""
     print("\n" + "=" * 80)
@@ -956,6 +1004,7 @@ def run_hainterface_service_tests(my_predbat):
     failed += test_hainterface_set_state_external_domain_input_text(my_predbat)
     failed += test_hainterface_set_state_external_sensor(my_predbat)
     failed += test_hainterface_set_state_external_watch_list(my_predbat)
+    failed += test_hainterface_set_state_external_event_attributes(my_predbat)
     failed += test_hainterface_set_state_external_no_change(my_predbat)
 
     print("\n" + "=" * 80)

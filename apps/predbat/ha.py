@@ -709,8 +709,13 @@ class HAInterface(ComponentBase):
                                                     entity_id = new_state.get("entity_id", None)
                                                     if entity_id:
                                                         self.update_state_item(new_state, entity_id)
-                                                        # Only trigger on value change or you get too many updates
-                                                        if not old_state or (new_state.get("state", None) != old_state.get("state", None)):
+                                                        # Only trigger on value change or you get too many updates.
+                                                        # For event entities the state is only the last-fire
+                                                        # timestamp, so an attribute change with an unchanged
+                                                        # state must also reach trigger_watch_list(), where the
+                                                        # fingerprint is a hash of the attributes.
+                                                        event_attributes_changed = entity_id.split(".", 1)[0] == "event" and new_state.get("attributes", {}) != (old_state or {}).get("attributes", {})
+                                                        if not old_state or (new_state.get("state", None) != old_state.get("state", None)) or event_attributes_changed:
                                                             await self.base.trigger_watch_list(entity_id, event_data.get("attribute", None), event_data.get("old_state", None), new_state)
                                                         error_count = 0  # Reset error count on successful result
                                                         self.update_success_timestamp()
@@ -1187,8 +1192,10 @@ class HAInterface(ComponentBase):
         # If its not found then its a sensor and we can set the state directly
         self.set_state(entity_id, state, attributes)
 
-        # Only trigger on value change or you get too many updates
-        if (old_value is None) or (new_value != old_value):
+        # Only trigger on value change or you get too many updates. For event
+        # entities the state is only the last-fire timestamp, so an attribute
+        # change with an unchanged state must also reach trigger_watch_list().
+        if (old_value is None) or (new_value != old_value) or (domain == "event" and attributes != (old_state or {}).get("attributes", {})):
             await self.base.trigger_watch_list(entity_id, attributes, old_state, new_state)
 
     def set_state(self, entity_id, state, attributes=None):

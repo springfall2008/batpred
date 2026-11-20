@@ -1172,12 +1172,54 @@ class UserInterface:
                     ha_value = history[-1].get("state", None)
         return ha_value
 
+    def watch_list_fingerprint(self, entity_id, new):
+        """
+        Fingerprint a watched entity's new state for change detection.
+
+        For event entities the state is just the timestamp of the last fire,
+        so it changes on every refire even when the event data has not changed.
+        Their fingerprint is therefore a hash of the attributes, ignoring the
+        state. For every other entity the fingerprint is the state, exactly as
+        the old state-only check behaved, so an attribute-only change still
+        does not trigger a replan.
+        """
+        if entity_id.split(".", 1)[0] == "event":
+            if not isinstance(new, dict):
+                # No state dict to read attributes from: fingerprint the raw
+                # value itself so a change is never silently swallowed.
+                try:
+                    return json.dumps(new, sort_keys=True, default=str)
+                except (TypeError, ValueError):
+                    return repr(new)
+            attributes = new.get("attributes", None)
+            if attributes is None:
+                attributes = {}
+            try:
+                return json.dumps(attributes, sort_keys=True, default=str)
+            except (TypeError, ValueError):
+                return repr(attributes)
+        if isinstance(new, dict):
+            return new.get("state", None)
+        return new
+
     async def trigger_watch_list(self, entity_id, attribute, old, new):
         """
         Trigger a watch event for an entity
+
+        A watched entity only triggers when its fingerprint has changed since
+        the last trigger (first sight always triggers). The fingerprint is
+        stored per entity so both trigger paths - the websocket state_changed
+        handler and the loopback set_state_external path in ha.py - share one
+        rule and no longer depend on what HA reports as the old state.
         """
+        fingerprints = self.watch_list_fingerprints
         for entity in self.watch_list:
             if entity_id == entity:
+                fingerprint = self.watch_list_fingerprint(entity, new)
+                if entity in fingerprints and fingerprints[entity] == fingerprint:
+                    self.log("Watched event: {} unchanged, ignoring".format(entity))
+                    continue
+                fingerprints[entity] = fingerprint
                 await self.watch_event(entity, attribute, old, new, None)
 
     async def trigger_callback(self, service_data):

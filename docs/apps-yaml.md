@@ -2605,6 +2605,8 @@ You can manually force Predbat to start executing by turning **switch.predbat_ac
 
 Additionally Predbat can 'watch' a number of Home Assistant entities and if one of those changes, Predbat will automatically start executing.
 
+An identical update — one that carries no new data — does not start execution: for an `event.*` entity the data is its attributes (its state is only the time it last fired), while for every other entity the data is its state. So a watched event entity that fires again with the same attributes, or a sensor that reports the same state again, will not force a re-plan.
+
 This can be useful for EV owners such as to detect when you have plugged the EV in (for Predbat to stop the battery discharging), and with Intelligent Octopus Go if Octopus gives you additional charge slots.
 
 In `apps.yaml`, uncomment (or add) the following lines, customising to the list of configuration items you have setup in `apps.yaml` and want Predbat to watch for changes for:
