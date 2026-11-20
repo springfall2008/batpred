@@ -50,6 +50,7 @@ from hypervolt import (
     release_command,
     status_text,
 )
+from utils import minute_data
 
 # Charger ids are decimal; their hex form is 12 digits for a V2 and 16 for a V3
 V2_ID = str(int("a" * 12, 16))
@@ -681,6 +682,55 @@ def test_session_energy_v3_without_session_id():
     apply_session(v2, {"charging": True, "watt_hours": 4000})
     assert v2.session_energy_kwh == 5.0
     print("  ✓ Session energy on V3 without a session id")
+
+
+def test_session_energy_unknown_after_restart():
+    """After a restart the session's energy stays unknown until a message carries watt_hours (#6285)."""
+    charger = HypervoltCharger(V2_ID)
+    assert charger.session_energy_kwh is None
+    apply_snapshot(charger, MOCK_SNAPSHOT)
+    assert charger.session_energy_kwh is None
+    # The first session id since start-up may be a session already part-way through, so no 0 is invented for it
+    apply_session(charger, {"charging": False, "session": 5})
+    assert charger.session_energy_kwh is None and charger.session_id == 5
+    apply_session(charger, {"charging": True, "session": 5, "watt_hours": 4500})
+    assert charger.session_energy_kwh == 4.5
+    # A later new session still starts again from 0
+    apply_session(charger, {"charging": True, "session": 6})
+    assert charger.session_energy_kwh == 0.0 and charger.session_id == 6
+    # Energy held from messages without a session id isn't carried into the first session id seen
+    v3 = HypervoltCharger(V3_ID, api_version=3)
+    apply_session(v3, {"charging": True, "watt_hours": 17836})
+    apply_session(v3, {"charging": True, "session": 9, "watt_hours": 500})
+    assert v3.session_energy_kwh == 0.5 and v3.session_id == 9
+    print("  ✓ Session energy unknown after a restart")
+
+
+def test_restart_history_counts_session_once():
+    """A restart mid-session read back through minute_data counts the session once with 'unavailable', twice with 0 (#6285)."""
+    now = datetime.datetime(2026, 11, 20, 12, 0, tzinfo=datetime.timezone.utc)
+    start = now - datetime.timedelta(minutes=120)
+
+    def counted(restart_state):
+        """Energy counted for a 5 kWh session whose sensor reads restart_state for 10 minutes at 4.5 kWh."""
+        history = [{"state": str(round(4.5 * minute / 90, 3)), "last_updated": (start + datetime.timedelta(minutes=minute)).isoformat()} for minute in range(0, 91, 5)]
+        for minute, state in ((91, restart_state), (101, "4.5"), (115, "5.0")):
+            history.append({"state": state, "last_updated": (start + datetime.timedelta(minutes=minute)).isoformat()})
+        data, _ = minute_data(history, 1, now, "state", "last_updated", backwards=True, smoothing=True, scale=1.0, clean_increment=True, can_modify_history=True)
+        return data[0] - data[max(data)]
+
+    assert abs(counted("0.0") - 9.5) < 0.01, counted("0.0")
+    assert abs(counted("unavailable") - 5.0) < 0.01, counted("unavailable")
+    print("  ✓ Restart history counts the session once")
+
+
+def test_publishes_unavailable_session_energy_until_known():
+    """A charger heard from but with no watt_hours yet publishes session energy as unavailable, not 0 (#6285)."""
+    component = _make_component([HypervoltCharger(V3_ID, api_version=3, release_state="default", pilot_status="C", charging=True, last_message=time.time())])
+    assert run_async(component.run(0, True)) is True
+    entity = "sensor.predbat_hypervolt_{}_session_energy".format(V3_ID)
+    assert component.base.entities[entity]["state"] == "unavailable", component.base.entities[entity]
+    print("  ✓ Session energy unavailable until known")
 
 
 def test_apply_pilot():
@@ -2292,6 +2342,9 @@ def test_hypervolt(my_predbat=None):
     test_apply_session_power()
     test_session_energy_holds_and_resets()
     test_session_energy_v3_without_session_id()
+    test_session_energy_unknown_after_restart()
+    test_restart_history_counts_session_once()
+    test_publishes_unavailable_session_energy_until_known()
     test_apply_pilot()
     test_connected_state_unknown_until_pilot()
     test_apply_plugncharge()

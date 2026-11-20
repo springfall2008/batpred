@@ -152,7 +152,8 @@ class HypervoltCharger:
     pilot_status: Optional[str] = None
     power_w: float = 0.0
     session_id: Optional[int] = None
-    session_energy_kwh: float = 0.0
+    # None until a session message with watt_hours arrives, so a restart mid-session never publishes 0 (#6285)
+    session_energy_kwh: Optional[float] = None
     max_current_a: Optional[int] = None
     charge_mode: Optional[str] = None
     features: list = field(default_factory=list)
@@ -205,17 +206,20 @@ def apply_session(charger, result):
             charger.power_w = measured
         # A message with neither leaves the last power alone
     if "session" in result and result["session"] != charger.session_id:
-        # A new session: its energy starts again from whatever this message says
+        # A new session: its energy starts again from whatever this message says.
+        # The first session id seen since start-up may be a session already part-way through, so its energy is unknown until watt_hours arrives,
+        # and energy held from earlier messages without a session id can't be carried into it either
+        charger.session_energy_kwh = 0.0 if charger.session_id is not None else None
         charger.session_id = result["session"]
-        charger.session_energy_kwh = 0.0
     watt_hours = _to_float(result.get("watt_hours"))
     if watt_hours is not None:
         kwh = round(watt_hours / 1000.0, 3)
-        if charger.api_version >= 3 and "session" not in result and kwh < charger.session_energy_kwh:
-            # The V3 API sends no session id, and its watt_hours drops to 0 when a session ends
-            charger.session_energy_kwh = 0.0
-        # The session's maximum, so the sensor only ever rises within a session
-        charger.session_energy_kwh = max(charger.session_energy_kwh, kwh)
+        if charger.session_energy_kwh is None or (charger.api_version >= 3 and "session" not in result and kwh < charger.session_energy_kwh):
+            # Unknown until now, or on V3, which sends no session id, a drop in watt_hours: a session ended and a new one started
+            charger.session_energy_kwh = kwh
+        else:
+            # The session's maximum, so the sensor only ever rises within a session
+            charger.session_energy_kwh = max(charger.session_energy_kwh, kwh)
 
 
 def apply_pilot(charger, result):
@@ -1197,7 +1201,9 @@ class HypervoltAPI(ComponentBase, CarChargerControl):
 
             self.dashboard_item("sensor.{}_status".format(prefix), state=status_text(charger), attributes=status_attributes, app="hypervolt")
             self.dashboard_item("sensor.{}_power".format(prefix), state=charger.power_w, attributes=self.charger_attributes(charger, "power"), app="hypervolt")
-            self.dashboard_item("sensor.{}_session_energy".format(prefix), state=charger.session_energy_kwh, attributes=self.charger_attributes(charger, "session_energy"), app="hypervolt")
+            # Unavailable rather than 0 until the session's energy is known: a 0 then the real total reads as a counter reset and double-counts
+            session_energy = charger.session_energy_kwh if charger.session_energy_kwh is not None else "unavailable"
+            self.dashboard_item("sensor.{}_session_energy".format(prefix), state=session_energy, attributes=self.charger_attributes(charger, "session_energy"), app="hypervolt")
             connected = connected_state(charger)
             if connected == "unavailable" and charger.charger_id in self.released_by_predbat and charger.release_state == "released":
                 # Fail open: a charger Predbat stopped must keep its car's plan, or it is never started again
@@ -1446,14 +1452,14 @@ def print_charger_table(chargers):  # pragma: no cover
     print("{:<22} {:<16} {:<13} {:>4} {:>8} {:>9} {:>12} {:>6} {:<10} {:>8}".format("CHARGER", "NAME", "STATUS", "API", "PILOT", "POWER W", "SESSION kWh", "MAX A", "MODE", "RELEASE"))
     for charger in chargers:
         print(
-            "{:<22} {:<16} {:<13} {:>4} {:>8} {:>9.0f} {:>12.3f} {:>6} {:<10} {:>8}".format(
+            "{:<22} {:<16} {:<13} {:>4} {:>8} {:>9.0f} {:>12} {:>6} {:<10} {:>8}".format(
                 charger.charger_id,
                 charger.name[:16],
                 status_text(charger),
                 charger.api_version,
                 charger.pilot_status or "-",
                 charger.power_w,
-                charger.session_energy_kwh,
+                "-" if charger.session_energy_kwh is None else "{:.3f}".format(charger.session_energy_kwh),
                 charger.max_current_a or "-",
                 charger.charge_mode or "-",
                 charger.release_state or "-",
