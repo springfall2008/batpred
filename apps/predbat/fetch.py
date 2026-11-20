@@ -52,7 +52,6 @@ from const import (
     LOAD_FORECAST_RECORDED_MIN_MINUTES,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
-    OCTOPUS_MANUAL_DISPATCH_SOURCES,
     DISPATCH_SOURCE_CHARGER_SCHEDULE,
     CAR_CHARGING_NOW_POWER_W,
     CAR_MANUAL_SOC_LATE_MINUTES,
@@ -2145,19 +2144,19 @@ class Fetch:
         """
         The dispatches still used for a car while Octopus Smart Control is off (#5339).
 
-        Manual bump/boost dispatches and a charger's own schedule are kept. Other dispatches are
-        Octopus's plan, which will not happen, unless charger_plan says they came from the charger's
+        A charger's own schedule is kept. Other dispatches, manual bump/boost ones included, are
+        Octopus's plan, which will not happen, as Octopus dispatches nothing to a suspended device
+        (matching planned_dispatches_for_state() in the built-in component), unless charger_plan says they came from the charger's
         own sensor (octopus_intelligent_planned_slot): those are kept as car load but re-tagged as a
         charger schedule, as Octopus is not dispatching them and so they are not off-peak. Kept slots
         carry their source at the top level, which is where load_octopus_slots() reads it from.
         """
-        kept_sources = OCTOPUS_MANUAL_DISPATCH_SOURCES + (DISPATCH_SOURCE_CHARGER_SCHEDULE,)
         used = []
         for slot in slots or []:
             if not isinstance(slot, dict):
                 continue
             source = slot.get("source") or (slot.get("meta") or {}).get("source")
-            if source in kept_sources:
+            if source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
                 used.append(slot if slot.get("source") == source else dict(slot, source=source))
             elif charger_plan:
                 used.append(dict(slot, source=DISPATCH_SOURCE_CHARGER_SCHEDULE))

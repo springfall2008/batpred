@@ -656,7 +656,7 @@ def test_dispatch_times_judged_against_the_clock():
 
 def test_smart_control_off_ignores_planned_dispatches():
     """While Octopus Smart Control is off the dispatch sensor keeps the plan Octopus made before, but
-    nothing will act on it (#5339), so the charger does not follow it - only a manual bump charge."""
+    nothing will act on it (#5339), so the charger does not follow it - a manual bump charge included."""
     component = _octopus_component(FakeOctopus(), is_charger=False)
     component.args["octopus_intelligent_charger_follows_car"] = True
     now = _now()  # 01:30 London, 00:30 UTC
@@ -671,9 +671,9 @@ def test_smart_control_off_ignores_planned_dispatches():
     # The sensor's state reflects the ignored plan too, so it is not fallen back on
     component.sensors[DISPATCH]["planned_dispatches"] = []
     assert component.charger_control_dispatch_active(0, now) is False
-    # A bump charge the user asked for still runs the charger
+    # Octopus dispatches nothing to a suspended device, a bump charge included
     component.sensors[DISPATCH]["planned_dispatches"] = [dict(smart, source="bump-charge")]
-    assert component.charger_control_dispatch_active(0, now) is True
+    assert component.charger_control_dispatch_active(0, now) is False
     # Another car's switch does not count
     component.base.smart_control_off = {1: True}
     component.sensors[DISPATCH]["planned_dispatches"] = [smart]

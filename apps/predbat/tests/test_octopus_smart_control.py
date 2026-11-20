@@ -178,7 +178,7 @@ def run_octopus_smart_control_tests(my_predbat):
         _slots(my_predbat)
         failed |= _check("t9 signature", my_predbat.octopus_slots_signature(before) != my_predbat.octopus_slots_signature(my_predbat.octopus_slots), "")
 
-        print("Test 10: manual bump/boost dispatches are kept while Smart Control is off, scheduled ones are not")
+        print("Test 10: manual bump/boost dispatches are dropped while Smart Control is off, as the built-in component does")
         my_predbat.num_cars = 1
         my_predbat.args["octopus_intelligent_slot"] = SLOT_SENSOR
         my_predbat.args["octopus_intelligent_smart_control"] = SWITCH
@@ -190,7 +190,7 @@ def run_octopus_smart_control_tests(my_predbat):
         my_predbat.ha_interface.set_state(SLOT_SENSOR, "off", attributes=attributes)
         items[SWITCH] = "off"
         kwh = _slots(my_predbat)
-        failed |= _check("t10 boost kept", kwh == [2.0, 3.0, 5.0], "kwh {}".format(kwh))
+        failed |= _check("t10 boost dropped", kwh == [5.0], "kwh {}".format(kwh))
         items[SWITCH] = "on"
         kwh = _slots(my_predbat)
         failed |= _check("t10 all on", kwh == [2.0, 3.0, 5.0, 10.0], "kwh {}".format(kwh))
@@ -286,14 +286,14 @@ def run_octopus_smart_control_tests(my_predbat):
         my_predbat.args.pop("octopus_intelligent_planned_slot", None)
         _setup(my_predbat)
 
-        print("Test 10f: a bump charge whose source is only under meta is kept with the source where the slot loader reads it")
+        print("Test 10f: a bump charge whose source is only under meta is dropped too")
         attributes = copy.deepcopy(items[SLOT_SENSOR])
         attributes["planned_dispatches"].append({"start": boost_start, "end": boost_end, "charge_in_kwh": 3.0, "location": "AT_HOME", "meta": {"source": "bump-charge"}})
         my_predbat.ha_interface.set_state(SLOT_SENSOR, "off", attributes=attributes)
         items[SWITCH] = "off"
         kwh = _slots(my_predbat)
         sources = {slot.get("charge_in_kwh"): slot.get("source") for slot in my_predbat.octopus_slots[0]}
-        failed |= _check("t10f bump kept", kwh == [3.0, 5.0] and sources.get(3.0) == "bump-charge", "kwh {} sources {}".format(kwh, sources))
+        failed |= _check("t10f bump dropped", kwh == [5.0] and 3.0 not in sources, "kwh {} sources {}".format(kwh, sources))
         _setup(my_predbat)
 
         print("Test 11: the state is case-insensitive, and an odd state string is no evidence")
