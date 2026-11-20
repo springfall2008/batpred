@@ -1,0 +1,84 @@
+.app-content > main:has(> .docs-page) {
+  display: flex;
+  max-width: none;
+  min-height: 100dvh;
+  margin-block: 0;
+  padding: 1.5rem clamp(0.75rem, 2vw, 2rem);
+}
+
+.docs-page {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 1rem;
+  min-width: 0;
+  min-height: calc(100dvh - 3rem);
+}
+
+.docs-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.docs-page-header h1,
+.docs-page-header p {
+  margin: 0;
+}
+
+.docs-page-header h1 {
+  color: var(--color-text);
+  font-size: 1.5rem;
+}
+
+.docs-page-header p {
+  margin-top: 0.2rem;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+}
+
+.docs-page-header a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.docs-page-header a:hover {
+  border-color: var(--color-current);
+  color: var(--color-current);
+}
+
+.docs-frame {
+  flex: 1;
+  width: 100%;
+  min-height: 40rem;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+@media (max-width: 700px) {
+  .app-content > main:has(> .docs-page) {
+    min-height: calc(100dvh - 52px);
+    padding: 1rem 0.75rem;
+  }
+
+  .docs-page {
+    min-height: calc(100dvh - 84px);
+  }
+
+  .docs-page-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

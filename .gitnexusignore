@@ -1,0 +1,2 @@
+# Analyse the React source instead of generated, minified bundles.
+apps/predbat/predbat_ui*.js

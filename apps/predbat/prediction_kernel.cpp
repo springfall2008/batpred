@@ -135,10 +135,13 @@ inline double round4_fast(double value)
 // Mirror of utils.py calc_percent_limit() for a scalar value
 int32_t calc_percent_limit(double charge_limit, double soc_max)
 {
-    if (soc_max <= 0) {
+    if (!std::isfinite(charge_limit) || !std::isfinite(soc_max) || soc_max <= 0 || charge_limit <= 0) {
         return 0;
     }
-    return std::min(static_cast<int32_t>((charge_limit / soc_max * 100.0) + 0.5), 100);
+    if (charge_limit >= soc_max) {
+        return 100;
+    }
+    return static_cast<int32_t>((charge_limit / soc_max * 100.0) + 0.5);
 }
 
 // The SoC percent that Python's round(soc, 1) -> calc_percent_limit() pair produces.
@@ -486,7 +489,7 @@ inline double get_total_inverted(double battery_draw, double pv_dc, double pv_ac
 // rate_curve_ceiling().
 inline double rate_curve_pct(int32_t soc_percent, double rate_setting, double rate_max, const double *curve_row, double rate_min)
 {
-    soc_percent = std::max(std::min(soc_percent, int32_t(100)), int32_t(0));
+    soc_percent = std::max(std::min(std::clamp(soc_percent, 0, 100), int32_t(100)), int32_t(0));
     const double rated = curve_row[101];
     const double max_rate = (rate_max <= rated || rated <= 0.0) ? std::min(rate_max, curve_row[soc_percent]) : std::min(curve_row[soc_percent] * (rate_max / rated), curve_row[102]);
     return std::max(std::min(rate_setting, max_rate), rate_min);

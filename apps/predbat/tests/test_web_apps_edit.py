@@ -441,6 +441,31 @@ def run_web_apps_edit_tests(my_predbat):
         # as test_debug_history_client_js.py does
         print("Test: the page JS defines the delete and add handlers the buttons call")
         apps_js = get_apps_js("{}")
+        print("Test: entity JSON stays inside the script and preserves markup as data")
+        states = {
+            "sensor.<b>sample</b>": {
+                "state": '</ScRiPt><b>sample</b><!--<script> & "quoted"',
+                "unit_of_measurement": "<em>kWh</em>",
+            }
+        }
+        states_js = get_apps_js(json.dumps(states))
+        embedded_json = states_js.split("const allStates = ", 1)[1].split(";\nfunction showMessage", 1)[0]
+        if "<" in embedded_json or json.loads(embedded_json) != states:
+            print("  ERROR: entity JSON must escape HTML script delimiters without changing data")
+            failed += 1
+        if states_js.lower().count("</script>") != 1:
+            print("  ERROR: entity data introduced an extra closing script tag")
+            failed += 1
+
+        print("Test: both entity dropdowns escape names, states and units before inserting markup")
+        for function in ("populateEntityDropdown", "populateNestedEntityDropdown"):
+            dropdown_src = apps_js[apps_js.index("function {}(".format(function)) :]
+            dropdown_src = dropdown_src[: dropdown_src.index("\n}\n")]
+            for value in ("entityId", "entityValue", "unit_of_measurement"):
+                if "${escapeHtml(" + value + ")}" not in dropdown_src or "${" + value + "}" in dropdown_src:
+                    print("  ERROR: {} must escape {} in dropdown markup".format(function, value))
+                    failed += 1
+
         for expected in ["function deleteNestedValue(", "function undoDeleteNestedValue(", "function addListItem(", "function addDictKey(", "function registerPendingAdd(", "function cancelPendingAdd("]:
             if expected not in apps_js:
                 print("  ERROR: expected {!r} in the apps page JS".format(expected))
