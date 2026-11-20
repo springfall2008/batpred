@@ -616,10 +616,10 @@ class CarChargerControl:
         the end of a dispatch. A sensor with no dispatch times falls back to its state.
 
         While Octopus Smart Control is off the sensor goes on listing the plan Octopus made
-        before, which nothing will act on (#5339), so only the planned dispatches Predbat still
-        uses are followed - a bump charge the user asked for, or a charger's own schedule - and
-        the sensor's state, which reflects that plan too, is not fallen back on, even though a
-        sensor listing no dispatches could be on for a bump charge.
+        before, which nothing will act on (#5339), so of the planned dispatches only a charger's
+        own schedule is followed - a bump charge included, Octopus dispatches nothing to a
+        suspended device - and the sensor's state, which reflects that plan too, is not fallen
+        back on.
         """
         if not self.get_arg("octopus_intelligent_charging", True):
             return False

@@ -2127,7 +2127,8 @@ class Fetch:
         if switch_config and not isinstance(switch_config, list):
             switch_config = [switch_config]
         switch_id = switch_config[car_n] if switch_config and car_n < len(switch_config) else None
-        if not switch_id:
+        # An unresolved 're:' template default or a fixed value names no switch
+        if not switch_id or not isinstance(switch_id, str) or switch_id.startswith("re:"):
             return False
         state = self.get_state_wrapper(entity_id=switch_id)
         off = isinstance(state, str) and state.lower() == "off"
@@ -2634,8 +2635,9 @@ class Fetch:
                             self.record_status(message="Error: octopus_intelligent_planned_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
                 # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will act
-                # on it (#5339). Slots already delivered (completed) are real, so those are still counted, as are
-                # the manual bump/boost charges the user asked for themselves. So is a charger's own schedule: the Ohme
+                # on it (#5339), bump/boost charges included: Octopus dispatches nothing to a suspended device, as the
+                # built-in component's planned_dispatches_for_state() assumes. Slots already delivered (completed) are
+                # real, so those are still counted. So is a charger's own schedule: the Ohme
                 # component wires that in when Octopus no longer drives the charger, and Smart Control has no say in it.
                 # Slots taken from octopus_intelligent_planned_slot are the charger's own plan, so they are kept as car
                 # load - but with Octopus no longer dispatching they are not off-peak, so they are re-tagged as a charger

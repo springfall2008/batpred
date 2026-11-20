@@ -305,6 +305,20 @@ def run_octopus_smart_control_tests(my_predbat):
         kwh = _slots(my_predbat)
         failed |= _check("t11 true", kwh == [5.0, 10.0], "kwh {}".format(kwh))
 
+        print("Test 11b: an unresolved 're:' template default or a fixed value names no switch, so the plan is trusted and nothing is read")
+        items[SWITCH] = "off"
+        warned = []
+        real_log = my_predbat.log
+        my_predbat.log = lambda message, *args, **kwargs: (warned.append(message) if "fixed value" in message else None, real_log(message, *args, **kwargs))[1]
+        try:
+            for config in ("re:(switch.octopus_energy([0-9a-z_]+|)_intelligent_smart_charge)", True, ["re:(switch.nothing)"]):
+                my_predbat.args["octopus_intelligent_smart_control"] = config
+                failed |= _check("t11b {} not off".format(config), my_predbat.octopus_smart_control_off(0, save=False) is False, "")
+            failed |= _check("t11b no fixed-value warning", not warned, "logged {}".format(warned))
+        finally:
+            my_predbat.log = real_log
+            my_predbat.args["octopus_intelligent_smart_control"] = SWITCH
+
         print("Test 12: the change is logged once on a live fetch, and not at all on a save=False re-run")
         logs = []
         real_log = my_predbat.log

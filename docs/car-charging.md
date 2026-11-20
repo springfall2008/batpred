@@ -439,6 +439,7 @@ Just keep the single-sensor config (or provide a one-entry list) and car 1 will 
 
   # Only car 0 uses IOG - a single entry is sufficient
   octopus_intelligent_slot: 'binary_sensor.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_dispatching'
+  octopus_intelligent_smart_control: 'switch.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_smart_charge'
   octopus_ready_time: 'time.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_target_time'
   octopus_charge_limit: 'number.octopus_energy_{{DEVICE_ID_CAR1}}_intelligent_charge_target'
 ```
