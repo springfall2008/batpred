@@ -54,8 +54,10 @@ TOTAL_FEATURES = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_I
 # alike. A rate far outside anything training saw (a saving session or an Axle event against a near-flat tariff reached
 # 21-100 sigma) otherwise drove the ReLU layers to a state where the network returns a constant (#6147, #6208, #6259).
 # Replayed on those cases' saved histories, a +100p rate spike moved single forecast steps by up to 16x without the limit
-# and by under 4x with it, at no measurable cost in accuracy. Raising the rate blocks' minimum std (1p) as well was tried
-# and rejected: it added little on top of this and made one case's forecast far too flat
+# and by under 4x with it. Two training runs per case could not tell the accuracy apart either way: runs of the same setup
+# differed by up to 3.6x. Raising the rate blocks' minimum std (1p) as well was tried and rejected: it added little on top
+# of this and made one case's forecast far too flat. The limit is part of the input transform a model is trained under, so
+# save() records it and load() discards a model saved under a different one
 FEATURE_Z_LIMIT = 5.0
 
 
@@ -1910,6 +1912,7 @@ class LoadPredictor:
             # Prepare metadata
             metadata = {
                 "model_version": MODEL_VERSION,
+                "feature_z_limit": FEATURE_Z_LIMIT,
                 "lookback_steps": LOOKBACK_STEPS,
                 "output_steps": OUTPUT_STEPS,
                 "predict_horizon": PREDICT_HORIZON,
@@ -1981,6 +1984,13 @@ class LoadPredictor:
             saved_version = metadata.get("model_version", 0)
             if saved_version != MODEL_VERSION:
                 self.log("Warn: ML Predictor: Model version mismatch (saved={}, current={}), retraining from scratch".format(saved_version, MODEL_VERSION))
+                return False
+
+            # The weights were trained against inputs bounded at the saved limit; predicting under another would feed them a
+            # transform they never saw, so a changed FEATURE_Z_LIMIT retrains too, whether or not MODEL_VERSION was bumped with it
+            saved_limit = metadata.get("feature_z_limit")
+            if saved_limit != FEATURE_Z_LIMIT:
+                self.log("Warn: ML Predictor: Model input limit mismatch (saved={}, current={}), retraining from scratch".format(saved_limit, FEATURE_Z_LIMIT))
                 return False
 
             # Check architecture compatibility

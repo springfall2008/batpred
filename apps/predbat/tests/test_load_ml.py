@@ -54,6 +54,7 @@ def test_load_ml(my_predbat=None):
         ("training_with_temp", _test_training_with_temp, "Training with temperature input features"),
         ("model_persistence", _test_model_persistence, "Model save/load with version check"),
         ("model_version_discards_unbounded", _test_model_version_discards_unbounded, "A model saved before the inputs were bounded is discarded on load"),
+        ("model_limit_mismatch_discards", _test_model_limit_mismatch_discards, "A model saved under a different input limit is discarded on load"),
         ("cold_start", _test_cold_start, "Cold start with insufficient data"),
         ("fine_tune", _test_fine_tune, "Fine-tune on recent data"),
         ("curriculum_training", _test_curriculum_training, "Curriculum training with progressive window expansion"),
@@ -901,6 +902,57 @@ def _test_model_version_discards_unbounded():
         assert not old.model_initialized, "A discarded model should leave the predictor untrained"
         assert any("version mismatch" in line for line in logged), f"The discard should be logged, got {logged}"
     finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _test_model_limit_mismatch_discards():
+    """The input limit a model was trained under is saved with it, and a model saved under a different limit (or none)
+    is discarded on load, so tuning FEATURE_Z_LIMIT can't leave old weights predicting under a transform they never saw"""
+    import json
+    import load_predictor
+
+    predictor = LoadPredictor()
+    predictor._initialize_weights()
+    predictor.feature_mean = np.zeros(TOTAL_FEATURES, dtype=np.float32)
+    predictor.feature_std = np.ones(TOTAL_FEATURES, dtype=np.float32)
+
+    def rewrite(path, change):
+        """Rewrite a saved model's metadata with change applied."""
+        with np.load(path, allow_pickle=True) as data:
+            arrays = {key: data[key] for key in data.files}
+        metadata = json.loads(str(arrays["metadata_json"]))
+        change(metadata)
+        arrays["metadata_json"] = json.dumps(metadata)
+        np.savez(path, **arrays)
+
+    def refused(path):
+        """True when a fresh predictor refuses the model at path and logs the limit mismatch."""
+        logged = []
+        fresh = LoadPredictor(log_func=logged.append)
+        return not fresh.load(path) and not fresh.model_initialized and any("input limit mismatch" in line for line in logged)
+
+    with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
+        temp_path = f.name
+    saved_limit = load_predictor.FEATURE_Z_LIMIT
+    try:
+        assert predictor.save(temp_path), "Model save should succeed"
+        with np.load(temp_path, allow_pickle=True) as data:
+            assert json.loads(str(data["metadata_json"])).get("feature_z_limit") == saved_limit, "The limit should be saved with the model"
+        assert LoadPredictor().load(temp_path), "A model saved under the current limit should load"
+
+        # The constant is tuned after the model was saved
+        load_predictor.FEATURE_Z_LIMIT = 4.0
+        assert refused(temp_path), "A model saved under 5.0 should be discarded once the limit is 4.0"
+        load_predictor.FEATURE_Z_LIMIT = saved_limit
+
+        # The saved metadata names another limit, or none at all
+        rewrite(temp_path, lambda metadata: metadata.update(feature_z_limit=4.0))
+        assert refused(temp_path), "A model saved under limit 4.0 should be discarded"
+        rewrite(temp_path, lambda metadata: metadata.pop("feature_z_limit"))
+        assert refused(temp_path), "A model saved without a limit should be discarded"
+    finally:
+        load_predictor.FEATURE_Z_LIMIT = saved_limit
         if os.path.exists(temp_path):
             os.unlink(temp_path)
 
