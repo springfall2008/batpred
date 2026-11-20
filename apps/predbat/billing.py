@@ -546,15 +546,17 @@ class BillingReader:
             self.task.cancel()
 
     async def refresh(self, query_fn, mpans, now_utc, pace_seconds=0):
-        """Read every day in the window that is not complete yet, for each configured leg.
+        """Read every day in the window that is not complete yet, and every complete one not yet read today, for each configured leg.
 
-        Each complete day is also read again once a local day until it settles, as its costs can be revised after
-        it first arrives; a failed re-read leaves it, and the complete days after it, to the next refresh. mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
-        query_fn(query, context) returns the GraphQL data, or None for a failed read; a failed read
-        marks the leg False and leaves what was cached alone. A day read once it is BILLING_SETTLE_DAYS old
-        is settled and not read again, however much of it arrived. With pace_seconds, each query after the
-        first waits a random 0 to pace_seconds first. With credits_account set, the account's event credits are
-        read too (one query; a failed read keeps the ones already read). Returns True when new slots or credits arrived.
+        A complete day is read again once a local day until it settles, as its costs can be revised after it first
+        arrives. mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
+        query_fn(query, context) returns the GraphQL data, or None for a failed read. A failed read of an incomplete
+        day marks the leg False and leaves what was cached alone; a failed re-read of a complete day keeps its cached
+        figures and leaves it, and the complete days after it, to the next refresh. A day read once it is
+        BILLING_SETTLE_DAYS old is settled and not read again, however much of it arrived. With pace_seconds, each
+        query after the first waits a random 0 to pace_seconds first. With credits_account set, the account's event
+        credits are read too (one query; a failed read keeps the ones already read). Returns True when a half-hour
+        that differs from the cached one, or a change to the credits, arrived.
         """
         tz = _zone(self.owner.local_tz)
         changed = False

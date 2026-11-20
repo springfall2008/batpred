@@ -4570,7 +4570,8 @@ class Output:
     def calculate_history_days(self):
         """Build the History view for the days before yesterday, for the day picker, and publish them as predbat.plan_history.
 
-        Rebuilt once per local date, or sooner when new billing has been published (its complete_until moves on).
+        Rebuilt once per local date, or sooner when the billing changes: new billing published (its complete_until moves on)
+        or a billed half-hour revised in place, as when Octopus re-prices an Intelligent dispatch a day or so later.
         Only days the loaded load history reaches (max_days_previous) and the recorded rates cover are built.
         """
         today = self.now_utc.astimezone(self.local_tz).date()
