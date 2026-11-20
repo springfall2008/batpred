@@ -404,6 +404,7 @@ from tests.test_battery_temperature_fetch import (
     test_battery_temperature_history_stuck_warning,
     test_battery_temperature_history_stuck_warning_fetch,
     test_battery_temperature_history_stuck_warning_once,
+    test_templates_set_battery_temperature_history,
 )
 from tests.test_oauth_mixin import run_oauth_mixin_tests
 from tests.test_fox_oauth import run_fox_oauth_tests
@@ -978,6 +979,7 @@ def main():
         ("battery_temperature_stuck_warning", test_battery_temperature_history_stuck_warning, "Battery temperature history stuck at 0 warns, naming the GivTCP rename (#6193)", False),
         ("battery_temperature_stuck_warning_fetch", test_battery_temperature_history_stuck_warning_fetch, "Battery temperature stuck warning through the real fetch path (#6193)", False),
         ("battery_temperature_stuck_warning_once", test_battery_temperature_history_stuck_warning_once, "Battery temperature stuck warning reported once, curve-aware wording (#6193)", False),
+        ("templates_battery_temperature_history", test_templates_set_battery_temperature_history, "apps.yaml templates that set battery_temperature also set battery_temperature_history (#6270)", False),
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
         ("rate_text_scan", test_rate_text_scan, "Rate text scan tests (multi-band min/max range grouping)", False),
