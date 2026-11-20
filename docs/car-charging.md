@@ -786,6 +786,8 @@ The effect is that with a low battery Predbat may top it up in the first half ho
 Once your car is charging in the dispatch (see **Charging the battery while the car is charging** below), the rest of that dispatch is no longer assumed to go away: if it did, Predbat would notice within a cycle (5 minutes).
 Instead the house and battery pay the peak rate for 5 minutes of each half hour of it, and the car's own charging pays none of that, as the car stops with its dispatch.
 This applies whether the dispatches come from the Octopus Energy integration or from Predbat's own Octopus connection.
+Because it shares that weight with the solar forecast, a high **input_number.predbat_pv_metric10_weight** can stop Predbat cycling the battery in a cheap dispatch window that it would cycle if the same rate came from your tariff.
+Turn **switch.predbat_octopus_intelligent_pv10_dispatch_gone** (*expert mode*, On by default) Off to trust dispatch rates in the PV10% scenario as well, so dispatch windows plan like any other cheap rate while the PV10% solar weighting stays in place.
 
 - When a dispatch is withdrawn, the Octopus Energy integration's import rate sensor can keep showing its cheap rate for a while. Predbat puts those minutes back to your normal rate once no dispatch covers them, as long as it saw a dispatch covering them before.
 Nothing is changed while a car is charging, as Octopus briefly lists no dispatches while it re-plans a running charge. With **switch.predbat_octopus_intelligent_dynamic** Off the half hour in progress is left alone too, as the car may have charged in it before the dispatch was withdrawn.
