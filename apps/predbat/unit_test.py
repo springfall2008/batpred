@@ -32,6 +32,7 @@ from tests.test_plot import run_plot_tests
 from tests.test_predict_pv_power import run_predict_pv_power_tests
 from tests.test_dashboard_device_class import test_dashboard_device_class
 from tests.test_inverter_config_sensor import test_inverter_config_sensor
+from tests.test_solar_surplus import run_solar_surplus_tests
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
 from tests.test_prediction_batch import run_prediction_batch_tests
 from tests.test_kernel_static_cache import run_kernel_static_cache_tests
@@ -383,6 +384,7 @@ from tests.test_myenergi import test_myenergi
 from tests.test_wallbox import test_wallbox
 from tests.test_hypervolt import test_hypervolt
 from tests.test_car_charger_control import run_car_charger_control_tests
+from tests.test_car_cancel import run_car_cancel_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
@@ -600,6 +602,7 @@ def main():
         ("predict_pv_power", run_predict_pv_power_tests, "predict_pv_power plan-interval scaling tests", False),
         ("dashboard_device_class", test_dashboard_device_class, "Dashboard sensor device_class regression tests (#3352)", False),
         ("inverter_config_sensor", test_inverter_config_sensor, "Aggregated static prediction inputs published as sensor.<prefix>_inverter_config", False),
+        ("solar_surplus", run_solar_surplus_tests, "Solar surplus power and force export slot sensor tests", False),
         ("model_kernel", run_model_kernel_tests, "Model tests run with the C++ prediction kernel enabled", False),
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
@@ -953,6 +956,7 @@ def main():
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
         ("givtcp_rest", run_givtcp_rest_tests, "GivTCP REST client write/retry/transport tests", False),
         ("car_charger_control", run_car_charger_control_tests, "Shared Predbat-led EV charger control tests", False),
+        ("car_cancel", run_car_cancel_tests, "Cancel a car slot for export tests", False),
         # myenergi Zappi and Eddi unit tests
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
         ("wallbox", test_wallbox, "Wallbox EV charger tests (transport, normalisation, publishing, auto-config, controls, plan-led charging)", False),
