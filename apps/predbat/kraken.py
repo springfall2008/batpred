@@ -1837,7 +1837,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         condition as the set_arg (export rates only once they are actually available) but regardless
         of the one-shot wired latches, since the record describes the account, not whether wiring
         already happened - except that a rate source the user chose in apps.yaml ranking below metric_octopus_*
-        is kept by run(), so then the rate bindings (and for import the standing charge) are not claimed.
+        is kept by run(), so then the rate binding is not claimed.
+        The import standing charge is bound whatever rate source they chose, unless they set metric_standing_charge
+        themselves, in which case that is not claimed either.
         No tariff flags: Kraken exposes nothing to derive them from.
 
         cars: one record per LIVE SmartFlex EV (every entry in intelligent_devices), bound to the
@@ -1865,9 +1867,13 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
             return {setting: {"entity_id": self.get_entity_name(domain, suffix), "domain": domain, "access": "r"}}
 
         import_mpan = self.import_mpan or self.configured_mpan
-        # run() keeps a lower-ranked rate source the user chose in apps.yaml and binds neither the rates nor the standing charge, so they are not described as bound
+        # run() keeps a lower-ranked rate source the user chose in apps.yaml and binds neither the rates only, so they are not described as bound
         import_wired = not self.user_set_arg(rate_sources_below_octopus("import"))
-        import_meter = self._discovery_meter("import", self.current_tariff, import_mpan, self.account_id, {**sensor("metric_octopus_import", "import_rates"), **sensor("metric_standing_charge", "import_standing")} if import_wired else {})
+        import_entities = sensor("metric_octopus_import", "import_rates") if import_wired else {}
+        if not self.user_fixed_arg("metric_standing_charge"):
+            # run() leaves the user's own metric_standing_charge as written, so the Kraken sensor is only described as bound when they have not set one
+            import_entities.update(sensor("metric_standing_charge", "import_standing"))
+        import_meter = self._discovery_meter("import", self.current_tariff, import_mpan, self.account_id, import_entities)
         if self.import_standing_charge is not None:
             import_meter["ratings"] = {"standing_charge_p": round(self.import_standing_charge * 100, 4)}
         meters = [import_meter]
@@ -2014,7 +2020,9 @@ class KrakenAPI(ComponentBase, _AUTH_BASE):
         # Wire import into fetch.py once tariff is discovered (retries until successful)
         if not self.wired and self.current_tariff:
             # A rate source the user chose in apps.yaml that ranks below metric_octopus_import is kept, not out-ranked
-            if self.set_arg_unless_user_set("metric_octopus_import", self.get_entity_name("sensor", "import_rates"), rate_sources_below_octopus("import")):
+            self.set_arg_unless_user_set("metric_octopus_import", self.get_entity_name("sensor", "import_rates"), rate_sources_below_octopus("import"))
+            # The standing charge is not a rate source, so it is wired whichever rate source the user chose; only a fixed value of their own (not the template's "re:" pattern) wins
+            if not self.user_fixed_arg("metric_standing_charge"):
                 self.set_arg("metric_standing_charge", self.get_entity_name("sensor", "import_standing"))
             self.wired = True
         # Wire export into fetch.py once export rates are actually available.

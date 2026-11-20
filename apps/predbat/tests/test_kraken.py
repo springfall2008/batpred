@@ -2670,7 +2670,7 @@ def test_kraken_discovery_omits_bindings_for_user_set_rate_source():
     api = _discovery_kraken()
     api.base.args_from_apps_yaml = {"metric_spot_import": "sensor.nordpool_raw"}
     meters = {record["direction"]: record for record in api.build_discovery()["meters"]}
-    assert "entities" not in meters["import"], "import rate and standing charge are not bound, so not claimed"
+    assert list(meters["import"]["entities"]) == ["metric_standing_charge"], "the import rate is not bound, but the standing charge still is"
     assert meters["import"]["ratings"] == {"standing_charge_p": 53.21}, "the tariff's own standing charge is still reported"
     assert "metric_octopus_export" in meters["export"]["entities"], "an import source does not block export"
 
@@ -2682,6 +2682,26 @@ def test_kraken_discovery_omits_bindings_for_user_set_rate_source():
     api.base.args_from_apps_yaml = {"metric_octopus_import": "sensor.mine"}
     meters = {record["direction"]: record for record in api.build_discovery()["meters"]}
     assert "metric_octopus_import" in meters["import"]["entities"], "a same-rank or higher source does not stop Kraken wiring"
+
+
+def test_kraken_discovery_omits_user_set_standing_charge():
+    """A metric_standing_charge the user set in apps.yaml is kept by run(), so discovery does not claim the Kraken standing charge sensor."""
+    api = _discovery_kraken()
+    api.base.args_from_apps_yaml = {"metric_standing_charge": 0.55}
+    meter = next(record for record in api.build_discovery()["meters"] if record["direction"] == "import")
+    assert list(meter["entities"]) == ["metric_octopus_import"], meter
+    assert meter["ratings"] == {"standing_charge_p": 53.21}, "the tariff's own figure is still reported"
+    api.base.args_from_apps_yaml = {"metric_standing_charge": "re:(sensor.octopus_energy_electricity_[0-9a-z]+_current_standing_charge)"}
+    meter = next(record for record in api.build_discovery()["meters"] if record["direction"] == "import")
+    assert "metric_standing_charge" in meter["entities"], "the template's re: pattern is auto-discovery, so the Kraken binding is still claimed"
+
+
+def test_user_fixed_arg():
+    """A number or sensor name is a fixed user value; unset and re: patterns are not."""
+    api = make_kraken_api()
+    for raw, expected in [({}, False), ({"x": None}, False), ({"x": "re:(sensor.a)"}, False), ({"x": 0}, True), ({"x": 0.55}, True), ({"x": "sensor.mine"}, True)]:
+        api.base.args_from_apps_yaml = raw
+        assert api.user_fixed_arg("x") is expected, raw
 
 
 def test_user_set_arg_is_read_only():
@@ -2832,7 +2852,7 @@ def test_run_keeps_user_import_rate_source():
     for key in ["metric_spot_import", "metric_energidataservice_import", "metric_stromligning_import_today", "metric_stromligning_import_tomorrow"]:
         api, set_names, logs = _run_wiring({key: "sensor.user_rates"})
         assert "metric_octopus_import" not in set_names, "{} set: metric_octopus_import must not be wired, got {}".format(key, set_names)
-        assert "metric_standing_charge" not in set_names, "{} set: the standing charge must be left to the user, got {}".format(key, set_names)
+        assert "metric_standing_charge" in set_names, "{} set: the standing charge is not a rate source and must still be wired, got {}".format(key, set_names)
         assert api.wired is True, "{} set: wiring must still be marked done so it is not retried every cycle".format(key)
         assert any(line.startswith("Info: apps.yaml sets '{}".format(key)) for line in logs), "{} set: expected a note, got {}".format(key, logs)
 
@@ -2852,6 +2872,22 @@ def test_run_user_import_source_does_not_block_export():
     api, set_names, _ = _run_wiring({"metric_spot_import": "sensor.user_rates"}, export=True)
     assert "metric_octopus_import" not in set_names and "metric_octopus_export" in set_names, set_names
     assert api.wired is True and api.export_wired is True
+
+
+def test_run_keeps_user_standing_charge():
+    """A metric_standing_charge the user set themselves is left as written; otherwise the Kraken one is wired whatever rate source they chose."""
+    _, set_names, _ = _run_wiring({"metric_standing_charge": 0.55})
+    assert "metric_standing_charge" not in set_names, set_names
+    assert "metric_octopus_import" in set_names, set_names
+
+
+def test_run_replaces_template_standing_charge_pattern():
+    """The shipped template's re: pattern for metric_standing_charge is auto-discovery, so the Kraken sensor still replaces it."""
+    pattern = "re:(sensor.octopus_energy_electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)"
+    _, set_names, _ = _run_wiring({"metric_standing_charge": pattern})
+    assert "metric_standing_charge" in set_names, set_names
+    _, set_names, _ = _run_wiring({"metric_standing_charge": pattern, "metric_spot_import": "sensor.user_rates"})
+    assert "metric_standing_charge" in set_names and "metric_octopus_import" not in set_names, set_names
 
 
 def test_run_wires_when_user_set_only_basic_or_octopus_rates():

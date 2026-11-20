@@ -364,6 +364,18 @@ class ComponentBase(ABC):
                 return other
         return None
 
+    def user_fixed_arg(self, arg):
+        """
+        Return True if the user's own apps.yaml sets `arg` to a fixed value (a number, a sensor name), False if it is unset or a "re:" pattern.
+
+        A "re:" pattern is auto-discovery, which is what the shipped templates use for settings such as metric_standing_charge, so it does not
+        count as the user choosing a value and the component may still bind it. Read-only: it binds and logs nothing.
+        """
+        raw_value = (getattr(self.base, "args_from_apps_yaml", None) or {}).get(arg)
+        if raw_value is None:
+            return False
+        return not (isinstance(raw_value, str) and raw_value.startswith("re:"))
+
     def set_arg_unless_user_set(self, arg, value, other_args):
         """
         Like set_arg(), for auto-discovery code binding `arg` when the user may have chosen a different apps.yaml key to

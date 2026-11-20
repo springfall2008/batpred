@@ -1713,9 +1713,11 @@ class OctopusAPI(ComponentBase):
         self.set_arg("octopus_free_electricity", self.get_entity_name("sensor", "free_electricity"))
         for tariff in tariffs:
             # A rate source the user chose in apps.yaml that ranks below metric_octopus_xxx is kept, not out-ranked
-            bound = self.set_arg_unless_user_set("metric_octopus_{}".format(tariff), self.get_entity_name("sensor", tariff + "_rates"), rate_sources_below_octopus(tariff))
-            if bound and tariff == "import":
-                self.set_arg("metric_standing_charge", self.get_entity_name("sensor", tariff + "_standing"))
+            self.set_arg_unless_user_set("metric_octopus_{}".format(tariff), self.get_entity_name("sensor", tariff + "_rates"), rate_sources_below_octopus(tariff))
+            if tariff == "import":
+                # The standing charge is not a rate source, so it is wired whichever rate source the user chose; only a fixed value of their own (not the template's "re:" pattern) wins
+                if not self.user_fixed_arg("metric_standing_charge"):
+                    self.set_arg("metric_standing_charge", self.get_entity_name("sensor", tariff + "_standing"))
         devices = self.get_intelligent_devices()
         # Also enter this block when the device set has emptied, so the slot args are cleared rather
         # than left pointing at a device that no longer exists. Only once real devices have actually

@@ -33,6 +33,23 @@ If your energy provider prices on the basis of smaller (or larger) intervals the
   plan_interval_minutes: duration
 ```
 
+## Which rate source is used
+
+If more than one import rate source is configured, Predbat uses the first of these (in order) that is set:
+`rates_import_octopus_url`, `metric_octopus_import`, `metric_spot_import`, `metric_energidataservice_import`, `metric_stromligning_import_today`/`_tomorrow`, then `rates_import`.
+Export follows the same order with the `export` names.
+If you configure both `metric_octopus_*` and `metric_spot_*`, the `metric_octopus_*` entry is used and a warning is logged.
+
+`metric_octopus_*` is meant for the Octopus Energy integration or Predbat's Octopus / Kraken components. Supplying `raw_today` / `raw_tomorrow` rates through it still works but is **deprecated**
+(Predbat logs a one-off warning): please move those entries to [`metric_spot_import` / `metric_spot_export`](#other-energy-spot-rate-sensor-integrations).
+
+The Predbat Octopus and Kraken (EDF / E.ON) components auto-configure `metric_octopus_*`. If you have set `metric_spot_*`, `metric_energidataservice_*` or `metric_stromligning_*` yourself in `apps.yaml`,
+your entry is kept and the rates for that direction (import or export) are not auto-configured, and a note is logged once. The other direction is still auto-configured.
+
+A `metric_octopus_*` entry of your own is not treated as a different source, so auto-configuration still replaces it.
+
+The [standing charge](#standing-charge) is not a rate source and is handled separately.
+
 ## Octopus Energy direct
 
 If your electricity supplier is Octopus Energy then the simplest way to provide Predbat with your electricity pricing information is to connect Predbat directly to Octopus.
@@ -135,23 +152,23 @@ Note: Predbat using the Octopus integration rates relies upon the day rate event
 There have been occasions with some Octopus Integration installations where the event name is as above but the sensor name has a different prefix, e.g. sensor.electricity_METER_NUMBER_current_rate and not sensor.octopus_energy_electricity_METER_NUMBER_current_rate.<BR>
 If this is the case then the sensor must be renamed to the correct format so that Predbat can function correctly.
 
-**Note:** `metric_octopus_import` and `metric_octopus_export` are for sensors from the Octopus Energy integration (or the Predbat Octopus component). They are what Predbat uses to detect an Agile tariff and to work out your AgilePredict region automatically.
-If your rates come from any other supplier, use [metric_spot_import / metric_spot_export](#other-energy-spot-rate-sensor-integrations) instead.
+**Note:** `metric_octopus_import` and `metric_octopus_export` are for sensors from the Octopus Energy integration (or the Predbat Octopus / Kraken component). They are what Predbat uses to detect an Agile tariff and to work out your AgilePredict region automatically.
 
-Supplying `raw_today` / `raw_tomorrow` rates through `metric_octopus_import` / `metric_octopus_export` still works, but is **deprecated** (Predbat logs a one-off warning): please move those entries to `metric_spot_import` / `metric_spot_export`.
+For any other supplier use [metric_spot_import / metric_spot_export](#other-energy-spot-rate-sensor-integrations) - see [Which rate source is used](#which-rate-source-is-used).
 
 ### Standing charge
 
 Predbat can also (optionally) include the daily standing charge in cost predictions.
 The following configuration item in `apps.yaml` defaults to obtaining the standing charge from the Octopus Energy integration:
 
-- **metric_standing_charge** - Standing charge in pounds. By default points to the Octopus Energy integration sensor sensor.octopus_energy_electricity_METER_NUMBER_current_standing_charge
+- **metric_standing_charge** - Standing charge in major currency unit (pounds, euros, etc). By default points to the Octopus Energy integration sensor sensor.octopus_energy_electricity_METER_NUMBER_current_standing_charge
 
-You can manually change this to a standing charge in pounds, e.g. 0.50 is 50p, or delete this line from `apps.yaml`, or set it to zero
+The Predbat Octopus and Kraken components set `metric_standing_charge` from your supplier's figure whichever rate source you use, including `metric_spot_*`.
+
+This overrides the default `re:(...)` pattern in the `apps.yaml` template. If you set `metric_standing_charge` to a fixed value yourself in `apps.yaml` (a standing charge in major currency unit, or a sensor name), your value is kept.
+
+You can set it to a standing charge in major currency unit, e.g. 0.50 is 50p, or set it to zero
 if you don't want the standing charge (and only have consumption usage) to be included in Predbat charts and output data.
-
-Note that this configuration option to suppress the standing charge only applies if you are using the Octopus Integration from Predbat.
-If you are using the Octopus Energy direct method of Predbat directly connecting to Octopus then the standing charge will always be included in the plan and charts.
 
 ### Octopus Saving sessions (Power Down events)
 
@@ -292,15 +309,7 @@ e.g. (for DNO region A)
   rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
 ```
 
-If you configure the rates_import_octopus_url then Predbat will use this instead of metric_octopus or rates_import.
-Similarly, rates_export_octopus_url takes precedence over metric_octopus_export or rates_export.
-
-If more than one import rate source is configured, Predbat uses the first of these that is set:
-`rates_import_octopus_url`, `metric_octopus_import`, `metric_spot_import`, `metric_energidataservice_import`, `metric_stromligning_import_today`/`_tomorrow`, then `rates_import`.
-Export follows the same order with the `export` names.
-If you configure both `metric_octopus_*` and `metric_spot_*`, the `metric_octopus_*` entry is used and a warning is logged.
-
-If the Predbat Octopus or Kraken (EDF / E.ON) component is set to auto-configure your rates but you have set `metric_spot_*`, `metric_energidataservice_*` or `metric_stromligning_*` yourself in `apps.yaml`, your entry is kept and the rates are not auto-configured for that direction (import or export).  Additionally, for import, `metric_standing_charge` is not wired either, so it stays at its default of 0 rather than the supplier's figure.
+If you configure `rates_import_octopus_url` (or `rates_export_octopus_url`) Predbat uses it in preference to every other rate source - see [Which rate source is used](#which-rate-source-is-used).
 
 A full list of available Octopus products is at <https://api.octopus.energy/v1/products/>.
 
@@ -405,7 +414,7 @@ is normally needed to convert them into a sensor with `raw_today` and (optionall
 ```yaml
   metric_spot_import: 'sensor.current_buy_electricity_price_raw'
   metric_spot_export: 'sensor.current_sell_electricity_price_raw'
-  metric_standing_charge: 0
+  metric_standing_charge: 0.50
 ```
 
 - **metric_spot_import** - Import rates, a sensor with `raw_today` / `raw_tomorrow` attributes as described below
@@ -418,7 +427,7 @@ The AgilePredict forecast is designed for Octopus Agile tariffs and should be le
 The separate Nord Pool day-ahead future rate options (`futurerate_url` with `futurerate_adjust_import` / `futurerate_adjust_export`) are independent of the rate settings, and work with whichever import and export rates Predbat has loaded.
 
 !!!
-    Note: `metric_octopus_import` and `metric_octopus_export` also accept sensors in this format and continue to work, but this is deprecated:
+    `metric_octopus_import` and `metric_octopus_export` also accept sensors in this format, but that is deprecated - see [Which rate source is used](#which-rate-source-is-used).
     Predbat logs a one-off warning and you should move to using `metric_spot_import` / `metric_spot_export`.
 
 ### Sensor data format

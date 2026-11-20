@@ -364,8 +364,8 @@ def test_octopus_auto_rates(my_predbat):
     metric_octopus_xxx ranks above metric_spot_xxx, metric_energidataservice_xxx and metric_stromligning_xxx in
     fetch_sensor_data(), so an auto-discovered metric_octopus_xxx would silently win over them. When the user's
     apps.yaml sets one of the lower ranked sources for a direction (import or export), that direction is left alone
-    (and for import metric_standing_charge too) and a note is logged once. A direction with no such entry is
-    auto-configured exactly as before, including over the user's own metric_octopus_xxx.
+    and a note is logged once. For import, metric_standing_charge is still auto-configured, unless the user set it themselves.
+    A direction with no such entry is auto-configured exactly as before, including over the user's own metric_octopus_xxx.
     """
     print("**** Running octopus_auto_rates tests ****")
     failed = False
@@ -399,10 +399,10 @@ def test_octopus_auto_rates(my_predbat):
         else:
             print("Test 1 passed")
 
-        print("*** Test 2: user metric_spot_import - import (and the standing charge) are kept, export is still auto-configured, one note")
+        print("*** Test 2: user metric_spot_import - import rates are kept, export and the standing charge are still auto-configured, one note")
         set_args, infos = run_case({"metric_spot_import": "sensor.my_spot_import"})
-        if set_args != {"metric_octopus_export"}:
-            print("ERROR: Test 2 expected only metric_octopus_export auto-configured, got {}".format(sorted(set_args)))
+        if set_args != {"metric_octopus_export", "metric_standing_charge"}:
+            print("ERROR: Test 2 expected metric_octopus_export and metric_standing_charge auto-configured, got {}".format(sorted(set_args)))
             failed = True
         elif "metric_octopus_import" in my_predbat.args or my_predbat.args.get("metric_spot_import") != "sensor.my_spot_import":
             print("ERROR: Test 2 the user's import setting must be left as written and metric_octopus_import left unset")
@@ -426,8 +426,8 @@ def test_octopus_auto_rates(my_predbat):
 
         print("*** Test 4: Energi Data Service import and export - nothing for rates is auto-configured")
         set_args, infos = run_case({"metric_energidataservice_import": "sensor.eds", "metric_energidataservice_export": "sensor.eds_export"})
-        if set_args:
-            print("ERROR: Test 4 expected no Octopus rate args auto-configured, got {}".format(sorted(set_args)))
+        if set_args != {"metric_standing_charge"}:
+            print("ERROR: Test 4 expected no rates auto-configured but the standing charge still set, got {}".format(sorted(set_args)))
             failed = True
         elif len(infos) != 2:
             print("ERROR: Test 4 expected one note per direction, got {}".format(infos))
@@ -475,6 +475,26 @@ def test_octopus_auto_rates(my_predbat):
             failed = True
         else:
             print("Test 7 passed")
+
+        print("*** Test 8: the user's own metric_standing_charge is kept, while the import rates are still auto-configured")
+        set_args, infos = run_case({"metric_standing_charge": 0.55})
+        if my_predbat.args.get("metric_standing_charge") != 0.55:
+            print("ERROR: Test 8 the user's metric_standing_charge must be left as written, got {}".format(my_predbat.args.get("metric_standing_charge")))
+            failed = True
+        elif set_args != {"metric_octopus_import", "metric_octopus_export"}:
+            print("ERROR: Test 8 expected both rates auto-configured, got {}".format(sorted(set_args)))
+            failed = True
+        else:
+            print("Test 8 passed")
+
+        print("*** Test 9: the template's re: pattern for metric_standing_charge is auto-discovery, so it is still replaced")
+        pattern = "re:(sensor.octopus_energy_electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)"
+        run_case({"metric_standing_charge": pattern})
+        if my_predbat.args.get("metric_standing_charge") == pattern or "metric_standing_charge" not in my_predbat.args:
+            print("ERROR: Test 9 the template's re: pattern should be replaced by the discovered standing charge sensor, got {}".format(my_predbat.args.get("metric_standing_charge")))
+            failed = True
+        else:
+            print("Test 9 passed")
 
     finally:
         my_predbat.args.clear()
