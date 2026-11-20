@@ -24,6 +24,25 @@ from utils import dp2
 MARGINAL_EXTRA_KWH_LEVELS = [1, 2, 4, 8]
 MARGINAL_EXTRA_KWH_LEVEL_NAMES = ["low", "med", "high", "ev"]  # Example labels for the extra load levels
 MARGINAL_TIME_OFFSETS = [0, 2 * 60, 4 * 60, 6 * 60, 8 * 60, 10 * 60, 12 * 60]
+MARGINAL_CHEAP_RANGE_FRACTION = 0.05  # With a 0p or negative minimum, "cheap" is within this fraction of the rate range above it (#5826)
+
+
+def marginal_thresholds(rate_min, rate_max):
+    """
+    The (cheap, moderate) marginal cost thresholds for base import rates running from rate_min to rate_max.
+
+    With a positive minimum, cheap is rate_min x 1.2, within 20% of the cheapest rate. Multiplying doesn't widen a 0p
+    or negative minimum, though: at -5p it put the threshold at -6p, below the cheapest rate, and at 0p at 0, so nothing
+    could read cheap on a plunge-pricing day (#5826). There, cheap is instead 5% of the range above the minimum, and
+    never below 0p, so a marginal cost of 0p or less always reads cheap.
+    """
+    if rate_min > 0:
+        cheap_threshold = rate_min * 1.2
+    else:
+        cheap_threshold = max(rate_min + (rate_max - rate_min) * MARGINAL_CHEAP_RANGE_FRACTION, 0.0)
+    # "Moderate" if above cheap but below half of max
+    moderate_threshold = max(rate_max * 0.5, rate_min * 1.5)
+    return cheap_threshold, moderate_threshold
 
 
 class Marginal:
@@ -194,8 +213,7 @@ class Marginal:
         min_import_cost = self.rate_min_base
         max_import_cost = self.rate_max_base
 
-        cheap_threshold = min_import_cost * 1.2  # Example threshold for "cheap" energy
-        moderate_threshold = max(max_import_cost * 0.5, min_import_cost * 1.5)  # "Moderate" if above cheap but below half of max
+        cheap_threshold, moderate_threshold = marginal_thresholds(min_import_cost, max_import_cost)
 
         for state_name in MARGINAL_EXTRA_KWH_LEVEL_NAMES:
             state_value = self.marginal_costs_matrix.get(MARGINAL_EXTRA_KWH_LEVELS[MARGINAL_EXTRA_KWH_LEVEL_NAMES.index(state_name)], {}).get(first_time_label, 0)

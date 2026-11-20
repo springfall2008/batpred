@@ -11,7 +11,7 @@
 
 from tests.test_infra import reset_rates, reset_inverter
 from prediction import Prediction
-from marginal import MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_EXTRA_KWH_LEVEL_NAMES
+from marginal import MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_EXTRA_KWH_LEVEL_NAMES, marginal_thresholds
 from utils import dp2
 
 
@@ -229,10 +229,50 @@ def test_marginal_costs(my_predbat):
                 print("ERROR: saving session: '{}' = '{}' but expected 'off' (20p is above the 15p moderate threshold of a 30p base peak)".format(bs_key, bs_state))
                 failed = True
 
+    failed |= marginal_costs_thresholds_non_positive_min(my_predbat)
+
     if not failed:
         print("*** test_marginal_costs PASSED ***")
     else:
         print("*** test_marginal_costs FAILED ***")
+    return failed
+
+
+def marginal_costs_thresholds_non_positive_min(my_predbat):
+    """
+    The cheapest slot reads cheap when the day's lowest rate is negative or 0p, and positive-minimum days keep rate_min x 1.2 (#5826).
+    """
+    print("*** Running test: marginal_costs thresholds with a negative or 0p minimum")
+    failed = False
+
+    # A positive minimum keeps exactly the old thresholds, however small it is next to the range
+    for rate_min, rate_max in ((10.0, 35.0), (13.0, 40.0), (7.0, 30.0), (25.0, 25.0), (20.0, 80.0), (15.0, 100.0), (3.0, 35.0), (0.5, 30.0)):
+        cheap, moderate = marginal_thresholds(rate_min, rate_max)
+        if abs(cheap - rate_min * 1.2) > 1e-9 or abs(moderate - max(rate_max * 0.5, rate_min * 1.5)) > 1e-9:
+            print("ERROR: thresholds for {}..{} are {}/{} but expected the unchanged {}/{}".format(rate_min, rate_max, cheap, moderate, rate_min * 1.2, max(rate_max * 0.5, rate_min * 1.5)))
+            failed = True
+
+    # A 0p or negative minimum: cheap is 5% of the range above it, never below 0p. rate_minmax() never lets rate_max fall below 0
+    for rate_min, rate_max, expected_cheap, expected_moderate in ((0.0, 30.0, 1.5, 15.0), (-1.0, 35.0, 0.8, 17.5), (-5.0, 35.0, 0.0, 17.5), (-20.0, 35.0, 0.0, 17.5), (-20.0, 0.0, 0.0, 0.0)):
+        cheap, moderate = marginal_thresholds(rate_min, rate_max)
+        if abs(cheap - expected_cheap) > 1e-9 or abs(moderate - expected_moderate) > 1e-9:
+            print("ERROR: thresholds for {}..{} are {}/{} but expected {}/{}".format(rate_min, rate_max, cheap, moderate, expected_cheap, expected_moderate))
+            failed = True
+
+    # Published sensors: the cheapest slot of a plunge-pricing day, and of a day whose minimum is 0p, reads cheap
+    first_time_label = my_predbat.marginal_time_labels[0]
+    for rate_min, cost in ((-5.0, -5.0), (0.0, 0.3)):
+        my_predbat.marginal_costs_matrix = {kwh: {first_time_label: cost} for kwh in MARGINAL_EXTRA_KWH_LEVELS}
+        my_predbat.rate_min_base = rate_min
+        my_predbat.rate_max_base = 35.0
+        my_predbat.publish_marginal_costs()
+        for state_name in MARGINAL_EXTRA_KWH_LEVEL_NAMES:
+            for kind, expected in (("cheap", "on"), ("moderate", "off")):
+                bs_key = "binary_sensor.{}_marginal_rate_now_{}_is_{}".format(my_predbat.prefix, state_name, kind)
+                bs_state = my_predbat.dashboard_values.get(bs_key, {}).get("state")
+                if bs_state != expected:
+                    print("ERROR: minimum {}p: '{}' = '{}' but expected '{}' ({}p is the cheapest slot)".format(rate_min, bs_key, bs_state, expected, cost))
+                    failed = True
     return failed
 
 
