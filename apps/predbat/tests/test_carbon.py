@@ -25,6 +25,8 @@ class MockCarbonAPI(CarbonAPI):
         # Don't call parent __init__ to avoid ComponentBase
         self.postcode = "BS16 1AB"
         self.automatic = False
+        self.last_fetch_error = None
+        self.api_started = True
         self.failures_total = 0
         self.last_updated_timestamp = None
         self.carbon_data_points = []
@@ -92,6 +94,8 @@ def test_carbon(my_predbat=None):
         ("initialisation", _test_carbon_initialization, "Carbon API initialisation"),
         ("fetch_success", _test_fetch_carbon_data_success, "Fetch carbon data success"),
         ("http_error", _test_fetch_carbon_data_http_error, "HTTP error handling (404, 500)"),
+        ("failure_details", _test_failure_details, "DNS, body timeouts, HTTP and malformed response details"),
+        ("refresh_health", _test_refresh_health, "Refresh failures, recovery and expiry"),
         ("timeout", _test_fetch_carbon_data_timeout, "Timeout handling"),
         ("json_error", _test_fetch_carbon_data_json_error, "JSON parsing error"),
         ("empty_data", _test_fetch_carbon_data_empty, "Empty data response"),
@@ -352,6 +356,7 @@ def _test_fetch_carbon_data_cache_skip(my_predbat=None):
 
     # Set last updated to 2 hours ago
     api.last_updated_timestamp = datetime.now(timezone.utc) - timedelta(hours=2)
+    api.carbon_data_points = _carbon_forecast_points(datetime.now(timezone.utc), 48)
 
     with patch("carbon.aiohttp.ClientSession") as mock_session_class:
         run_async(api.fetch_carbon_data())
@@ -1155,4 +1160,64 @@ def _test_carbon_discovery_run_files_report(my_predbat=None):
     api.report_discovery = filed.append
     asyncio.run(api.run(60, False))
     assert len(filed) == 1 and filed[0]["forecasts"][0]["kind"] == "carbon", filed
+    return 0
+
+
+def _test_refresh_health(my_predbat=None):
+    """Empty timeouts stay visible, stale forecasts survive failures, and valid refreshes recover."""
+    api = MockCarbonAPI()
+    api.carbon_data_points = _carbon_forecast_points(datetime.now(timezone.utc) - timedelta(minutes=5), 48)
+    previous = list(api.carbon_data_points)
+    session = create_aiohttp_mock_session(exception=asyncio.TimeoutError())
+    with patch("carbon.aiohttp.ClientSession", return_value=session) as factory:
+        assert run_async(api.run(900, False)) is False
+        timeout = factory.call_args.kwargs["timeout"]
+        assert (timeout.total, timeout.connect, timeout.sock_read) == (30, 10, 20)
+    assert api.failures_total == 1 and not api.is_alive()
+    assert api.last_updated_timestamp is None
+    assert "TimeoutError" in api.health_message()
+    assert any("total timeout=30s" in line and "TimeoutError" in line for line in api.log_messages)
+    assert api.dashboard_items["sensor.predbat_carbon_intensity"]["attributes"]["forecast"] == previous
+    response = create_aiohttp_mock_response(status=200, json_data=_carbon_api_response(datetime.now(timezone.utc) - timedelta(minutes=5), 48))
+    with patch("carbon.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)):
+        assert run_async(api.run(1800, False)) is True
+    assert api.is_alive() and api.last_fetch_error is None
+    updated = api.last_updated_timestamp
+    with patch("carbon.aiohttp.ClientSession") as factory:
+        assert run_async(api.fetch_carbon_data()) is True
+        factory.assert_not_called()
+    assert api.last_updated_timestamp == updated
+    api.carbon_data_points = _carbon_forecast_points(datetime.now(timezone.utc) - timedelta(hours=50), 48)
+    api.publish_carbon_data()
+    assert not api.is_alive()
+    item = api.dashboard_items["sensor.predbat_carbon_intensity"]
+    assert item["state"] == "unknown" and item["attributes"]["forecast"] == []
+    api.last_updated_timestamp = None
+    response = create_aiohttp_mock_response(status=200, json_data={"data": {"data": [{"from": "invalid"}]}})
+    with patch("carbon.aiohttp.ClientSession", return_value=create_aiohttp_mock_session(response)):
+        assert run_async(api.fetch_carbon_data()) is False
+    assert api.last_updated_timestamp is None and not api.is_alive()
+    return 0
+
+
+def _test_failure_details(my_predbat=None):
+    """Each failed refresh counts once, preserves fetch age, and exposes a meaningful reason."""
+    for session, expected in [
+        (create_aiohttp_mock_session(exception=aiohttp.ClientConnectionError("Temporary failure in name resolution")), "ClientConnectionError"),
+        (create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_exception=asyncio.TimeoutError())), "TimeoutError"),
+        (create_aiohttp_mock_session(create_aiohttp_mock_response(status=503)), "HTTP 503"),
+        (create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_exception=ValueError("bad JSON"))), "ValueError"),
+        (create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data={"data": {"data": []}})), "No usable forecast"),
+    ]:
+        api = MockCarbonAPI()
+        api.carbon_data_points = _carbon_forecast_points(datetime.now(timezone.utc) - timedelta(hours=5), 48)
+        updated = datetime.now(timezone.utc) - timedelta(hours=5)
+        api.last_updated_timestamp = updated
+        with patch("carbon.aiohttp.ClientSession", return_value=session):
+            assert run_async(api.run(900, False)) is False
+        assert api.failures_total == 1 and api.last_updated_timestamp == updated
+        assert expected in api.health_message(), api.health_message()
+        assert not api.is_alive()
+        if expected == "TimeoutError":
+            assert any("read=20s" in line for line in api.log_messages)
     return 0
