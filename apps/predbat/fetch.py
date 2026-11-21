@@ -69,7 +69,7 @@ from const import (
     BATTERY_RATE_GRID_RESAVE_MINUTES,
     BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE,
     BATTERY_RATE_GRID_SCAN_VERSION,
-    BATTERY_RATE_GRID_KEY_SETTLE_MINUTES,
+    BATTERY_RATE_GRID_KEY_SETTLE_CYCLES,
     BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES,
     BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE,
     BATTERY_RATE_GRID_MAX_AGE_DAYS,
@@ -4206,7 +4206,7 @@ class Fetch:
         num_cars = min(self.get_arg("num_cars", 1), PREDBAT_MAX_CARS)
         self.car_charging_max_rate = [self.car_max_rate_cap(car_n) for car_n in range(max(num_cars, 1))]
 
-    def battery_rate_grid_update(self, inverter, discharge):
+    def battery_rate_grid_update(self, inverter, discharge, quick=False):
         """
         Update the charge (or discharge) rate grid the plan reads its ceiling from.
 
@@ -4224,6 +4224,8 @@ class Fetch:
         Args:
             inverter: the Inverter whose (fleet) history is scanned
             discharge: True for the discharge grid
+            quick: True for the quick update between plan cycles, which does not refresh the inverter values the scan key is
+                built from
         """
         from ha import run_async
 
@@ -4345,22 +4347,29 @@ class Fetch:
             load_empty_scan()
         last_success = self.battery_rate_grid_last_success.get(kind)
         # A key that differs from the one the stored samples were measured under may be a passing value (a rated rate or
-        # battery size read as its default while an entity is unavailable, most likely just after a restart): the scan waits
-        # until it has held for BATTERY_RATE_GRID_KEY_SETTLE_MINUTES - in time, as the quick updates between cycles call this
-        # without refreshing those values - so one bad reading cannot re-measure every stored day against it. At most
+        # battery size read as its default while an entity is unavailable, most likely just after a restart): it only counts
+        # once BATTERY_RATE_GRID_KEY_SETTLE_CYCLES consecutive plan cycles agree on it. Only those refresh the inverter
+        # values: a quick update reuses the last cycle's, so it neither confirms a key nor starts a scan under an unconfirmed
+        # one. A due scan waits for that, so one bad reading cannot re-measure every stored day against it, for at most
         # BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES, so a key that never settles still gets scanned
-        previous_key = self.battery_rate_grid_previous_basis.get(kind)
-        if previous_key is None or not self.rate_grid_scan_key_matches(previous_key, scan_key):
-            self.battery_rate_grid_basis_since[kind] = self.now_utc
-        self.battery_rate_grid_previous_basis[kind] = scan_key
+        if not quick:
+            previous_key = self.battery_rate_grid_previous_basis.get(kind)
+            agreeing = self.battery_rate_grid_basis_cycles.get(kind, 0) + 1 if self.rate_grid_scan_key_matches(previous_key, scan_key) else 1
+            self.battery_rate_grid_basis_cycles[kind] = agreeing
+            self.battery_rate_grid_previous_basis[kind] = scan_key
         measured_key = self.battery_rate_grid_scan_basis.get(kind)
-        unsettled = measured_key is not None and not self.rate_grid_scan_key_matches(measured_key, scan_key) and (self.now_utc - self.battery_rate_grid_basis_since[kind]) < timedelta(minutes=BATTERY_RATE_GRID_KEY_SETTLE_MINUTES)
-        if due and unsettled:
+        changed = measured_key is not None and not self.rate_grid_scan_key_matches(measured_key, scan_key)
+        settled = self.battery_rate_grid_basis_cycles.get(kind, 0) >= BATTERY_RATE_GRID_KEY_SETTLE_CYCLES and self.rate_grid_scan_key_matches(self.battery_rate_grid_previous_basis.get(kind), scan_key)
+        if changed and settled and not due and (self.now_utc - last_scan) >= timedelta(minutes=BATTERY_RATE_GRID_RETRY_MINUTES):
+            # A settled change re-measures within the hour rather than at the next daily scan, so a full read made under a
+            # passing value (the wait below ran out) is not left in the plan for a day
+            due = True
+        if due and changed and not settled:
             wait_since = self.battery_rate_grid_basis_wait_since.get(kind)
             if wait_since is None:
                 wait_since = self.battery_rate_grid_basis_wait_since[kind] = self.now_utc
                 self.log("Info: battery {} rate grid scan waits for what it is measured against to settle".format(kind))
-            if (self.now_utc - wait_since) < timedelta(minutes=BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES):
+            if quick or (self.now_utc - wait_since) < timedelta(minutes=BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES):
                 due = False
         if due:
             self.battery_rate_grid_basis_wait_since.pop(kind, None)

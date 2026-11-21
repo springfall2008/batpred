@@ -23,7 +23,7 @@ import yaml
 from battery_rate_grid import rate_grid_curve
 from utils import rate_curve_function
 from config import APPS_SCHEMA
-from const import BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES, BATTERY_RATE_GRID_KEY_SETTLE_MINUTES, BATTERY_RATE_GRID_MAX_AGE_DAYS, BATTERY_RATE_GRID_RESAVE_MINUTES, BATTERY_RATE_GRID_SCAN_MINUTES, TIME_FORMAT
+from const import BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES, BATTERY_RATE_GRID_RETRY_MINUTES, BATTERY_RATE_GRID_MAX_AGE_DAYS, BATTERY_RATE_GRID_RESAVE_MINUTES, BATTERY_RATE_GRID_SCAN_MINUTES, TIME_FORMAT
 
 
 class FakeInverter:
@@ -268,7 +268,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
             """
             A new instance `hours_later` after the original's clock, on its own copy of the saved store (or of `payload`), so
             one case's save cannot set up the next; returns the days its scans read and the instance. Run a second time
-            BATTERY_RATE_GRID_KEY_SETTLE_MINUTES later, as a scan under a key that differs from the stored one waits that long.
+            a plan cycle later, as a scan under a key that differs from the stored one waits for a second cycle to agree on it.
             """
             restarts[0] += 1
             store = make_test_storage(my_predbat, tmpdir + "/t4b_{}".format(restarts[0]))
@@ -281,7 +281,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
             scanner = FakeInverter()
             scanner.scan[False] = {}
             restarted.battery_rate_grid_update(scanner, False)
-            restarted.now_utc += timedelta(minutes=BATTERY_RATE_GRID_KEY_SETTLE_MINUTES)
+            restarted.now_utc += timedelta(minutes=5)
             restarted.battery_rate_grid_update(scanner, False)
             return scanner.days.get(False), restarted
 
@@ -425,7 +425,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
             my_predbat.battery_rate_grid_update(inv, False)
             my_predbat.now_utc += timedelta(minutes=5)
         failed |= _check("t4d and is scanned once the wait runs out", inv.days[False][first:] == [28], inv.days[False])
-        # A changed key that holds is scanned once it has held for BATTERY_RATE_GRID_KEY_SETTLE_MINUTES, reading the full window
+        # A changed key that holds is scanned once a second plan cycle agrees on it, reading the full window
         first = len(inv.days[False])
         my_predbat.now_utc += timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES)
         my_predbat.soc_max = 12.0
@@ -457,6 +457,32 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         restarted.now_utc += timedelta(minutes=5)
         restarted.battery_rate_grid_update(scanner, False)
         failed |= _check("t4d a store read back just before the scan still makes a fallback size wait", scanner.days.get(False) == [2], scanner.days.get(False))
+
+        # A quick update reuses the last plan cycle's values, so however long a passing value stands it confirms nothing and
+        # starts no scan; and once a scan under a passing value has run (the wait ran out), the real key re-measures within the hour
+        my_predbat = _make({"battery_charge_power_curve": {100: 0.5}})
+        my_predbat.components = MockStorageComponents(make_test_storage(my_predbat, tmpdir + "/t4d2"))
+        inv = FakeInverter()
+        inv.scan[False] = _samples(my_predbat)
+        _settle(my_predbat, inv)
+        first = len(inv.days[False])
+        my_predbat.now_utc += timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES)
+        my_predbat.soc_max = 8.0
+        my_predbat.battery_rate_grid_update(inv, False)  # a plan cycle that reads the fallback size, then a slow plan
+        for _ in range(BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES + 10):
+            my_predbat.now_utc += timedelta(minutes=1)
+            my_predbat.battery_rate_grid_update(inv, False, quick=True)
+        failed |= _check("t4d quick updates never scan under an unconfirmed key", inv.days[False][first:] == [], inv.days[False])
+        for _ in range(BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES // 5 + 1):
+            my_predbat.soc_max = 8.0 if my_predbat.soc_max != 8.0 else 7.0  # never agreeing, until the wait runs out
+            my_predbat.now_utc += timedelta(minutes=5)
+            my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t4d the wait runs out on a plan cycle", inv.days[False][first:] == [28], inv.days[False])
+        my_predbat.soc_max = 10.0
+        for _ in range(BATTERY_RATE_GRID_RETRY_MINUTES // 5 + 2):
+            my_predbat.now_utc += timedelta(minutes=5)
+            my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t4d the real key re-measures within the hour", inv.days[False][first:] == [28, 28] and my_predbat.battery_rate_grid_scan_basis["charge"][1] == 10.0, (inv.days[False], my_predbat.battery_rate_grid_scan_basis["charge"]))
 
         print("Test 4e: a store that reads back late under another key has its days re-measured (#6287)")
         my_predbat = _make({"battery_charge_power_curve": {100: 0.5}})
@@ -498,7 +524,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
             """
             A new instance an hour after the original's clock, on a store holding only the no-evidence record (or
             `record_payload`, and the evidence store `evidence` when given); returns the days its discharge scans read, run a
-            second time BATTERY_RATE_GRID_KEY_SETTLE_MINUTES later as restart() is.
+            second time a plan cycle later as restart() is.
             """
             restarts[0] += 1
             store = make_test_storage(my_predbat, tmpdir + "/t4c_{}".format(restarts[0]))
@@ -512,7 +538,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
             restarted.components = MockStorageComponents(FlakyStorage(store, fails))
             scanner = FakeInverter()
             restarted.battery_rate_grid_update(scanner, True)
-            restarted.now_utc += timedelta(minutes=BATTERY_RATE_GRID_KEY_SETTLE_MINUTES)
+            restarted.now_utc += timedelta(minutes=5)
             restarted.battery_rate_grid_update(scanner, True)
             return scanner.days.get(True)
 
