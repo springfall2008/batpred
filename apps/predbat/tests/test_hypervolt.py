@@ -702,6 +702,7 @@ def test_session_energy_unknown_after_restart():
     apply_session(charger, {"charging": True, "session": 6, "watt_hours": 1200})
     apply_session(charger, {"charging": True, "session": None})
     apply_session(charger, {"charging": True, "session": "6"})
+    apply_session(charger, {"charging": True, "session": 6.0})
     assert charger.session_energy_kwh == 1.2 and str(charger.session_id) == "6", (charger.session_energy_kwh, charger.session_id)
     # Energy held from messages without a session id isn't carried into the first session id seen
     v3 = HypervoltCharger(V3_ID, api_version=3)
@@ -772,6 +773,15 @@ def test_publishes_unavailable_session_energy_until_known():
     apply_session(charger, {"charging": True, "session": 4})
     run_async(component.publish_data())
     assert component.base.entities[entity]["state"] == 0.0, component.base.entities[entity]
+    # A V3 charger that sends no session id publishes its first watt_hours after a restart, and a later drop as a new session
+    v3 = HypervoltCharger(V3_ID, api_version=3, release_state="default", pilot_status="C", charging=True, last_message=time.time())
+    component = _make_component([v3])
+    assert run_async(component.run(0, True)) is True
+    assert component.base.entities[entity]["state"] == "unavailable", component.base.entities[entity]
+    for watt_hours, expected in ((3100, 3.1), (3400, 3.4), (200, 0.2)):
+        apply_session(v3, {"charging": True, "watt_hours": watt_hours})
+        run_async(component.publish_data())
+        assert component.base.entities[entity]["state"] == expected, (watt_hours, component.base.entities[entity])
     print("  ✓ Session energy unavailable until known")
 
 

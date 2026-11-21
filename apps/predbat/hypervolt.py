@@ -152,7 +152,8 @@ class HypervoltCharger:
     pilot_status: Optional[str] = None
     power_w: float = 0.0
     session_id: Optional[int] = None
-    # None until a session message with watt_hours arrives, so a restart mid-session never publishes 0 (#6285)
+    # None while unknown: at start-up, and from the first session id seen since start-up until a message carries its watt_hours,
+    # so a restart mid-session never publishes 0 (#6285)
     session_energy_kwh: Optional[float] = None
     max_current_a: Optional[int] = None
     charge_mode: Optional[str] = None
@@ -206,10 +207,11 @@ def apply_session(charger, result):
             charger.power_w = measured
         # A message with neither leaves the last power alone
     session = result.get("session")
-    if session is not None and str(session) != str(charger.session_id):
+    if session is not None and session != charger.session_id and str(session) != str(charger.session_id):
         # A new session: its energy starts again from whatever this message says.
         # The first session id seen since start-up may be a session already part-way through, so its energy is unknown until watt_hours arrives,
-        # and energy held from earlier messages without a session id can't be carried into it either. A null session id is not a new session
+        # and energy held from earlier messages without a session id can't be carried into it either. A null session id is not a new session,
+        # and an id equal as a value (5 and 5.0) or as text (240 and "240") is the same session
         charger.session_energy_kwh = 0.0 if charger.session_id is not None else None
         charger.session_id = session
     watt_hours = _to_float(result.get("watt_hours"))
