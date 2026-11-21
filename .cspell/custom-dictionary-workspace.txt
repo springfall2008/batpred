@@ -570,6 +570,7 @@ poinv
 popv
 postdata
 powercontrolmode
+Powerflex
 powerline
 Powerwall
 ppdetails
@@ -840,6 +841,7 @@ workmode
 workstream
 workstreams
 worktree
+woutervg
 writeonly
 wrongsha
 WRONLY

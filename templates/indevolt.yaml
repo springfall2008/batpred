@@ -1,0 +1,445 @@
+# ---------------------------------------------------------------------------
+# Predbat template for INDEVOLT battery systems (tested on CMS-SF2000)
+#
+# Uses the official INDEVOLT Home Assistant integration, which exposes
+# indevolt.charge / indevolt.discharge service calls rather than the
+# GivEnergy-style time-window + target-SoC control model. It is therefore
+# configured as a custom inverter (inverter_type: MINE) with
+# has_service_api: True.
+#
+# Replace every <PLACEHOLDER> with your own values. Entity names shown in
+# comments are the Dutch localisation of the integration - yours will differ
+# by language, but the underlying entities are the same.
+#
+# Seven Home Assistant helpers are required first; see the companion post for
+# the template sensor YAML.
+# ---------------------------------------------------------------------------
+
+pred_bat:
+  module: predbat
+  class: PredBat
+
+  # Sets the prefix for all created entities in HA - only change if you want to run more than once instance
+  prefix: predbat
+
+  # Timezone to work in
+  timezone: Europe/London
+
+  # XXX: Template configuration, delete this line once you have set up for your system
+  template: True
+
+  # If you are using Predbat outside of HA then set the HA URL or IP address and Key (long lived access token here)
+  #ha_url: 'http://homeassistant.local:8123'
+  #ha_key: 'xxx'
+
+  # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
+  currency_symbols:
+    - '£'
+    - 'p'
+
+  # Number of threads to use in plan calculation
+  # Can be auto for automatic, 0 for off or values 1-N for a fixed number
+  threads: auto
+
+  # Sets the maximum period of zero load before the gap is filled, default 30 minutes
+  # To disable set it to 1440
+  load_filter_threshold: 30
+
+  # ---------------------------------------------------------------
+  # Energy today
+  # ---------------------------------------------------------------
+  #
+  # Sensors, more than one can be specified and they will be summed up automatically
+  #
+  # For two inverters the load today would normally be the master load sensor only (to cover the entire house)
+  # If you have three phase and one inverter per phase then you would need three load sensors
+  #
+  # For pv_today if you have multiple solar inverter inputs then you should include one entry for each inverter
+  #
+  import_today:
+  - <SENSOR_GRID_IMPORT_TODAY>           # daily incrementing kWh
+  export_today:
+  - <SENSOR_GRID_EXPORT_TODAY>           # daily incrementing kWh
+  pv_today:
+  - <SENSOR_PV_PRODUCTION_TODAY>         # daily incrementing kWh
+
+  # NOTE: the INDEVOLT integration exposes no house-load sensor, and grid
+  # import is NOT a substitute - solar consumed directly by the house never
+  # passes the meter, so the load would be understated and Predbat would
+  # subtract PV twice (once implicitly, once via the forecast).
+  # Helper 4: import - export + pv + battery_discharge - battery_charge
+  load_today:
+  - sensor.house_load_today
+
+  # ---------------------------------------------------------------
+  # INDEVOLT - custom inverter definition
+  # ---------------------------------------------------------------
+  num_inverters: 1
+  inverter_type: 'Indevolt'
+
+  inverter:
+    name: "Indevolt"
+    has_rest_api: false
+    has_mqtt_api: false
+    has_service_api: true
+    output_charge_control: "power"
+    charge_control_immediate: true
+    has_charge_enable_time: false
+    has_discharge_enable_time: false
+    has_target_soc: true
+    has_reserve_soc: true
+    has_timed_pause: false
+    charge_time_format: "S"
+    charge_time_entity_is_option: false
+    soc_units: "%"
+    num_load_entities: 1
+    has_ge_inverter_mode: false
+    has_fox_inverter_mode: false
+    time_button_press: false
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    write_and_poll_sleep: 2
+    has_time_window: false
+    support_charge_freeze: false
+    support_discharge_freeze: false
+    has_idle_time: false
+    can_span_midnight: true
+    charge_discharge_with_rate: false
+
+  # ---------------------------------------------------------------
+  # Control services
+  # The integration switches the device into real-time control mode by
+  # itself, so no separate mode call is needed to start.
+  # ---------------------------------------------------------------
+  charge_start_service:
+    service: indevolt.charge
+    device_id: <INDEVOLT_DEVICE_ID>      # Developer Tools > Actions > YAML mode
+    target_soc: "{target_soc}"
+    power: "{power}"
+
+  discharge_start_service:
+    service: indevolt.discharge
+    device_id: <INDEVOLT_DEVICE_ID>
+    target_soc: "{target_soc}"
+    power: "{power}"
+
+  # Return to self-consumption rather than pressing "Enable standby mode":
+  # standby also stops the battery from serving the house, so outside
+  # Predbat's planned slots the battery would sit idle.
+  #
+  # NOTE: select.select_option needs the INTERNAL option value, not the
+  # translated UI label. Valid values:
+  #   self_consumed_prioritized, real_time_control, charge_discharge_schedule
+  charge_stop_service:
+    service: select.select_option
+    entity_id: <SELECT_INDEVOLT_ENERGY_MODE>
+    option: "self_consumed_prioritized"
+
+  discharge_stop_service:
+    service: select.select_option
+    entity_id: <SELECT_INDEVOLT_ENERGY_MODE>
+    option: "self_consumed_prioritized"
+
+  # ---------------------------------------------------------------
+  # Sensors
+  # ---------------------------------------------------------------
+  battery_power:
+  - <SENSOR_INDEVOLT_BATTERY_POWER>      # ..._batterijvermogen
+  # Predbat expects grid power NEGATIVE on import / POSITIVE on export. The
+  # INDEVOLT meter power sensor uses the opposite convention, so helper 2
+  # feeds it through a template sensor that multiplies by -1.
+
+  grid_power:
+  - sensor.indevolt_grid_power_inverted
+  pv_power:
+  - <SENSOR_PV_POWER>
+
+  # Helper 3, optional: only needed for the Power Flow diagram and in-slot
+  # correction. house = pv + meter_power + battery_power (with the INDEVOLT
+  # sign convention, battery power is negative while charging).
+  load_power:
+  - sensor.house_load_power
+
+  # The INDEVOLT has no writable charge/discharge rate entity - power is
+  # passed as a parameter to indevolt.charge/discharge instead. Pointing
+  # these at a sensor fails validation ("cannot be modified"), so use
+  # input_number helpers. Predbat writes to them; they control nothing, but
+  # they let Predbat build its charge/discharge curves.
+  charge_rate:
+  - input_number.indevolt_charge_rate     # helper 5, range 0 - <MAX_POWER_W>
+  discharge_rate:
+  - input_number.indevolt_discharge_rate  # helper 6, range 0 - <MAX_POWER_W>
+
+  # Same story for charge_limit: has_target_soc is true, so Predbat needs
+  # somewhere to write the target SoC even though the real target goes as a
+  # parameter to indevolt.charge. Without it every run ends with "No
+  # entity_id for charge_limit to write N" once the battery is full and
+  # Predbat drops into Demand - which also blocks the stop service from
+  # returning the battery to self-consumption.
+  # Confirmed in practice: Predbat writes a percentage here, never kWh.
+  charge_limit:
+  - input_number.indevolt_charge_limit     # helper 7, range 0-100, unit %
+
+  # Helper 1: the integration reports SoC as a percentage, Predbat wants kWh.
+  soc_kw:
+  - sensor.indevolt_soc_kwh
+  soc_max:
+  - <SENSOR_INDEVOLT_NOMINAL_CAPACITY>   # ..._nominal_capacitye
+  # It must be the real, writable discharge-limit entity. If Predbat cannot find
+  # one it silently creates a sensor.predbat_mine_0_reserve dummy that reads
+  # itself - which means your minimum SoC is never actually set on the
+  # battery.
+  reserve:
+  - <NUMBER_INDEVOLT_DISCHARGE_LIMIT>    # number...._ontlaadlimiet
+
+  # ---------------------------------------------------------------
+  # Power limits
+  # CRITICAL: battery_rate_max must be set explicitly. For non-GivEnergy
+  # inverters Predbat otherwise defaults to 2600W and the INDEVOLT service
+  # rejects anything above its maximum:
+  #   "value must be at most 2400 for dictionary value @ data['power']"
+  # On the CMS-SF2000 the charge service will accept 3000, but the discharge
+  # service still caps at 2400 - so keep both at the discharge limit unless
+  # you have verified otherwise by calling the service manually.
+  # ---------------------------------------------------------------
+  battery_rate_max:
+  - <MAX_POWER_W>                        # e.g. 2400 for the CMS-SF2000
+
+  # Inverter max AC limit (one per inverter). E.g for a 3.6kw inverter set to 3600
+  # If you have a second inverter for PV only please add the two values together
+  inverter_limit:
+  - <MAX_POWER_W>
+
+  # The maximum rate (in watts) that the inverter can charge and discharge the battery can be overwritten, this will change
+  # the inverter settings and thus cap the max rates. The default is to use the maximum supported rates (recommended)
+  #
+  inverter_limit_charge:
+  - <MAX_POWER_W>
+  inverter_limit_discharge:
+  - <MAX_POWER_W>
+
+  # Export limit is a software limit set on your inverter that prevents exporting above a given level
+  # When enabled Predbat will model this limit
+  #export_limit:
+  #  - 3600
+  #  - 3600
+
+  # Workaround to limit the maximum reserve setting, some inverters won't allow 100% to be set
+  inverter_reserve_max: 98
+
+  # ---------------------------------------------------------------
+  # Solar forecast
+  # ---------------------------------------------------------------
+  # Solcast cloud interface, set this or the local interface below
+  #solcast_host: 'https://api.solcast.com.au/'
+  #solcast_api_key: 'YOUR_SOLCAST_API_KEY>'
+  #solcast_poll_hours: 8
+
+  # Set these to match solcast sensor names if not using the cloud interface
+  # The regular expression (re:) makes the solcast bit optional
+  # If these don't match find your own names in Home Assistant
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+
+  # car_charging_energy defines an incrementing sensor which measures the charge added to your car
+  # is used for car_charging_hold feature to filter out car charging from the previous load data
+  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
+  # Also adjust car_charging_energy_scale if it's not in kwH to fix the units
+  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+
+  # car_charging_power is the live charging power of your car charger, in Watts
+  # It is display only - it drives the car shown on the web interface power flow diagram
+  # and the predbat.car_charging_power sensor. The plan itself is unaffected by it.
+  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
+  car_charging_power: 're:(sensor.myenergi_zappi_[0-9a-z]+_internal_load_ct1|sensor.wallbox_portal_charging_power)'
+
+  # Defines the number of cars modelled by the system, set to 0 for no car
+  num_cars: 0
+
+  # car_charging_planned is set to a sensor which when positive indicates the car will charged in the upcoming low rate slots
+  # This should not be needed if you use Intelligent Octopus slots which will take priority if enabled
+  # The list of possible values is in car_charging_planned_response
+  # Auto matches Zappi and Wallbox, or change it for your own
+  # One entry per car
+  car_charging_planned:
+    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+
+  car_charging_planned_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'connected'
+    - 'ev connected'
+    - 'ev ready to charge'
+    - 'charging'
+    - 'paused'
+    - 'waiting for car demand'
+    - 'waiting for ev'
+    - 'scheduled'
+    - 'enabled'
+    - 'latched'
+    - 'locked'
+    - 'plugged in'
+
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
+  #car_charging_now:
+  #  - sensor.wallbox_portal_charging_power
+
+  # Positive responses for car_charging_now, for an on/off or status sensor. Its state must match one
+  # of these (ignoring case) for Predbat to see the car charging - e.g. 'charging' for a myenergi Zappi
+  # plug_status sensor. If it never matches while the car charges, Predbat cancels the car's Octopus Intelligent
+  # dispatches (switch.predbat_octopus_intelligent_dynamic, On by default) and the house battery can lose their cheap rate.
+  car_charging_now_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'charging'
+
+  # To make planned car charging more accurate, either using car_charging_planned or the Octopus Energy plugin,
+  # specify your battery size in kwh, charge limit % and current car battery soc % sensors/values.
+  # If you have Intelligent Octopus the battery size and limit will be extracted from the Octopus Energy plugin directly.
+  # Set the car SoC% if you have it to give an accurate forecast of the cars battery levels.
+  # One entry per car if you have multiple cars.
+  #car_charging_battery_size:
+  #  - 75
+  #car_charging_limit:
+  #  - 're:number.tsunami_charge_limit'
+  #car_charging_soc:
+  #  - 're:sensor.tsunami_battery'
+
+  # If you have Octopus Intelligent Go and are not using the Octopus Direct connection method, enable the intelligent slot information to add to pricing
+  # Will automatically disable if not found, or comment out to disable fully
+  # When enabled it overrides the 'car_charging_planned' feature and predict the car charging based on the intelligent plan (unless Octopus intelligent charging is False)
+  # This matches the intelligent slot from the Octopus Energy integration
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
+
+  # Example alternative configuration for Ohme integration release >=v0.6.1
+  #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  #octopus_ready_time: 'time.ohme_target_time'
+  #octopus_charge_limit: 'number.ohme_target_percent'
+
+  # Set this to False if you use Octopus Intelligent slot for car planning but when on another tariff e.g. Agile
+  #octopus_slot_low_rate: False
+
+  # Carbon Intensity data from National grid
+  # carbon_postcode: 'SW1 5NA'
+  # carbon_automatic: True
+
+  # ---------------------------------------------------------------
+  # Energy rates - adjust to your own supplier integration
+  # ---------------------------------------------------------------
+  # Octopus saving session points to the saving session Sensor in the Octopus plugin, when enabled saving sessions will be at the assumed
+  # Rate is read automatically from the add-in and converted to pence using the conversion rate below (default is 8)
+  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_(saving_session_events?|power_down_events))'
+  octopus_saving_session_octopoints_per_penny: 8
+  # Minimum octopoints_per_kwh an available saving session must offer for Predbat to auto-join it (default 0, joins any non-negative reward).
+  octopus_saving_session_min_octopoints_per_kwh: 0
+
+  # Octopus free session points to the free session Sensor in the Octopus plugin
+  # Note: You must enable this event sensor in the Octopus Integration in Home Assistant for it to work
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_(free_electricity_session_events|power_up_events))'
+
+  # Enter your Axle VPP API key if you have signed up to the Axle service in the UK
+  # axle_api_key: "xxxxxxx"
+
+  # Energy rates
+  # Please set one of these three, if multiple are set then Octopus is used first, second rates_import/rates_export and latest basic metric
+
+  # Set import and export entity to point to the Octopus Energy plugin import and export sensors
+  # automatically matches your meter number assuming you have only one (no need to edit the below)
+  # Will be ignored if you don't have the sensor but will error if you do have one and it's incorrect
+  # Note: To get detailed energy rates you need to go in and manually enable the following events in HA
+  #       event.octopus_energy_electricity_xxxxxxxx_previous_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_current_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_next_day_rates
+  # and if you have export enable:
+  #       event.octopus_energy_electricity_xxxxxxxx_export_previous_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
+  #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
+  # Predbat will automatically find the event. entities from the link below to the sensors
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
+
+  # Standing charge in pounds, can be set to a sensor or manually entered (e.g. 0.50 is 50p)
+  # The default below will pick up the standing charge from the Octopus Plugin
+  # The standing charge only impacts the cost graphs and doesn't change the way Predbat plans
+  # If you don't want to show the standing charge then just delete this line or set to zero
+  metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+
+  # Or set your actual rates across time for import and export
+  # If start/end is missing it's assumed to be a fixed rate
+  # Gaps are filled with zero rate
+  #rates_import:
+  #  - start: "00:30:00"
+  #    end: "04:30:00"
+  #    rate: 7.5
+  #  - start: "04:30:00"
+  #    end: "00:30:00"
+  #    rate: 40.0
+  #
+  #rates_export:
+  #  - rate: 4.2
+
+  # Can be used instead of the plugin to get import rates directly online
+  # Overrides metric_octopus_import and rates_import
+  # See the 'energy rates' part of the documentation for instructions on how to find the correct URL for your tariff and DNO region
+  #
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
+  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates"
+
+  # Overrides metric_octopus_export and rates_export
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-A/standard-unit-rates"
+  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+
+  # Import rates can be overridden with rate_import_override
+  # Export rates can be overridden with rate_export_override
+  # Use the same format as above, but a date can be included if it just applies for a set day (e.g. Octopus power ups)
+  # This will override even the Octopus plugin rates if enabled
+  #
+  #rates_import_override:
+  #  - date: '2023-09-10'
+  #    start: '14:00:00'
+  #    end: '14:30:00'
+  #    rate: 112
+  #    load_scaling: 0.8
+
+  # ---------------------------------------------------------------
+  # General
+  # ---------------------------------------------------------------
+  # Days previous sets how many days of load history Predbat searches when forecasting your future house load.
+  # By default this uses a weighted-bucket forecast that automatically accounts for day-of-week, holiday mode
+  # and recency (days_previous_auto) - see the documentation for other options, such as picking specific
+  # days/weights instead, or using Load ML.
+  days_previous:
+  - 7
+
+  # Number of hours forward to forecast, best left as-is unless you have specific reason
+  forecast_hours: 48
+
+  # Specify the devices that notifies are sent to, the default is 'notify' which goes to all
+  #notify_devices:
+  #  - mobile_app_treforsiphone12_2
+
+  # Battery scaling makes the battery smaller (e.g. 0.9) or bigger than its reported
+  # If you have an 80% DoD battery that falsely reports it's kwh then set it to 0.8 to report the real figures
+  # One per inverter
+  battery_scaling:
+    - 1.0
+
+  # Can be used to scale import and export data, used for workarounds
+  import_export_scaling: 1.0
+
+  # ---------------------------------------------------------------
+  # Worth knowing once it runs
+  #
+  # Measured round-trip efficiency of the CMS-SF2000 is about 81%, well below
+  # Predbat's 3% default per direction. Set battery_loss and
+  # battery_loss_discharge accordingly (0.08 each with inverter_loss 0.04
+  # lands on 81%), otherwise Predbat plans arbitrage that does not pay.
+  # ---------------------------------------------------------------
