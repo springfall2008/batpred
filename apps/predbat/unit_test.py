@@ -367,6 +367,7 @@ from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_
 from tests import network_guard
 from tests.test_network_guard import test_network_guard
 from tests.test_debug_yaml_cache import test_debug_yaml_cache
+from tests.test_debug_yaml_safe_load import run_debug_yaml_safe_load_tests
 from tests.test_gecloud_budget import run_gecloud_budget_harness_tests, run_gecloud_api_budget
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
@@ -1036,6 +1037,7 @@ def main():
         ("optimise_swap_export", run_optimise_swap_export_tests, "Optimise pairwise export-window swap tests", False),
         ("network_guard", test_network_guard, "Unit tests may not reach the network: non-local lookups and connects fail the test", False),
         ("debug_yaml_cache", test_debug_yaml_cache, "Debug dump parse cache used by the test runner", False),
+        ("debug_yaml_safe_load", run_debug_yaml_safe_load_tests, "Replaying a debug dump never runs code the dump names", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", False),
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
