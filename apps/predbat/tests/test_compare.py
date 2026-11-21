@@ -31,10 +31,14 @@ from unittest.mock import MagicMock, patch
 
 from compare import Compare, check_compare_list, valid_compare_list, COMPARE_HARDWARE_STATE, COMPARE_PLAN_STATE, COMPARE_RESTORED_STATE, COMPARE_RESTORED_COPIES
 from const import MINUTE_WATT
+from fetch import Fetch
 
 
 class _FakePredbat:
     """Minimal predbat stub sufficient for Compare tests that don't run a full plan."""
+
+    # The real helper, so fetch_rates() trims a pre-saving snapshot exactly as the live path does
+    pre_saving_for_session_minutes = Fetch.pre_saving_for_session_minutes
 
     def __init__(self):
         """Initialise stub with representative hardware defaults."""
@@ -1282,16 +1286,19 @@ def test_compare(my_predbat):
     export_live = {minute: (105.0 if minute >= 30 else 5.0) for minute in range(60)}
     event_minutes = set(range(30, 60))
 
-    # (label, tariff, sessions, expected existing, expected import at 10/45, expected export at 10/45, expected export saving minutes)
+    # (label, tariff, sessions, expected existing, expected import at 10/45, expected export at 10/45,
+    #  expected import saving minutes, expected export saving minutes). An export-direction event stamps both
+    #  sides, so a supplied import side gets the event minutes too; a side left on the live rates has none here
+    #  as no live cycle state is captured
     cases = [
-        ("the same export tariff during an event", {"id": "mine", "rates_export": [{"rate": 5.0}]}, axle_export_event, True, (20.0, 120.0), (5.0, 105.0), event_minutes),
-        ("a different export tariff", {"id": "flat15", "rates_export": [{"rate": 15.0}]}, axle_export_event, False, (20.0, 120.0), (15.0, 115.0), event_minutes),
-        ("the same import tariff during an event", {"id": "imp", "rates_import": [{"rate": 20.0}]}, axle_export_event, True, (20.0, 120.0), (5.0, 105.0), set()),
-        ("a different import tariff", {"id": "imp25", "rates_import": [{"rate": 25.0}]}, axle_export_event, False, (25.0, 125.0), (5.0, 105.0), set()),
-        ("a tariff reusing the live rates", {"id": "live"}, axle_export_event, True, (20.0, 120.0), (5.0, 105.0), set()),
-        ("a different export tariff with no Axle sessions", {"id": "flat15", "rates_export": [{"rate": 15.0}]}, [], False, (20.0, 20.0), (15.0, 15.0), set()),
+        ("the same export tariff during an event", {"id": "mine", "rates_export": [{"rate": 5.0}]}, axle_export_event, True, (20.0, 120.0), (5.0, 105.0), set(), event_minutes),
+        ("a different export tariff", {"id": "flat15", "rates_export": [{"rate": 15.0}]}, axle_export_event, False, (20.0, 120.0), (15.0, 115.0), set(), event_minutes),
+        ("the same import tariff during an event", {"id": "imp", "rates_import": [{"rate": 20.0}]}, axle_export_event, True, (20.0, 120.0), (5.0, 105.0), event_minutes, set()),
+        ("a different import tariff", {"id": "imp25", "rates_import": [{"rate": 25.0}]}, axle_export_event, False, (25.0, 125.0), (5.0, 105.0), event_minutes, set()),
+        ("a tariff reusing the live rates", {"id": "live"}, axle_export_event, True, (20.0, 120.0), (5.0, 105.0), set(), set()),
+        ("a different export tariff with no Axle sessions", {"id": "flat15", "rates_export": [{"rate": 15.0}]}, [], False, (20.0, 20.0), (15.0, 15.0), set(), set()),
     ]
-    for label, tariff, sessions, expected_existing, expected_import, expected_export, expected_saving in cases:
+    for label, tariff, sessions, expected_existing, expected_import, expected_export, expected_import_saving, expected_export_saving in cases:
         pb.axle_sessions = sessions
         live_import = import_live if sessions else import_clean
         live_export = export_live if sessions else export_clean
@@ -1308,10 +1315,20 @@ def test_compare(my_predbat):
             t34_errors.append("{}: import at 00:10/00:45 should be {}, got {}".format(label, expected_import, got_import))
         if got_export != expected_export:
             t34_errors.append("{}: export at 00:10/00:45 should be {}, got {}".format(label, expected_export, got_export))
-        if tariff.get("rates_export") and pb.rate_export_saving_minutes != expected_saving:
-            t34_errors.append("{}: export saving minutes should be {} minutes, got {}".format(label, len(expected_saving), len(pb.rate_export_saving_minutes)))
-        if tariff.get("rates_export") and sessions and pb.rate_export_pre_saving.get(45) != expected_export[0]:
-            t34_errors.append("{}: export pre-saving snapshot at 00:45 should be the tariff's own {}, got {}".format(label, expected_export[0], pb.rate_export_pre_saving.get(45)))
+        # Each side's "saving" tags and saving minutes, and its pre-saving snapshot reduced to just those minutes at
+        # the tariff's own price - per side, so a branch reading or writing the other side's tables is caught
+        for side, expected_saving, own_rate, got_saving, got_pre_saving, got_replicated in [
+            ("import", expected_import_saving, expected_import[0], pb.rate_import_saving_minutes, pb.rate_import_pre_saving, pb.rate_import_replicated),
+            ("export", expected_export_saving, expected_export[0], pb.rate_export_saving_minutes, pb.rate_export_pre_saving, pb.rate_export_replicated),
+        ]:
+            got_tagged = {minute for minute, tag in got_replicated.items() if tag == "saving"}
+            if got_tagged != expected_saving:
+                t34_errors.append("{}: {} rates should have {} minutes tagged saving, got {}".format(label, side, len(expected_saving), len(got_tagged)))
+            if got_saving != expected_saving:
+                t34_errors.append("{}: {} saving minutes should be {} minutes, got {}".format(label, side, len(expected_saving), len(got_saving)))
+            expected_pre_saving = {minute: own_rate for minute in expected_saving}
+            if got_pre_saving != expected_pre_saving:
+                t34_errors.append("{}: {} pre-saving snapshot should hold {} session minutes at {}, got {} minutes".format(label, side, len(expected_pre_saving), own_rate, len(got_pre_saving)))
 
     if t34_errors:
         for error in t34_errors:

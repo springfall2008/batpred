@@ -404,23 +404,23 @@ class Compare:
         pre_saving before load_axle_slot() mutates the rates in place, then freeze the "saving"-tagged minutes
         before the caller's rates_*_override can tag them again (GH#5050). Keep the two in step. fetch_sensor_data()
         takes its snapshot before the Octopus saving/free sessions as well, which the compared tariff never
-        carries, so only the Axle step is repeated here.
+        carries, so only the Axle step is repeated here. As apply_rate_overrides() does on the live path, the
+        snapshot is then reduced to the session minutes (pre_saving_for_session_minutes()), the only ones read.
         """
         pb = self.pb
         if not pb.axle_sessions:
             return
-        if export:
-            replicated = pb.rate_export_replicated
-            pb.rate_export_pre_saving = dict(rates)
-        else:
-            replicated = pb.rate_import_replicated
-            pb.rate_import_pre_saving = dict(rates)
+        replicated = pb.rate_export_replicated if export else pb.rate_import_replicated
+        pre_saving = dict(rates)
         load_axle_slot(pb, pb.axle_sessions, rates, export=export, rate_replicate=replicated)
         saving_minutes = {minute for minute, tag in replicated.items() if tag == "saving"}
+        pre_saving = pb.pre_saving_for_session_minutes(pre_saving, saving_minutes)
         if export:
             pb.rate_export_saving_minutes = saving_minutes
+            pb.rate_export_pre_saving = pre_saving
         else:
             pb.rate_import_saving_minutes = saving_minutes
+            pb.rate_import_pre_saving = pre_saving
 
     def is_live_published(self, rates, live_rates):
         """
