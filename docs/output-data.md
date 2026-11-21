@@ -298,10 +298,11 @@ Use it in an automation that follows Predbat's status, e.g. `state_attr('predbat
 
 Predbat outputs the values it read from your inverters as totals, this gives the current power flow:
 
-- predbat.load_power - The current house load in Watts
-- predbat.battery_power - The current power of your battery (charging or discharging) in Watts
-- predbat.pv_power - The current power of your PV system in Watts
-- predbat.grid_power - The current grid power flow (import or export) in Watts
+- predbat.load_power - The current house load in kW
+- predbat.battery_power - The current power of your battery in kW, positive when discharging and negative when charging
+- predbat.pv_power - The current power of your PV system in kW
+- predbat.grid_power - The current grid power flow in kW, positive when exporting and negative when importing
+- predbat.solar_surplus_power - The power in kW a flexible load (a car charger, an immersion heater or anything else you can divert to) could take right now without importing or draining the battery, capped at your current PV generation. Attributes give the **grid_power**, **battery_power**, **pv_power** and **car_charging_power** it was calculated from, plus **car_charging_power_configured** and **car_charging_power_included** - see [charging from solar surplus](car-charging.md#charging-from-solar-surplus)
 - predbat.car_charging_power - The current power drawn by your car charger in kW. Only published when **car_charging_power** is set in `apps.yaml`, or wired up automatically by a supported charger integration (Ohme, myenergi Zappi, GivEnergy EV charger, AlphaESS or the Predbat gateway) - see [car charging](car-charging.md#configure-appsyaml-for-your-car-charging)
 
 ## Baseline data
@@ -441,6 +442,9 @@ The following sensors are set based on what Predbat is currently controlling the
 
 - binary_sensor.predbat_charging - Set to 'on' when Predbat is force charging the battery (from solar, or if that is insufficient, from grid import), or 'off' otherwise
 - binary_sensor.predbat_exporting - Set to 'on' when Predbat is force discharging the battery for export income, 'off' otherwise.
+- binary_sensor.predbat_force_export_slot - Set to 'on' when the plan has a force export slot running now, 'off' otherwise.
+Unlike the two sensors above this comes from the plan rather than from what is being commanded, so it stays on for the whole slot,
+includes freeze export slots, and still reports when Predbat is in read-only mode - see [charging from solar surplus](car-charging.md#charging-from-solar-surplus)
 
 These are useful for automations if for example, you want to turn off car charging when the battery is being exported.
 
@@ -652,7 +656,7 @@ vs not having a PV and battery system at all and all house load being met from g
 The state is the most recent complete day's billed energy cost in pence (import less export, standing charge excluded); with an export meter a day only counts as complete once its export billing has been read too.
 Attributes: `supplier`, `legs` (whether import and export billing were read: true, false if the last read failed, or null if not configured), `complete_until` (the end of the last billed half hour, UTC),
 `days` (a summary per day: billed import and export cost and kWh, standing charge and the cost and kWh in each rate bucket) and `slots` (every billed half hour of the last week, with its rate buckets).
-It is refreshed every three hours; billing usually appears one to two days after the half hour. The attributes are too large for Home Assistant's recorder to store, so only the current value is kept.
+It is refreshed every three hours (give or take up to 27 minutes with [plan_random_delay](apps-yaml.md#plan_random_delay) set); billing usually appears one to two days after the half hour. The supplier can re-price a half hour after publishing it, so each day is read again once a day until it is five days old, and a day's figures can change until then. The attributes are too large for Home Assistant's recorder to store, so only the current value is kept.
 - predbat.plan_history - The 'History' view for each of the older days in the [web interface](web-interface.md#plan-view) day picker, rebuilt once a day and again when new billing arrives. The state is the number of days available. A day that had a saving session, free electricity session, Axle event or rate override lists them in its `history_events`.
 
 Note: predbat.savings_yesterday_predbat's own displayed state is the *adjusted* saving (it factors in the change in battery value across the day, via the `saving_adjusted` attribute), while predbat.savings_total_predbat accumulates the *real*, unadjusted `saving_real` attribute from that same sensor. This is deliberate - the running total is meant to track real money saved, not a figure that includes the battery-value adjustment - but it means the two numbers are not simply "yesterday's bar vs the running total plus that bar", and the daily figure can legitimately be negative on a day the total still rises. Both `saving_real` and `saving_adjusted` are published as attributes on predbat.savings_yesterday_predbat if you want to chart either one explicitly.
@@ -767,6 +771,20 @@ Nothing is checked in read-only mode, while an inverter is calibrating, after th
 
 Common causes are an inverter app or schedule overriding Predbat's mode, a battery management system limiting the charge or discharge rate, a command that never reached the inverter, or a cloud integration that reports battery power several minutes late.
 The same data is shown in the Control Failures section of the [Metrics view](web-interface.md#metrics-view).
+
+## Inverter balancing data
+
+With two or more inverters, Predbat publishes what [inverter balancing](customisation.md#balance-inverters) is doing each time it runs. That is once a minute while it is switched on, and with each plan run otherwise. There is no sensor for a single inverter.
+
+- **sensor.predbat_balance_inverters** - the number of inverters balancing is holding right now (holding back their charge or discharge rate). Attributes:
+    - `status` - `off` (balancing switched off), `read_only`, `calibrating`, `balanced` (running, nothing held) or `holding`.
+    - `fleet_direction` - whether the batteries should be `discharge`ing (covering the house) or `charge`ing (soaking up spare solar), as balancing judged it, together with the `spread_percent` between the fullest and emptiest battery and the `spare_pv_w` it judged on.
+    - `inverters` - one entry per inverter with its `soc_percent`, `charge_hold` and `discharge_hold`, and any rate it has learned that inverter can really deliver (`charge_ceiling_w` / `discharge_ceiling_w`, with their age in minutes). A hold is `soc` (SoC balancing), `cross_charge` (caught charging from, or discharging into, the other batteries) or `cross_charge_latched` (kept from an earlier pass while the batteries keep their direction).
+    - `holds_24h`, `releases_24h`, `cross_charges_caught_24h` and `ceilings_learned_24h` - what balancing has done in the last 24 hours, counted by the hour.
+    - `events` - the ten most recent holds, releases and learned ceilings, with their times.
+    - `history` - the hourly counts behind those totals. After a restart, Predbat reads `history` and `events` back from this sensor (from Home Assistant's history if Home Assistant restarted too) and carries on counting, so the totals survive a restart.
+
+A steady stream of holds and releases in the same direction is balancing flapping, and each one is a register write. A high `cross_charges_caught_24h` usually means the inverters disagree with each other about the grid reading, so one keeps charging from another. A learned ceiling well below the battery's rate is usually a cold battery or a BMS limit.
 
 ## Predbat Logfile
 

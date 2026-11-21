@@ -99,6 +99,11 @@ _COMMIT_POLL_SECONDS = 0.5
 # loop is stuck or gone: the caller is Predbat's control thread, which must not be held there.
 _PUBLISH_HANDOVER_SECONDS = 30
 
+# How long enabling read-only on the Hub waits for reset_inverter() to write the safe state first
+# (seconds). The reset runs at the next plan execution; one that never comes (Predbat stuck, plan
+# failing) must not leave the Hub writable indefinitely, so after this the command is sent anyway.
+_READ_ONLY_HANDOVER_WAIT_SECONDS = 15 * 60
+
 
 def _split_same_day_plan_entries(entries):
     """Split native EMS windows into same-day pieces on the plan's absolute timeline.
@@ -149,6 +154,50 @@ def _serial_suffix(serial):
 PLAN_MODE_AUTO = 0
 PLAN_MODE_CHARGE = 1
 PLAN_MODE_DISCHARGE = 2
+
+# Display timeline slot codes published in predbat_data "timeline"
+TIMELINE_IDLE = 0
+TIMELINE_CHARGE = 1
+TIMELINE_EXPORT = 2
+TIMELINE_SOLAR = 3
+TIMELINE_IMPORT = 4
+# Per-slot modifier published in "timeline_sub", naming the plan's mode for a charge or export slot.
+# Devices that do not read it draw the plain code, exactly as before.
+# The modifier says which mode the plan puts the slot in, not whether energy flows: a freeze-charge
+# window that starts below the reserve still charges up to the reserve before it holds.
+TIMELINE_SUB_NONE = 0  # Charge/export to a target, or a slot with no modifier
+TIMELINE_SUB_HOLD = 1  # Hold mode - charge target already met, or export target out of reach, so the slot holds
+TIMELINE_SUB_FREEZE = 2  # Freeze mode - charge-freeze (limit at the reserve, hold-at-reserve) or freeze export
+
+# Plan row raw state -> (timeline code, timeline_sub modifier)
+TIMELINE_STATE_CODES = {
+    "Chrg": (TIMELINE_CHARGE, TIMELINE_SUB_NONE),
+    "HoldChrg": (TIMELINE_CHARGE, TIMELINE_SUB_HOLD),
+    "FrzChrg": (TIMELINE_CHARGE, TIMELINE_SUB_FREEZE),
+    "Exp": (TIMELINE_EXPORT, TIMELINE_SUB_NONE),
+    "HoldExp": (TIMELINE_EXPORT, TIMELINE_SUB_HOLD),
+    "FrzExp": (TIMELINE_EXPORT, TIMELINE_SUB_FREEZE),
+}
+
+
+def timeline_slot_codes(state, pv_forecast):
+    """Return the (timeline, timeline_sub) display codes for one plan row.
+
+    Args:
+        state: Plan row raw state, e.g. "Chrg" or "HoldChrg".
+        pv_forecast: Forecast PV for the slot in kW.
+
+    Returns:
+        tuple: (code for "timeline", modifier for "timeline_sub").
+    """
+    if state in TIMELINE_STATE_CODES:
+        return TIMELINE_STATE_CODES[state]
+    try:
+        pv = float(pv_forecast or 0)
+    except (TypeError, ValueError):
+        pv = 0.0
+    return (TIMELINE_SOLAR if pv > 0.1 else TIMELINE_IMPORT), TIMELINE_SUB_NONE
+
 
 # GivEnergy holds the charge and discharge rates as a whole percent of nominal battery capacity,
 # rounded down - 1300W on a 13.41kWh battery reads back 1206W (#5324)
@@ -562,6 +611,9 @@ class GatewayMQTT(ComponentBase):
         # Latch so a gateway whose reported read-only state disagrees with what PredBat
         # requested is logged once per transition, not on every status cycle
         self._read_only_mismatch_logged = False
+        # Monotonic time enabling read-only was first held back for a pending handover reset
+        # (None when nothing is held back), bounding the wait to _READ_ONLY_HANDOVER_WAIT_SECONDS
+        self._read_only_held_since = None
 
         # Set once the first MQTT connection attempt has completed (success or failure)
         self._first_connection_attempted = False
@@ -2800,7 +2852,8 @@ class GatewayMQTT(ComponentBase):
             cost_today = self.get_state_wrapper(self.prefix + ".cost_today")
             avg_price = self.get_state_wrapper(self.prefix + ".ppkwh_today")
 
-            timeline = [0] * 12  # 12 x 30-min slots, default idle
+            timeline = [TIMELINE_IDLE] * 12  # 12 x 30-min slots, default idle
+            timeline_sub = [TIMELINE_SUB_NONE] * 12  # Per-slot hold/freeze modifier for timeline
             block_soc = []  # SOC % values for current plan block only
             block_state_name = ""  # Current block state for display label
 
@@ -2809,15 +2862,6 @@ class GatewayMQTT(ComponentBase):
             if plan_raw and isinstance(plan_raw, dict) and "rows" in plan_raw:
                 rows = plan_raw["rows"]
                 now = datetime.datetime.now(self.local_tz)
-
-                state_map = {
-                    "Chrg": 1,
-                    "FrzChrg": 1,
-                    "HoldChrg": 1,
-                    "Exp": 2,
-                    "HoldExp": 2,
-                    "FrzExp": 2,
-                }
 
                 slot_idx = 0
                 for row in rows:
@@ -2830,22 +2874,21 @@ class GatewayMQTT(ComponentBase):
                         continue
 
                     state = row.get("state", "")
-                    code = state_map.get(state, 0)
-                    if code == 0:
-                        pv = float(row.get("pv_forecast", 0) or 0)
-                        if pv > 0.1:
-                            code = 3  # Solar
-                        else:
-                            code = 4  # Grid import (consuming)
+                    code, sub = timeline_slot_codes(state, row.get("pv_forecast", 0))
 
                     if slot_idx < 12:
                         timeline[slot_idx] = code
+                        timeline_sub[slot_idx] = sub
 
                     if slot_idx == 0:
                         block_state_name = state
 
                     if slot_idx < 24:
-                        block_soc.append(int(float(row.get("soc_percent", 0) or 0)))
+                        try:
+                            block_soc.append(int(float(row.get("soc_percent", 0) or 0)))
+                        except (ValueError, TypeError):
+                            # One bad row must not drop the whole publish - repeat the previous SoC so the sparkline has no false dip
+                            block_soc.append(block_soc[-1] if block_soc else 0)
 
                     slot_idx += 1
 
@@ -2935,6 +2978,7 @@ class GatewayMQTT(ComponentBase):
                 "avg_price": round(float(avg_price or 0), 1),
                 "total_cost": round(float(cost_today or 0) / 100.0, 2),  # pence → pounds
                 "timeline": timeline,
+                "timeline_sub": timeline_sub,
                 "block_soc": block_soc,
                 "block_state": block_state_name,
                 "savings_yesterday": saving_yesterday,
@@ -3005,21 +3049,59 @@ class GatewayMQTT(ComponentBase):
         least every 30 minutes even when unchanged. The command is gateway-wide, so it
         carries no inverter serial. Gated only on an active MQTT connection — it does not
         depend on auto-config, so the state is established as early as possible.
+
+        Enabling read-only is held back while the switch's handover reset is still pending (see
+        _hold_read_only_for_reset), because the Hub rejects writes once it is read-only and the
+        reset's safe-state writes would never land. Disabling is never held back. If a new handover
+        reset is pending while the Hub is already read-only (the switch went off and on between two
+        cycles, so no change was seen), read-only is first disabled to reopen the Hub, then held.
         """
         if not self._mqtt_connected:
             # Force a re-send after reconnect (command is not retained).
             self._last_read_only = None
             return
         read_only = bool(self.get_arg("set_read_only", False))
+        reset_pending = getattr(self.base, "inverter_needs_reset_force", "") == "set_read_only"
+        if not read_only or not reset_pending:
+            self._read_only_held_since = None
         now = self.monotonic()
+        if read_only and reset_pending and self._last_read_only and self._read_only_held_since is None:
+            # The switch went off and on again between two cycles, so the Hub is still read-only from the
+            # earlier enable and would reject the new handover reset's writes: reopen it, then hold as usual.
+            await self.publish_command("set_read_only", enable=False)
+            self._last_read_only = False
+            self._last_read_only_sent_time = now
+            self.log("Info: GatewayMQTT: set_read_only command sent (read_only=False) so the inverter can be reset to a safe state")
         changed = read_only != self._last_read_only
         stale = not self._last_read_only_sent_time or now - self._last_read_only_sent_time >= 30 * 60
         if not changed and not stale:
+            return
+        if read_only and self._hold_read_only_for_reset(now):
             return
         await self.publish_command("set_read_only", enable=read_only)
         self._last_read_only = read_only
         self._last_read_only_sent_time = now
         self.log(f"Info: GatewayMQTT: set_read_only command sent (read_only={read_only})")
+
+    def _hold_read_only_for_reset(self, now):
+        """True while enabling read-only on the Hub should wait for reset_inverter()'s safe-state writes.
+
+        Turning the switch on arms inverter_needs_reset_force = "set_read_only", and reset_inverter()
+        clears it once it has written the safe state at the next plan execution. Until then the Hub
+        must stay writable. The wait is bounded by _READ_ONLY_HANDOVER_WAIT_SECONDS so a reset that
+        never runs does not leave the Hub writable indefinitely: after that this returns False even
+        though the reset is still pending.
+        """
+        if getattr(self.base, "inverter_needs_reset_force", "") != "set_read_only":
+            self._read_only_held_since = None
+            return False
+        if self._read_only_held_since is None:
+            self._read_only_held_since = now
+            self.log("Info: GatewayMQTT: set_read_only held back until the inverter has been reset to a safe state")
+        if now - self._read_only_held_since < _READ_ONLY_HANDOVER_WAIT_SECONDS:
+            return True
+        self.log(f"Warn: GatewayMQTT: inverter reset for read-only not done after {_READ_ONLY_HANDOVER_WAIT_SECONDS // 60} minutes, sending set_read_only anyway")
+        return False
 
     def _check_read_only_mismatch(self, reported):
         """Warn when the gateway's enforced read-only state differs from what PredBat asked for.

@@ -238,6 +238,10 @@ class AnnualWeather:
                 shading_factors=array.get("shading_factors", None),
             )
             for stamp, values in periods.items():
+                # The window's first sample (00:00 on start_date) covers the hour before it; keep
+                # that stub hour out so the day before the window is not counted as a one-hour day
+                if stamp.date() < start_date:
+                    continue
                 totals[stamp] = totals.get(stamp, 0.0) + values["pv_estimate"]
 
         return totals

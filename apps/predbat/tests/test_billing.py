@@ -217,6 +217,19 @@ def test_days_to_fetch_skips_complete():
     return False
 
 
+def test_days_to_fetch_recheck():
+    """With recheck, complete days in the window are asked for again too, but settled ones still are not."""
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    cache = {"import": _slots_for_day(date(2026, 10, 31))}
+    cache["import"].update(_slots_for_day(date(2026, 10, 27)))
+    cache["import"].update(_slots_for_day(date(2026, 10, 30)))
+    days = days_to_fetch(cache, "import", now_utc, LONDON, settled=("2026-10-27",), rechecked={"2026-10-30": "2026-11-02", "2026-10-31": "2026-11-01"})
+    if date(2026, 10, 31) not in days or date(2026, 10, 30) in days or date(2026, 10, 27) in days or date(2026, 11, 2) not in days:
+        print("ERROR: should ask for complete 31 Oct (last read yesterday) but not 30 Oct (read today) or settled 27 Oct, got {}".format(days))
+        return True
+    return False
+
+
 def test_merge_prunes_old():
     """Slots older than the 7-day window are dropped on merge, and the input cache is not changed."""
     now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
@@ -354,7 +367,7 @@ def _query_day(query):
 
 
 def test_reader_fetches_only_incomplete_days():
-    """A refresh asks only for days that are not complete yet, one query per day."""
+    """Once the day's complete days have been read again, a refresh asks only for days that are not complete yet, one query per day."""
     import asyncio
     from billing import BillingReader
 
@@ -362,6 +375,7 @@ def test_reader_fetches_only_incomplete_days():
     owner = _Owner(_FakeStorage())
     reader = BillingReader(owner, "octopus_user", "billing")
     reader.cache = {"import": _slots_for_day(date(2026, 10, 31))}
+    reader.rechecked = {"import": {"2026-10-31": "2026-11-02"}, "export": {}}
     queries = []
 
     async def query_fn(query, context):
@@ -1099,6 +1113,211 @@ def test_reader_settles_old_days():
     return False
 
 
+def test_reader_rechecks_complete_days():
+    """A complete day is read again once a local day until it settles, so a half-hour Octopus re-prices after it first
+    arrived (an Intelligent dispatch billed at the standard rate, then at the dispatch rate, #6252) is corrected."""
+    import asyncio
+    from billing import BillingReader
+
+    storage = _FakeStorage()
+    reader = BillingReader(_Owner(storage), "octopus_user", "billing")
+    mpans = {"import": ("A-1", "IMP"), "export": None}
+    monday = date(2026, 11, 16)
+    # Monday was read complete, its half-hours at the standard rate; Octopus now has them at the dispatch rate
+    reader.cache = {"import": _slots_for_day(monday, kwh=1.0, cost=35.61)}
+    state = {"cost": 6.6, "fail": None, "now": None}
+    asked = []
+
+    async def query_fn(query, context):
+        """Answer with the day's billing up to now at the current price, or fail for the day told to."""
+        day = _query_day(query)
+        asked.append(day)
+        if day == state["fail"]:
+            return None
+        response = _day_response(day, kwh=1.0, cost=state["cost"] if day == monday else 10.0)
+        edges = response["account"]["properties"][0]["measurements"]["edges"]
+        edges[:] = [edge for edge in edges if datetime.fromisoformat(edge["node"]["startAt"]) + timedelta(minutes=30) <= state["now"]]
+        return response
+
+    def refresh(which, when):
+        """Refresh which reader at when, with the fake's clock set to it."""
+        state["now"] = when
+        asked.clear()
+        return asyncio.run(which.refresh(query_fn, mpans, when))
+
+    def monday_cost(which):
+        """Monday's billed import cost in which reader's cache."""
+        keys = {start.strftime("%Y-%m-%dT%H:%M:%SZ") for start in day_slot_starts(monday, LONDON)}
+        return sum(slot["cost"] for key, slot in which.cache["import"].items() if key in keys)
+
+    tuesday = datetime(2026, 11, 17, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    refresh(reader, tuesday)
+    if monday not in asked or not _close(monday_cost(reader), 48 * 6.6) or reader.rechecked["import"].get("2026-11-16") != "2026-11-17":
+        print("ERROR: the day's first refresh should read complete Monday again and take its re-priced cost, asked {} cost {} rechecked {}".format(asked, monday_cost(reader), reader.rechecked))
+        return True
+
+    # Later the same day today, still incomplete, is read but complete Monday is not; nothing changed, so no change is reported
+    state["cost"] = 7.0
+    changed = refresh(reader, tuesday + timedelta(hours=3))
+    if asked != [date(2026, 11, 17)] or changed is not True:
+        print("ERROR: a later refresh the same day should read only incomplete today (whose new half-hours are a change), asked {} changed {}".format(asked, changed))
+        return True
+    changed = refresh(reader, tuesday + timedelta(hours=3))
+    if changed is not False:
+        print("ERROR: a refresh that read nothing new should report no change, got {}".format(changed))
+        return True
+
+    # A failed re-read of complete Monday doesn't stop the newer days, keeps Monday as cached, and counts as today's re-read
+    state["fail"] = monday
+    wednesday = datetime(2026, 11, 18, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    refresh(reader, wednesday)
+    if date(2026, 11, 18) not in asked or reader.legs["import"] is not True or reader.rechecked["import"].get("2026-11-16") != "2026-11-18" or not _close(monday_cost(reader), 48 * 6.6):
+        print("ERROR: a failed Monday re-read should leave Monday as cached and still read today, asked {} legs {} rechecked {}".format(asked, reader.legs, reader.rechecked))
+        return True
+
+    # The recheck dates survive a restart, so the next refresh the same day asks for neither Monday nor Tuesday
+    state["fail"] = None
+    restarted = BillingReader(_Owner(storage), "octopus_user", "billing")
+    asyncio.run(restarted.load())
+    if restarted.rechecked["import"] != reader.rechecked["import"]:
+        print("ERROR: the recheck dates should be restored after a restart, got {}".format(restarted.rechecked))
+        return True
+    refresh(restarted, wednesday + timedelta(hours=3))
+    if monday in asked or date(2026, 11, 17) in asked or not _close(monday_cost(restarted), 48 * 6.6):
+        print("ERROR: the refresh after the failure should leave Monday and Tuesday until tomorrow, asked {} cost {}".format(asked, monday_cost(restarted)))
+        return True
+
+    # The next day Monday is read again and takes the re-price it missed
+    refresh(restarted, datetime(2026, 11, 19, 10, 0, tzinfo=LONDON).astimezone(timezone.utc))
+    if monday not in asked or not _close(monday_cost(restarted), 48 * 7.0):
+        print("ERROR: the day after the failure Monday should be read again, asked {} cost {}".format(asked, monday_cost(restarted)))
+        return True
+
+    # Once Monday has been read at BILLING_SETTLE_DAYS old it is settled and not read again
+    refresh(restarted, datetime(2026, 11, 21, 10, 0, tzinfo=LONDON).astimezone(timezone.utc))
+    refresh(restarted, datetime(2026, 11, 22, 10, 0, tzinfo=LONDON).astimezone(timezone.utc))
+    if "2026-11-16" not in restarted.settled["import"] or monday in asked:
+        print("ERROR: Monday should settle on 21 Nov and not be read on 22 Nov, settled {} asked {}".format(restarted.settled, asked))
+        return True
+    return False
+
+
+def test_reader_failed_recheck_skips_complete_days():
+    """A failed re-read of a complete day keeps its cached figures and the leg healthy, says so in the log, still reads the
+    incomplete days, and leaves the complete days after it to the next refresh. It counts as that day's re-read, so a day
+    whose query keeps failing is tried once a day until it settles and can't hold the newer days back for the rest of the window."""
+    import asyncio
+    from billing import BillingReader
+
+    owner = _Owner(_FakeStorage())
+    reader = BillingReader(owner, "octopus_user", "billing")
+    mpans = {"import": ("A-1", "IMP"), "export": None}
+    sunday, monday, tuesday = date(2026, 11, 15), date(2026, 11, 16), date(2026, 11, 17)
+    # Sunday and Monday are complete and were last read yesterday, so both are due a re-read today; Sunday's query always fails
+    reader.cache = {"import": {**_slots_for_day(sunday, cost=35.61), **_slots_for_day(monday, cost=35.61)}}
+    reader.rechecked = {"import": {"2026-11-15": "2026-11-16", "2026-11-16": "2026-11-16"}, "export": {}}
+    asked = []
+
+    async def query_fn(query, context):
+        """Answer every day at 6.6p a half-hour, but fail every read of Sunday."""
+        day = _query_day(query)
+        asked.append(day)
+        return None if day == sunday else _day_response(day, cost=6.6)
+
+    def day_cost(day):
+        """The day's billed import cost in the cache."""
+        keys = {start.strftime("%Y-%m-%dT%H:%M:%SZ") for start in day_slot_starts(day, LONDON)}
+        return sum(slot["cost"] for key, slot in reader.cache["import"].items() if key in keys)
+
+    def refresh(day, hour):
+        """Refresh at hour o'clock London time on day, returning the days asked for."""
+        asked.clear()
+        asyncio.run(reader.refresh(query_fn, mpans, datetime(2026, 11, day, hour, 0, tzinfo=LONDON).astimezone(timezone.utc)))
+        return list(asked)
+
+    first = refresh(17, 10)
+    if sunday not in first or monday in first or tuesday not in first:
+        print("ERROR: after Sunday's re-read fails, complete Monday should wait for the next refresh while incomplete today is still read, asked {}".format(first))
+        return True
+    if reader.legs["import"] is not True or not _close(day_cost(monday), 48 * 35.61) or not _close(day_cost(sunday), 48 * 35.61):
+        print("ERROR: a failed re-read should keep the leg healthy and the cached figures, legs {} Sunday {} Monday {}".format(reader.legs, day_cost(sunday), day_cost(monday)))
+        return True
+    if reader.rechecked["import"].get("2026-11-15") != "2026-11-17" or reader.rechecked["import"].get("2026-11-16") != "2026-11-16":
+        print("ERROR: the failed Sunday should count as re-read today and the skipped Monday should not, got {}".format(reader.rechecked))
+        return True
+    warnings = [line for line in owner.logged if line.startswith("Warn:") and "2026-11-15" in line and "tried again tomorrow" in line]
+    if len(warnings) != 1 or "could not read the import billing for MPAN" in " ".join(owner.logged):
+        print("ERROR: the failed re-read should be logged once, naming the day, and not as a failed leg, got {}".format(owner.logged))
+        return True
+
+    # The next refresh re-reads Monday and takes its re-priced cost, without asking for Sunday again today
+    second = refresh(17, 13)
+    if sunday in second or monday not in second or not _close(day_cost(monday), 48 * 6.6) or not _close(day_cost(sunday), 48 * 35.61):
+        print("ERROR: the refresh after the failure should re-read Monday but not Sunday, asked {} Sunday {} Monday {}".format(second, day_cost(sunday), day_cost(monday)))
+        return True
+
+    # Over the following days Sunday is tried once a day until it settles at 5 days old (20 Nov), and Monday is still re-read each day until it settles
+    for day in (18, 19, 20, 21):
+        asked_today = refresh(day, 10) + refresh(day, 13)
+        if asked_today.count(sunday) != (1 if day <= 20 else 0) or asked_today.count(monday) != 1 or reader.legs["import"] is not True:
+            print("ERROR: on {} Nov Sunday should be asked for {} and Monday once, asked {} legs {}".format(day, 1 if day <= 20 else 0, asked_today, reader.legs))
+            return True
+    if "2026-11-15" not in reader.settled["import"] or not any("2026-11-15" in line and "won't be read again" in line for line in owner.logged):
+        print("ERROR: Sunday should settle on 20 Nov despite its failing reads, settled {}".format(reader.settled))
+        return True
+    return False
+
+
+def test_reader_refresh_jitter():
+    """Without random_delay a read is due exactly BILLING_REFRESH_MINUTES after the last; with it, within
+    BILLING_REFRESH_JITTER of that, picked afresh after every read so installations in step drift apart."""
+    import asyncio
+    from unittest.mock import patch
+    from billing import BillingReader
+
+    now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
+    reader = BillingReader(_Owner(_FakeStorage()), "octopus_user", "billing")
+    reader.fetched_at = now_utc
+    if reader.due(now_utc + timedelta(minutes=179)) or not reader.due(now_utc + timedelta(minutes=180)):
+        print("ERROR: without random_delay the next read should be due exactly 180 minutes after the last")
+        return True
+    if billing.BILLING_REFRESH_JITTER != 0.15:
+        print("ERROR: the refresh jitter should be 15%, got {}".format(billing.BILLING_REFRESH_JITTER))
+        return True
+
+    async def query_fn(query, context):
+        """Answer every day with a full day of billing."""
+        return _day_response(_query_day(query))
+
+    reader.random_delay = True
+    reader.first_read_after = now_utc
+    with patch.object(billing.random, "uniform", return_value=1.15) as uniform:
+        if reader.due(now_utc + timedelta(minutes=206)) or not reader.due(now_utc + timedelta(minutes=207)):
+            print("ERROR: with the longest jitter the next read should be due 207 minutes after the last")
+            return True
+        if uniform.call_count != 1 or uniform.call_args.args != (1 - billing.BILLING_REFRESH_JITTER, 1 + billing.BILLING_REFRESH_JITTER):
+            print("ERROR: the wait should be picked once per read from 0.85 to 1.15, got {} calls {}".format(uniform.call_count, uniform.call_args))
+            return True
+    # A read clears the pick, so the next wait is drawn again
+    asyncio.run(reader.refresh(query_fn, {"import": ("A-1", "IMP"), "export": None}, now_utc))
+    if reader.refresh_after is not None:
+        print("ERROR: a read should clear the picked wait, got {}".format(reader.refresh_after))
+        return True
+    with patch.object(billing.random, "uniform", return_value=0.85):
+        if reader.due(now_utc + timedelta(minutes=152)) or not reader.due(now_utc + timedelta(minutes=153)):
+            print("ERROR: with the shortest jitter the next read should be due 153 minutes after the last")
+            return True
+    # Unpatched, the picks spread over the whole range
+    picks = set()
+    for _ in range(50):
+        reader.refresh_after = None
+        picks.add(round(reader.refresh_minutes(), 3))
+    if min(picks) < 153 or max(picks) > 207 or len(picks) < 10:
+        print("ERROR: the picked waits should vary between 153 and 207 minutes, got {}".format(sorted(picks)))
+        return True
+    return False
+
+
 def test_sensor_needs_export_when_configured():
     """With an export meter whose read failed, a day isn't complete on import alone, so the state never quietly becomes import-only."""
     now_utc = datetime(2026, 11, 2, 10, 0, tzinfo=LONDON).astimezone(timezone.utc)
@@ -1521,6 +1740,195 @@ def test_attach_axle():
     return False
 
 
+def _saving_event(start_minute, end_minute, points=149, rewarded=None, event_type="TURN_DOWN", event_id=8342):
+    """A joined saving session as the octopus_saving_session sensor lists it, by minutes after the view's midnight."""
+    return {
+        "start": (VIEW_MIDNIGHT + timedelta(minutes=start_minute)).strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "end": (VIEW_MIDNIGHT + timedelta(minutes=end_minute)).strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "octopoints_per_kwh": points,
+        "rewarded_octopoints": rewarded,
+        "id": event_id,
+        "code": "EVENT_{}".format(event_id),
+        "event_type": event_type,
+    }
+
+
+def test_saving_session_events():
+    """Joined saving sessions are priced as the planner prices them, and Happy Hours, unpriced and unreadable events are left out."""
+    from billing import saving_session_events
+
+    joined = [
+        _saving_event(1020, 1080, points=149, rewarded=392),
+        _saving_event(480, 540, points=0, event_type="WEEKEND_HAPPY_HOUR", event_id=1),
+        _saving_event(600, 660, points=None, event_id=2),
+        _saving_event(700, 760, points=0, event_id=3),
+        {"start": "not a time", "end": None, "octopoints_per_kwh": 100},
+        "junk",
+    ]
+    events = saving_session_events(joined, 8, 0.0)
+    if [(event["id"], event["pence_per_kwh"], event["octopoints_per_kwh"], event["rewarded_octopoints"], event["award_expected"], event["on_export"]) for event in events] != [(8342, 18.625, 149.0, 392.0, True, True)]:
+        print("ERROR: only the priced turn-down session should be kept, at 149 points / 8 = 18.625p, got {}".format(events))
+        return True
+    # With octopus_saving_session_rate set, an event that reports no reward is priced at it, as the planner does
+    defaulted = saving_session_events(joined, 8, 50.0)
+    # ... and still waits for its award, which such sessions get (issue #3079's sessions were awarded with no points rate)
+    if [(event["id"], event["pence_per_kwh"], event["octopoints_per_kwh"], event["award_expected"]) for event in defaulted] != [(8342, 18.625, 149.0, True), (2, 50.0, 400.0, True)]:
+        print("ERROR: an event with no reward should take the default rate and still expect an award, got {}".format(defaulted))
+        return True
+    # A feed that can't report awards (the flexibility API) leaves rewarded_octopoints out, so no award is expected
+    unreported = {key: value for key, value in _saving_event(1020, 1080).items() if key != "rewarded_octopoints"}
+    if [(event["rewarded_octopoints"], event["award_expected"]) for event in saving_session_events([unreported], 8, 0.0)] != [(None, False)]:
+        print("ERROR: an event without rewarded_octopoints shouldn't expect an award, got {}".format(saving_session_events([unreported], 8, 0.0)))
+        return True
+    return False
+
+
+def test_attach_saving():
+    """A saving session's price is left out of Predbat's cost and the Diff, and estimated in points, with what Octopus awarded."""
+    from billing import attach_billing, saving_session_events
+
+    # 2.5 kWh exported in each half-hour of a 17:00-18:00 session at Agile Outgoing 15p, which Predbat priced 18.625p/kWh higher
+    minutes = [1020, 1050, 1080]
+    imports = {_key(1020): _slot(0.0, 0.0), _key(1050): _slot(0.0, 0.0), _key(1080): _slot(1.0, 30.0)}
+    exports = {_key(1020): _slot(2.5, 2.5 * 15.0), _key(1050): _slot(2.5, 2.5 * 15.0), _key(1080): _slot(0.0, 0.0)}
+    billing = dict(_billing_attrs(imports, exports, legs={"import": True, "export": True}))
+    predbat_cost = {1020: -2.5 * 33.625, 1050: -2.5 * 33.625, 1080: 30.0}
+    import_kwh = {1020: 0.0, 1050: 0.0, 1080: 1.0}
+    export_kwh = {1020: 2.5, 1050: 2.5, 1080: 0.0}
+    sessions = saving_session_events([_saving_event(1020, 1080)], 8, 0.0)
+    plan = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {minute: "saving" for minute in range(1020, 1080)}, False, import_kwh, export_kwh, None, sessions)
+    summary = plan["billing_summary"]
+    # 2.5 kWh at 149 points/kWh is 372.5 points a half-hour
+    if [row.get("billing_saving") for row in plan["rows"]] != [372, 372, None]:
+        print("ERROR: each session row should carry its 2.5 kWh at 149 points, got {}".format([row.get("billing_saving") for row in plan["rows"]]))
+        return True
+    if summary.get("predbat_cost") != -0.45 or summary.get("diff") != 0.0 or summary.get("saving_points") != 745 or summary.get("saving_value") != 0.93 or summary.get("saving_slots") != 2:
+        print("ERROR: Predbat's cost should be at the tariff's rates, with the session's 93p shown as 745 points, got {}".format(summary))
+        return True
+    if [row.get("billing_diff") for row in plan["rows"]] != [0.0, 0.0, 0.0] or plan["rows"][0].get("billing_event") is not None:
+        print("ERROR: each session row's Diff should leave the session price out, and its label go, got {}".format([(row.get("billing_diff"), row.get("billing_event")) for row in plan["rows"]]))
+        return True
+    if summary.get("saving_awarded") is not None or summary.get("saving_awarded_pending") != 1:
+        print("ERROR: a session Octopus hasn't awarded yet should be counted as pending, got {}".format(summary))
+        return True
+    # Each row's points are worth what Predbat priced them at: 2.5 kWh at 18.625p is about 47p
+    if [row.get("billing_saving_value") for row in plan["rows"]] != [0.47, 0.47, None] or summary.get("saving_awarded_value") is not None:
+        print("ERROR: each session row should carry its points' value, and no award value before an award, got {} {}".format([row.get("billing_saving_value") for row in plan["rows"]], summary))
+        return True
+    awarded = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1080, rewarded=392)], 8, 0.0))
+    if awarded["billing_summary"].get("saving_awarded") != 392 or awarded["billing_summary"].get("saving_awarded_pending") != 0 or awarded["billing_summary"].get("diff") != 0.0:
+        print("ERROR: the points Octopus awarded should be shown, and not change the Difference, got {}".format(awarded["billing_summary"]))
+        return True
+    # 392 points at 8 points a penny are worth 49p
+    if awarded["billing_summary"].get("saving_awarded_value") != 0.49:
+        print("ERROR: the awarded points should be valued at the session's pence per point, got {}".format(awarded["billing_summary"]))
+        return True
+    # A session that gives no points (octopus_saving_session_octopoints_per_penny 0, priced at the default rate) can't be valued
+    unvalued = saving_session_events([_saving_event(1020, 1080, points=None, rewarded=392)], 0, 18.625)
+    zero = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, unvalued)
+    zero_summary = zero["billing_summary"]
+    if zero_summary.get("saving_awarded") != 392 or zero_summary.get("saving_awarded_value") is not None or zero_summary.get("saving_points_valued") is not False:
+        print("ERROR: an award with no points rate to value it by should show with no value, got {}".format(zero_summary))
+        return True
+    if [row.get("billing_saving_value") for row in zero["rows"]] != [None, None, None]:
+        print("ERROR: rows whose price came to no points shouldn't give them a value, got {}".format([row.get("billing_saving_value") for row in zero["rows"]]))
+        return True
+    if summary.get("saving_points_valued") is not True:
+        print("ERROR: points priced at 8 a penny should be valued, got {}".format(summary))
+        return True
+    # An award of nothing is still an award, shown as 0 rather than as nothing posted
+    nothing = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1080, rewarded=0)], 8, 0.0))
+    if nothing["billing_summary"].get("saving_awarded") != 0 or nothing["billing_summary"].get("saving_awarded_pending") != 0:
+        print("ERROR: a posted award of 0 should show as 0 awarded, got {}".format(nothing["billing_summary"]))
+        return True
+    # Octopus awards a whole session, so with only its first half-hour compared (the second waits for its export) the award isn't set against it
+    part_billing = dict(billing, slots={"import": imports, "export": {key: slot for key, slot in exports.items() if key != _key(1050)}})
+    part = attach_billing(_plan(minutes), part_billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1080, rewarded=392)], 8, 0.0))
+    if part["billing_summary"].get("saving_points") != 372 or part["billing_summary"].get("saving_awarded") is not None or part["billing_summary"].get("saving_awarded_pending") != 0:
+        print("ERROR: a session only partly compared should show its points so far and no award, got {}".format(part["billing_summary"]))
+        return True
+    # A feed that doesn't report awards (the flexibility API leaves rewarded_octopoints out) leaves nothing pending
+    unreported = saving_session_events([{key: value for key, value in _saving_event(1020, 1080).items() if key != "rewarded_octopoints"}], 8, 0.0)
+    quiet = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, unreported)
+    if quiet["billing_summary"].get("saving_awarded_pending") != 0 or quiet["billing_summary"].get("saving_awarded") is not None or quiet["billing_summary"].get("diff") != 0.0:
+        print("ERROR: a feed without awards shouldn't show one pending, got {}".format(quiet["billing_summary"]))
+        return True
+    # A session reporting no points rate (priced at octopus_saving_session_rate, here the same 18.625p) is still awarded, so it waits
+    defaulted = saving_session_events([_saving_event(1020, 1080, points=None)], 8, 18.625)
+    waiting = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, defaulted)
+    if waiting["billing_summary"].get("saving_awarded_pending") != 1 or waiting["billing_summary"].get("diff") != 0.0:
+        print("ERROR: a session with no points rate should still wait for its award, got {}".format(waiting["billing_summary"]))
+        return True
+    # With an export tariff that pays nothing Predbat doesn't add the session to its export rate, so nothing is put back on export
+    unpaid_cost = {1020: -2.5 * 15.0, 1050: -2.5 * 15.0, 1080: 30.0}
+    unpaid = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, unpaid_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1080)], 8, 0.0, on_export=False))
+    if unpaid["billing_summary"].get("diff") != 0.0 or unpaid["billing_summary"].get("saving_points") != 0:
+        print("ERROR: a session not priced on export should leave export alone, got {}".format(unpaid["billing_summary"]))
+        return True
+    # Import only: Predbat's import cost carries the session price on import, which is taken back off
+    night_imports = {_key(1020): _slot(1.0, 30.0), _key(1050): _slot(1.0, 30.0)}
+    import_only = attach_billing(_plan([1020, 1050]), _billing_attrs(night_imports), VIEW_MIDNIGHT, 30, {1020: 48.625, 1050: 48.625}, 55.52, {}, True, {1020: 1.0, 1050: 1.0}, None, None, sessions)
+    if import_only["billing_summary"].get("diff") != 0.0 or import_only["billing_summary"].get("saving_points") != -298:
+        print("ERROR: an import-only comparison should take the session price off the import, got {}".format(import_only["billing_summary"]))
+        return True
+    # Without the session the same day shows its price as a gap against the bill
+    plain = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh)
+    if plain["billing_summary"].get("diff") != 0.93 or plain["billing_summary"].get("saving_slots") != 0 or plain["rows"][0].get("billing_saving") is not None:
+        print("ERROR: without saving sessions nothing should be left out, got {}".format(plain["billing_summary"]))
+        return True
+    # A session row's import rate carries the session price, so it mustn't make the day's rates look implausible
+    rated = _plan(minutes)
+    for row, rate in zip(rated["rows"], (48.625, 48.625, 30.0)):
+        row["import_rate"] = rate
+    rated_billing = dict(billing, slots={"import": {key: _slot(1.0, 30.0) for key in imports}, "export": exports})
+    priced = attach_billing(rated, rated_billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, import_kwh, export_kwh, None, sessions)
+    if "billing_summary" not in priced:
+        print("ERROR: a saving session row's import rate should be checked without the session price")
+        return True
+    # Import during a session: Predbat priced it 18.625p/kWh higher, which the bill doesn't charge
+    import_cost = {**predbat_cost, 1080: 1.0 * 48.625}
+    during = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, import_cost, 55.52, {}, False, import_kwh, export_kwh, None, saving_session_events([_saving_event(1020, 1110)], 8, 0.0))
+    if during["rows"][2].get("billing_saving") != -149 or during["billing_summary"].get("diff") != 0.0:
+        print("ERROR: import during a session should count against its points and come off Predbat's cost, got {} {}".format(during["rows"][2].get("billing_saving"), during["billing_summary"]))
+        return True
+    # Without Predbat's recorded kWh there is nothing to estimate from, so the row isn't flagged
+    unmetered = attach_billing(_plan(minutes), billing, VIEW_MIDNIGHT, 30, predbat_cost, 55.52, {}, False, None, None, None, sessions)
+    if unmetered["rows"][0].get("billing_saving") is not None or unmetered["billing_summary"].get("saving_slots") != 0:
+        print("ERROR: without recorded kWh no saving session estimate should be made, got {}".format(unmetered["billing_summary"]))
+        return True
+    return False
+
+
+def test_history_billing_mark_saving():
+    """The History views rebuild when a saving session over the billed half-hours appears, its points rate changes, Octopus awards its points, or an award stops being expected."""
+    from billing import saving_session_events
+    from output import Output
+
+    billing = _billing_attrs({_key(480): _slot(1.0, 30.0), _key(1050): _slot(1.0, 30.0)})
+    base = Output.history_billing_mark(billing)
+    pending = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([_saving_event(1020, 1080)], 8, 0.0)))
+    awarded = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([_saving_event(1020, 1080, rewarded=392)], 8, 0.0)))
+    if len({repr(mark) for mark in (base, pending, awarded)}) != 3:
+        print("ERROR: the mark should change with a session and with its award, got {} {} {}".format(base, pending, awarded))
+        return True
+    # A feed that stops reporting awards (the flexibility API leaves rewarded_octopoints out) changes it too, though the award is still None
+    unreported = {key: value for key, value in _saving_event(1020, 1080).items() if key != "rewarded_octopoints"}
+    quiet = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([unreported], 8, 0.0)))
+    if quiet == pending:
+        print("ERROR: the mark should change when a session's award stops being expected, got {}".format(quiet))
+        return True
+    # A session with no points rate keeps its default pence when octopus_saving_session_octopoints_per_penny changes, but not its points
+    defaulted = [_saving_event(1020, 1080, points=None)]
+    if Output.history_billing_mark(dict(billing, saving_events=saving_session_events(defaulted, 8, 25.0))) == Output.history_billing_mark(dict(billing, saving_events=saving_session_events(defaulted, 10, 25.0))):
+        print("ERROR: the mark should change with a session's points rate")
+        return True
+    later = Output.history_billing_mark(dict(billing, saving_events=saving_session_events([_saving_event(1020, 1080), _saving_event(1200, 1260, event_id=9)], 8, 0.0)))
+    if later != pending:
+        print("ERROR: a session after the billed half-hours shouldn't change the mark, got {} {}".format(later, pending))
+        return True
+    return False
+
+
 def test_plan_renderer_js_parses():
     """The plan renderer's JavaScript, billing columns and summary included, parses: one bad escape stops every plan view rendering."""
     import re
@@ -1566,6 +1974,13 @@ def test_history_billing_mark():
         return True
     if Output.history_billing_mark({}) is not None or Output.history_billing_mark(None) is not None:
         print("ERROR: no billing should give no mark")
+        return True
+    # A half-hour re-priced in place, same keys, changes the mark too (#6252)
+    if Output.history_billing_mark(_billing_attrs({_key(480): _slot(1.0, 6.6), _key(510): _slot(1.0, 30.0)})) == plain:
+        print("ERROR: a re-priced half-hour should change the mark")
+        return True
+    if Output.history_billing_mark(_billing_attrs({_key(480): _slot(1.2, 30.0), _key(510): _slot(1.0, 30.0)})) == plain:
+        print("ERROR: a half-hour whose kWh is revised at the same cost should change the mark")
         return True
     return False
 
@@ -1634,6 +2049,7 @@ def run_billing_tests(my_predbat):
         test_parse_none_vs_empty,
         test_day_slot_starts_clock_change,
         test_days_to_fetch_skips_complete,
+        test_days_to_fetch_recheck,
         test_merge_prunes_old,
         test_sensor_shape,
         test_sensor_no_data,
@@ -1644,6 +2060,9 @@ def run_billing_tests(my_predbat):
             failed = True
     for test in (
         test_reader_fetches_only_incomplete_days,
+        test_reader_rechecks_complete_days,
+        test_reader_failed_recheck_skips_complete_days,
+        test_reader_refresh_jitter,
         test_reader_failed_read_marks_leg,
         test_reader_restart_restores_cache,
         test_reader_random_first_read_delay,
@@ -1683,6 +2102,9 @@ def run_billing_tests(my_predbat):
         test_attach_axle,
         test_history_billing_mark_axle,
         test_plan_renderer_js_parses,
+        test_saving_session_events,
+        test_attach_saving,
+        test_history_billing_mark_saving,
         test_octopus_billing_credit_events,
     ):
         print("billing: {}".format(test.__name__))

@@ -39,6 +39,8 @@ armv
 ASHP
 asn
 asname
+aspectmode
+aspectratio
 astimezone
 asyncio
 atfork
@@ -54,6 +56,7 @@ axisbelow
 axvline
 axvspan
 Backfeed
+backgroundcolor
 backprop
 Backpropagate
 backpropagation
@@ -103,6 +106,8 @@ chg
 Chrg
 citem
 cloudfront
+cmax
+cmin
 cmpl
 cobat
 codepoint
@@ -111,6 +116,8 @@ Codespaces
 COEFF
 collaps
 collapsable
+colorbar
+colorscale
 compareform
 configform
 connack
@@ -152,6 +159,7 @@ deadbanding
 deadbeefdeadbeef
 dedup
 dedupe
+deepseek
 dend
 denorm
 derate
@@ -183,6 +191,8 @@ dstart
 dtu
 dtype
 dwindow
+Dykstra
+Dykstra's
 eauth
 echargingpile
 ECONNRESET
@@ -265,6 +275,7 @@ foxess
 foxesscloud
 frameon
 freephase
+frombuffer
 fromisoformat
 fronius
 funcs
@@ -297,6 +308,7 @@ GOELEC
 goldens
 gridcharge
 gridcode
+gridcolor
 gridconsumption
 gridconsumptionpower
 gridspec
@@ -307,6 +319,7 @@ guoxia
 guoxiatech
 GWMQTT
 HACS
+hacsfiles
 hadashboard
 hahistory
 hainterface
@@ -330,9 +343,11 @@ heatsink
 holdout
 homeassistant
 houseb
+hovertemplate
 htmlcov
 hultenvp
 husforbrukning
+hvac
 hypervolt
 iboost
 idag
@@ -531,6 +546,7 @@ pac
 packettypes
 paho
 parseable
+pava
 pbat
 pbgw
 pcharging
@@ -654,12 +670,14 @@ setstate
 SFMB
 sg05lp1
 sharex
+showlegend
 SIGALRM
 sigcloud
 sigen
 sigencloud
 sigenergy
 sigenstor
+sizeof
 skynet
 Slee
 slugified
@@ -711,6 +729,7 @@ sunspec
 sunsynk
 supabase
 suptitle
+surrogatepass
 suspendedev
 suspendedevse
 synkctl
@@ -728,6 +747,9 @@ testname
 thirdparty
 threadpool
 threadpoolctl
+tickfont
+ticktext
+tickvals
 timea
 timeb
 timec
@@ -766,6 +788,7 @@ tzpath
 tzset
 unasserted
 uncalibrated
+uncancellable
 uncompilable
 unconfigured
 underivable
@@ -800,6 +823,7 @@ Vallery
 varh
 venv
 Victron
+Viridis
 visibilitychange
 vvwwxxabcdefyyzzuu
 waf
@@ -830,6 +854,7 @@ xrtkq
 xtest
 xticks
 xxabcdefyy
+yanchor
 yaxis
 yaxistooltip
 yday
@@ -840,6 +865,8 @@ yticks
 yuanzhi
 zappi
 zappis
+zaxis
 zcat
+zeroline
 zigbee
 zoneinfo

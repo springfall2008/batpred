@@ -34,6 +34,8 @@ from const import (
     OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES,
     PREDICT_STEP,
     DYNAMIC_LOAD_CAR_START_MINUTES,
+    OCTOPUS_API_URL,
+    OCTOPUS_BACKEND_API_URL,
 )
 from utils import (
     RepeatLogGate,
@@ -54,9 +56,10 @@ from utils import (
     GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS,
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
     strptime_aware,
+    migrate_octopus_url,
 )
 from component_base import ComponentBase, new_http_session
-from billing import BillingReader, billing_slot_key
+from billing import BillingReader, billing_slot_key, saving_session_rate
 from mock_base import MockBase as SharedMockBase
 import aiohttp
 import hashlib
@@ -537,8 +540,8 @@ class OctopusEnergyApiClient:
         self.log = log
         # Called for every HTTP session; the owning component passes its http_session
         self._session_factory = session_factory or new_http_session
-        self.base_url = "https://api.octopus.energy"
-        self.backend_url = "https://api.backend.octopus.energy"
+        self.base_url = OCTOPUS_API_URL
+        self.backend_url = OCTOPUS_BACKEND_API_URL
 
         self.default_headers = {"user-agent": f"{user_agent_value}/1.0"}
         self.timeout = aiohttp.ClientTimeout(total=None, sock_connect=timeout_in_seconds, sock_read=timeout_in_seconds)
@@ -1628,17 +1631,18 @@ class OctopusAPI(ComponentBase):
             if reward is None:
                 reward = default_octopoints  # Inject default when API doesn't provide reward
             if start and end:
-                return_joined_events.append(
-                    {
-                        "start": start,
-                        "end": end,
-                        "octopoints_per_kwh": reward,
-                        "rewarded_octopoints": event.get("rewardGivenInOctoPoints", None),
-                        "id": event_id,
-                        "code": event_code.get(event_id, None),
-                        "event_type": event.get("eventType", None) or event_type.get(event_id, None),
-                    }
-                )
+                joined_event = {
+                    "start": start,
+                    "end": end,
+                    "octopoints_per_kwh": reward,
+                    "id": event_id,
+                    "code": event_code.get(event_id, None),
+                    "event_type": event.get("eventType", None) or event_type.get(event_id, None),
+                }
+                # Only a feed that reports awards lists one, null until Octopus posts it (the History view counts those as pending)
+                if "rewardGivenInOctoPoints" in event:
+                    joined_event["rewarded_octopoints"] = event.get("rewardGivenInOctoPoints")
+                return_joined_events.append(joined_event)
 
         saving_attributes = {"friendly_name": "Octopus Intelligent Saving Sessions", "icon": "mdi:currency-usd", "joined_events": return_joined_events, "available_events": return_available_events}
 
@@ -2047,6 +2051,8 @@ class OctopusAPI(ComponentBase):
 
         # Map to existing internal format
         # New API doesn't distinguish available vs joined — treat all as joined
+        # ... and doesn't report the Octopoints awarded, so rewardGivenInOctoPoints is left out rather than null: null says an award
+        # is still to come, which this feed can never post
         result = {"events": [], "account": {"hasJoinedCampaign": len(saving_events) > 0, "joinedEvents": []}}  # No "available" events (no separate list in new API)
         for event in saving_events:
             result["account"]["joinedEvents"].append(
@@ -2054,7 +2060,6 @@ class OctopusAPI(ComponentBase):
                     "eventId": event.get("code"),
                     "startAt": event.get("startAt"),
                     "endAt": event.get("endAt"),
-                    "rewardGivenInOctoPoints": None,
                 }
             )
 
@@ -2072,7 +2077,7 @@ class OctopusAPI(ComponentBase):
         or None if the product info could not be fetched or tariff_code was not found (caller should fall back).
         """
         if product_code not in self._product_info_cache:
-            url = f"https://api.octopus.energy/v1/products/{product_code}/"
+            url = f"{OCTOPUS_API_URL}/v1/products/{product_code}/"
             product_info = await self.fetch_url_cached(url, json_only=True)
             if not product_info or not isinstance(product_info, dict):
                 self.log("Warn: OctopusAPI: Could not fetch product info for {}".format(product_code))
@@ -2348,7 +2353,8 @@ class OctopusAPI(ComponentBase):
                             self.failures_total += 1
                             self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {} (No Results) - {}".format(url, detail))
                             return {}
-                        url = data.get("next", None)
+                        # The new host still links further pages on the old one (GH#5786)
+                        url = migrate_octopus_url(data.get("next", None))
                         pages += 1
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 self.failures_total += 1
@@ -2397,7 +2403,7 @@ class OctopusAPI(ComponentBase):
                 tariff_type = "gas"
             else:
                 tariff_type = "electricity"
-            standard_url = f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/"
+            standard_url = f"{OCTOPUS_API_URL}/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/"
             if tariff_type == "electricity":
                 # Always check product links first to determine the correct rate endpoint type,
                 # avoiding the 400 round-trip for tariffs that only expose day/night rate endpoints.
@@ -2417,7 +2423,7 @@ class OctopusAPI(ComponentBase):
                 # is not on the public REST API — fetch the equivalent INTELLI-FLUX-IMPORT tariff instead
                 flux_import_product = product_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
                 flux_import_tariff_code = tariff_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
-                flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff_code}/standard-unit-rates/"
+                flux_import_url = f"{OCTOPUS_API_URL}/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff_code}/standard-unit-rates/"
                 import_data = await self.fetch_url_cached(flux_import_url)
                 if import_data:
                     tariffs[tariff]["data"] = import_data
@@ -2429,7 +2435,7 @@ class OctopusAPI(ComponentBase):
                         self.log("OctopusAPI: Using current import rates as fallback for {} export tariff (FLUX-IMPORT also unavailable)".format(product_code))
                     else:
                         self.log("Warn: OctopusAPI: No import data available for INTELLI-FLUX-EXPORT fallback, export rates will be zero")
-            tariffs[tariff]["standing"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
+            tariffs[tariff]["standing"] = await self.fetch_url_cached(f"{OCTOPUS_API_URL}/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
 
             rates = self.get_octopus_rates_direct(tariff)
             standing = self.get_octopus_rates_direct(tariff, standingCharge=True)
@@ -2682,7 +2688,7 @@ class OctopusAPI(ComponentBase):
     async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False, _retry_count=0, use_backend=False):
         """
         Execute a graphql query with automatic token refresh on auth errors.
-        If use_backend=True, uses api.backend.octopus.energy with no JWT prefix
+        If use_backend=True, uses the backend host (OCTOPUS_BACKEND_API_URL) with no JWT prefix
         (required for saving sessions since Feb 2026 API migration).
 
         While a rate limit pause is running (see start_graphql_rate_limit_backoff) a query is not sent
@@ -3555,12 +3561,21 @@ class Octopus:
         Download octopus rates directly from a URL or return from cache if recent
         Retry 3 times and then throw error
         """
+        legacy_url = url
+        url = migrate_octopus_url(url)
+        if url != legacy_url and legacy_url not in self.octopus_url_migrated:
+            self.octopus_url_migrated.add(legacy_url)
+            self.log("Warn: Octopus: URL {} uses the old Octopus API address, using {} instead - please update apps.yaml".format(legacy_url, url))
 
         self.log("Octopus: Download Octopus rates from {}".format(url))
 
         # Pre-warm the entire cache from storage once per process lifetime (shared with free sessions).
         # Done before any in-memory population so the one-shot storage load cannot clobber freshly cached entries.
         self._load_octopus_url_cache_from_storage()
+
+        # Rates cached under the old address before the upgrade stay the fallback for a failed download
+        if url != legacy_url and url not in self.octopus_url_cache and legacy_url in self.octopus_url_cache:
+            self.octopus_url_cache[url] = self.octopus_url_cache.pop(legacy_url)
 
         # Check the cache first
         now = datetime.now()
@@ -3648,7 +3663,8 @@ class Octopus:
                 self.log("Warn: Octopus: Error downloading Octopus data from URL {} (No Results)".format(url))
                 self.record_status("Warn: Octopus: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
-            url = data.get("next", None)
+            # The new host still links further pages on the old one (GH#5786)
+            url = migrate_octopus_url(data.get("next", None))
             pages += 1
 
         mdata = filter_payment_method(mdata)
@@ -5524,6 +5540,8 @@ class Octopus:
 
         # Octopus saving session
         octopus_saving_slots = []
+        if "octopus_saving_session" not in self.args:
+            self.octopus_saving_joined_events = []
         if "octopus_saving_session" in self.args:
             saving_rate = 200  # Default rate if not reported
             octopoints_per_penny = self.get_arg("octopus_saving_session_octopoints_per_penny", 8)  # Default 8 octopoints per penny
@@ -5551,6 +5569,10 @@ class Octopus:
                         entity_id = fallback_entity_id
                         joined_events = fallback_joined_events
                         available_events = fallback_available_events
+                # Every joined session the sensor lists, past ones included, for the History view's billing comparison: published in one
+                # assignment, and kept while the entity has no attributes (unavailable after a restart) rather than emptied
+                if joined_events is not _ATTRIBUTE_UNSET:
+                    self.octopus_saving_joined_events = list(joined_events or [])
                 joined_events = [] if joined_events is _ATTRIBUTE_UNSET else joined_events
                 available_events = [] if available_events is _ATTRIBUTE_UNSET else available_events
 
@@ -5648,11 +5670,11 @@ class Octopus:
                 for event in joined_events:
                     start = event.get("start", None)
                     end = event.get("end", None)
-                    octopoints_kwh = event.get("octopoints_per_kwh", None)
-                    if octopoints_kwh is not None:
-                        saving_rate = octopoints_kwh / octopoints_per_penny  # Octopoints per pence
-                    elif default_rate_pence > 0:
-                        saving_rate = default_rate_pence  # Use configured default rate
+                    # The session's Octopoints per kWh over octopoints_per_penny, or the configured default rate when it reports none;
+                    # shared with the History view's billing comparison, so both price a session the same way
+                    event_rate = saving_session_rate(event.get("octopoints_per_kwh", None), octopoints_per_penny, default_rate_pence)
+                    if event_rate is not None:
+                        saving_rate = event_rate
 
                     # Octopus publishes Power Up and Power Down events through the same savingSessions
                     # feed and distinguishes them with eventType (#4548 point 5/7):
@@ -5683,7 +5705,7 @@ class Octopus:
                         continue
 
                     # Skip events with no rate info unless default is configured
-                    if start and end and (octopoints_kwh is not None or default_rate_pence > 0) and saving_rate > 0:
+                    if start and end and event_rate is not None:
                         # Save the saving slot?
                         try:
                             start_time = str2time(start)

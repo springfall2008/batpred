@@ -35,12 +35,18 @@ BILLING_REFRESH_MINUTES = 180
 # fleet restarted together doesn't send its whole first fill to Kraken at once
 BILLING_FIRST_READ_DELAY_SECONDS = 30 * 60
 BILLING_DAY_PACE_SECONDS = 60
+# With plan_random_delay set, each wait between reads is also BILLING_REFRESH_MINUTES give or take up to this fraction, picked
+# afresh after every read. The last read time survives a restart, so without it a fleet whose reads ever lined up (one restarted
+# together before the first-read delay existed) would keep reading in step forever; with it, their read times drift apart
+BILLING_REFRESH_JITTER = 0.15
 BILLING_ENTITY_SUFFIX = "billing"
 BILLING_SLOT_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 BILLING_LEGS = ("import", "export")
 # A past day is read again each refresh until it is complete, but once it is this many days old one more read settles it:
 # import is published within a day or two but export can lag several days behind it, so a half-hour still missing by then
-# (or a meter that publishes nothing) is not coming
+# (or a meter that publishes nothing) is not coming. A complete day is read again once a day until then too, as its costs
+# can still change: Octopus first prices an Intelligent dispatch's half-hours at the standard rate and reprices them at
+# the dispatch rate a day or so later (#6252)
 BILLING_SETTLE_DAYS = 5
 # The measurements query asks for Europe/London days, and the supplier spreads each London day's standing charge over its half-hours
 BILLING_TZ = ZoneInfo("Europe/London")
@@ -242,10 +248,15 @@ def merge_slots(cache, leg, new_slots, now_utc, tz):
     return merged
 
 
-def days_to_fetch(cache, leg, now_utc, tz, settled=()):
-    """Return the local dates in the window that are not yet complete for leg, leaving out settled ones (YYYY-MM-DD)."""
+def days_to_fetch(cache, leg, now_utc, tz, settled=(), rechecked=None):
+    """Return the local dates in the window to read for leg, leaving out settled ones (YYYY-MM-DD).
+
+    Those not yet complete and, when rechecked is given ({YYYY-MM-DD day: YYYY-MM-DD local date it was last read}), the
+    complete ones not read yet today as well, as their costs may since have been revised.
+    """
     slots = (cache or {}).get(leg) or {}
-    return [day for day in _window_days(now_utc, tz) if day.isoformat() not in settled and not _day_complete(slots, day, tz)]
+    today = now_utc.astimezone(tz).date().isoformat()
+    return [day for day in _window_days(now_utc, tz) if day.isoformat() not in settled and (not _day_complete(slots, day, tz) or (rechecked is not None and rechecked.get(day.isoformat()) != today))]
 
 
 def _complete_until(slots):
@@ -442,10 +453,14 @@ class BillingReader:
         self.mpans = None
         # Per leg, the days (YYYY-MM-DD) read when already BILLING_SETTLE_DAYS old, which are not read again
         self.settled = {leg: [] for leg in BILLING_LEGS}
+        # Per leg, {day: local date it was last read} (both YYYY-MM-DD), so a complete day is read again at most once a day until it settles
+        self.rechecked = {leg: {} for leg in BILLING_LEGS}
         # Set by the owner from plan_random_delay: hold back the first read and pace the day queries in the background
         self.random_delay = False
         # When the first read after this start may go ahead, picked on the first due() check while random_delay is on
         self.first_read_after = None
+        # The minutes to wait after the last read while random_delay is on, picked by refresh_minutes() and cleared by each read
+        self.refresh_after = None
         # The background read started by read() while random_delay is on, so a second one isn't started over it
         self.task = None
         # Event credits read from the account (parse_credits()), and the account to read them from, or None not to
@@ -466,6 +481,8 @@ class BillingReader:
         self.mpans = data.get("mpans")
         settled = data.get("settled") or {}
         self.settled = {leg: list(settled.get(leg) or []) for leg in BILLING_LEGS}
+        rechecked = data.get("rechecked") or {}
+        self.rechecked = {leg: dict(rechecked.get(leg)) if isinstance(rechecked.get(leg), dict) else {} for leg in BILLING_LEGS}
         fetched_at = data.get("fetched_at")
         if isinstance(fetched_at, str):
             try:
@@ -480,7 +497,7 @@ class BillingReader:
         storage = self.owner.storage
         if not storage:
             return
-        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "settled": self.settled, "credits": self.credits, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
+        blob = {"slots": self.cache, "legs": self.legs, "mpans": self.mpans, "settled": self.settled, "rechecked": self.rechecked, "credits": self.credits, "fetched_at": self.fetched_at.isoformat() if self.fetched_at else None}
         await storage.save(self.storage_app, self.storage_name, blob, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(days=BILLING_DAYS * 2))
 
     def running(self):
@@ -488,7 +505,7 @@ class BillingReader:
         return self.task is not None and not self.task.done()
 
     def due(self, now_utc):
-        """True when the billing has never been read, or was last read BILLING_REFRESH_MINUTES ago.
+        """True when the billing has never been read, or was last read refresh_minutes() ago.
 
         With random_delay on, the first read after a start also waits until a random moment up to
         BILLING_FIRST_READ_DELAY_SECONDS after the first check, and nothing is due while a read is running.
@@ -504,7 +521,16 @@ class BillingReader:
                 return False
         if self.fetched_at is None:
             return True
-        return now_utc - self.fetched_at >= timedelta(minutes=BILLING_REFRESH_MINUTES)
+        return now_utc - self.fetched_at >= timedelta(minutes=self.refresh_minutes())
+
+    def refresh_minutes(self):
+        """The minutes to wait after a read before the next: BILLING_REFRESH_MINUTES, or with random_delay on a random
+        moment within BILLING_REFRESH_JITTER of it, picked once per read so many installations don't stay in step."""
+        if not self.random_delay:
+            return BILLING_REFRESH_MINUTES
+        if self.refresh_after is None:
+            self.refresh_after = BILLING_REFRESH_MINUTES * random.uniform(1 - BILLING_REFRESH_JITTER, 1 + BILLING_REFRESH_JITTER)  # nosec B311 - jitter, not security
+        return self.refresh_after
 
     async def read(self, query_fn, mpans, now_utc, supplier, app):
         """Refresh the billing and publish it.
@@ -535,14 +561,18 @@ class BillingReader:
             self.task.cancel()
 
     async def refresh(self, query_fn, mpans, now_utc, pace_seconds=0):
-        """Read every day in the window that is not complete yet, for each configured leg.
+        """Read every day in the window that is not complete yet, and every complete one not yet read today, for each configured leg.
 
-        mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
-        query_fn(query, context) returns the GraphQL data, or None for a failed read; a failed read
-        marks the leg False and leaves what was cached alone. A day read once it is BILLING_SETTLE_DAYS old
-        is settled and not read again, however much of it arrived. With pace_seconds, each query after the
-        first waits a random 0 to pace_seconds first. With credits_account set, the account's event credits are
-        read too (one query; a failed read keeps the ones already read). Returns True when new slots or credits arrived.
+        A complete day is read again once a local day until it settles, as its costs can be revised after it first
+        arrives. mpans maps "import"/"export" to (account_id, mpan), or None when that leg isn't configured.
+        query_fn(query, context) returns the GraphQL data, or None for a failed read. A failed read of an incomplete
+        day marks the leg False and leaves what was cached alone; a failed re-read of a complete day keeps its cached
+        figures and counts as that day's re-read (settling it if it is old enough), leaving the complete days after it
+        to the next refresh. A day read once it is
+        BILLING_SETTLE_DAYS old is settled and not read again, however much of it arrived. With pace_seconds, each
+        query after the first waits a random 0 to pace_seconds first. With credits_account set, the account's event
+        credits are read too (one query; a failed read keeps the ones already read). Returns True when a half-hour
+        that differs from the cached one, or a change to the credits, arrived.
         """
         tz = _zone(self.owner.local_tz)
         changed = False
@@ -553,7 +583,9 @@ class BillingReader:
             self.owner.log("Billing: meters changed, discarding the billing read for the previous meters")
             self.cache = {}
             self.settled = {leg: [] for leg in BILLING_LEGS}
+            self.rechecked = {leg: {} for leg in BILLING_LEGS}
         self.mpans = meters
+        today = now_utc.astimezone(tz).date().isoformat()
         queried = False
         for leg in BILLING_LEGS:
             settled = [name for name in self.settled.get(leg) or [] if name in window]
@@ -564,7 +596,13 @@ class BillingReader:
                 continue
             account_id, mpan = target
             ok = True
-            for day in days_to_fetch(self.cache, leg, now_utc, tz, settled):
+            rechecked = {name: when for name, when in (self.rechecked.get(leg) or {}).items() if name in window}
+            recheck_failed = False
+            for day in days_to_fetch(self.cache, leg, now_utc, tz, settled, rechecked=rechecked):
+                complete = _day_complete(self.cache.get(leg) or {}, day, tz)
+                if complete and recheck_failed:
+                    # After a failed read of a complete day leave the rest to the next refresh, but still read the incomplete ones
+                    continue
                 starts = day_slot_starts(day, tz)
                 query = BILLING_MEASUREMENTS_QUERY.format(
                     account_id=account_id,
@@ -578,18 +616,34 @@ class BillingReader:
                 queried = True
                 slots = parse_measurements(await query_fn(query, "billing-{}-{}".format(leg, day.isoformat())))
                 if slots is None:
+                    if complete:
+                        # What is cached for a complete day stands, so a failed re-read of one doesn't stop the newer days. It counts as
+                        # read today, and settles once old enough, so a day whose query keeps failing is tried once a day rather than
+                        # every refresh, and can't hold back the complete days after it (oldest first) for the rest of the window
+                        recheck_failed = day.isoformat()
+                        rechecked[day.isoformat()] = today
+                        if day.isoformat() <= settle_by:
+                            settled.append(day.isoformat())
+                        continue
                     ok = False
                     break
-                changed = changed or bool(slots)
+                cached = self.cache.get(leg) or {}
+                changed = changed or any(cached.get(key) != slot for key, slot in slots.items())
                 self.cache = merge_slots(self.cache, leg, slots, now_utc, tz)
+                rechecked[day.isoformat()] = today
                 if day.isoformat() <= settle_by:
                     settled.append(day.isoformat())
                     if not _day_complete(self.cache.get(leg) or {}, day, tz):
                         self.owner.log("Warn: Billing: the {} billing for {} on MPAN ...{} is still incomplete after {} days, so it won't be read again".format(leg, day.isoformat(), str(mpan)[-4:], BILLING_SETTLE_DAYS))
             self.settled[leg] = settled
             self.legs[leg] = ok
+            self.rechecked[leg] = rechecked
             if not ok:
                 self.owner.log("Warn: Billing: could not read the {} billing for MPAN ...{}, keeping what was already read".format(leg, str(mpan)[-4:]))
+            if recheck_failed:
+                # The leg stays healthy, so say so here or a re-read that keeps failing would leave no trace that revisions stopped landing
+                when = "won't be read again, as it is {} days old".format(BILLING_SETTLE_DAYS) if recheck_failed in settled else "will be tried again tomorrow"
+                self.owner.log("Warn: Billing: could not read the {} billing for {} on MPAN ...{} again, keeping what was cached; it {}, and the complete days after it are left to the next refresh".format(leg, recheck_failed, str(mpan)[-4:], when))
         self.cache = merge_slots(self.cache, "import", {}, now_utc, tz)
         if self.credits_account:
             credits = parse_credits(await query_fn(BILLING_CREDITS_QUERY.format(account_id=self.credits_account), "billing-credits"), now_utc)
@@ -599,6 +653,7 @@ class BillingReader:
                 changed = changed or credits != self.credits
                 self.credits = credits
         self.fetched_at = now_utc
+        self.refresh_after = None
         await self.save()
         return changed
 
@@ -676,38 +731,109 @@ def parse_axle_events(axle_events):
     return parsed
 
 
-def _row_axle(axle_events, row_start, row_end):
-    """The Axle premiums Predbat priced into one row: (export event pence/kWh, import event pence/kWh), each weighted by how much of the row the event covers, or None when no event overlaps it.
+def saving_session_rate(octopoints_per_kwh, octopoints_per_penny, default_rate_pence):
+    """The pence/kWh Predbat adds to its rates for a joined saving session, or None when it adds nothing.
 
-    A premium can be negative (a managed price curve can go below zero) or the two can cancel, so being inside an event is not judged by the premiums' sign.
-    The premium is spread over the row's kWh by time, which is exact for events on the half-hour boundaries the rows use.
+    The session's Octopoints per kWh over octopus_saving_session_octopoints_per_penny, or default_rate_pence (the
+    octopus_saving_session_rate setting) when the session reports none. Shared by fetch_octopus_sessions() and the History view.
     """
-    export_premium = 0.0
-    import_premium = 0.0
+    points = _to_float(octopoints_per_kwh)
+    per_penny = _to_float(octopoints_per_penny) or 0.0
+    if points is not None:
+        rate = points / per_penny if per_penny > 0 else None
+    else:
+        rate = _to_float(default_rate_pence)
+    return rate if rate is not None and rate > 0 else None
+
+
+def saving_session_events(joined_events, octopoints_per_penny, default_rate_pence, on_export=True):
+    """The joined Octopus saving sessions (the octopus_saving_session sensor's joined_events) as Predbat priced them, for the History view.
+
+    Each is {start, end, pence_per_kwh, octopoints_per_kwh, on_export, rewarded_octopoints, award_expected, id}, with the rate
+    saving_session_rate() gives, as fetch_octopus_sessions() prices it for the planner. on_export says whether Predbat adds it to
+    the export rate too, which it only does with an export tariff that pays (rate_export_max above 0). award_expected says the
+    feed reports this session's award, listing rewarded_octopoints (null until Octopus posts it), so a session without one yet
+    is waiting for it; a feed that can't report awards, such as Octopus's flexibility API, leaves the key out. Whether the session
+    reports a points rate says nothing about this: sessions with none are awarded too. A Weekend Happy Hour is free import, not a
+    saving session, and an event Predbat priced at nothing added nothing, so both are left out, as are events that can't be read.
+    """
+    events = []
+    per_penny = _to_float(octopoints_per_penny) or 0.0
+    for event in joined_events or []:
+        if not isinstance(event, dict) or event.get("event_type") == "WEEKEND_HAPPY_HOUR":
+            continue
+        start = _parse_event_time(event.get("start"))
+        end = _parse_event_time(event.get("end"))
+        pence = saving_session_rate(event.get("octopoints_per_kwh"), octopoints_per_penny, default_rate_pence)
+        if start and end and start < end and pence is not None:
+            points = _to_float(event.get("octopoints_per_kwh"))
+            events.append(
+                {
+                    "start": event.get("start"),
+                    "end": event.get("end"),
+                    "pence_per_kwh": pence,
+                    "octopoints_per_kwh": points if points is not None else pence * per_penny,
+                    "on_export": bool(on_export),
+                    "rewarded_octopoints": _to_float(event.get("rewarded_octopoints")),
+                    "award_expected": "rewarded_octopoints" in event,
+                    "id": event.get("id"),
+                }
+            )
+    return events
+
+
+def parse_saving_events(saving_events):
+    """saving_session_events() entries as (start, end, pence_per_kwh, octopoints_per_kwh, on_export, rewarded_octopoints, award_expected, id); unreadable ones are dropped."""
+    spans = []
+    for event in saving_events or []:
+        if not isinstance(event, dict):
+            continue
+        start = _parse_event_time(event.get("start"))
+        end = _parse_event_time(event.get("end"))
+        pence = _to_float(event.get("pence_per_kwh"))
+        points = _to_float(event.get("octopoints_per_kwh"))
+        if start and end and start < end and pence is not None and points is not None:
+            spans.append((start, end, pence, points, event.get("on_export", True) is not False, _to_float(event.get("rewarded_octopoints")), bool(event.get("award_expected", True)), event.get("id") or event.get("start")))
+    return spans
+
+
+def _span_average(spans, row_start, row_end):
+    """The values of the (start, end, value) spans that overlap a row, each weighted by how much of the row it covers, summed; None when none overlaps it.
+
+    A value can be negative (a managed price curve can go below zero) or values can cancel, so overlapping is not judged by the sum's sign.
+    Spreading over the row's kWh by time is exact for events on the half-hour boundaries the rows use.
+    """
+    total = 0.0
     inside = False
     row_seconds = (row_end - row_start).total_seconds()
-    for start, end, direction, pence in axle_events:
+    for start, end, value in spans:
         overlap = (min(end, row_end) - max(start, row_start)).total_seconds()
-        if overlap <= 0:
-            continue
-        inside = True
-        if direction == "export":
-            export_premium += pence * overlap / row_seconds
-        else:
-            import_premium += pence * overlap / row_seconds
-    return (export_premium, import_premium) if inside else None
+        if overlap > 0:
+            inside = True
+            total += value * overlap / row_seconds
+    return total if inside else None
+
+
+def _span_value_at(spans, when):
+    """The summed values of the (start, end, value) spans in force at one instant, such as a row's first minute, where its import_rate is read."""
+    return sum(value for start, end, value in spans if start <= when < end)
+
+
+def _row_axle(axle_events, row_start, row_end):
+    """The Axle premiums Predbat priced into one row: (export event pence/kWh, import event pence/kWh), each weighted by how much of the row the event covers, or None when no event overlaps it."""
+    export_premium = _span_average([(start, end, pence) for start, end, direction, pence in axle_events if direction == "export"], row_start, row_end)
+    import_premium = _span_average([(start, end, pence) for start, end, direction, pence in axle_events if direction != "export"], row_start, row_end)
+    if export_premium is None and import_premium is None:
+        return None
+    return (export_premium or 0.0, import_premium or 0.0)
 
 
 def _row_axle_at_start(axle_events, row_start):
     """The Axle premium Predbat added to the import rate at a row's first minute, where the row's import_rate is read: an export event's pence/kWh less an import event's."""
-    premium = 0.0
-    for start, end, direction, pence in axle_events:
-        if start <= row_start < end:
-            premium += pence if direction == "export" else -pence
-    return premium
+    return _span_value_at([(start, end, pence if direction == "export" else -pence) for start, end, direction, pence in axle_events], row_start)
 
 
-def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes, predbat_slot_cost, standing_pence, events, import_only, predbat_import_kwh, predbat_export_kwh, axle_events=None):
+def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes, predbat_slot_cost, standing_pence, events, import_only, predbat_import_kwh, predbat_export_kwh, axle_events=None, saving_events=None):
     """Add the billed cost, Diff and a day summary to a History view's plan JSON, in place.
 
     billing is the sensor.predbat_billing attributes dict. predbat_slot_cost maps each row's slot_minute
@@ -728,6 +854,12 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
     estimate of what Predbat priced in for Axle there, and its Diff and the summary's diff are after those estimates: Predbat
     adds an export event's pence/kWh to both its export and import rates (the import part is a planning cost, not a charge) and
     takes an import event's off its import rate, while the bill carries the supplier's rates alone.
+    A fully billed row inside one of saving_events (saving_session_events(): joined Octopus saving sessions, rewarded in Octopoints
+    rather than money) is flagged billing_saving with the Octopoints Predbat priced in there. Predbat adds the session's pence/kWh to both
+    rates, so that value is put back on Predbat's cost, which the row's Diff and the summary then compare at the tariff's rates alone;
+    the points are reported apart, with what Octopus has awarded for the sessions once it posts it, and each with roughly what it
+    is worth at that price (billing_saving_value, saving_value and saving_awarded_value; saving_points_valued is false, and the
+    row and award values None, when the prices come to no points to value).
     Billing whose rates don't match Predbat's is not shown at all. The summary is only added when at least
     one row is fully billed. Returns plan_json; it is left untouched only when billing holds no import half-hours at
     all or rows can't be matched to half-hours - a view with nothing billed in it still gets the (empty) fields.
@@ -748,18 +880,33 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
             credit_slots[key] = credit_event
     credited = {}
     axle = parse_axle_events(axle_events)
+    saving = parse_saving_events(saving_events)
+    # Predbat adds a session's price to its import rate, and to its export rate when its export tariff pays; in pence and in points
+    saving_import = [(start, end, pence) for start, end, pence, _, _, _, _, _ in saving]
+    saving_export = [(start, end, pence) for start, end, pence, _, on_export, _, _, _ in saving if on_export]
+    saving_import_points = [(start, end, points) for start, end, _, points, _, _, _, _ in saving]
+    # Points can be given a money value only when the sessions' prices come to some (not with octopus_saving_session_octopoints_per_penny
+    # 0, which leaves every session priced at the default rate with none, and drops the rest)
+    points_valued = all(points > 0 for _, _, _, points, _, _, _, _ in saving)
+    saving_export_points = [(start, end, points) for start, end, _, points, on_export, _, _, _ in saving if on_export]
+    # Each session's seconds inside rows whose figures were compared, so its award is only set against a whole session
+    saving_covered = {}
     day_half_hours = {}
     updates = []
     totals = {"predbat": 0.0, "billed": 0.0, "standing_predbat": 0.0, "standing_billed": 0.0, "import_kwh": 0.0, "export_kwh": 0.0, "predbat_import_kwh": 0.0, "predbat_export_kwh": 0.0, "rate_cost": 0.0, "rate_kwh": 0.0, "predbat_rate_cost": 0.0}
     axle_total = 0.0
+    saving_total = 0.0
+    saving_points_total = 0.0
     for row in plan_json.get("rows") or []:
         slot_minute = row.get("slot_minute")
         if slot_minute is None:
             continue
         keys = _row_slot_keys(view_midnight_utc, slot_minute, plan_interval_minutes)
         row_start = view_midnight_utc + timedelta(minutes=slot_minute)
-        premiums = _row_axle(axle, row_start, row_start + timedelta(minutes=plan_interval_minutes))
+        row_end = row_start + timedelta(minutes=plan_interval_minutes)
+        premiums = _row_axle(axle, row_start, row_end)
         axle_row = premiums is not None
+        saving_row = _span_average(saving_import, row_start, row_end) is not None
         billed_pence = None
         buckets = None
         full = False
@@ -776,7 +923,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
                     # The plausibility check is on the import bill alone, so a row waiting for its export still counts. A credited
                     # event's half-hours are left out: they are billed at the full rate where Predbat priced them free. An Axle row's
                     # import rate is checked without the Axle premium Predbat added to it, which the bill doesn't carry
-                    import_rate = row["import_rate"] - (_row_axle_at_start(axle, row_start) if axle_row else 0.0)
+                    # ... and a saving session's likewise
+                    import_rate = row["import_rate"] - (_row_axle_at_start(axle, row_start) if axle_row else 0.0) - _span_value_at(saving_import, row_start)
                     totals["rate_cost"] += imports[key]["cost"]
                     totals["rate_kwh"] += imports[key]["kwh"]
                     totals["predbat_rate_cost"] += imports[key]["kwh"] * import_rate
@@ -804,6 +952,8 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         row_export_kwh = (predbat_export_kwh or {}).get(slot_minute, 0.0)
         diff = None
         axle_pence = None
+        saving_row_points = None
+        saving_row_value = None
         if full and predbat_pence is not None:
             if axle_row and predbat_import_kwh is not None:
                 # Axle pays the event's pence/kWh on what Predbat recorded crossing the meter in the event's direction; the export
@@ -812,6 +962,18 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
                 export_premium, import_premium = premiums
                 axle_pence = export_premium * (row_export_kwh - row_import_kwh) + import_premium * row_import_kwh
                 axle_total += axle_pence
+            if saving_row and predbat_import_kwh is not None:
+                # What Predbat priced the session at on what crossed the meter, put back on its cost: Octopus pays in points, not on the bill
+                saving_value = (_span_average(saving_export, row_start, row_end) or 0.0) * row_export_kwh - _span_average(saving_import, row_start, row_end) * row_import_kwh
+                saving_row_points = (_span_average(saving_export_points, row_start, row_end) or 0.0) * row_export_kwh - _span_average(saving_import_points, row_start, row_end) * row_import_kwh
+                predbat_pence += saving_value
+                saving_total += saving_value
+                saving_points_total += saving_row_points
+                saving_row_value = saving_value
+                for start, end, _, _, _, _, _, event_id in saving:
+                    overlap = (min(end, row_end) - max(start, row_start)).total_seconds()
+                    if overlap > 0:
+                        saving_covered[event_id] = saving_covered.get(event_id, 0.0) + overlap
             # A row's Diff is after its Axle estimate, as the summary's is
             diff = _pounds(billed_pence - (axle_pence or 0.0) - predbat_pence)
             totals["predbat"] += predbat_pence
@@ -833,23 +995,26 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         credit_state = None
         if row_credit_events and billed_pence is not None:
             credit_state = "pending" if any(credit_event.get("credit") is None for credit_event in row_credit_events) else "credited"
-        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export, credit_state, axle_pence))
+        updates.append((row, None if billed_pence is None else _pounds(billed_pence), buckets, diff, _row_event(events, slot_minute, plan_interval_minutes), full, pending_export, credit_state, axle_pence, saving_row_points, saving_row_value))
     if not updates:
         return plan_json
     plausible = True
     if totals["rate_kwh"] > 0.5 and totals["predbat_rate_cost"] > 0:
         ratio = totals["rate_cost"] / totals["predbat_rate_cost"]
         plausible = BILLING_PLAUSIBLE_RATE_RATIO[0] <= ratio <= BILLING_PLAUSIBLE_RATE_RATIO[1]
-    for row, billed, buckets, diff, event, full, pending_export, credit_state, axle_pence in updates:
+    for row, billed, buckets, diff, event, full, pending_export, credit_state, axle_pence, saving_row_points, saving_row_value in updates:
         # Billing that doesn't match the rates leaves the columns empty rather than showing a wrong figure
         row["billed"] = billed if plausible else None
         row["billed_buckets"] = buckets if plausible else None
         row["billing_diff"] = diff if plausible else None
         row["billing_pending_export"] = pending_export and plausible
-        # An Axle row's estimate explains the difference its event label would warn of
-        row["billing_event"] = None if axle_pence is not None and plausible else event
+        # An Axle or saving session row's estimate explains the difference its event label would warn of
+        row["billing_event"] = None if (axle_pence is not None or saving_row_points is not None) and plausible else event
         row["billing_credit"] = credit_state if plausible else None
         row["billing_axle"] = _pounds(axle_pence) if plausible and axle_pence is not None else None
+        row["billing_saving"] = round(saving_row_points) if plausible and saving_row_points is not None else None
+        # ... and what those points are roughly worth, at the price Predbat gave them
+        row["billing_saving_value"] = _pounds(saving_row_value) if plausible and saving_row_value is not None and points_valued else None
     if not plausible or not any(update[5] for update in updates):
         return plan_json
     last_billed = max(index for index, update in enumerate(updates) if update[5])
@@ -860,6 +1025,12 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         credit = entry["event"].get("credit") or 0.0
         event_billed = entry["event"].get("billed") or 0.0
         credits += credit * min(1.0, entry["counted"] / event_billed) if event_billed > 0 else 0.0
+    # Octopus awards a session as a whole, so only sessions whose every minute is in the compared rows are set against the estimate
+    whole_sessions = [span for span in saving if saving_covered.get(span[7], 0.0) >= (span[1] - span[0]).total_seconds() - 1]
+    awarded = [span[5] for span in whole_sessions if span[5] is not None]
+    # What the awarded points are roughly worth, each session's at the pence per point Predbat priced it at. With
+    # octopus_saving_session_octopoints_per_penny 0 a price gives no points, so none can be valued
+    awarded_value = None if not awarded or not points_valued else _pounds(sum(span[5] * span[2] / span[3] for span in whole_sessions if span[5] is not None))
     billed_until = (view_midnight_utc + timedelta(minutes=updates[last_billed][0]["slot_minute"] + plan_interval_minutes)).astimezone(timezone.utc).strftime(BILLING_SLOT_FORMAT)
     plan_json["billing_summary"] = {
         "predbat_cost": _pounds(totals["predbat"]),
@@ -870,6 +1041,15 @@ def attach_billing(plan_json, billing, view_midnight_utc, plan_interval_minutes,
         "credits": _pounds(credits),
         "axle": _pounds(axle_total),
         "axle_slots": sum(1 for update in updates if update[8] is not None),
+        # Saving sessions: Predbat's cost above leaves out the price it gave them, estimated here in Octopoints (and in pence), with the
+        # Octopoints Octopus has awarded for the sessions in these rows and how many it hasn't posted yet
+        "saving_slots": sum(1 for update in updates if update[9] is not None),
+        "saving_points": round(saving_points_total),
+        "saving_value": _pounds(saving_total),
+        "saving_awarded": None if not awarded else round(sum(awarded)),
+        "saving_awarded_value": awarded_value,
+        "saving_points_valued": points_valued,
+        "saving_awarded_pending": sum(1 for _, _, _, _, _, rewarded, expected, _ in whole_sessions if expected and rewarded is None),
         "credits_pending": sum(1 for entry in credited.values() if entry["event"].get("credit") is None),
         "standing_predbat": _pounds(totals["standing_predbat"]),
         "standing_billed": _pounds(totals["standing_billed"]),

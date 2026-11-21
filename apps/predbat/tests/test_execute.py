@@ -47,8 +47,12 @@ class ActiveTestInverter:
         self.inv_has_target_soc = True
         self.inv_has_charge_enable_time = True
         self.inv_has_timed_pause = True
+        self.current_hold_cycle_calls = []
+        self.current_holds_released_directions = []
         self.inv_reserve_above_soc_charges_from_grid = False
         self.inv_reserve_full_only_above_80 = False
+        self.inv_reserve_via_discharge_rate = False
+        self.reserve_hold_active = False
         self.inv_has_discharge_enable_time = True
         self.inv_has_ge_eco_toggle = False
         self.inv_has_ge_inverter_mode = False
@@ -75,6 +79,10 @@ class ActiveTestInverter:
         self.current_charge_limit = 0
         self.charge_rate_now = 1000
         self.discharge_rate_now = 1000
+        self.charge_rate_is_zero = False
+        self.discharge_rate_is_zero = False
+        self.balance_ceiling_charge = None
+        self.balance_ceiling_discharge = None
         self.battery_rate_min = 0
         self.inverter_limit = 1000
         self.export_limit = 1000
@@ -105,7 +113,8 @@ class ActiveTestInverter:
     def update_status(self, minutes_now, quiet=False):
         pass
 
-    def find_charge_curve(self, discharge=False):
+    def find_rate_grid_samples(self, discharge=False, days=None):
+        """No rate grid history (the grids gather evidence every cycle, auto mode or not)."""
         return None
 
     def get_current_charge_rate(self):
@@ -163,6 +172,20 @@ class ActiveTestInverter:
         self.isCharging = isCharging
         self.isExporting = isExporting
 
+    def start_current_hold_cycle(self):
+        """Mirror Inverter.start_current_hold_cycle(); recorded so tests can check execute_plan() brackets every cycle."""
+        self.current_hold_cycle_calls.append("start")
+
+    def end_current_hold_cycle(self, rate_pass_writes=(), read_only=False):
+        """Mirror Inverter.end_current_hold_cycle(); recorded likewise, with what execute_plan() told it."""
+        self.current_hold_cycle_calls.append("end")
+        self.current_hold_cycle_end_args = (set(rate_pass_writes), read_only)
+
+    def release_current_holds(self, directions=("charge", "discharge")):
+        """Mirror Inverter.release_current_holds(), called by the reset and calibration paths."""
+        self.current_hold_cycle_calls.append("release")
+        self.current_holds_released_directions.extend(directions)
+
     def adjust_charge_rate(self, charge_rate, notify=True):
         self.charge_rate = charge_rate
         self.charge_rate_now = charge_rate
@@ -187,6 +210,7 @@ def run_execute_test(
     export_limits_best=None,
     car_slot=None,
     car_charging_now=False,
+    car_cancelled_for_export=None,
     soc_kw=0,
     soc_max=10,
     soc_max_array=None,
@@ -237,6 +261,7 @@ def run_execute_test(
     has_timed_pause_array=None,
     reserve_above_soc_charges_from_grid=False,
     reserve_full_only_above_80=False,
+    reserve_via_discharge_rate=False,
     has_target_soc=True,
     has_charge_enable_time=True,
     has_ge_eco_toggle=False,
@@ -279,6 +304,7 @@ def run_execute_test(
     my_predbat.set_read_only_axle = set_read_only_axle
     my_predbat.car_charging_slots = [car_slot]
     my_predbat.car_charging_now = [car_charging_now]
+    my_predbat.car_cancelled_for_export = car_cancelled_for_export or {}
     my_predbat.num_cars = 1
     my_predbat.inverter_hybrid = inverter_hybrid
     my_predbat.set_charge_low_power = set_charge_low_power
@@ -352,6 +378,7 @@ def run_execute_test(
         inverter.inv_has_timed_pause = has_timed_pause_array[inverter.id] if has_timed_pause_array else has_timed_pause
         inverter.inv_reserve_above_soc_charges_from_grid = reserve_above_soc_charges_from_grid
         inverter.inv_reserve_full_only_above_80 = reserve_full_only_above_80
+        inverter.inv_reserve_via_discharge_rate = reserve_via_discharge_rate
         inverter.inv_has_target_soc = has_target_soc
         inverter.inv_has_charge_enable_time = has_charge_enable_time
         inverter.inv_has_ge_eco_toggle = has_ge_eco_toggle
@@ -409,6 +436,8 @@ def run_execute_test(
         my_predbat.args["threads"] = 0
         my_predbat.calculate_plan(recompute=False)
 
+    for inverter in my_predbat.inverters:
+        inverter.current_hold_cycle_calls = []
     status, status_extra = my_predbat.execute_plan()
 
     if assert_status_extra is not None and assert_status_extra != status_extra:
@@ -418,6 +447,35 @@ def run_execute_test(
     for inverter in my_predbat.inverters:
         if assert_status != status:
             print("ERROR: Inverter {} status should be {} got {}".format(inverter.id, assert_status, status))
+            failed = True
+        # Every cycle brackets its 0 A current holds once, whatever path it takes, releasing unrenewed holds before the rates are applied (#5972)
+        hold_calls = [call for call in inverter.current_hold_cycle_calls if call != "release"]
+        if hold_calls != ["start", "end"]:
+            print("ERROR: Inverter {} current hold cycle should be start then end once per execute_plan, got {}".format(inverter.id, inverter.current_hold_cycle_calls))
+            failed = True
+        # The end of the cycle is told which directions the rate pass writes, and that read-only writes nothing (#5972)
+        if hold_calls == ["start", "end"]:
+            rate_pass_writes, read_only = inverter.current_hold_cycle_end_args
+            calibrating_fleet = any(inv.in_calibration for inv in my_predbat.inverters)
+            if read_only != my_predbat.set_read_only:
+                print("ERROR: Inverter {} end_current_hold_cycle read_only should be {} got {}".format(inverter.id, my_predbat.set_read_only, read_only))
+                failed = True
+            if my_predbat.set_read_only or calibrating_fleet:
+                expect_writes = set()
+            elif my_predbat.set_charge_window or my_predbat.set_export_window:
+                expect_writes = {"charge", "discharge"}
+            else:
+                # Monitor / SoC-only: only the rates something claimed are written
+                entry = my_predbat.inverter_rate_intent.get(inverter.id, {})
+                expect_writes = {direction for direction in ("charge", "discharge") if entry.get(direction + "_rate", None) is not None}
+            if rate_pass_writes != expect_writes:
+                print("ERROR: Inverter {} end_current_hold_cycle rate_pass_writes should be {} got {}".format(inverter.id, expect_writes, rate_pass_writes))
+                failed = True
+        # Calibration runs at full rate, so it releases every inverter's holds before writing (#5972)
+        calibrating_now = any(inv.in_calibration for inv in my_predbat.inverters) and not my_predbat.set_read_only
+        calls = inverter.current_hold_cycle_calls
+        if calibrating_now and not (all(call in calls for call in ("start", "release", "end")) and calls.index("start") < calls.index("release") < calls.index("end")):
+            print("ERROR: Inverter {} calibration should release current holds within the cycle, got {}".format(inverter.id, inverter.current_hold_cycle_calls))
             failed = True
         inv_assert_charge_time_enable = assert_charge_time_enable_array[inverter.id] if assert_charge_time_enable_array else assert_charge_time_enable
         if inv_assert_charge_time_enable != inverter.charge_time_enable:
@@ -1352,8 +1410,9 @@ def test_balance_release_is_also_silent(my_predbat):
             print("ERROR: the hold was not applied, so the release cannot be tested")
             failed = True
 
-        # Cycle two: the fleet is no longer fighting itself, so the hold is released
-        force_fleet(my_predbat, {0: 1000.0, 1: 1000.0}, grid=0.0)
+        # Cycle two: the fleet turns to soaking up PV surplus, so the latched cross-charge hold ends
+        # (it is kept for as long as the fleet still discharges - see test_cross_charge_hold_is_latched)
+        force_fleet(my_predbat, {0: -1000.0, 1: 0.0}, grid=1500.0)
         my_predbat.execute_plan()
         if my_predbat.inverters[1].charge_rate == 0:
             print("ERROR: the hold was not released, so the release cannot be tested")
@@ -1783,7 +1842,18 @@ def test_control_monitor_uses_written_rate(my_predbat):
     return failed
 
 
-EXPECTED_RATE_SETTINGS = ("battery_charge_power_curve", "battery_discharge_power_curve", "battery_temperature_charge_curve", "battery_temperature_discharge_curve", "inverter_hybrid")
+EXPECTED_RATE_SETTINGS = (
+    "battery_charge_power_curve",
+    "battery_discharge_power_curve",
+    "battery_temperature_charge_curve",
+    "battery_temperature_discharge_curve",
+    "inverter_hybrid",
+    "soc_max",
+    "battery_rate_max_charge",
+    "battery_rate_max_discharge",
+    "battery_charge_rate_grid",
+    "battery_discharge_rate_grid",
+)
 
 
 def expected_rate_inverter(my_predbat, soc_kw=5.0, soc_max=10.0):
@@ -1817,6 +1887,11 @@ def test_expected_battery_rates(my_predbat):
         my_predbat.battery_temperature_charge_curve = {}
         my_predbat.battery_temperature_discharge_curve = {}
         my_predbat.inverter_hybrid = True
+        # The rate grids are built for the fleet: here one battery the size of the test inverter
+        my_predbat.soc_max = 10.0
+        my_predbat.battery_rate_max_charge = 1000 / MINUTE_WATT
+        my_predbat.battery_rate_max_discharge = 1000 / MINUTE_WATT
+        my_predbat.apply_rate_grids()
 
         failed |= check("no limits", expected_rate_inverter(my_predbat), (1000, 1000))
 
@@ -1828,18 +1903,23 @@ def test_expected_battery_rates(my_predbat):
         # Taper near full: the curve allows 40% of max at this SoC
         my_predbat.battery_charge_power_curve = {percent: 0.4 for percent in range(101)}
         my_predbat.battery_discharge_power_curve = {percent: 0.5 for percent in range(101)}
+        my_predbat.apply_rate_grids()
         failed |= check("charge/discharge curve", expected_rate_inverter(my_predbat, soc_kw=9.5), (400, 500))
         my_predbat.battery_charge_power_curve = {}
         my_predbat.battery_discharge_power_curve = {}
+        my_predbat.apply_rate_grids()
 
         # Cold battery: 0C allows 0.05C on a 10kWh battery = 500W charge, 0.03C = 300W discharge
         my_predbat.battery_temperature_charge_curve = {0: 0.05}
         my_predbat.battery_temperature_discharge_curve = {0: 0.03}
+        my_predbat.apply_rate_grids()
         inverter = expected_rate_inverter(my_predbat)
         inverter.battery_temperature = 0
         failed |= check("temperature cap", inverter, (500, 300))
         my_predbat.battery_temperature_charge_curve = {}
         my_predbat.battery_temperature_discharge_curve = {}
+
+        my_predbat.apply_rate_grids()
 
         # Hybrid with 3kW of PV on a 3.6kW AC limit: only 600W of AC headroom left for the battery
         inverter = expected_rate_inverter(my_predbat)
@@ -1892,11 +1972,16 @@ def test_control_monitor_tapered_charge_not_failing(my_predbat):
         return my_predbat.control_monitor.total
 
     try:
+        my_predbat.soc_max = 10.0
+        my_predbat.battery_rate_max_charge = 1000 / MINUTE_WATT
+        my_predbat.battery_rate_max_discharge = 1000 / MINUTE_WATT
         my_predbat.battery_charge_power_curve = {}
+        my_predbat.apply_rate_grids()
         if run_slot() != 1:
             print("ERROR: setup - 150W against a flat-curve 1000W should fail, so this test proves nothing")
             failed = True
         my_predbat.battery_charge_power_curve = {percent: 0.4 for percent in range(101)}
+        my_predbat.apply_rate_grids()
         total = run_slot()
         if total != 0:
             print("ERROR: charging at the tapered rate was judged a failure, total {}".format(total))
@@ -2039,6 +2124,30 @@ def test_reserve_above_soc_inverter_types():
     return failed
 
 
+def test_discharge_to_target_inverter_types():
+    """
+    Pin the inverter types that can discharge to a Hold charging target in demand mode (#5937).
+
+    The branch in execute_plan runs when no pause can hold (no timed pause) and the window cannot act as a floor
+    (no target SoC). It is reached by more types than Sigenergy, the one in the issue: the service-driven ones
+    (SE, SX4, SF, SFMB, HU, SIG) stop the charge as demand does, FoxESS only when its reserve cannot hold at the
+    target (reserve_max below it, or set_reserve_enable off), and GS through mimic_target_soc (test_inverter
+    solis_gs_discharge_to_target). HanchuCloud has a target SoC, so it is not here: its component leaves the
+    charge slot out itself (#5955, #6127).
+    This pins the static flags only; the reserve conditions are runtime.
+    A type joining this set changes how its Hold charging behaves, so it has to be added here on purpose.
+    """
+    from config import INVERTER_DEF
+
+    failed = False
+    reached = sorted(name for name, idef in INVERTER_DEF.items() if not idef.get("has_timed_pause", False) and not idef.get("has_target_soc", False))
+    expected = ["FoxESS", "GS", "HU", "SE", "SF", "SFMB", "SIG", "SX4"]
+    if reached != expected:
+        print("ERROR: inverter types that can discharge to a Hold charging target should be {}, got {}".format(expected, reached))
+        failed = True
+    return failed
+
+
 def test_reserve_full_only_above_80_inverter_types():
     """Only the Powerwall, whose firmware honours no backup reserve between 80 and 100 (GH#6046), opts in."""
     from config import INVERTER_DEF
@@ -2076,6 +2185,133 @@ def test_reserve_full_only_above_80_reaches_the_inverter(my_predbat):
     return failed
 
 
+def test_reserve_via_discharge_rate_inverter_types(my_predbat):
+    """Only Sigenergy (SIG) holds its reserve with a zero discharge rate, and the flag reaches a real Inverter from INVERTER_DEF (#5358)."""
+    from config import INVERTER_DEF
+    from inverter import Inverter
+
+    failed = False
+    opted_in = sorted(name for name, idef in INVERTER_DEF.items() if idef.get("reserve_via_discharge_rate", False))
+    if opted_in != ["SIG"]:
+        print("ERROR: reserve_via_discharge_rate should be set for SIG only, got {}".format(opted_in))
+        failed = True
+
+    orig_inverter_type = my_predbat.args.get("inverter_type")
+    orig_rest = my_predbat.args.get("givtcp_rest")
+    my_predbat.args["givtcp_rest"] = None
+    try:
+        for inverter_type, expected in (("SIG", True), ("GE", False)):
+            my_predbat.args["inverter_type"] = [inverter_type]
+            inverter = Inverter(my_predbat, 0, quiet=True)
+            if inverter.inv_reserve_via_discharge_rate is not expected:
+                print("ERROR: {} inverter has inv_reserve_via_discharge_rate {}, expected {}".format(inverter_type, inverter.inv_reserve_via_discharge_rate, expected))
+                failed = True
+    finally:
+        if orig_inverter_type is None:
+            my_predbat.args.pop("inverter_type", None)
+        else:
+            my_predbat.args["inverter_type"] = orig_inverter_type
+        my_predbat.args["givtcp_rest"] = orig_rest
+    return failed
+
+
+def test_reserve_hold_via_discharge_rate(my_predbat):
+    """
+    An inverter with no reserve register holds the plan's reserve with a zero discharge rate in Demand (#5358).
+
+    Sigenergy has no reserve Predbat can set, so after an export stops at its target the plant's
+    self-consumption used to drain the battery from the plan's 4% floor to the device's 0% cut-off.
+    The hold starts at the reserve plus RESERVE_HOLD_MARGIN_PERCENT, leaves the charge rate alone so PV
+    still charges, and stays out of charging and force exporting.
+    """
+    failed = False
+    saved_inverters = my_predbat.inverters
+    saved_num_inverters = my_predbat.args.get("num_inverters")
+    my_predbat.inverters = [ActiveTestInverter(0, 0, 10.0, my_predbat.now_utc)]
+    my_predbat.args["num_inverters"] = 1
+    # Sigenergy: no timed pause, and fetch_inverter_data() forces reserve control off for a type without a reserve
+    sig = dict(set_charge_window=True, set_export_window=True, has_timed_pause=False, set_reserve_enable=False, reserve=0.4, assert_reserve=0, assert_immediate_soc_target=0)
+    try:
+        # In order: the hold carries state from one cycle to the next
+        for name, soc_kw, flag, expect_rate in (
+            ("reserve_hold_above_margin", 0.6, True, 1000),
+            ("reserve_hold_margin", 0.5, True, 0),
+            ("reserve_hold_at_reserve", 0.4, True, 0),
+            ("reserve_hold_below_reserve", 0.2, True, 0),
+            # Held, so it only lets go a further RESERVE_HOLD_HYSTERESIS_PERCENT up
+            ("reserve_hold_hysteresis_keeps", 0.6, True, 0),
+            ("reserve_hold_hysteresis_releases", 0.7, True, 1000),
+            ("reserve_hold_released_above_margin", 0.6, True, 1000),
+            ("reserve_hold_not_opted_in", 0.4, False, 1000),
+        ):
+            failed |= run_execute_test(my_predbat, name, soc_kw=soc_kw, reserve_via_discharge_rate=flag, assert_discharge_rate=expect_rate, **sig)
+            if failed:
+                return failed
+
+        # A car hold taking the rate over while the reserve hold is on must not lose the hysteresis state
+        failed |= run_execute_test(my_predbat, "reserve_hold_holds_again", soc_kw=0.5, reserve_via_discharge_rate=True, assert_discharge_rate=0, **sig)
+        failed |= run_execute_test(my_predbat, "reserve_hold_under_car_hold", soc_kw=0.6, car_charging_now=True, reserve_via_discharge_rate=True, assert_status="Hold for car", assert_discharge_rate=0, **dict(sig, assert_immediate_soc_target=6))
+        failed |= run_execute_test(my_predbat, "reserve_hold_after_car_hold", soc_kw=0.6, reserve_via_discharge_rate=True, assert_discharge_rate=0, **sig)
+        if failed:
+            return failed
+
+        # Monitor mode: Predbat is watching, not controlling, so the rate is left as it was - neither held at 0 nor reset to max
+        my_predbat.inverters[0].discharge_rate = 500
+        failed |= run_execute_test(my_predbat, "reserve_hold_not_in_monitor", soc_kw=0.4, reserve_via_discharge_rate=True, **dict(sig, set_charge_window=False, set_export_window=False, assert_discharge_rate=500))
+        if failed:
+            return failed
+
+        # Freeze export in Demand already stops charging, so the hold leaves the battery idle at the reserve
+        my_predbat.set_freeze_export_during_demand = True
+        try:
+            failed |= run_execute_test(my_predbat, "reserve_hold_with_freeze_export", soc_kw=0.4, reserve_via_discharge_rate=True, assert_status="Demand [Freeze exporting]", assert_charge_rate=0, assert_discharge_rate=0, **sig)
+        finally:
+            my_predbat.set_freeze_export_during_demand = False
+        if failed:
+            return failed
+
+        # Charging at the reserve: the battery is being filled from the grid, so the rate is the charge's to set
+        charge_window = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
+        failed |= run_execute_test(
+            my_predbat,
+            "reserve_hold_not_while_charging",
+            charge_window_best=charge_window,
+            charge_limit_best=[10],
+            soc_kw=0.4,
+            reserve_via_discharge_rate=True,
+            assert_status="Charging",
+            assert_charge_time_enable=True,
+            assert_charge_start_time_minutes=-1,
+            assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+            assert_discharge_rate=1000,
+            **dict(sig, assert_immediate_soc_target=100),
+        )
+        if failed:
+            return failed
+
+        # The export has reached its target and stopped (Hold exporting is Demand on the inverter): exactly the
+        # moment in #5358 where the battery went on from 4% to 0%
+        export_window = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
+        failed |= run_execute_test(
+            my_predbat,
+            "reserve_hold_after_export_target",
+            export_window_best=export_window,
+            export_limits_best=[pack_export_limit(EXPORT_MODE_TARGET, 4)],
+            soc_kw=0.4,
+            reserve_via_discharge_rate=True,
+            assert_status="Hold exporting",
+            assert_discharge_rate=0,
+            **sig,
+        )
+    finally:
+        my_predbat.inverters = saved_inverters
+        if saved_num_inverters is None:
+            my_predbat.args.pop("num_inverters", None)
+        else:
+            my_predbat.args["num_inverters"] = saved_num_inverters
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
@@ -2086,12 +2322,17 @@ def run_execute_tests(my_predbat):
     failed |= test_inverter_reads_battery_export_permitted(my_predbat)
     failed |= test_fetch_inverter_data_battery_export_not_permitted(my_predbat)
     failed |= test_reserve_above_soc_inverter_types()
+    failed |= test_discharge_to_target_inverter_types()
     failed |= test_reserve_full_only_above_80_inverter_types()
     failed |= test_reserve_full_only_above_80_reaches_the_inverter(my_predbat)
+    failed |= test_reserve_via_discharge_rate_inverter_types(my_predbat)
     if failed:
         return failed
 
     reset_inverter(my_predbat)
+    failed |= test_reserve_hold_via_discharge_rate(my_predbat)
+    if failed:
+        return failed
 
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 1}]
     charge_window_best_slot = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "kwh": 7.5}]
@@ -3000,6 +3241,148 @@ def run_execute_tests(my_predbat):
     )
     if failed:
         return failed
+
+    # No target SoC, reserve or pause (Sigenergy): stop rather than freeze, so the battery covers the house down to the target (#5937)
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=0,
+        assert_immediate_charge_soc_freeze_array=[False, False],
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    # Its rates are claimed as demand, so the crosscharge balancer does not hold the discharge against a charging fleet
+    for inverter in my_predbat.inverters:
+        owner = my_predbat.inverter_rate_intent[inverter.id].get("owner")
+        if owner != "demand":
+            print("ERROR: Inverter {} discharging to target should claim its rates as demand, got {}".format(inverter.id, owner))
+            failed = True
+    if failed:
+        return failed
+
+    # The same inverter at the target holds with a freeze, as #5541 intended
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_at_target",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=5.1,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=780,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=50,
+        assert_immediate_soc_target=50,
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    if failed:
+        return failed
+
+    # With set_discharge_during_charge off the plan never discharges in the window, so keep holding
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_no_discharge",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=True,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=780,
+        assert_discharge_rate=0,
+        assert_pause_discharge=False,
+        assert_soc_target=50,
+        assert_immediate_soc_target=50,
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+        set_discharge_during_charge=False,
+    )
+    if failed:
+        return failed
+
+    # A rate-controlled inverter (Huawei) also needs its discharge rate back, or a zero rate still holds the battery
+    for inverter in my_predbat.inverters:
+        inverter.inv_charge_discharge_with_rate = True
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_with_rate",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=1000,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=0,
+        assert_immediate_charge_soc_freeze_array=[False, False],
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    for inverter in my_predbat.inverters:
+        inverter.inv_charge_discharge_with_rate = False
+    if failed:
+        return failed
+
+    # A car hold still holds the battery at its current SoC while discharging to the target
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_hold_no_target_soc_no_reserve_car",
+        charge_window_best=charge_window_best,
+        charge_limit_best=charge_limit_best2,
+        assert_charge_time_enable=False,
+        set_charge_window=True,
+        set_export_window=True,
+        assert_status="Hold charging, Hold for car",
+        soc_kw=9,
+        assert_charge_start_time_minutes=-1,
+        assert_charge_end_time_minutes=-1,
+        assert_discharge_rate=0,
+        assert_pause_discharge=False,
+        assert_soc_target=0,
+        assert_immediate_soc_target=90,
+        assert_immediate_charge_soc_freeze_array=[True, True],
+        car_slot=charge_window_best_slot,
+        car_charging_from_battery=False,
+        set_reserve_enable=False,
+        has_timed_pause=False,
+        has_target_soc=False,
+        has_charge_enable_time=False,
+    )
+    if failed:
+        return failed
+
     # Here the target is 5kWh and we are at 9kWh so we will let it discharge.
     failed |= run_execute_test(
         my_predbat,
@@ -4247,6 +4630,56 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # A slot cancelled for an export is a car that will not charge, so it does not hold the battery; a car
+    # really drawing power (car_charging_now) still does, and so does a slot that is not the cancelled one
+    failed |= run_execute_test(
+        my_predbat,
+        "car_slot_cancelled_no_hold",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Demand",
+        assert_pause_discharge=False,
+        car_slot=charge_window_best_slot,
+        car_cancelled_for_export={0: [(charge_window_best_slot[0]["start"], charge_window_best_slot[0]["end"])]},
+        car_charging_from_battery=False,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "car_slot_other_cancelled_holds",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        car_slot=charge_window_best_slot,
+        car_cancelled_for_export={0: [(charge_window_best_slot[0]["end"], charge_window_best_slot[0]["end"] + 30)]},
+        assert_immediate_soc_target=100,
+        car_charging_from_battery=False,
+    )
+    if failed:
+        return failed
+
+    failed |= run_execute_test(
+        my_predbat,
+        "car_now_hold_slot_cancelled",
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=100,
+        assert_status="Hold for car",
+        assert_pause_discharge=True,
+        car_slot=charge_window_best_slot,
+        car_charging_now=True,
+        car_cancelled_for_export={0: [(charge_window_best_slot[0]["start"], charge_window_best_slot[0]["end"])]},
+        assert_immediate_soc_target=100,
+        car_charging_from_battery=False,
+    )
+    if failed:
+        return failed
+
     # car_charging_now holds the battery on its own, with no car slot: the car is drawing power, so
     # the battery must not feed it whatever the plan says. Only the slot route checks the modelled
     # car SoC - a sensor reporting the car charging outranks a model saying it is full.
@@ -4911,7 +5344,15 @@ def run_execute_tests(my_predbat):
     )
 
     # Reset test
+    for inverter in my_predbat.inverters:
+        inverter.current_hold_cycle_calls = []
+        inverter.current_holds_released_directions = []
     my_predbat.reset_inverter()
+    # Safe mode is not a hold: reset releases the 0 A current holds of each direction it rewrites - here both windows are on (#5972)
+    for inverter in my_predbat.inverters:
+        if sorted(inverter.current_holds_released_directions) != ["charge", "discharge"]:
+            print("ERROR: reset_inverter should release inverter {} charge and discharge holds, got {}".format(inverter.id, inverter.current_holds_released_directions))
+            failed = True
     failed |= run_execute_test(
         my_predbat,
         "demand_after_reset",

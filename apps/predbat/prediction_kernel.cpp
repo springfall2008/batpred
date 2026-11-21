@@ -62,7 +62,12 @@
 // ABI 11: the ten scalar PkResult fields from final_metric to final_carbon_g are returned already
 // rounded to 4dp (round4_fast), and Python no longer rounds them. The layout is unchanged, but a binary
 // from before this returns them unrounded, so it must be refused rather than read.
-#define PK_ABI_VERSION 11
+// ABI 12 (car cancel branch): the car slot cancel table (cancel_count to cancel_penalty_rate) follows car_rate_flat in PkContext.
+// ABI 13 (car cancel branch): both of the above, plus cancel_floor_kw, each cancellable slot's car charge rate, after cancel_penalty_rate in PkContext.
+// ABI 12 (main): the charge and discharge curves are rate grid curve rows of PK_CURVE_WIDTH (the battery rate grids).
+// ABI 14: the car cancel branch's ABI 13 merged with main's ABI 12 - the cancel table and the PK_CURVE_WIDTH curve rows.
+#define PK_ABI_VERSION 14
+#define PK_CURVE_WIDTH 103 // a rate grid curve row: 101 SoC percents, the rated rate, then the absolute temperature cap
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
 // prediction.py.
@@ -75,13 +80,20 @@
 // rate, without saving session or Axle rewards) and the slot's own rate (#5163).
 // Parity 18: energy a charge window stores in a confirmed Intelligent dispatch run (io_credit) earns a score
 // only credit off metric_keep.
-// Parity 19: in PV10, a dispatch minute of a confirmed run (io_credit set) is no longer assumed gone: the
+// Parity 19 (main): in PV10, a dispatch minute of a confirmed run (io_credit set) is no longer assumed gone: the
 // dispatch is kept and the non-car import pays PK_RUN_EVERY minutes of each half hour at the worst-case rate.
-// Parity 20: below a manual_soc or alert floor the keep penalty's import rate, and above a manual_soc_max
+// Parity 19 (car cancel branch): an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
+// Parity 20 (car cancel branch): a cancelled step is charged the buy-back penalty on at least the car's full charge rate (cancel_floor_kw).
+// Parity 21 (car cancel branch): both of the above together; a cancelled step is not a confirmed run's dispatch, so it carries no dispatch_risk.
+// Parity 20 (main): below a manual_soc or alert floor the keep penalty's import rate, and above a manual_soc_max
 // ceiling its export rate, is at least PK_KEEP_TARGET_MIN_RATE, so a target in a free or negative-price
 // slot still costs something to miss (#5162).
-#define PK_PARITY_REVISION 20
+// Parity 22 (car cancel branch): the car cancel branch's parity 21 merged with main's parity 20.
+// Parity 21 to 23 (main): the battery rate grids - each step's charge and discharge rate from a rate grid curve row.
+// Parity 24: the car cancel branch's parity 22 merged with main's parity 23.
+#define PK_PARITY_REVISION 24
 #define PK_MAX_CARS 8
+#define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_KEEP_TARGET_MIN_RATE 1.0 // const.py KEEP_TARGET_MIN_RATE
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -219,17 +231,29 @@ struct PkContext {
     const double *load10;             // load kWh per step (PV10)
     const double *pv90;               // PV forecast kWh per step (PV90)
     const double *load90;             // load kWh per step (PV90)
-    const double *temp_charge_cap;    // temperature rate cap base (soc_max*adjust/60) per step, charge curve
-    const double *temp_discharge_cap; // temperature rate cap base per step, discharge curve
+    const int32_t *charge_curve_row;    // per step, the row of charge_curves for that step's battery temperature
+    const int32_t *discharge_curve_row; // per step, the row of discharge_curves
     const int32_t *io_flag;           // io_adjusted flag per step
     const double *io_credit;          // bird-in-hand credit, pence per kWh stored, per step
-    const double *charge_curve;       // 101 entries, raw charge power curve multiplier by SoC percent
-    const double *discharge_curve;    // 101 entries, raw discharge power curve multiplier by SoC percent
+    const double *charge_curves;      // rows x 103: battery charge ceiling (kW/min) by SoC percent, the rated rate and the absolute cap, one row per distinct temperature (rate grid)
+    const double *discharge_curves;   // rows x 103: battery discharge ceiling by SoC percent, the rated rate and the absolute cap
     const double *carbon;             // carbon intensity per step
     const double *gas_rate;           // gas rate per step, pre-scaled by iboost_gas_scale
     const double *iboost_plan_load;   // iBoost plan load kW per step (in_iboost_slot)
     const double *car_load_flat;      // car charging load kW, num_cars * n_steps (in_car_slot)
     const double *car_rate_flat;      // car premium rate, num_cars * n_steps (in_car_slot)
+
+    // Car slot cancel table - car_cancel.py CarCancelTable; cancel_count is 0 and the pointers null without one
+    int32_t cancel_count;                     // cancellable slots, at most PK_CANCEL_MAX_SLOTS; bit j of a mask is slot j
+    int32_t cancel_start[PK_CANCEL_MAX_SLOTS]; // slot j's start, absolute minutes
+    int32_t cancel_end[PK_CANCEL_MAX_SLOTS];   // slot j's end, absolute minutes
+    uint64_t cancel_forced_mask;              // the slots a charger is force-holding off, cancelled whatever the plan does
+    const int32_t *cancel_slot_flat;          // num_cars * n_steps: the slot j in_car_slot() picks for that car and step, or -1
+    const uint64_t *cancel_need_mask;         // per step: the cancellable dispatches covering it (rounded out to half hours)
+    const int32_t *cancel_trusted;            // per step: 1 when a dispatch that cannot be cancelled covers it
+    const double *cancel_revert_rate;         // per step: the rate a cancelled dispatch reverts to, or negative when it cannot
+    double cancel_penalty_rate;               // what each cancelled kWh costs to buy back (rate_max_base times the margin)
+    double cancel_floor_kw[PK_CANCEL_MAX_SLOTS]; // slot j's car charge rate: a cancelled step is charged on at least this
 
     double soc_kw;
     double soc_max;
@@ -443,12 +467,15 @@ static PkScratch &thread_scratch()
 struct ContextStore {
     std::vector<double> rate_import, rate_export, alert_keep, alert_keep_max;
     std::vector<double> pv, load, pv10, load10, pv90, load90;
-    std::vector<double> temp_charge_cap, temp_discharge_cap;
+    std::vector<int32_t> charge_curve_row, discharge_curve_row;
     std::vector<int32_t> io_flag;
     std::vector<double> io_credit;
-    std::vector<double> charge_curve, discharge_curve;
+    std::vector<double> charge_curves, discharge_curves;
     std::vector<double> carbon, gas_rate, iboost_plan_load;
     std::vector<double> car_load_flat, car_rate_flat;
+    std::vector<int32_t> cancel_slot_flat, cancel_trusted;
+    std::vector<uint64_t> cancel_need_mask;
+    std::vector<double> cancel_revert_rate;
     std::vector<double> soc_percent_threshold; // see build_soc_percent_thresholds
     PkContext ctx;
 };
@@ -476,24 +503,24 @@ inline double get_total_inverted(double battery_draw, double pv_dc, double pv_ac
     return total_inverted;
 }
 
-// Mirror of utils.py get_charge_rate_curve_cached()/get_discharge_rate_curve_cached().
+// Mirror of utils.py get_charge_rate_curve_cached()/get_discharge_rate_curve_cached() (rate_curve_ceiling()).
 // soc_key is passed exactly as Python does (usually round(soc, 1), but raw soc for the DC-rate lookups).
-// temp_cap_base is the pre-computed find_battery_temperature_cap() value before the min with max_rate.
-inline double rate_curve_pct(int32_t soc_percent, double rate_setting, double rate_max, double temp_cap_base, const double *curve, double rate_min)
+// curve_row is the step's battery ceiling by SoC percent in kW/min (an absolute rate grid row); the path's own maximum
+// is a separate limit.
+// Entry 101 of a row is the rated rate the row was scaled from: at or below it the ceiling is absolute, above it (a
+// hybrid's DC charge) the row scales with the path under the absolute temperature cap in entry 102 - mirrors utils.py
+// rate_curve_ceiling().
+inline double rate_curve_pct(int32_t soc_percent, double rate_setting, double rate_max, const double *curve_row, double rate_min)
 {
-    double max_rate = rate_max * curve[soc_percent];
-    double max_rate_cap = std::min(temp_cap_base, rate_max);
-    max_rate = std::min(max_rate, max_rate_cap);
+    soc_percent = std::max(std::min(soc_percent, int32_t(100)), int32_t(0));
+    const double rated = curve_row[101];
+    const double max_rate = (rate_max <= rated || rated <= 0.0) ? std::min(rate_max, curve_row[soc_percent]) : std::min(curve_row[soc_percent] * (rate_max / rated), curve_row[102]);
     return std::max(std::min(rate_setting, max_rate), rate_min);
 }
 
-inline double rate_curve(double soc_key, double rate_setting, double rate_max, double temp_cap_base, const double *curve, double soc_max, double rate_min)
+inline double rate_curve(double soc_key, double rate_setting, double rate_max, const double *curve_row, double soc_max, double rate_min)
 {
-    int32_t soc_percent = calc_percent_limit(soc_key, soc_max);
-    double max_rate = rate_max * curve[soc_percent];
-    double max_rate_cap = std::min(temp_cap_base, rate_max);
-    max_rate = std::min(max_rate, max_rate_cap);
-    return std::max(std::min(rate_setting, max_rate), rate_min);
+    return rate_curve_pct(calc_percent_limit(soc_key, soc_max), rate_setting, rate_max, curve_row, rate_min);
 }
 
 // Build per-step window membership, mirroring Prediction.find_charge_window_optimised():
@@ -625,7 +652,7 @@ int32_t pk_parity_revision(void)
 // Create a per-plan context; deep-copies all arrays. Returns a handle (>0) or 0 on error.
 int64_t pk_context_create(const PkContext *in)
 {
-    if (!in || in->n_steps <= 0 || in->num_cars < 0 || in->num_cars > PK_MAX_CARS) {
+    if (!in || in->n_steps <= 0 || in->num_cars < 0 || in->num_cars > PK_MAX_CARS || in->cancel_count < 0 || in->cancel_count > PK_CANCEL_MAX_SLOTS) {
         return 0;
     }
     auto store = std::make_unique<ContextStore>();
@@ -641,12 +668,15 @@ int64_t pk_context_create(const PkContext *in)
     store->load10.assign(in->load10, in->load10 + n);
     store->pv90.assign(in->pv90, in->pv90 + n);
     store->load90.assign(in->load90, in->load90 + n);
-    store->temp_charge_cap.assign(in->temp_charge_cap, in->temp_charge_cap + n);
-    store->temp_discharge_cap.assign(in->temp_discharge_cap, in->temp_discharge_cap + n);
+    store->charge_curve_row.assign(in->charge_curve_row, in->charge_curve_row + n);
+    store->discharge_curve_row.assign(in->discharge_curve_row, in->discharge_curve_row + n);
     store->io_flag.assign(in->io_flag, in->io_flag + n);
     store->io_credit.assign(in->io_credit, in->io_credit + n);
-    store->charge_curve.assign(in->charge_curve, in->charge_curve + 101);
-    store->discharge_curve.assign(in->discharge_curve, in->discharge_curve + 101);
+    // The tables hold one row per distinct step temperature: as many rows as the highest row index used, plus one
+    const size_t charge_rows = n > 0 ? static_cast<size_t>(*std::max_element(store->charge_curve_row.begin(), store->charge_curve_row.end())) + 1 : 1;
+    const size_t discharge_rows = n > 0 ? static_cast<size_t>(*std::max_element(store->discharge_curve_row.begin(), store->discharge_curve_row.end())) + 1 : 1;
+    store->charge_curves.assign(in->charge_curves, in->charge_curves + PK_CURVE_WIDTH * charge_rows);
+    store->discharge_curves.assign(in->discharge_curves, in->discharge_curves + PK_CURVE_WIDTH * discharge_rows);
     store->carbon.assign(in->carbon, in->carbon + n);
     store->gas_rate.assign(in->gas_rate, in->gas_rate + n);
     store->iboost_plan_load.assign(in->iboost_plan_load, in->iboost_plan_load + n);
@@ -654,6 +684,14 @@ int64_t pk_context_create(const PkContext *in)
     if (n_car > 0) {
         store->car_load_flat.assign(in->car_load_flat, in->car_load_flat + n_car);
         store->car_rate_flat.assign(in->car_rate_flat, in->car_rate_flat + n_car);
+    }
+    if (in->cancel_count > 0) {
+        if (n_car > 0) {
+            store->cancel_slot_flat.assign(in->cancel_slot_flat, in->cancel_slot_flat + n_car);
+        }
+        store->cancel_need_mask.assign(in->cancel_need_mask, in->cancel_need_mask + n);
+        store->cancel_trusted.assign(in->cancel_trusted, in->cancel_trusted + n);
+        store->cancel_revert_rate.assign(in->cancel_revert_rate, in->cancel_revert_rate + n);
     }
     store->ctx = *in;
     store->ctx.rate_import = store->rate_import.data();
@@ -666,17 +704,21 @@ int64_t pk_context_create(const PkContext *in)
     store->ctx.load10 = store->load10.data();
     store->ctx.pv90 = store->pv90.data();
     store->ctx.load90 = store->load90.data();
-    store->ctx.temp_charge_cap = store->temp_charge_cap.data();
-    store->ctx.temp_discharge_cap = store->temp_discharge_cap.data();
+    store->ctx.charge_curve_row = store->charge_curve_row.data();
+    store->ctx.discharge_curve_row = store->discharge_curve_row.data();
     store->ctx.io_flag = store->io_flag.data();
     store->ctx.io_credit = store->io_credit.data();
-    store->ctx.charge_curve = store->charge_curve.data();
-    store->ctx.discharge_curve = store->discharge_curve.data();
+    store->ctx.charge_curves = store->charge_curves.data();
+    store->ctx.discharge_curves = store->discharge_curves.data();
     store->ctx.carbon = store->carbon.data();
     store->ctx.gas_rate = store->gas_rate.data();
     store->ctx.iboost_plan_load = store->iboost_plan_load.data();
     store->ctx.car_load_flat = store->car_load_flat.data();
     store->ctx.car_rate_flat = store->car_rate_flat.data();
+    store->ctx.cancel_slot_flat = in->cancel_count > 0 ? store->cancel_slot_flat.data() : nullptr;
+    store->ctx.cancel_need_mask = in->cancel_count > 0 ? store->cancel_need_mask.data() : nullptr;
+    store->ctx.cancel_trusted = in->cancel_count > 0 ? store->cancel_trusted.data() : nullptr;
+    store->ctx.cancel_revert_rate = in->cancel_count > 0 ? store->cancel_revert_rate.data() : nullptr;
 
     std::lock_guard<std::mutex> lock(g_context_mutex);
     int64_t handle = g_next_handle++;
@@ -790,6 +832,25 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         }
     }
 
+    // The car slots this plan's target exports cancel - prediction.py car_cancel / car_cancel.cancelled_mask(). Read
+    // from the scenario's limits as passed in: the export floor never changes a window's mode. With no table or
+    // nothing cancelled the run is exactly as without one.
+    uint64_t cancel_mask = 0;
+    if (c->cancel_count > 0) {
+        cancel_mask = c->cancel_forced_mask;
+        for (int32_t j = 0; j < c->cancel_count; j++) {
+            for (int32_t i = 0; i < s->n_export; i++) {
+                if (s->export_limits[i].mode == PK_EXPORT_MODE_TARGET && s->export_start[i] < c->cancel_end[j] && s->export_end[i] > c->cancel_start[j]) {
+                    cancel_mask |= uint64_t(1) << j;
+                    break;
+                }
+            }
+        }
+    }
+    const bool car_cancel = cancel_mask != 0;
+    // The energy each car would have bought in its cancelled slots so far, which the room left in it caps
+    double car_cancelled_kwh[PK_MAX_CARS] = {0};
+
     // Initial state - prediction.py:435-490
     double soc = c->soc_kw;
     double soc_min = c->soc_max;
@@ -862,9 +923,17 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Rates - prediction.py:577-580
         double import_rate = c->rate_import[k];
-        const double dispatch_rate = import_rate;
+        double dispatch_rate = import_rate;
         bool dispatch_gone = c->io_flag[k] && is_pv10 && minute > 30;
         double dispatch_risk = 0.0;
+        // car_cancel.step_reverted(): the step can revert, nothing trusted covers it, and every dispatch covering it is cancelled
+        const bool cancel_reverted = car_cancel && c->cancel_revert_rate[k] >= 0 && !c->cancel_trusted[k] && c->cancel_need_mask[k] != 0 && (c->cancel_need_mask[k] & ~cancel_mask) == 0;
+        if (cancel_reverted) {
+            // Every dispatch here is cancelled, so the half hour is billed at peak, and it is no longer a dispatch that can go away
+            import_rate = c->cancel_revert_rate[k];
+            dispatch_rate = import_rate;
+            dispatch_gone = false;
+        }
         if (dispatch_gone && c->io_credit[k] != 0.0) {
             // The car is charging in this run, so a dispatch that goes away is seen within a Predbat cycle: the
             // dispatch is kept, and the house and battery pay PK_RUN_EVERY minutes of each half hour at the
@@ -988,6 +1057,19 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 if (car_load_now > 0.0) {
                     double car_load_scale = car_load_now * step / 60.0;
                     car_load_scale = car_load_scale * c->car_charging_loss;
+                    if (car_cancel) {
+                        const int32_t cancel_j = c->cancel_slot_flat[car_n * n_steps + k];
+                        if (cancel_j >= 0 && ((cancel_mask >> cancel_j) & 1)) {
+                            // Cancelled for an export: the car buys nothing here and keeps its room for later, but the
+                            // energy it would have bought - at least its full charge rate, capped by the room left - must be bought back at peak (score only).
+                            // A later uncancelled slot may refill that room, so the penalty can double-count: a deliberate conservative bias
+                            car_load_scale = std::max(car_load_scale, c->cancel_floor_kw[cancel_j] * step / 60.0 * c->car_charging_loss);
+                            car_load_scale = std::max(std::min(car_load_scale, c->car_charging_limit[car_n] - car_soc[car_n] - car_cancelled_kwh[car_n]), 0.0);
+                            car_cancelled_kwh[car_n] += car_load_scale;
+                            metric_keep += car_load_scale / c->car_charging_loss * c->cancel_penalty_rate;
+                            continue;
+                        }
+                    }
                     car_load_scale = std::max(std::min(car_load_scale, c->car_charging_limit[car_n] - car_soc[car_n]), 0.0);
                     car_soc[car_n] = car_soc[car_n] + car_load_scale;
 
@@ -1101,9 +1183,12 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // the percent at bucket edges so it is observable. The precomputed bucket boundaries give
         // the identical percent from a binary search, with no round_py in the loop at all.
         const int32_t soc_percent_round1 = soc >= 0.0 ? static_cast<int32_t>(std::upper_bound(soc_pct_threshold.begin() + 1, soc_pct_threshold.end(), soc) - (soc_pct_threshold.begin() + 1)) : percent_via_round(soc, soc_max);
-        double charge_rate_now_curve = rate_curve_pct(soc_percent_round1, charge_rate_now, battery_rate_max_charge, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
+        // The step's battery ceiling curves, picked for its forecast temperature (rate grid rows)
+        const double *charge_row = c->charge_curves + PK_CURVE_WIDTH * static_cast<size_t>(c->charge_curve_row[k]);
+        const double *discharge_row = c->discharge_curves + PK_CURVE_WIDTH * static_cast<size_t>(c->discharge_curve_row[k]);
+        double charge_rate_now_curve = rate_curve_pct(soc_percent_round1, charge_rate_now, battery_rate_max_charge, charge_row, battery_rate_min) * battery_rate_max_scaling;
         double charge_rate_now_curve_step = charge_rate_now_curve * step;
-        double discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_discharge, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
+        double discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_discharge, discharge_row, battery_rate_min) * battery_rate_max_scaling_discharge;
         double discharge_rate_now_curve_step = discharge_rate_now_curve * step;
 
         const double battery_to_min = std::max(soc - reserve_expected, 0.0) * battery_loss_discharge;
@@ -1136,7 +1221,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 export_rate_adjust = export_power_now;
             }
             discharge_rate_now = battery_rate_max_export * export_rate_adjust;
-            discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_export, c->temp_discharge_cap[k], c->discharge_curve, battery_rate_min) * battery_rate_max_scaling_discharge;
+            discharge_rate_now_curve = rate_curve_pct(soc_percent_round1, discharge_rate_now, battery_rate_max_export, discharge_row, battery_rate_min) * battery_rate_max_scaling_discharge;
             discharge_rate_now_curve_step = discharge_rate_now_curve * step;
 
             battery_draw = std::min(discharge_rate_now_curve_step, battery_to_min);
@@ -1154,7 +1239,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                         reduce_by = reduce_by - battery_draw * inverter_loss;
                         if (inverter_hybrid) {
                             // Note: Python passes the un-rounded soc for the DC-rate lookup here
-                            const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+                            const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, charge_row, soc_max, battery_rate_min) * battery_rate_max_scaling;
                             const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
                             battery_draw = std::max({-reduce_by * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step});
                         } else {
@@ -1183,7 +1268,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                         reduce_by = reduce_by - battery_draw;
                         battery_draw = 0;
                         if (c->inverter_can_charge_during_export) {
-                            const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+                            const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, charge_row, soc_max, battery_rate_min) * battery_rate_max_scaling;
                             const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
                             battery_draw = std::max({-reduce_by, -battery_to_max, -charge_rate_now_curve_dc_step});
                         }
@@ -1222,7 +1307,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             // find_charge_rate with set_charge_low_power off (always the case for scenario runs)
             // reduces to the max rate and its curve value - utils.py:1145,1237-1238
             charge_rate_now = battery_rate_max_charge_combined;
-            charge_rate_now_curve = rate_curve_pct(soc_percent_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, c->temp_charge_cap[k], c->charge_curve, battery_rate_min) * battery_rate_max_scaling;
+            charge_rate_now_curve = rate_curve_pct(soc_percent_round1, battery_rate_max_charge_combined, battery_rate_max_charge_combined, charge_row, battery_rate_min) * battery_rate_max_scaling;
             charge_rate_now_curve_step = charge_rate_now_curve * step;
 
             battery_draw = -std::max({std::min(charge_rate_now_curve_step, std::max(charge_limit_n - soc, pv_now)), 0.0, -battery_to_max});
@@ -1275,7 +1360,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 if (inverter_hybrid) {
                     const double charge_rate_now_dc = battery_rate_max_charge_dc;
                     // Note: Python passes the un-rounded soc for the DC-rate lookup here
-                    const double charge_rate_now_curve_dc = rate_curve(soc, charge_rate_now_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+                    const double charge_rate_now_curve_dc = rate_curve(soc, charge_rate_now_dc, battery_rate_max_charge_dc, charge_row, soc_max, battery_rate_min) * battery_rate_max_scaling;
                     const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step * charge_rate_scale;
 
                     const double virtual_inverter_limit = inverter_limit + pv_now;
@@ -1301,7 +1386,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 if (diff < 0 && std::fabs(diff) > export_limit && c->inverter_can_charge_during_export && c->inverter_support_feedin_first) {
                     const double over_limit = std::fabs(diff) - export_limit;
                     if (inverter_hybrid) {
-                        const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, c->temp_charge_cap[k], c->charge_curve, soc_max, battery_rate_min) * battery_rate_max_scaling;
+                        const double charge_rate_now_curve_dc = rate_curve(soc, battery_rate_max_charge_dc, battery_rate_max_charge_dc, charge_row, soc_max, battery_rate_min) * battery_rate_max_scaling;
                         const double charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step;
                         battery_draw = std::max({-over_limit * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step});
                     } else {
@@ -1401,7 +1486,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             soc = std::max(soc - battery_draw / battery_loss_discharge, reserve_expected);
         } else {
             // Bird in hand: score only credit for what a charge window stores in a confirmed dispatch run - prediction.py
-            if (force_charging && c->io_credit[k] != 0.0) {
+            // A reverted step's dispatch is cancelled, so there is no confirmed run to bank
+            if (force_charging && c->io_credit[k] != 0.0 && !cancel_reverted) {
                 metric_keep -= std::min(-battery_draw * battery_loss, soc_max - soc) * c->io_credit[k];
             }
             soc = std::min(soc - battery_draw * battery_loss, soc_max);

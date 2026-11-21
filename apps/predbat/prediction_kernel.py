@@ -28,12 +28,17 @@ import platform
 import sys
 import weakref
 
+from car_cancel import CAR_CANCEL_MAX_SLOTS
 from const import PREDICT_STEP, PREDBAT_MAX_CARS, EXPORT_MODE_TARGET, FULL_EXPORT_POWER
-from utils import get_curve_value, find_battery_temperature_cap, in_car_slot, in_iboost_slot
+from utils import in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
-KERNEL_ABI_VERSION = 11
-KERNEL_PARITY_REVISION = 20
+# ABI 11: scalar results come back already rounded to 4dp. ABI 13 (car cancel branch) adds the car slot cancel table and cancel_floor_kw to
+# PkContext; ABI 12 (main) the rate grid curve rows; ABI 14 is both.
+KERNEL_ABI_VERSION = 14
+# Parity 22 (car cancel branch): an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted -
+# merged with main's parity 20. Parity 23 (main): the battery rate grids. Parity 24: both.
+KERNEL_PARITY_REVISION = 24
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -61,17 +66,28 @@ class PkContext(ctypes.Structure):
         ("load10", ctypes.POINTER(ctypes.c_double)),
         ("pv90", ctypes.POINTER(ctypes.c_double)),
         ("load90", ctypes.POINTER(ctypes.c_double)),
-        ("temp_charge_cap", ctypes.POINTER(ctypes.c_double)),
-        ("temp_discharge_cap", ctypes.POINTER(ctypes.c_double)),
+        ("charge_curve_row", ctypes.POINTER(ctypes.c_int32)),
+        ("discharge_curve_row", ctypes.POINTER(ctypes.c_int32)),
         ("io_flag", ctypes.POINTER(ctypes.c_int32)),
         ("io_credit", ctypes.POINTER(ctypes.c_double)),
-        ("charge_curve", ctypes.POINTER(ctypes.c_double)),
-        ("discharge_curve", ctypes.POINTER(ctypes.c_double)),
+        ("charge_curves", ctypes.POINTER(ctypes.c_double)),
+        ("discharge_curves", ctypes.POINTER(ctypes.c_double)),
         ("carbon", ctypes.POINTER(ctypes.c_double)),
         ("gas_rate", ctypes.POINTER(ctypes.c_double)),
         ("iboost_plan_load", ctypes.POINTER(ctypes.c_double)),
         ("car_load_flat", ctypes.POINTER(ctypes.c_double)),
         ("car_rate_flat", ctypes.POINTER(ctypes.c_double)),
+        # The car slot cancel table (car_cancel.CarCancelTable); cancel_count 0 and null pointers without one
+        ("cancel_count", ctypes.c_int32),
+        ("cancel_start", ctypes.c_int32 * CAR_CANCEL_MAX_SLOTS),
+        ("cancel_end", ctypes.c_int32 * CAR_CANCEL_MAX_SLOTS),
+        ("cancel_forced_mask", ctypes.c_uint64),
+        ("cancel_slot_flat", ctypes.POINTER(ctypes.c_int32)),
+        ("cancel_need_mask", ctypes.POINTER(ctypes.c_uint64)),
+        ("cancel_trusted", ctypes.POINTER(ctypes.c_int32)),
+        ("cancel_revert_rate", ctypes.POINTER(ctypes.c_double)),
+        ("cancel_penalty_rate", ctypes.c_double),
+        ("cancel_floor_kw", ctypes.c_double * CAR_CANCEL_MAX_SLOTS),
         ("soc_kw", ctypes.c_double),
         ("soc_max", ctypes.c_double),
         ("reserve", ctypes.c_double),
@@ -703,18 +719,22 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
     pv = []
     pv10 = []
     pv90 = []
-    temp_charge_cap = []
-    temp_discharge_cap = []
+    charge_curve_row = []
+    discharge_curve_row = []
+    charge_curves = []
+    discharge_curves = []
+    charge_rows = {}
+    discharge_rows = {}
+    step_temperature = None
+    step_rows = None
     carbon = []
     gas_rate = []
     iboost_plan_load = []
     car_load_flat = [0.0] * (num_cars * n_steps)
     car_rate_flat = [0.0] * (num_cars * n_steps)
-    # The temperature rate caps are a pure function of the temperature at that step, and a forecast
-    # normally holds one value for hours at a time, so the two curve walks are memoised per distinct
-    # temperature instead of repeated for every step. On the benchmark that is 17,856 calls per plan
-    # for a handful of answers.
-    temp_cap_memo = {}
+    # The battery ceiling curves are a pure function of the temperature at that step (Prediction.rate_curves, memoised
+    # there per temperature), and a forecast normally holds one value for hours at a time, so each distinct curve
+    # becomes one row of a small table and each step carries its row index.
     for k in range(n_steps):
         minute = k * PREDICT_STEP
         minute_absolute = minute + minutes_now
@@ -728,18 +748,20 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         pv.append(pred.pv_forecast_minute_step[minute])
         pv10.append(pred.pv_forecast_minute10_step[minute])
         pv90.append(pred.pv_forecast_minute90_step[minute])
-        # Pre-compute the temperature rate cap base (before the min against the max rate,
-        # which the kernel applies per lookup) - mirrors utils.py find_battery_temperature_cap
+        # The step's battery ceiling curves - mirrors prediction.py run_prediction()'s rate_curves(battery_temperature)
         battery_temperature = pred.battery_temperature_prediction.get(minute, pred.battery_temperature)
-        caps = temp_cap_memo.get(battery_temperature)
-        if caps is None:
-            caps = (
-                find_battery_temperature_cap(battery_temperature, pred.battery_temperature_charge_curve, pred.soc_max, float("inf")),
-                find_battery_temperature_cap(battery_temperature, pred.battery_temperature_discharge_curve, pred.soc_max, float("inf")),
-            )
-            temp_cap_memo[battery_temperature] = caps
-        temp_charge_cap.append(caps[0])
-        temp_discharge_cap.append(caps[1])
+        if battery_temperature != step_temperature:
+            step_temperature = battery_temperature
+            step_rows = []
+            for curve, rows, table in zip(pred.rate_curves(battery_temperature), (charge_rows, discharge_rows), (charge_curves, discharge_curves)):
+                row = rows.get(curve)
+                if row is None:
+                    row = len(rows)
+                    rows[curve] = row
+                    table.extend(curve)
+                step_rows.append(row)
+        charge_curve_row.append(step_rows[0])
+        discharge_curve_row.append(step_rows[1])
         carbon.append(pred.carbon_intensity.get(minute, 0) if pred.carbon_intensity else 0)
         # Gas rate pre-scaled by iboost_gas_scale - mirrors prediction.py:719/725
         gas_rate.append((pred.rate_gas.get(minute_absolute, 99) * pred.iboost_gas_scale) if pred.rate_gas else 0)
@@ -750,11 +772,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
                 car_load_flat[car_n * n_steps + k] = car_load[car_n]
                 car_rate_flat[car_n * n_steps + k] = car_rate_slot[car_n]
 
-    # Raw power curve multipliers by SoC percent - mirrors utils.py get_curve_value
-    charge_curve = [get_curve_value(pred.battery_charge_power_curve, percent, 1.0) for percent in range(101)]
-    discharge_curve = [get_curve_value(pred.battery_discharge_power_curve, percent, 1.0) for percent in range(101)]
-
-    return (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve)
+    return (rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, charge_curve_row, discharge_curve_row, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curves, discharge_curves)
 
 
 def create_kernel_context(pred, static_cache=None):
@@ -803,7 +821,7 @@ def create_kernel_context(pred, static_cache=None):
             static = (shape, build_static_context_arrays(pred, n_steps, minutes_now, num_cars))
             if static_cache is not None:
                 static_cache["arrays"] = static
-        rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, temp_charge_cap, temp_discharge_cap, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curve, discharge_curve = static[1]
+        rate_import, rate_export, alert_keep, alert_keep_max, io_flag, io_credit, pv, pv10, pv90, charge_curve_row, discharge_curve_row, carbon, gas_rate, iboost_plan_load, car_load_flat, car_rate_flat, charge_curves, discharge_curves = static[1]
 
         ctx = PkContext()
         ctx.rate_import = double_array(rate_import)
@@ -816,17 +834,19 @@ def create_kernel_context(pred, static_cache=None):
         ctx.load10 = double_array(load10)
         ctx.pv90 = double_array(pv90)
         ctx.load90 = double_array(load90)
-        ctx.temp_charge_cap = double_array(temp_charge_cap)
-        ctx.temp_discharge_cap = double_array(temp_discharge_cap)
+        ctx.charge_curve_row = int32_array(charge_curve_row)
+        ctx.discharge_curve_row = int32_array(discharge_curve_row)
         ctx.io_flag = int32_array(io_flag)
         ctx.io_credit = double_array(io_credit)
-        ctx.charge_curve = double_array(charge_curve)
-        ctx.discharge_curve = double_array(discharge_curve)
+        ctx.charge_curves = double_array(charge_curves)
+        ctx.discharge_curves = double_array(discharge_curves)
         ctx.carbon = double_array(carbon)
         ctx.gas_rate = double_array(gas_rate)
         ctx.iboost_plan_load = double_array(iboost_plan_load)
         ctx.car_load_flat = double_array(car_load_flat)
         ctx.car_rate_flat = double_array(car_rate_flat)
+        if not set_cancel_context(ctx, getattr(pred, "car_cancel", None), n_steps, num_cars, log=pred.log):
+            return 0
 
         ctx.soc_kw = pred.soc_kw
         ctx.soc_max = pred.soc_max
@@ -905,6 +925,40 @@ def create_kernel_context(pred, static_cache=None):
         if pred.log:
             pred.log("Warn: Prediction kernel context build failed ({}) - using Python engine".format(error))
         return 0
+
+
+def set_cancel_context(ctx, car_cancel, n_steps, num_cars, log=None):
+    """Copy a car_cancel.CarCancelTable into the kernel context, or leave cancel_count 0 and the pointers null without one.
+
+    Returns False for a table built for another horizon or car count, whose arrays the kernel would read past
+    their end: the caller then builds no context, so every prediction runs in the Python engine, which applies
+    the table, rather than in a kernel handed arrays it cannot index. That is logged as a warning through log,
+    as the slowdown would otherwise be silent.
+    """
+    if car_cancel is None or not car_cancel.slots:
+        ctx.cancel_count = 0
+        return True
+    if car_cancel.n_steps != n_steps or len(car_cancel.slot_flat) != num_cars * n_steps or len(car_cancel.slots) > CAR_CANCEL_MAX_SLOTS:
+        if log:
+            log(
+                "Warn: Prediction kernel: car slot cancel table does not fit ({} steps, {} slot lookups, {} slots for {} steps and {} cars) - using Python engine".format(
+                    car_cancel.n_steps, len(car_cancel.slot_flat), len(car_cancel.slots), n_steps, num_cars
+                )
+            )
+        return False
+    slots = car_cancel.slots
+    ctx.cancel_count = len(slots)
+    for j, slot in enumerate(slots):
+        ctx.cancel_start[j] = slot.start
+        ctx.cancel_end[j] = slot.end
+        ctx.cancel_floor_kw[j] = car_cancel.floor_kw[j]
+    ctx.cancel_forced_mask = car_cancel.forced_mask
+    ctx.cancel_slot_flat = int32_array(car_cancel.slot_flat) if num_cars > 0 else None
+    ctx.cancel_need_mask = (ctypes.c_uint64 * n_steps)(*car_cancel.need_mask)
+    ctx.cancel_trusted = int32_array(car_cancel.trusted)
+    ctx.cancel_revert_rate = double_array(car_cancel.revert_rate)
+    ctx.cancel_penalty_rate = car_cancel.penalty_rate
+    return True
 
 
 def kernel_supported(pred, save, step):

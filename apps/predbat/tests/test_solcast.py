@@ -10,7 +10,6 @@
 
 import os
 import json
-import hashlib
 import re
 import shutil
 import tempfile
@@ -385,9 +384,7 @@ def test_cache_get_url_hit(my_predbat):
         url = "https://api.solcast.com.au/test/cached"
         params = {}
 
-        # Compute hash key same as cache_get_url
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
+        hash_key = test_api.solar.solar_cache_key(url, params)
 
         # Pre-populate storage with a non-expired, recently-created entry (age ~0 < max_age)
         cached_data = {"cached": True, "from": "file"}
@@ -442,8 +439,7 @@ def test_cache_get_url_stale(my_predbat):
         url = "https://api.solcast.com.au/test/stale"
         params = {}
 
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
+        hash_key = test_api.solar.solar_cache_key(url, params)
 
         # Save data with 7-day expiry so it won't be removed, then backdate creation to 2 hours ago
         old_data = {"stale": True}
@@ -489,8 +485,7 @@ def test_cache_get_url_failure_with_stale_cache(my_predbat):
         url = "https://api.solcast.com.au/test/failure"
         params = {}
 
-        hash_key = url + "_" + hashlib.md5(str(params).encode()).hexdigest()
-        hash_key = hash_key.replace("/", "_").replace(":", "_").replace("?", "a").replace("&", "b").replace("*", "c")
+        hash_key = test_api.solar.solar_cache_key(url, params)
 
         # Save data with 7-day expiry then backdate creation to 2 hours ago to make it stale
         stale_data = {"stale": True, "fallback": "data"}
@@ -556,6 +551,58 @@ def test_cache_get_url_metrics_forecast_solar(my_predbat):
 
         if test_api.solar.solcast_requests_total != 0:
             print(f"ERROR: solcast_requests_total should be 0, got {test_api.solar.solcast_requests_total}")
+            failed = True
+
+    finally:
+        test_api.cleanup()
+
+    return failed
+
+
+# The Open-Meteo forecast URL from #6161 - long enough that embedding it in the cache filename exceeded the 255-character limit
+OPEN_METEO_LONG_URL = "https://api.open-meteo.com/v1/forecast?latitude=52.145899374311014&longitude=12.844656407833101&hourly=global_tilted_irradiance,temperature_2m,wind_speed_10m&wind_speed_unit=ms&tilt=39&azimuth=-48&forecast_days=4&timezone=UTC"
+
+
+def test_cache_get_url_long_url(my_predbat):
+    """
+    Test cache_get_url with a long Open-Meteo URL (#6161) - the cache must be written under a short filename and used on the next call.
+    """
+    print("  - test_cache_get_url_long_url")
+    failed = False
+
+    test_api = create_test_solar_api()
+    try:
+        mock_data = {"hourly": {"time": ["2025-06-15T12:00"], "global_tilted_irradiance": [500]}}
+        test_api.set_mock_response("api.open-meteo.com", mock_data, 200)
+
+        def create_mock_session(*args, **kwargs):
+            return test_api.mock_aiohttp_session()
+
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(OPEN_METEO_LONG_URL, {}, max_age=60))
+        if result != mock_data:
+            print(f"ERROR: Expected {mock_data}, got {result}")
+            failed = True
+
+        cache_path = os.path.join(test_api.mock_base.config_root, "cache")
+        cache_files = os.listdir(cache_path)
+        if len(cache_files) != 2:
+            print(f"ERROR: Expected a data file and a meta file in the cache, got {cache_files}")
+            failed = True
+        for name in cache_files:
+            if len(name) > 64:
+                print(f"ERROR: Cache filename should be short, got {len(name)} characters: {name}")
+                failed = True
+
+        # Second call within max_age must be served from the cache, not re-downloaded
+        test_api.mock_responses = {}
+        with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
+            result = run_async(test_api.solar.cache_get_url(OPEN_METEO_LONG_URL, {}, max_age=60))
+        if result != mock_data:
+            print(f"ERROR: Expected cached data {mock_data} on second call, got {result}")
+            failed = True
+        if len(test_api.request_log) != 1:
+            print(f"ERROR: Expected one HTTP request in total, got {len(test_api.request_log)}")
             failed = True
 
     finally:
@@ -2838,8 +2885,8 @@ def test_fetch_pv_forecast_open_meteo_first_hourly_slots(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             run_async(test_api.solar.fetch_pv_forecast())
 
-        # Two hourly periods are produced from three instant samples, trapezoidally integrated
-        # and temperature corrected by solar_model.gti_hourly_to_period_kwh.
+        # Three hourly periods (each sample is the mean of the hour before it), temperature
+        # corrected by solar_model.gti_hourly_to_period_kwh.
         expected_kwh = round(day_zero_kwh(captured.get("data", []), test_api.mock_base.midnight_utc), 2)
         failed |= check_slot_scaling(test_api, captured, 60, expected_kwh, "Open-Meteo as the primary hourly source")
 
@@ -4772,12 +4819,12 @@ def test_fetch_pv_forecast_solcast_band_follows_calibration(my_predbat):
                 for m_of_day in range(window_start, window_start + window_length):
                     pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = 1.0
 
-            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist, **kwargs):
                 """Return the synthetic pv_today history."""
                 return dict(_hist) if key == "pv_today" else {}
 
             base.minute_data_import_export = mock_minute_import_export
-            solar.get_history_wrapper = lambda entity_id, days, required=False: []
+            solar.get_history_wrapper = lambda entity_id, days, required=False, **kwargs: []
             solar.forecast_solar = None
 
             # 1 kW in each 30-minute slot of the window, in kW as both Solcast routes report it
@@ -4922,12 +4969,12 @@ def test_fetch_pv_forecast_solcast_band_does_not_compound(my_predbat):
                 for m_of_day in range(window_start, window_start + window_length):
                     pv_forecast_hist[day_num * 1440 + (minutes_now - m_of_day)] = 1.0
 
-            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist):
+            def mock_minute_import_export(max_days_prev, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, _hist=hist, **kwargs):
                 """Return the synthetic pv_today history."""
                 return dict(_hist) if key == "pv_today" else {}
 
             base.minute_data_import_export = mock_minute_import_export
-            solar.get_history_wrapper = lambda entity_id, days, required=False: []
+            solar.get_history_wrapper = lambda entity_id, days, required=False, **kwargs: []
             solar.forecast_solar = None
 
             detailed = None
@@ -5515,13 +5562,16 @@ def test_pv_calibration_total_adjustment_recency_weighted(my_predbat):
     history window. Otherwise a recent change in system performance (e.g. panel cleaning,
     seasonal trend) is diluted by older, less-relevant days.
 
-    3 days (day1=most recent, weight 1.0/0.9/0.8), uniform forecast=1.0 kWh/day:
+    3 days (day1=most recent), uniform forecast=1.0 kWh/day:
       day1: actual=2.0 kWh (ratio 2.0)
       day2: actual=1.0 kWh (ratio 1.0)
       day3: actual=0.5 kWh (ratio 0.5)
 
-    Flat/unweighted ratio (what the old code produced): (2.0+1.0+0.5) / (1.0+1.0+1.0) = 3.5/3 ~= 1.1667
-    Recency-weighted ratio (current code): (2.0*1.0+1.0*0.9+0.5*0.8) / (1.0*1.0+1.0*0.9+1.0*0.8) = 3.3/2.7 ~= 1.2222
+    Flat/unweighted ratio: (2.0+1.0+0.5) / (1.0+1.0+1.0) = 3.5/3 ~= 1.1667
+    Recency-weighted ratio: weights halve every pv_calibration_half_life (3.5) days, 1.0/0.82/0.67, giving ~1.25.
+
+    Shrinkage is switched off here (pv_calibration_shrink set very large) so the weighting itself is measured: with the default
+    shrinkage these three wildly different days would rightly leave the factor much closer to 1.
     """
     print("  - test_pv_calibration_total_adjustment_recency_weighted")
     failed = False
@@ -5560,7 +5610,7 @@ def test_pv_calibration_total_adjustment_recency_weighted(my_predbat):
 
     actual_per_day = [2.0, 1.0, 0.5]
     forecast_per_day = [1.0, 1.0, 1.0]
-    weights = [1.0, 0.9, 0.8]
+    weights = [0.5 ** (k / 3.5) for k in range(3)]
 
     flat_average = sum(actual_per_day) / sum(forecast_per_day)
     expected_weighted = sum(a * w for a, w in zip(actual_per_day, weights)) / sum(f * w for f, w in zip(forecast_per_day, weights))
@@ -5580,6 +5630,7 @@ def test_pv_calibration_total_adjustment_recency_weighted(my_predbat):
             return dict(_hist) if key == "pv_today" else {}
 
         base.minute_data_import_export = mock_minute_import_export
+        base.mock_config = {"pv_calibration_shrink": 1e6, "pv_calibration_shrink_slot": 1e6}
         solar.get_history_wrapper = lambda entity_id, days, required=False: []
 
         total_minutes = 4 * 24 * 60
@@ -7026,6 +7077,7 @@ def run_solcast_tests(my_predbat):
 
     # Cache tests
     failed |= test_cache_get_url_miss(my_predbat)
+    failed |= test_cache_get_url_long_url(my_predbat)
     failed |= test_cache_get_url_hit(my_predbat)
     failed |= test_cache_get_url_stale(my_predbat)
     failed |= test_cache_get_url_failure_with_stale_cache(my_predbat)

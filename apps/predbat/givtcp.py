@@ -1016,6 +1016,14 @@ class GivTCPComponent(ComponentBase):
             else:
                 self.log("Info: GivTCP: {} is not reported by every inverter - leaving it to your apps.yaml config".format(key))
 
+        # battery_temperature_history has to follow battery_temperature. The forward temperature
+        # prediction is built from it, so a different sensor - typically the GivTCP template's
+        # battery stack BMS sensor, which can read a flat 0 - plans every charge at the charge curve's
+        # coldest rate while the live reading is warm (#6193). One site-wide entity, from the lowest
+        # endpoint that answered: the first-device rule GE Cloud and SolaX use (discovery spec D15).
+        if "battery_temperature" in keys:
+            keys.append("battery_temperature_history")
+
         if all(self.rest[n].battery_soh() is not None for n in discovered):
             keys += GIVTCP_AUTO_CONFIG_SCALING_KEYS
         else:
@@ -1060,6 +1068,12 @@ class GivTCPComponent(ComponentBase):
             domain = domain or "sensor"
             if key == "battery_scaling":
                 self.set_arg_auto(key, self._per_endpoint_values(key, lambda n: self._entity_id("sensor", n, "battery_dod_soh"), n_inverters))
+                continue
+            if key == "battery_temperature_history":
+                # Read as history, but unlike the energy totals the user's sensor does not win: the
+                # prediction looks back only 24 hours and holds the current temperature flat until
+                # history builds, so repointing it costs at most a day of trend, not the plan.
+                self.set_arg_auto(key, self._entity_id("sensor", min(discovered), "battery_temperature"))
                 continue
             # Indexed by REST endpoint, not by position: _parse_entity feeds self.rest[n] on every
             # write, so renumbering would route the surviving inverter's writes at a dead client.
@@ -1161,7 +1175,9 @@ class GivTCPComponent(ComponentBase):
         with the same _entity_id() call, so the two cannot drift. A key is kept only when
         publish_data() actually published its entity for this inverter (see _discovery_descriptor).
         battery_scaling is bound to the combined battery_dod_soh sensor, exactly as automatic_config()
-        binds it, and inverter_time carries the format its value is published in.
+        binds it, and inverter_time carries the format its value is published in. The site-wide
+        battery_temperature_history goes on the lowest discovered inverter's record only, whenever
+        that inverter published battery_temperature - the same per-device rule as every other key.
 
         The record describes this device alone (spec D10 and D11). automatic_config()'s fleet-wide
         gates - a key claimed only when every discovered inverter published it or runs GivTCP v3 -
@@ -1182,6 +1198,9 @@ class GivTCPComponent(ComponentBase):
             if key == "inverter_time":
                 descriptor["format"] = GIVTCP_INVERTER_TIME_FORMAT
             entities[key] = descriptor
+        # Site-wide, so only the first device's record carries it (spec D15), bound as automatic_config() binds it
+        if self.discovered and n == min(self.discovered) and "battery_temperature" in entities:
+            entities["battery_temperature_history"] = dict(entities["battery_temperature"])
         return entities
 
     def build_discovery(self):

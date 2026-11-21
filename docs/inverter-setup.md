@@ -40,6 +40,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Givenergy with GE Cloud EMS](#givenergy-with-ge-cloud-ems) | [ge_cloud EMS](https://github.com/springfall2008/ge_cloud) | [givenergy_ems.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/givenergy_ems.yaml) |
    | [Givenergy/Octopus No Home Assistant](#givenergy-octopus-cloud-direct---no-home-assistant) | n/a | [ge_cloud_octopus_standalone.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ge_cloud_octopus_standalone.yaml) |
    | [AlphaESS Cloud](#alphaess-cloud) | Predbat | [alphaess_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/alphaess_cloud.yaml) |
+   | [Anker SOLIX X1](#anker-solix-x1) | [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) | [anker_x1.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1.yaml) |
    | [Canadian Solar EP Cube](#canadian-solar-ep-cube) | [ha-ep-cube](https://github.com/SkiLtY/ha-ep-cube) | [ep_cube_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/ep_cube_cloud.yaml) |
    | [DEYE Cloud](#deye-cloud) | Predbat | See [apps.yaml](apps-yaml.md#deye-cloud-api) |
    | [Enphase Cloud](#enphase-cloud) | Predbat | [enphase_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/enphase_cloud.yaml) |
@@ -194,7 +195,7 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
 - Predbat will auto-configure itself to use the appropriate GE Cloud controls for the EMS and if you add extra inverter and battery controls to `apps.yaml`, these will be ignored
 - As Predbat will only use slot 1, turn off charge, export and discharge slots 2, 3 and 4  - set the start and end times for these to 00:00
 - On each battery inverter, leave its own charge slot 1 and DC discharge slot 1 set to 00:00-23:59 so that they never override a command from the EMS. Predbat re-reads the inverter settings hourly and will warn in the log, and in the Predbat status, if it finds a slot 1 window set to anything else.
-- If your EMS does not return accurate **load_today** energy information, you can [override the GE Cloud load data](apps-yaml.md) by creating a custom template sensor and setting **ge_cloud_load_today_ignore** to `true` in `apps.yaml`.
+- Predbat works out **load_today** for an EMS from its grid, solar and battery counters by energy balance, rather than from the EMS's own consumption counter, which counts battery charging from the grid as house load - see [EMS house load](components.md#ems-house-load-gecloud). If you would still rather use your own sensor, you can [override the GE Cloud load data](apps-yaml.md) by creating a custom template sensor and setting **ge_cloud_load_today_ignore** to `true` in `apps.yaml`.
 
 ## GivEnergy Octopus Cloud Direct - No Home Assistant
 
@@ -262,6 +263,74 @@ python3 alphaess.py --app-id YOUR_APP_ID --app-secret YOUR_APP_SECRET --unbind -
 **`--unbind` is one-way from Home Assistant/the CLI.** Once unbound, Predbat can no longer read or control that system, and there is no `--bind`-from-nothing shortcut back - re-binding needs a fresh verification code emailed to the owner, via `--verify` then `--bind` as above, or via the AlphaESS portal.
 
 See [AlphaESS Cloud API](apps-yaml.md#alphaess-cloud-api) in `apps.yaml` for the full list of `alphaess_*` settings, defaults and important behaviour to be aware of - including the export-control limitation above, and the write-timing, freeze-signalling, `export_limit` and `battery_rate_max` notes that apply to every AlphaESS install.
+
+## Anker SOLIX X1
+
+The Anker SOLIX X1 hybrid inverter has no native Predbat integration. It is read and controlled locally over Modbus TCP by the [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) integration, and Predbat drives it through its generic [Service API](#has_service_api).
+
+Over Modbus the X1 has no charge schedule, target SoC or reserve controls. What it does have is a signed battery power setpoint (negative to charge, positive to discharge) that it follows in VPP work mode. All of Predbat's service hooks call one Home Assistant script, `script.predbat_anker_x1_control`, which puts the X1 into VPP mode and writes that setpoint, and hands the battery back to the X1's own Self-consumption mode when Predbat isn't charging or exporting. Predbat watches the battery SoC and stops a charge or export itself when the target is reached.
+
+Copy the template [anker_x1.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1.yaml) over your `apps.yaml`, install the Home Assistant package [anker_x1_package.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1_package.yaml), and follow the steps below.
+
+### Anker SOLIX X1 Prerequisites
+
+- Install the [anker-x1-ha](https://github.com/afewyards/anker-x1-ha) integration (it isn't in the default catalogue: on Home Assistant 2026.11 or newer use **Add from link** in the [Marketplace](install.md#hacs-and-the-marketplace), or on 2026.10 or older add it to HACS as a custom repository) and configure it with your X1's IP address. **Version 0.7.0 or later is required**: earlier versions took the setpoint's range from the X1's live limits, which collapse to almost nothing in VPP mode after a hold and can cap a charge to a few watts.
+- Confirm the integration's "Anker X1" device shows battery SoC, battery power, PV power and the external meter's power (`sensor.anker_x1_meter_total_power`), and that `number.anker_x1_battery_setpoint_charge_discharge` and `switch.anker_x1_modbus_control_hand_battery_to_ha_vpp` exist.
+- Make sure Home Assistant packages are enabled. `configuration.yaml` needs:
+
+```yaml
+homeassistant:
+  packages: !include_dir_named packages
+```
+
+### Anker Step 1 — Install the Home Assistant package
+
+Save [anker_x1_package.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/anker_x1_package.yaml) as `<config>/packages/anker_x1_package.yaml` and restart Home Assistant. It creates:
+
+| Entity | Used for |
+| ------ | -------- |
+| `script.predbat_anker_x1_control` | Every `*_service` entry in `apps.yaml` |
+| `input_number.predbat_anker_x1_charge_rate` | `charge_rate` |
+| `input_number.predbat_anker_x1_discharge_rate` | `discharge_rate` |
+| `sensor.anker_x1_house_load_today` | `load_today` |
+| `sensor.anker_x1_house_load_power` | `load_power` |
+| `sensor.anker_x1_battery_soc_for_predbat` | `soc_percent` |
+| `automation.predbat_anker_x1_follow_the_charge_limit_near_full` | Lowers a charge near 100% (see the notes) |
+| `input_text.predbat_anker_x1_last_command`, `input_number.predbat_anker_x1_setpoint_written`, `sensor.anker_x1_house_load_today_raw` | Internal to the package |
+
+The package uses the entity IDs the integration creates for its "Anker X1" device. If yours differ, replace them throughout the package and `apps.yaml`. If your inverter is not 5 kW, change `battery_limit` in the script and the `max` of the two rate helpers.
+
+### Anker Step 2 — Configure apps.yaml
+
+- Set `soc_max` to your battery size in kWh: 5 per battery module
+- Check `inverter_limit` and `battery_rate_max` against your inverter model (`sensor.anker_x1_model`). The template's 5000 is for the X1-H5K-S. Don't take the limit from `sensor.anker_x1_dischargeable_power`: that is the battery pack's DC capability (3300 W per module), not the inverter's AC output
+- Set `reserve` and `battery_min_soc` to the minimum SoC set in the Anker app. The X1 has no reserve setting over Modbus, so Predbat's reserve is only used for planning and the X1 stops discharging at the app's minimum
+- Delete the `template: True` line to allow Predbat to start
+- Configure your energy rates - see [Energy Rates](energy-rates.md)
+
+### Anker Step 3 — Test control before handing it to Predbat
+
+With Predbat in read-only mode, run the script from Developer Tools → Actions:
+
+```yaml
+action: script.predbat_anker_x1_control
+data:
+  command: discharge
+  power: 1000
+```
+
+The battery should ramp to about 1000 W of discharge within around ten seconds, and the X1's Work Mode should show VPP. Then run it with `command: auto` to hand control back: the Modbus Control switch turns off and the Work Mode returns to Self-consumption. Once that works, turn off read-only mode and let Predbat take control.
+
+### Anker SOLIX X1 Notes
+
+- **Skipping repeated writes:** the start and hold services use `repeat: True`, so Predbat re-sends them on every run and takes control back if the X1 drops out of VPP mode. Every setpoint write also rewrites the X1's work-mode register, so the script skips a write when the X1 is already doing what was asked.
+- **Stopping:** turning Modbus Control off clears the setpoint but leaves the X1 in App-managed mode rather than Self-consumption, so the script sets the work mode explicitly afterwards.
+- **Holds at the reserve:** Predbat sends `charge_freeze_service` whenever a charge window's target is the reserve, even with `support_charge_freeze: False`. Holding at 0 W at the bottom of the battery achieves nothing that Self-consumption doesn't, so the script treats a hold at or within 1% of the reserve as `auto`. A hold higher up still holds the battery at 0 W, which also stops it charging from solar during the hold.
+- **Charging near full:** asked to charge harder than the battery will take, which happens above about 95%, the X1 overshoots into discharge for a few seconds at a time, at up to several kW. Predbat only updates every five minutes, so the package's automation keeps a running charge at 90% of the X1's live charge limit (`sensor.anker_x1_rechargeable_power`) from 95% up, never more than Predbat asked for.
+- **Grid energy sensors:** anker-x1-ha 0.7.0 renamed "Grid Bought Today" / "Grid Fed-in Today" to "Grid Bought" / "Grid Fed-in". Older installs keep the `_today` entity IDs, and both the template and the package accept either name. These counters are lifetime totals on X1 firmware 1.0.19.16 and reset at midnight on 1.0.16.1. Predbat only uses how much they rise each day, so both work.
+- **House load:** the X1 reports no house load energy, so the package works it out as PV + grid import + battery discharge - grid export - battery charge, from how far each counter moved every minute. Inverter conversion losses end up counted as house load.
+- **Battery SoC filter:** the X1 occasionally reports an unavailable SoC or a momentary 0%. `sensor.anker_x1_battery_soc_for_predbat` holds the last good reading for up to 15 minutes so a single bad read doesn't make Predbat plan from an empty battery.
+- **Measured behaviour:** on a 3-module (15 kWh) pack, a forced charge holds 5 kW from the reserve to 95% and a forced export holds about 4.8 kW from the battery. Usable capacity measured 5.2-5.3 kWh per module, and grid-to-battery efficiency about 93%, which matches Predbat's default `inverter_loss` and `battery_loss`.
 
 ## Canadian Solar EP Cube
 
@@ -2000,6 +2069,11 @@ look for sensor.sigen_plant_daily_consumed_energy (the name earlier versions of 
 *Note:* If you rename **input_number.charge_rate** / **input_number.discharge_rate**, change them in `apps.yaml` **and** in the triggers and templates of the rate automations.
 If the two disagree the automations never fire, and nothing reports it: the plant simply stays at whatever limit it last had, so Predbat's rate changes (including setting a rate of 0 to hold the battery) never reach the inverter.
 
+*Note:* Predbat has no reserve it can set on a Sigenergy, so it holds **set_reserve_min** with the discharge rate instead: whenever it is not charging or force exporting and the battery is within 1% of the reserve,
+Predbat sets **input_number.discharge_rate** to 0 and the house is supplied from the grid. Solar can still charge the battery (except during Freeze Exporting, which stops charging), and the discharge rate goes back to maximum once the SoC is more than 2% above the reserve.
+The SoC is only checked every 5 minutes, so with a large house load the battery can still go a little below the reserve before the hold starts.
+Predbat only does this while it controls the charge or export windows, not in Monitor or Control SOC only mode. It relies on the discharge rate automation above. Without it the plant's own self-consumption carries on running the house from the battery down to **number.sigen_plant_ess_discharge_cut_off_state_of_charge** (see [batpred#5358](https://github.com/springfall2008/batpred/issues/5358)).
+
 *Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first automation to any lower import limit that your electricity supplier may have imposed,
 e.g. 18kW roughly corresponds to an 80A supply.
 
@@ -2059,6 +2133,9 @@ Predbat has a built-in Sigenergy Cloud integration that connects directly to the
 It publishes all necessary sensor entities itself and can automatically configure Predbat to use them.
 
 See the [Components - Sigenergy Cloud](components.md#sigenergy-cloud-api-sigenergy) documentation for full configuration options.
+
+*Note:* the reserve hold described for local Sigenergy setups above does not apply to Sigenergy Cloud. On Sigenergy Cloud, a zero discharge rate stops the battery charging as well, so a hold at the reserve would also stop solar from topping the battery up.
+With Sigenergy Cloud, Predbat's **set_reserve_min** is only a floor in the plan, and in Demand the plant can still run the battery down to its own discharge cut-off (see [batpred#5358](https://github.com/springfall2008/batpred/issues/5358)).
 
 ### Obtaining Sigenergy Cloud API credentials
 
@@ -2568,7 +2645,7 @@ max: 10
 The fix was to enable the hidden HA entity 'VPP Exit Idle Enable' and then change the entity value from Disabled to Enabled. Once this was Enabled the inverter responded correctly to Predbat commands.
 
 - When you first start Predbat, check the [Predbat log](output-data.md#predbat-logfile) to confirm that the correct sensor names are identified by the regular expressions in `apps.yaml`. Any non-matching expressions should be investigated and resolved.
-- You may well get a warning message in the logs that Predbat [cannot create battery charge/discharge curves](faq.md#warn-cannot-find-battery-charge-curve). Either configure [battery charge and discharge rates](apps-yaml.md#battery-chargedischarge-curves) in `apps.yaml` using appropriate inverter sensors (if available) or create a dummy default curve based on manufacturers information.
+- You may well get a warning message in the logs that Predbat [cannot learn the battery rate grids](faq.md#warn-cannot-find-battery-charge-rate-grid). Either configure [battery charge and discharge rates](apps-yaml.md#battery-chargedischarge-curves) in `apps.yaml` using appropriate inverter sensors (if available) or create a dummy default curve based on manufacturers information.
 
 Please see this ticket in Github for ongoing discussion: <https://github.com/springfall2008/batpred/issues/259>
 

@@ -46,15 +46,11 @@ from const import (
     INVERTER_LIMIT_DEFAULT_W,
     EXPORT_LIMIT_DEFAULT_W,
 )
+from battery_curve import BatteryCurve
 from control_ledger import generation_from_state, OWNED, UNOWNED
-from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, dp4, is_entity_id, time_string_to_stamp, minute_data, minute_data_state, window2minutes, pack_export_limit, strptime_aware
+from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3, is_entity_id, time_string_to_stamp, minute_data, window2minutes, pack_export_limit, strptime_aware
 
 TIME_FORMAT_HMS = "%H:%M:%S"
-
-# Largest SoC jump (percentage points) between consecutive readings that the charge curve learner
-# accepts as genuine. Wide enough for inverters that report SoC in 5% steps; a larger jump is a
-# glitch (e.g. a stray 0% reading) and would otherwise stamp one sample across a huge SoC range.
-CHARGE_CURVE_MAX_SOC_STEP = 10
 
 # Sentinel for "this side has committed nothing yet", distinct from any real commit key a caller
 # might use - including None, which adjust_charge_window() can legitimately produce for an unset
@@ -82,7 +78,7 @@ def calibration_reported(value):
     return value in ("on", "On", "true", "True", True)
 
 
-class Inverter:
+class Inverter(BatteryCurve):
     """Unified inverter control abstraction for multiple brands.
 
     Provides a common interface for controlling GivEnergy, Fox ESS, Solis,
@@ -415,6 +411,8 @@ class Inverter:
         # Set once an invalid battery_scaling read has been warned about, so a source that keeps
         # reading invalid warns once rather than every cycle (#5368); cleared by a valid read.
         self.battery_scaling_invalid_warned = False
+        # Set once battery_min_soc naming a reserve entity has been warned about (#4013); cleared when it no longer does
+        self.battery_min_soc_is_reserve_warned = False
         # Commit-once state, keyed by scope - see commit_needed(). Each entry is the last state that
         # scope actually committed to this inverter; a scope absent from the dict has committed
         # nothing yet in this run, so its next call commits once. commit_pending marks a scope whose
@@ -493,10 +491,26 @@ class Inverter:
         # checks for that explicitly rather than silently dividing by a placeholder.
         self.battery_power = 0
         self.battery_power_valid = False  # True only when update_status() actually read battery_power
+        # Whether update_status() read the charge/discharge rate back as exactly 0, before the prediction
+        # minimum and scaling are applied to charge_rate_now/discharge_rate_now - a balancing hold has to
+        # read back as one, or the next pass releases it.
+        self.charge_rate_is_zero = False
+        self.discharge_rate_is_zero = False
+        # The rate balancing has seen this inverter really deliver when it fell short of its configured
+        # rate, as [watts, seen_at epoch seconds], or None. Learned and aged by utils.learn_rate_ceilings().
+        self.balance_ceiling_charge = None
+        self.balance_ceiling_discharge = None
         # The rates execute_plan() last wrote, in W, which the control-failure monitor judges against;
         # None until written (and in Monitor mode, where nothing is)
         self.requested_charge_w = None
         self.requested_discharge_w = None
+        # Whether execute_plan() held this inverter at its reserve with a zero discharge rate last cycle (reserve_via_discharge_rate)
+        self.reserve_hold_active = False
+        # Directions ("charge", "discharge") mimic_target_soc is holding at 0 A on the timed current, which
+        # set_current_from_power() then writes as 0 A for every caller (#5972). See hold_current_at_zero()
+        self.current_holds = set()
+        # The holds this execute_plan() cycle's mimic_target_soc renewed; any other is released at the end of the loop
+        self.current_holds_renewed = set()
         self.battery_voltage = None
         self.pv_power = 0
         self.load_power = 0
@@ -573,7 +587,8 @@ class Inverter:
             self.log("Note: Inverter {}: Using inverter type {} - not all features are available on all Inverter types".format(self.id, self.inverter_type))
 
         # Load inverter brand definitions
-        self.reserve_max = self.base.get_arg("inverter_reserve_max", 100)
+        # One value for every inverter (as documented) or a per-inverter list (#5369, single_value_ok)
+        self.reserve_max = self.base.get_arg("inverter_reserve_max", 100, index=self.id)
         self.inv_has_mqtt_api = INVERTER_DEF[self.inverter_type]["has_mqtt_api"]
         self.inv_mqtt_topic = self.base.get_arg("mqtt_topic", "Sofar2mqtt")
         self.inv_output_charge_control = INVERTER_DEF[self.inverter_type]["output_charge_control"]
@@ -590,6 +605,10 @@ class Inverter:
         # True when no reserve between 80 and 100 is honoured (a Powerwall, GH#6046), so above 80% a hold that must not
         # discharge at all can only ask for 100. Defaults False so an inverter type has to opt in.
         self.inv_reserve_full_only_above_80 = INVERTER_DEF[self.inverter_type].get("reserve_full_only_above_80", False)
+        # True when an inverter with no reserve register can hold the reserve with a zero discharge rate, which
+        # stops discharge but still lets PV charge the battery (Sigenergy, #5358). Defaults False so an inverter
+        # type has to opt in.
+        self.inv_reserve_via_discharge_rate = INVERTER_DEF[self.inverter_type].get("reserve_via_discharge_rate", False)
         self.inv_charge_time_format = INVERTER_DEF[self.inverter_type]["charge_time_format"]
         self.inv_charge_time_entity_is_option = INVERTER_DEF[self.inverter_type]["charge_time_entity_is_option"]
         self.inv_clock_time_format = INVERTER_DEF[self.inverter_type]["clock_time_format"]
@@ -713,6 +732,7 @@ class Inverter:
         self.battery_rate_max_discharge = min(inverter_limit_discharge, self.battery_rate_max_raw) / MINUTE_WATT
         inverter_limit_export = self.base.get_arg("inverter_limit_export", inverter_limit_discharge, index=self.id, required_unit="W")
         self.battery_rate_max_export = min(inverter_limit_export, self.battery_rate_max_raw) / MINUTE_WATT
+        # One value for every inverter (as documented) or a per-inverter list (#5369, single_value_ok)
         self.battery_rate_min = min(self.base.get_arg("inverter_battery_rate_min", 0, index=self.id, required_unit="W"), self.battery_rate_max_raw) / MINUTE_WATT
 
         # Track and update battery size (if automatic)
@@ -769,7 +789,8 @@ class Inverter:
         self.reserve_min = int(self.base.get_arg("set_reserve_min" + reserve_min_postfix))
 
         # Min soc setting
-        battery_min_soc = self.base.get_arg("battery_min_soc", default=max(self.reserve_min, 4), index=self.id)
+        min_soc_is_reserve = self.battery_min_soc_is_reserve()
+        battery_min_soc = max(self.reserve_min, 4) if min_soc_is_reserve else self.base.get_arg("battery_min_soc", default=max(self.reserve_min, 4), index=self.id)
 
         # Get current reserve value. GivTCPComponent publishes the reserve entity's state straight
         # from Battery_Power_Reserve, so this reads the same number the REST snapshot used to carry
@@ -793,7 +814,8 @@ class Inverter:
         # Publish the floor as set_reserve_min's min too, so a UI driven by the entity's attributes stops
         # offering values the raise above reverts a cycle later (GH#5995). Unlike that raise it follows the
         # floor back down. Only a bound battery_min_soc counts here, as the default above is derived from reserve_min.
-        reserve_floor = max(self.base.get_arg("battery_min_soc", default=0, index=self.id), device_min or 0)
+        bound_min_soc = 0 if min_soc_is_reserve else self.base.get_arg("battery_min_soc", default=0, index=self.id)
+        reserve_floor = max(bound_min_soc, device_min or 0)
         self.base.expose_config_min("set_reserve_min" + reserve_min_postfix, reserve_floor)
         if (self.base.set_reserve_enable and self.inv_has_reserve_soc) or not self.inv_has_reserve_soc:
             self.reserve_percent = self.reserve_min
@@ -1403,325 +1425,6 @@ class Inverter:
             self.log("Warn: Inverter {} unable to estimate battery size from soc_percent and battery_power data".format(self.id))
         return None
 
-    def find_charge_curve(self, discharge):
-        """
-        Find expected charge curve
-        """
-        curve_type = "charge"
-        if discharge:
-            curve_type = "discharge"
-
-        predbat_status_sensor = self.base.prefix + ".status"
-
-        if "soc_percent" in self.base.args:
-            soc_kwh_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
-            soc_kwh_percent = True
-            soc_label = "soc_percent"
-        else:
-            soc_kwh_percent = False
-            soc_label = "soc_kw"
-            soc_kwh_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
-
-        if discharge:
-            charge_rate_sensor = self.base.get_arg("discharge_rate", indirect=False, index=self.id)
-            curve_label = "empty"
-        else:
-            charge_rate_sensor = self.base.get_arg("charge_rate", indirect=False, index=self.id)
-            curve_label = "full"
-
-        battery_power_sensor = self.base.get_arg("battery_power", indirect=False, index=self.id)
-        battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
-
-        final_curve = {}
-        final_curve_count = {}
-
-        if discharge:
-            max_power = int(self.battery_rate_max_discharge * MINUTE_WATT)
-        else:
-            max_power = int(self.battery_rate_max_charge * MINUTE_WATT)
-
-        max_power_scaled = max_power * 0.95
-
-        if soc_kwh_sensor and charge_rate_sensor and battery_power_sensor and predbat_status_sensor:
-            battery_power_sensor = battery_power_sensor.replace("number.", "sensor.")  # Workaround as old template had number.
-            self.log("Inverter {} Looking for {} curve with sensors {}, {}, {} and {}".format(self.id, curve_type, soc_kwh_sensor, charge_rate_sensor, predbat_status_sensor, battery_power_sensor))
-            if soc_kwh_percent:
-                soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous, required=False)
-            else:
-                soc_kwh_data = self.base.get_history_wrapper(entity_id=soc_kwh_sensor, days=self.base.max_days_previous, required=False)
-            charge_rate_data = self.base.get_history_wrapper(entity_id=charge_rate_sensor, days=self.base.max_days_previous, required=False)
-            battery_power_data = self.base.get_history_wrapper(entity_id=battery_power_sensor, days=self.base.max_days_previous, required=False)
-            predbat_status_data = self.base.get_history_wrapper(entity_id=predbat_status_sensor, days=self.base.max_days_previous, required=False)
-
-            if soc_kwh_data and charge_rate_data and battery_power_data and predbat_status_data:
-                if soc_kwh_percent:
-                    # If its in percent convert to kWh
-                    soc_kwh, ignore_io = minute_data(
-                        soc_kwh_data[0],
-                        self.base.max_days_previous,
-                        self.base.now_utc,
-                        "state",
-                        "last_updated",
-                        backwards=True,
-                        clean_increment=False,
-                        smoothing=False,
-                        divide_by=1.0,
-                        scale=self.battery_scaling,
-                        required_unit="%",
-                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
-                    )
-                    for entry in soc_kwh:
-                        soc_kwh[entry] = dp4(soc_kwh[entry] * self.soc_max / 100.0)
-                else:
-                    soc_kwh, ignore_io = minute_data(
-                        soc_kwh_data[0],
-                        self.base.max_days_previous,
-                        self.base.now_utc,
-                        "state",
-                        "last_updated",
-                        backwards=True,
-                        clean_increment=False,
-                        smoothing=False,
-                        divide_by=1.0,
-                        scale=self.battery_scaling,
-                        required_unit="kWh",
-                        can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
-                    )
-                charge_rate, ignore_io = minute_data(
-                    charge_rate_data[0],
-                    self.base.max_days_previous,
-                    self.base.now_utc,
-                    "state",
-                    "last_updated",
-                    backwards=True,
-                    clean_increment=False,
-                    smoothing=False,
-                    divide_by=1.0,
-                    scale=1.0,
-                    required_unit="W",
-                    can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
-                )
-                predbat_status = minute_data_state(predbat_status_data[0], self.base.max_days_previous, self.base.now_utc, "state", "last_updated")
-                for minute in predbat_status:
-                    status = predbat_status[minute]
-                    if "," in status:
-                        # If there are multiple statuses take the first one
-                        predbat_status[minute] = status.split(",")[0].strip()
-                battery_power, ignore_io = minute_data(
-                    battery_power_data[0],
-                    self.base.max_days_previous,
-                    self.base.now_utc,
-                    "state",
-                    "last_updated",
-                    backwards=True,
-                    clean_increment=False,
-                    smoothing=False,
-                    divide_by=1.0,
-                    scale=1.0,
-                    required_unit="W",
-                    can_modify_history=True,  # history is not accessed after this point, so minute_data can freely modify it
-                )
-                if battery_power_invert:
-                    # Invert the battery power if required
-                    for minute in battery_power:
-                        battery_power[minute] = -battery_power[minute]
-                min_len = min(len(soc_kwh), len(charge_rate), len(predbat_status), len(battery_power))
-                self.log("Inverter {} Looking for {} curve, have found {} days of history data, max days {}".format(self.id, curve_type, dp1(min_len / 60 / 24.0), self.base.max_days_previous))
-
-                soc_percent = {}
-                for minute in range(0, min_len):
-                    soc_percent[minute] = calc_percent_limit(soc_kwh.get(minute, 0), self.soc_max)
-
-                if discharge:
-                    search_range = range(5, 20, 1)
-                else:
-                    search_range = range(99, 85, -1)
-
-                # Find 100% end points. The exact-match checks below ("Charging" / "Exporting",
-                # "Discharging") deliberately exclude "Cross-charging" minutes - during genuine
-                # cross-charging another inverter is simultaneously drawing/feeding power at the
-                # same time, so this inverter's battery_power reading isn't a clean single-inverter
-                # charge/discharge sample and would corrupt the learned curve if included.
-                for data_point in search_range:
-                    for minute in range(1, min_len):
-                        # Start trigger is when the SoC just increased above the data point
-                        previous_point = soc_percent.get(minute - 1, 0)
-                        if (
-                            not discharge
-                            and previous_point > data_point
-                            and soc_percent.get(minute, 0) == data_point
-                            and predbat_status.get(minute - 1, "") == "Charging"
-                            and predbat_status.get(minute, "") == "Charging"
-                            and predbat_status.get(minute + 1, "") == "Charging"
-                            and charge_rate.get(minute - 1, 0) >= max_power_scaled
-                            and charge_rate.get(minute, 0) >= max_power_scaled
-                            and battery_power.get(minute, 0) < 0
-                        ) or (
-                            discharge
-                            and previous_point < data_point
-                            and soc_percent.get(minute, 0) == data_point
-                            and predbat_status.get(minute - 1, "") in ["Exporting", "Discharging"]
-                            and predbat_status.get(minute, "") in ["Exporting", "Discharging"]
-                            and predbat_status.get(minute + 1, "") in ["Exporting", "Discharging"]
-                            and charge_rate.get(minute - 1, 0) >= max_power_scaled
-                            and charge_rate.get(minute, 0) >= max_power_scaled
-                            and battery_power.get(minute, 0) > 0
-                        ):
-                            total_power = 0
-                            total_count = 0
-                            # Find a period where charging was at full rate and the SoC just drops below the data point
-                            for target_minute in range(minute, min_len):
-                                this_soc = soc_percent.get(target_minute, 0)
-                                if not discharge and (predbat_status.get(target_minute, "") != "Charging" or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) >= 0):
-                                    break
-                                if discharge and (predbat_status.get(target_minute, "") not in ["Exporting", "Discharging"] or charge_rate.get(target_minute, 0) < max_power_scaled or battery_power.get(target_minute, 0) <= 0):
-                                    break
-
-                                if (discharge and (this_soc > data_point)) or (not discharge and (this_soc < data_point)):
-                                    if total_power == 0:
-                                        # No power data, so skip this data point
-                                        break
-                                    if target_minute not in soc_kwh or abs(previous_point - data_point) > CHARGE_CURVE_MAX_SOC_STEP or abs(data_point - this_soc) > CHARGE_CURVE_MAX_SOC_STEP:
-                                        # Missing or implausible SoC reading at either end of the step, skip this sample (#5259)
-                                        break
-                                    if discharge:
-                                        this_soc -= 1
-                                    else:
-                                        this_soc += 1
-                                    # So the power for this data point average has been stored, it's possible we spanned more than one data point
-                                    # if not all SoC %'s are represented for this battery size
-                                    from_soc = soc_kwh.get(minute, 0)
-                                    to_soc = soc_kwh.get(target_minute, 0)
-                                    soc_charged = from_soc - to_soc
-                                    average_power = total_power / total_count
-                                    charge_curve = round(min(average_power / max_power / self.base.battery_loss, 1.0), 2)
-                                    if self.base.debug_enable:
-                                        self.log(
-                                            "Curve Percent: {}-{} at {} took {} minutes charged {} curve {} average_power {}".format(
-                                                data_point,
-                                                this_soc,
-                                                self.base.time_abs_str(self.base.minutes_now - minute),
-                                                total_count,
-                                                round(soc_charged, 2),
-                                                charge_curve,
-                                                average_power,
-                                            )
-                                        )
-                                    # Store data points
-                                    if discharge:
-                                        store_range = range(this_soc, previous_point, -1)
-                                    else:
-                                        store_range = range(this_soc, previous_point)
-
-                                    for point in store_range:
-                                        if point not in final_curve:
-                                            final_curve[point] = charge_curve
-                                            final_curve_count[point] = 1
-                                        else:
-                                            final_curve[point] += charge_curve
-                                            final_curve_count[point] += 1
-
-                                    break
-                                else:
-                                    # Store data for this minute of the period, so total_power/total_count
-                                    # below is the mean power across the whole SoC step rather than the
-                                    # reading at the single minute the step was triggered on
-                                    total_power += abs(battery_power.get(target_minute, 0))
-                                    total_count += 1
-                if final_curve:
-                    # Average the data points
-                    for index in final_curve:
-                        if final_curve_count[index] > 0:
-                            final_curve[index] = dp2(final_curve[index] / final_curve_count[index])
-
-                    self.log("Inverter {} {} curve before adjustment is: {}".format(self.id, curve_type, final_curve))
-
-                    # Find info for gap filling
-                    found_required = False
-                    if discharge:
-                        fill_range = range(4, 21, 1)
-                        value = min(final_curve.values())
-                    else:
-                        value = max(final_curve.values())
-                        fill_range = range(85, 101)
-
-                    # Pick the first value point for fill below
-                    for point in fill_range:
-                        if point in final_curve:
-                            value = final_curve[point]
-                            break
-
-                    # Fill gaps
-                    for point in fill_range:
-                        if point not in final_curve:
-                            final_curve[point] = value
-                            found_required = True
-                        else:
-                            value = final_curve[point]
-
-                    if found_required:
-                        # Scale curve to 1.0
-                        rate_scaling = 0
-
-                        # Work out the maximum power to use as a scale factor
-                        for index in final_curve:
-                            rate_scaling = max(final_curve[index], rate_scaling)
-
-                        # Scale the curve
-                        if rate_scaling > 0:
-                            for index in final_curve:
-                                final_curve[index] = round(final_curve[index] / rate_scaling, 2)
-
-                        # If we have the correct data then output it
-                        if rate_scaling > 0:
-                            if discharge:
-                                text = "  battery_discharge_power_curve:\n"
-                            else:
-                                text = "  battery_charge_power_curve:\n"
-                            keys = sorted(final_curve.keys())
-                            keys.reverse()
-                            first = True
-                            for key in keys:
-                                if (final_curve[key] < 1.0 or first) and final_curve[key] > 0.0:
-                                    text += "    {} : {}\n".format(key, final_curve[key])
-                                    first = False
-                            if self.base.battery_charge_power_curve_auto:
-                                self.log("Info: Inverter {} curve automatically computed as:\n".format(self.id) + text)
-                            else:
-                                self.log("Info: Inverter {} {} curve can be entered into apps.yaml or set to auto:\n".format(self.id, curve_type) + text)
-                            rate_scaling = round(rate_scaling, 2)
-                            if discharge:
-                                if rate_scaling != self.base.battery_rate_max_scaling_discharge:
-                                    self.log("Info: Inverter {} Consider setting in HA: input_number.battery_rate_max_scaling_discharge: {} - currently {}".format(self.id, rate_scaling, self.base.battery_rate_max_scaling_discharge))
-                            else:
-                                if rate_scaling != self.base.battery_rate_max_scaling:
-                                    self.log("Info: Inverter {} Consider setting in HA: input_number.battery_rate_max_scaling: {} - currently {}".format(self.id, rate_scaling, self.base.battery_rate_max_scaling))
-                            return final_curve
-                        else:
-                            self.log("Info: Inverter {} Found incorrect battery {} curve (was 0), maybe try again when you have more data.".format(self.id, curve_type))
-                    else:
-                        self.log("Warn: Inverter {} Found incomplete battery {} curve (no data points), maybe try again when you have more data.".format(self.id, curve_type))
-                else:
-                    self.log(
-                        "Info: Cannot find battery {} curve (no full rate {} cycle to {} found in history), battery may not have been fully charged/discharged at max rate recently - this is normal in cost-optimised operation".format(
-                            curve_type, curve_type, curve_label
-                        )
-                    )
-            else:
-                history_checks = [
-                    (soc_label, soc_kwh_sensor, soc_kwh_data),
-                    ("{}_rate".format(curve_type), charge_rate_sensor, charge_rate_data),
-                    ("battery_power", battery_power_sensor, battery_power_data),
-                    ("predbat.status", predbat_status_sensor, predbat_status_data),
-                ]
-                no_history = ["{} ({})".format(setting, entity_id) for setting, entity_id, data in history_checks if not data]
-                self.log("Warn: Inverter {} Cannot find battery {} curve (missing history), no history found for {} - check the entity name in apps.yaml and that Home Assistant is recording its history".format(self.id, curve_type, ", ".join(no_history)))
-                self.log("Warn: Inverter {} Sensor history record counts: {}".format(self.id, ", ".join("{} {}".format(setting, len(data[0]) if data else 0) for setting, entity_id, data in history_checks)))
-        else:
-            missing_settings = [setting for setting, entity_id in [(soc_label, soc_kwh_sensor), ("{}_rate".format(curve_type), charge_rate_sensor), ("battery_power", battery_power_sensor)] if not entity_id]
-            self.log("Warn: Inverter {} Cannot find battery {} curve (settings missing), {} not set in apps.yaml".format(self.id, curve_type, ", ".join(missing_settings)))
-        return {}
-
     def create_entity(self, entity_name, value, uom=None, device_class=None, icon=None):
         """
         Create dummy entities required by non GE inverters to mimic GE behaviour
@@ -1793,6 +1496,10 @@ class Inverter:
         # sleep inside the main planning loop whenever GivTCP was slow.
         self.charge_rate_now = self.get_current_charge_rate() / MINUTE_WATT
         self.discharge_rate_now = self.get_current_discharge_rate() / MINUTE_WATT
+        # Keep the hardware hold separate from prediction's minimum/scaled rate. Once a held
+        # battery stops moving power, balancing needs this zero to keep the hold in place.
+        self.charge_rate_is_zero = self.charge_rate_now == 0
+        self.discharge_rate_is_zero = self.discharge_rate_now == 0
 
         self.charge_enable_time = self.base.get_arg("scheduled_charge_enable", "on", index=self.id) == "on"
         self.discharge_enable_time = self.base.get_arg("scheduled_discharge_enable", "off", index=self.id) == "on"
@@ -2126,49 +1833,87 @@ class Inverter:
             if current_charge_limit == 100:
                 self.alt_charge_discharge_enable("eco", True)  # ECO Mode
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", discharge_power)
+                    self.release_current_to("discharge", discharge_power)
             elif self.soc_percent < float(current_charge_limit):
                 self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Discharge disabled.")
+                # A hold is left to end_current_hold_cycle(): it releases it, and restores the current unless the rate pass will
                 self.alt_charge_discharge_enable("discharge", False)
             elif self.soc_percent == float(current_charge_limit):  # If SoC target is reached
                 if self.inv_output_charge_control == "current":
                     self.alt_charge_discharge_enable("discharge", True)
-                    self.set_current_from_power("discharge", (0))  # Set charge current to zero (i.e hold SoC)
+                    self.hold_current_at_zero("discharge")  # Set discharge current to zero (i.e hold SoC)
                 else:
                     self.alt_charge_discharge_enable("discharge", False)
             else:
                 self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Discharge enabled.")
                 self.alt_charge_discharge_enable("discharge", True)
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", discharge_power)
+                    self.release_current_to("discharge", discharge_power)
                     self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Discharge enabled, amp rate written to inverter.")
         else:
             if current_charge_limit == 0:
                 self.alt_charge_discharge_enable("eco", True)  # ECO Mode
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
+                    self.release_current_to("charge", charge_power)  # Write previous current setting to inverter
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("discharge", discharge_power)  # Reset discharge power too
+                    self.release_current_to("discharge", discharge_power)  # Reset discharge power too
             elif self.soc_percent > float(current_charge_limit):
                 # If current SoC is above Target SoC, turn Grid Charging off
                 self.alt_charge_discharge_enable("charge", False)
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SoC)
+                    self.hold_current_at_zero("charge")  # Set charge current to zero (i.e hold SoC)
                 self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is greater than Target SoC {current_charge_limit}. Grid Charge disabled.")
             elif self.soc_percent == float(current_charge_limit):  # If SoC target is reached
                 self.alt_charge_discharge_enable("charge", True)  # Make sure charging is on
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", (0))  # Set charge current to zero (i.e hold SoC)
+                    self.hold_current_at_zero("charge")  # Set charge current to zero (i.e hold SoC)
                     self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is same as Target SoC {current_charge_limit}. Grid Charge enabled, Amps rate set to 0.")
             else:
                 # If we drop below the target, turn grid charging back on and make sure the charge current is correct
                 self.alt_charge_discharge_enable("charge", True)
                 if self.inv_output_charge_control == "current":
-                    self.set_current_from_power("charge", charge_power)  # Write previous current setting to inverter
+                    self.release_current_to("charge", charge_power)  # Write previous current setting to inverter
                     self.base.log(f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid Charge enabled, amp rate written to inverter.")
                 self.base.log(
                     f"Inverter {self.id} Current SoC {self.soc_percent}% is less than Target SoC {current_charge_limit}. Grid charging enabled with charge current set to {self.base.get_arg('timed_charge_current', index=self.id, default=65):0.2f}"
                 )
+
+    def battery_min_soc_is_reserve(self):
+        """
+        Return True, with a warning, when this inverter's battery_min_soc names a reserve entity.
+
+        battery_min_soc is a floor that refresh_config() raises set_reserve_min to and never lowers. If
+        it names a reserve entity, it reads back whatever Predbat last wrote to that reserve: a hold
+        writes the current SoC there, so every hold ratchets the floor up for good (GH#4013, where it
+        climbed from 8% to 97% over one overnight charge). That binding can never be a real floor, so
+        the caller treats battery_min_soc as unset. Any inverter's reserve counts, as a floor copied
+        across inverters reads back the first one's holds just the same - but only the reserve entries
+        of inverters that exist, as Predbat never writes the rest (older Growatt Solar Assistant
+        templates list a second reserve entity for one inverter, and point battery_min_soc at it).
+
+        Warns, on the status sensor too, on the first cycle only, then logs at Info, so a lasting
+        misconfiguration does not bury other warnings.
+        """
+        min_soc_entity = self.base.get_arg("battery_min_soc", indirect=False, index=self.id)
+        if not is_entity_id(min_soc_entity):
+            self.battery_min_soc_is_reserve_warned = False
+            return False
+        reserve_entities = self.base.get_arg("reserve", indirect=False)
+        if isinstance(reserve_entities, list):
+            reserve_entities = reserve_entities[: max(int(self.base.get_arg("num_inverters", 1)), 1)]
+        else:
+            reserve_entities = [reserve_entities]
+        if min_soc_entity.lower() not in [entity.lower() for entity in reserve_entities if isinstance(entity, str)]:
+            self.battery_min_soc_is_reserve_warned = False
+            return False
+        message = "Inverter {} battery_min_soc is set to {}, which is a reserve entity; ignoring battery_min_soc. Point it at a fixed minimum or remove it from apps.yaml, and lower set_reserve_min if it was raised".format(self.id, min_soc_entity)
+        if self.battery_min_soc_is_reserve_warned:
+            self.base.log("Info: " + message)
+        else:
+            self.base.log("Warn: " + message)
+            self.base.record_status("Warn: " + message, had_errors=True)
+        self.battery_min_soc_is_reserve_warned = True
+        return True
 
     def reserve_device_bounds(self):
         """
@@ -2378,6 +2123,92 @@ class Inverter:
         # actually needed, which is a no-op when nothing has drifted.
         if self.inv_output_charge_control == "current":
             self.set_current_from_power("charge", new_rate)
+
+    def hold_current_at_zero(self, direction):
+        """
+        Hold direction ("charge" or "discharge") at 0 A on the timed current, for mimic_target_soc.
+
+        On an inverter with no target SoC whose rate is controlled by current (GS), the timed current is the only
+        hold there is. Several writers set that current from the rate: the #4415 re-assert in adjust_charge_rate()
+        and adjust_discharge_rate() (from apply_inverter_rates() after mimic_target_soc, and from the 60 s
+        rebalance), and enable_charge_discharge_with_time_current() when a window or forced export is enabled
+        (before mimic_target_soc). They wrote the full current over the hold (#5972), so the hold is recorded in
+        current_holds and set_current_from_power() writes 0 A for a held direction whatever it is asked for.
+        Holding also renews the hold for this cycle: see start_current_hold_cycle(). The rate itself
+        (charge_rate / discharge_rate) is left alone.
+        """
+        self.current_holds.add(direction)
+        self.current_holds_renewed.add(direction)
+        self.set_current_from_power(direction, 0)
+
+    def release_current_to(self, direction, power):
+        """
+        End any hold on direction and write its timed current from power, for mimic_target_soc (#5972).
+        """
+        self.release_current_holds([direction])
+        self.set_current_from_power(direction, power)
+
+    def start_current_hold_cycle(self):
+        """
+        Begin an execute_plan() cycle: a hold now lasts past end_current_hold_cycle() only if mimic_target_soc renews it.
+
+        The holds themselves stay in force through the cycle, so a writer that runs before mimic_target_soc does not
+        lift a hold mimic_target_soc is about to keep - that briefly wrote the full current every cycle, and two
+        register writes per held cycle (#5972).
+        """
+        self.current_holds_renewed = set()
+
+    def end_current_hold_cycle(self, rate_pass_writes=(), read_only=False):
+        """
+        End an execute_plan() cycle's per-inverter pass: release every hold mimic_target_soc did not renew.
+
+        Covers the ways a hold stops being renewed in control: the plan moved on without mimic_target_soc running,
+        and Monitor or Control-SoC-only, which write no rates. A direction in rate_pass_writes is only released, as
+        apply_inverter_rates() is about to write its planned rate and so its current - restoring it here as well
+        would be a second register write. Any other direction has its current restored from the rate, as
+        get_current_charge_rate() / get_current_discharge_rate() read it, so 0 A is not stranded on the inverter.
+
+        In read-only (read_only, including an Axle event, which switches to read-only with no reset) nothing is
+        written and the holds stay as they are, as every other setting does: Predbat does not touch the inverter.
+        The first control cycle afterwards renews or releases them, and switching read-only on from Home Assistant
+        forces a reset that releases them first.
+
+        A hold is kept while battery_voltage is unknown, as set_current_from_power() could write neither the restore
+        nor the rate pass's re-assert.
+        """
+        if read_only:
+            return
+        for direction in sorted(self.current_holds - self.current_holds_renewed):
+            if not self.battery_voltage:
+                # Neither this restore nor the rate pass's re-assert can write a current without a voltage
+                self.base.log("Warn: Inverter {} {} current hold at 0 A can not be restored while battery_voltage is {}, keeping it".format(self.id, direction, self.battery_voltage))
+                continue
+            self.current_holds.discard(direction)
+            if self.inv_output_charge_control != "current":
+                # The inverter type changed under a persisted object: it has no timed current to restore
+                continue
+            if direction in rate_pass_writes:
+                self.base.log("Inverter {} {} current hold at 0 A no longer renewed, the rate pass restores the current".format(self.id, direction))
+                continue
+            power = self.get_current_charge_rate() if direction == "charge" else self.get_current_discharge_rate()
+            self.base.log("Inverter {} {} current hold at 0 A no longer renewed, restoring the current from {}W".format(self.id, direction, power))
+            self.set_current_from_power(direction, power)
+
+    def release_current_holds(self, directions=("charge", "discharge")):
+        """
+        Drop the holds on directions, so the writes that follow restore the current from the rate.
+
+        For paths that take the inverter out of Predbat's hold control and then write the full rates themselves:
+        reset_inverter(), per direction it rewrites, the calibration pass in execute_plan(), and mimic_target_soc's
+        own releases (#5972). While battery_voltage is unknown the holds are kept: set_current_from_power() could not
+        write the current that follows, and dropping the hold would leave 0 A on the inverter with nothing to restore it.
+        """
+        if not self.battery_voltage:
+            if self.current_holds.intersection(directions):
+                self.base.log("Warn: Inverter {} battery_voltage is {}, keeping its 0 A current holds {}".format(self.id, self.battery_voltage, sorted(self.current_holds)))
+            return
+        for direction in directions:
+            self.current_holds.discard(direction)
 
     def adjust_discharge_rate(self, new_rate, notify=True):
         """
@@ -3455,7 +3286,13 @@ class Inverter:
         the power target itself changes - this register can drift or get reset independently
         (#4415). write_and_poll_value() already no-ops when the live value already matches, so
         this is cheap when nothing has drifted.
+
+        A direction mimic_target_soc holds at 0 A (current_holds) is written as 0 A whatever power is asked
+        for, so no other writer of the register lifts the hold (#5972). mimic_target_soc releases the hold
+        before it writes a real current itself.
         """
+        if direction in self.current_holds:
+            power = 0
         if not self.battery_voltage:
             # None when update_status() has not run yet, so there is no real reading - a caller reached
             # the charge/discharge rate path before the inverter's own state was ever fetched - or a 0

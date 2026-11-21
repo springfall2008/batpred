@@ -225,6 +225,16 @@ If you do not have an export tariff then forced export will not apply and Predba
 If you do not want Predbat to automatically join Octopus saving sessions and manage your battery activity for the session,
 simply delete or comment out the **octopus_saving_session** entry in `apps.yaml`.
 
+### Intelligent dispatches cancelled for an export
+
+With **switch.predbat_car_charging_cancel_for_export** On the plan can cancel a car charging slot to export over it, for example to export through a saving session that overlaps an Intelligent Octopus dispatch - see [Cancelling a car slot for an export](car-charging.md#cancelling-a-car-slot-for-an-export).
+Octopus bills a half hour of a dispatch at the cheap rate only when the car charges in it, so the plan prices a cancelled dispatch the way it would be billed:
+
+- Outside the fixed 23:30-05:30 off-peak window, the half hours of a cancelled dispatch are costed at the peak rate (the highest base import rate in the forecast) instead of the dispatch rate. Inside 23:30-05:30 they are cheap anyway and keep their rate.
+- A half hour that another car's dispatch, one that is not cancelled, still covers stays cheap, as the rate applies to the whole house. A saving session or free session rate on it still applies.
+- Under the window billing rule (**intelligent_dispatch_billing** set to `window`, the default with `kraken_provider: eon`) the supplier bills the whole planned dispatch at the cheap rate whether or not the car charges, so a cancelled dispatch keeps its cheap rate.
+- Octopus smart control is never touched: Predbat does not suspend smart charging or change your target. The car is held off at its charger, and Octopus goes on planning and reporting its dispatches as normal.
+
 ### Octopus free (Power Up) events
 
 Predbat can automatically detect Octopus free events - now called Power Up events - and adjust your battery plan accordingly. Note that this is derived from external sources, which do not verify your eligibility for free sessions.
@@ -280,25 +290,28 @@ In `apps.yaml` configure the following lines:
 e.g. (for DNO region A)
 
 ```yaml
-  rates_import_octopus_url : "https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
-  rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates"
+  rates_import_octopus_url : "https://api.oegb-kraken.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-A/standard-unit-rates"
+  rates_import_octopus_url : "https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates"
 
-  rates_export_octopus_url: "https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-A/standard-unit-rates"
-  rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+  rates_export_octopus_url: "https://api.oegb-kraken.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-A/standard-unit-rates"
+  rates_export_octopus_url: "https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
 ```
 
 If you configure the rates_import_octopus_url then Predbat will use this instead of metric_octopus or rates_import.
 Similarly, rates_export_octopus_url takes precedence over metric_octopus_export or rates_export.
 
-A full list of available Octopus products is at <https://api.octopus.energy/v1/products/>.
+Octopus has moved its API from `api.octopus.energy` to `api.oegb-kraken.energy`, and the old address will stop working in due course.
+If your URLs still use `api.octopus.energy`, Predbat fetches them from the new address for you and logs a reminder; change them to `api.oegb-kraken.energy` when convenient.
+
+A full list of available Octopus products is at <https://api.oegb-kraken.energy/v1/products/>.
 
 If you view this page, search for the tariff by name, then copy the URL it shows into a new tab.
 
-E.g. <https://api.octopus.energy/v1/products/GO-VAR-22-10-14/>
+E.g. <https://api.oegb-kraken.energy/v1/products/GO-VAR-22-10-14/>
 
 Look through that page to find the right URL for usage charges in your DNO area
 
-<https://api.octopus.energy/v1/products/GO-VAR-22-10-14//electricity-tariffs/E-1R-GO-VAR-22-10-14-A/standard-unit-rates>
+<https://api.oegb-kraken.energy/v1/products/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-A/standard-unit-rates>
 
 (For area A)
 

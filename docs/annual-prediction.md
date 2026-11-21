@@ -506,7 +506,7 @@ annual:
     car_rate_kw: 7.4             # charger power, default 7.4, must be greater than 0
 
   tariff:
-    import_octopus_url: "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/"
+    import_octopus_url: "https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/"
     export_octopus_url: "..."
     dno_region: "A"              # required when a URL contains {dno_region}
     standing_charge_p_per_day: 60.0
@@ -528,7 +528,7 @@ annual:
   export_tariffs:
     - id: outgoing_fixed
       name: Octopus Outgoing Fixed
-      export_octopus_url: "https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/"
+      export_octopus_url: "https://api.oegb-kraken.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/"
     - id: seg
       name: SEG fixed rate
       rates_export:
