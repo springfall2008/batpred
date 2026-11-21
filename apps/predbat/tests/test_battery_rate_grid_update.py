@@ -240,7 +240,8 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         inv.scan[False] = _samples(my_predbat)
         _settle(my_predbat, inv)
         saved = run_async(storage.load("predbat", "battery_rate_grid_charge"))
-        failed |= _check("t4b last success saved", isinstance(saved, dict) and isinstance(saved.get("last_success"), str) and saved.get("scan_key") == my_predbat.rate_grid_scan_key(False), saved and {k: saved.get(k) for k in ("last_success", "scan_key")})
+        saved_fields = saved and {k: saved.get(k) for k in ("last_success", "scan_key")}
+        failed |= _check("t4b last success saved", isinstance(saved, dict) and isinstance(saved.get("last_success"), str) and saved.get("scan_key") == my_predbat.rate_grid_scan_key(False), saved_fields)
         failed |= _check("t4b no no-evidence record written alongside evidence", run_async(storage.load("predbat", "battery_rate_grid_charge_empty_scan")) is None)
         # An API override of export_limit is a live value, not part of the configured settings the key hashes
         key_discharge = my_predbat.rate_grid_scan_key(True)
@@ -420,6 +421,12 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         key_discharge = my_predbat.rate_grid_scan_key(True)
         my_predbat.battery_rate_max_export = export_cap / 2
         failed |= _check("t4b the export cap is part of the discharge key only", my_predbat.rate_grid_scan_key(True) != key_discharge and my_predbat.rate_grid_scan_key(False)[-1] is None, key_discharge)
+        # The cap drifts with a rated rate reported live, so it gets the same tolerance
+        drifted = list(my_predbat.rate_grid_scan_key(True))
+        drifted[7] = drifted[7] * 1.01
+        failed |= _check("t4b a 1% export cap drift matches", my_predbat.rate_grid_scan_key_matches(drifted, my_predbat.rate_grid_scan_key(True)))
+        drifted[7] = 0
+        failed |= _check("t4b a 0 export cap does not match a live one", not my_predbat.rate_grid_scan_key_matches(drifted, my_predbat.rate_grid_scan_key(True)))
         my_predbat.battery_rate_max_export = export_cap
         if export_limit is None:
             my_predbat.args.pop("export_limit")

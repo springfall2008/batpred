@@ -4392,7 +4392,7 @@ class Fetch:
             # last success with a day's overlap (battery_rate_grid_scan_days, more after a gap), as the per-day merge keeps the rest.
             # The full window again when what the samples are measured against has changed since the last full read, so the
             # stored days the history still holds are re-measured
-            full_read = last_success is None or not self.rate_grid_scan_key_matches(self.battery_rate_grid_scan_basis.get(kind), scan_key)
+            full_read = last_success is None or changed
             if full_read:
                 days = self.battery_rate_grid_history_days
             else:
@@ -4453,7 +4453,7 @@ class Fetch:
         self.battery_rate_grid_pending_save[kind] = bool(save and storage and not store_ready)
         if save and storage and store_ready:
             if store_ready and not self.battery_rate_grid_loaded.get(kind):
-                self.log("Info: {}: the stored evidence has not read back for {} cycles, treating the store as empty".format(key, len(failures)))
+                self.log("Info: {}: the stored evidence has not read back since {}, treating the store as empty".format(key, failures[0].strftime(TIME_FORMAT)))
                 self.battery_rate_grid_loaded[kind] = True
                 failures.clear()
             try:
@@ -4525,26 +4525,29 @@ class Fetch:
         """
         The apps.yaml settings find_rate_grid_samples() reads for one direction, as configured (entity names, not their
         states): per inverter its SoC sensor, written rate, battery_power and battery_power_invert, plus grid_power, its
-        invert, the battery temperature sensors and, for discharge, export_limit.
+        invert (the first inverter's, which the scan reads), the battery temperature sensors and, for discharge, export_limit.
         """
         soc_name = "soc_percent" if "soc_percent" in self.args else "soc_kw"
         rate_name = "discharge_rate" if discharge else "charge_rate"
-        names = [soc_name, rate_name, "battery_power", "battery_power_invert", "grid_power", "grid_power_invert"] + (["export_limit"] if discharge else [])
+        names = [soc_name, rate_name, "battery_power", "battery_power_invert"] + (["export_limit"] if discharge else [])
         # As configured: an API override (export_limit can be one) is a live value the scan applies itself
         inverters = [{name: self.get_arg(name, None, indirect=False, index=index, can_override=False) for name in names} for index in range(max(int(self.get_arg("num_inverters", 1)), 1))]
-        return {"inverters": inverters, "battery_temperature_history": self.get_arg("battery_temperature_history", None, indirect=False)}
+        # grid_power is read for the first inverter only, as the scan of the fleet's history reads it
+        grid = {name: self.get_arg(name, None, indirect=False, index=0, can_override=False) for name in ("grid_power", "grid_power_invert")}
+        return {"inverters": inverters, "grid": grid, "battery_temperature_history": self.get_arg("battery_temperature_history", None, indirect=False)}
 
     @staticmethod
     def rate_grid_scan_key_matches(stored, current):
         """
-        True when samples measured under the rate_grid_scan_key() stored still match the current one. The rated rate and
-        the battery size may drift by BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE and BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE
+        True when samples measured under the rate_grid_scan_key() stored still match the current one. The rated rate (and the
+        discharge export cap, which by default is the same rate) and the battery size may drift by
+        BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE and BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE
         (battery_scaling_auto and SoH move the size a little most days, and some inverters report their maximum rate live),
         or every restart would read the full window again; the rest must be equal.
         """
         if not isinstance(stored, list) or not isinstance(current, list) or len(stored) != len(current):
             return False
-        for index, tolerance in ((0, BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE), (1, BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE)):
+        for index, tolerance in ((0, BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE), (1, BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE), (7, BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE)):
             stored_value, current_value = stored[index], current[index]
             if stored_value is None or current_value is None:
                 if stored_value is not current_value:
@@ -4555,7 +4558,7 @@ class Fetch:
         if not isinstance(stored[4], int) or not isinstance(current[4], int) or stored[4] < current[4]:
             return False
         # battery_rate_grid_history_days: only a deeper window than the last full read needs reading again
-        return stored[2:4] + stored[5:] == current[2:4] + current[5:]
+        return stored[2:4] + stored[5:7] == current[2:4] + current[5:7]
 
     def rate_grid_stored_time(self, text):
         """A stored rate grid scan time, or None when it is missing, malformed or ahead of the clock."""
