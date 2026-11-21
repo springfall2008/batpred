@@ -51,8 +51,12 @@ high battery charge levels when the car was charged previously (e.g. last week).
 
         This assumes **import_today** and **export_today** come from your inverter's CT clamp, as they are meant to. If yours come from a smart meter (for example a Glow or Octopus Home Mini sensor), the meter already sees the car, so it would be counted twice - use your inverter's import and export sensors instead.
 
-    If the switch is On but **car_charging_energy** records more than twice your house load in at least two half hours of the last day, your load sensor cannot include the charger. Predbat then logs a warning,
-    `Warn: car_charging_energy recorded more than twice the house load ...`, suggesting, if **car_charging_energy** is only your car charger, that you turn this switch Off and set **car_charging_now** to the charger's charging power or status sensor.
+    If the switch is On but **car_charging_energy** records more than twice your house load in at least two half hours of the last day, your load sensor likely does not include the charger. Predbat then logs a warning,
+    `Warn: car_charging_energy recorded more than twice the house load ...`. What to do depends on where the charger is:
+    - **Outside the CT clamp** (your inverter's **import_today** misses the car too): turn this switch Off.
+    - **Inside the CT clamp** (for example a load template sensor with the charger subtracted, while the inverter still sees the car): leave the switch On and fix **load_today** so it includes the charger. Turning the switch Off here would add the car to today's cost a second time.
+
+    Either way, set **car_charging_now** to the charger's charging power or status sensor.
 
 - **switch.predbat_car_charging_hold** - A switch that when turned On (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.
 

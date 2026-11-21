@@ -5348,9 +5348,10 @@ class Fetch:
         windows = self.car_energy_exceeds_load_windows()
         if windows >= CAR_ENERGY_LOAD_CHECK_WINDOWS and not self.car_energy_reported_load_warned:
             self.log(
-                "Warn: car_charging_energy recorded more than twice the house load in {} half hours of the last day, so the load sensor cannot include that charging, "
-                "but switch.predbat_car_energy_reported_load is On. If car_charging_energy is only the car charger, turn the switch Off, and set car_charging_now to the charger's "
-                "charging power or status sensor so Octopus Intelligent dispatches are checked against the car rather than the house load".format(windows)
+                "Warn: car_charging_energy recorded more than twice the house load in {} half hours of the last day, so the load sensor likely does not include that charging, "
+                "but switch.predbat_car_energy_reported_load is On. If the charger is outside the inverter's CT clamp (so import_today misses it too), turn the switch Off; "
+                "if it is inside the clamp, fix the load sensor so it includes the charger instead, as turning the switch Off would then count the car twice in today's cost. "
+                "Either way, set car_charging_now to the charger's charging power or status sensor so Octopus Intelligent dispatches are checked against the car rather than the house load".format(windows)
             )
             self.car_energy_reported_load_warned = True
         elif windows == 0:
