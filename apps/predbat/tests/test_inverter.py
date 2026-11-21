@@ -251,8 +251,16 @@ def test_solis_energy_control_missing_warnings(my_predbat, ha):
     for inverter_type, steps, expected in (
         (
             "GS_fb00",
-            ("freeze", "freeze", "charge", "charge", "idle", "later", "freeze"),
-            [("Warn", SOLIS_MISSING_SWITCH_HOLD), ("Info", SOLIS_MISSING_SWITCH_HOLD), ("Warn", SOLIS_MISSING_SWITCH_CHARGE), ("Info", SOLIS_MISSING_SWITCH_CHARGE), ("Warn", SOLIS_MISSING_SWITCH_HOLD)],
+            ("freeze", "freeze", "charge", "charge", "idle", "later", "freeze", "charge", "earlier", "freeze"),
+            [
+                ("Warn", SOLIS_MISSING_SWITCH_HOLD),
+                ("Info", SOLIS_MISSING_SWITCH_HOLD),
+                ("Warn", SOLIS_MISSING_SWITCH_CHARGE),
+                ("Info", SOLIS_MISSING_SWITCH_CHARGE),
+                ("Warn", SOLIS_MISSING_SWITCH_HOLD),
+                ("Warn", SOLIS_MISSING_SWITCH_CHARGE),
+                ("Warn", SOLIS_MISSING_SWITCH_HOLD),
+            ],
         ),
         ("GS", ("enable_charge", "enable_charge", "enable_discharge"), [("Warn", SOLIS_MISSING_SWITCH_CHARGE), ("Info", SOLIS_MISSING_SWITCH_CHARGE)]),
     ):
@@ -273,6 +281,8 @@ def test_solis_energy_control_missing_warnings(my_predbat, ha):
                     inv.adjust_charge_immediate(100 if step == "charge" else 0)
                 elif step == "later":
                     my_predbat.now_utc += timedelta(minutes=61)
+                elif step == "earlier":
+                    my_predbat.now_utc -= timedelta(minutes=120)  # the clock set back: the next message warns again
                 else:
                     inv.alt_charge_discharge_enable(step.split("_")[1], True)
         finally:

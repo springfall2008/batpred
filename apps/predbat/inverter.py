@@ -55,7 +55,7 @@ TIME_FORMAT_HMS = "%H:%M:%S"
 # What a missing energy_control_switch stops Predbat enforcing on a Solis, for write_solis_energy_control() to warn about (#5857)
 SOLIS_MISSING_SWITCH_WARN_MINUTES = 60
 SOLIS_MISSING_SWITCH_CHARGE = "Predbat cannot make sure the inverter allows grid charging"
-SOLIS_MISSING_SWITCH_HOLD = "a freeze or hold cannot be enforced: the battery keeps discharging without the Battery Reserve mode, or imports from the grid to reach the raised reserve while grid charging is allowed"
+SOLIS_MISSING_SWITCH_HOLD = "a freeze or hold cannot be enforced: outside a Battery Reserve mode the battery keeps discharging, and where Predbat raises the reserve with grid charging allowed the inverter imports from the grid to reach it"
 
 # Sentinel for "this side has committed nothing yet", distinct from any real commit key a caller
 # might use - including None, which adjust_charge_window() can legitimately produce for an unset
@@ -3245,7 +3245,8 @@ class Inverter(BatteryCurve):
         if not entity_id:
             if missing_warning:
                 last_warned = self.solis_energy_control_missing_warned.get(missing_warning)
-                level = "Info" if last_warned is not None and (self.base.now_utc - last_warned) < timedelta(minutes=SOLIS_MISSING_SWITCH_WARN_MINUTES) else "Warn"
+                # A clock set back since the last warning counts as the interval having passed
+                level = "Info" if last_warned is not None and timedelta(0) <= (self.base.now_utc - last_warned) < timedelta(minutes=SOLIS_MISSING_SWITCH_WARN_MINUTES) else "Warn"
                 if level == "Warn":
                     self.solis_energy_control_missing_warned[missing_warning] = self.base.now_utc
                 self.base.log(f"{level}: Inverter {self.id} energy_control_switch is not set in apps.yaml, so {missing_warning}")
