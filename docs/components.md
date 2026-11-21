@@ -544,6 +544,28 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
 
+#### EMS house load (gecloud)
+
+With an EMS, `ge_cloud_automatic` sets `load_today` to `sensor.predbat_gecloud_<ems serial>_consumption_derived_today`.
+This is the house load so far today, worked out from the EMS's daily counters by energy balance:
+grid import − grid export + solar + battery discharge − battery charge.
+The Predbat hub works out house load the same way.
+
+Predbat does not use the EMS's own consumption counters, for two reasons:
+
+- **`consumption_total`** counts battery charging from the grid as house load, so it reads well above the real load
+  whenever the battery charges from the grid.
+- **`consumption_today`** reads low and can fall during the day.
+
+GivEnergy resets the five daily counters at slightly different moments around midnight. Each counter is therefore held
+at its highest value of the day. Once a counter resets, the sensor reads 0 until they all have, for at most an hour.
+A reset in progress is kept in storage, so it carries on through a restart.
+
+**Upgrading from a version that used `consumption_total`.** The load history recorded before the change was measured
+with the old counter and stays high until it ages out of `days_previous`; the new sensor has no history at first.
+For the first few days the load forecast therefore still leans on the old, inflated figures. This corrects itself, and
+needs no action.
+
 #### Register reads (gecloud)
 
 GivEnergy limits how many API calls an account can make each month, and the GE Cloud API reads an inverter's settings one
