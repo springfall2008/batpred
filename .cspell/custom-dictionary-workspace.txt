@@ -318,6 +318,7 @@ guoxia
 guoxiatech
 GWMQTT
 HACS
+hacsfiles
 hadashboard
 hahistory
 hainterface
@@ -675,6 +676,7 @@ sigen
 sigencloud
 sigenergy
 sigenstor
+sizeof
 skynet
 Slee
 slugified
@@ -745,6 +747,8 @@ thirdparty
 threadpool
 threadpoolctl
 tickfont
+ticktext
+tickvals
 timea
 timeb
 timec
@@ -783,6 +787,7 @@ tzpath
 tzset
 unasserted
 uncalibrated
+uncancellable
 uncompilable
 unconfigured
 underivable
@@ -848,6 +853,7 @@ xrtkq
 xtest
 xticks
 xxabcdefyy
+yanchor
 yaxis
 yaxistooltip
 yday
@@ -860,5 +866,6 @@ zappi
 zappis
 zaxis
 zcat
+zeroline
 zigbee
 zoneinfo

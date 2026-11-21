@@ -19,7 +19,24 @@ dictionaries for use by the prediction engine.
 """
 
 from datetime import datetime, timedelta
-from utils import clock_change_minutes, minutes_to_time, str2time, dp1, dp2, dp3, dp4, time_string_to_stamp, minute_data, get_now_from_cumulative, MinuteArray, strptime_aware, is_entity_id, intelligent_device_is_charger
+from utils import (
+    average_temperature_minutes,
+    battery_temperature_entities,
+    clock_change_minutes,
+    minutes_to_time,
+    str2time,
+    dp1,
+    dp2,
+    dp3,
+    dp4,
+    time_string_to_stamp,
+    minute_data,
+    get_now_from_cumulative,
+    MinuteArray,
+    strptime_aware,
+    is_entity_id,
+    intelligent_device_is_charger,
+)
 from battery_rate_grid import clean_rate_grid_samples, combine_rate_grid, fit_rate_grid, manual_rate_grid, merge_rate_grid_samples, rate_grid_table
 from battery_curve import charge_day
 from const import (
@@ -49,9 +66,11 @@ from const import (
     BATTERY_RATE_GRID_FIRST_SCAN_DAYS,
     BATTERY_RATE_GRID_LOAD_ATTEMPTS,
     BATTERY_RATE_GRID_LOAD_WAIT_MINUTES,
+    BATTERY_RATE_GRID_RESAVE_MINUTES,
     BATTERY_RATE_GRID_MAX_AGE_DAYS,
     BATTERY_RATE_GRID_RETRY_MINUTES,
     BATTERY_RATE_GRID_SCAN_MINUTES,
+    BATTERY_RATE_GRID_STORE_EXPIRY_DAYS,
 )
 from predbat_metrics import metrics
 from futurerate import FutureRate
@@ -1033,7 +1052,7 @@ class Fetch:
         else:
             return max(data.get(index + 1, 0) - data.get(index, 0), 0)
 
-    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, required=True):
+    def minute_data_import_export(self, max_days_previous, now_utc, key, scale=1.0, required_unit=None, increment=True, smoothing=True, pad=True, required=True, tracked=True):
         """
         Download one or more entities for import/export data
 
@@ -1060,7 +1079,8 @@ class Fetch:
                 continue
 
             try:
-                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous, required=required)
+                # tracked=False (a long one-off read) is passed only when asked for, so callers and mocks without it are unchanged
+                history = self.get_history_wrapper(entity_id=entity_id, days=max_days_previous, required=required, **({} if tracked else {"tracked": False}))
             except (ValueError, TypeError) as exc:
                 self.log("Warn: No history data found for {} : {}".format(entity_id, exc))
                 history = []
@@ -2054,6 +2074,7 @@ class Fetch:
         else:
             iog_entity_ids = []
 
+        self.car_planned_by_predbat = set()
         for car_n in range(self.num_cars):
             if self.octopus_intelligent_charging and car_n < len(iog_entity_ids) and iog_entity_ids[car_n]:
                 if self.car_charging_planned[car_n]:
@@ -2074,6 +2095,7 @@ class Fetch:
                 )
                 # The tariff's own windows: a car cannot export, so the plan's pre-event windows are no use to it
                 self.car_charging_slots[car_n] = self.plan_car_charging(car_n, self.low_rates_tariff)
+                self.car_planned_by_predbat.add(car_n)
             else:
                 self.log("Car {} charging is not planned as it is not plugged in".format(car_n))
 
@@ -2852,7 +2874,10 @@ class Fetch:
         Only BATTERY_TEMPERATURE_HISTORY_DAYS are fetched, not max_days_previous: the prediction looks
         back at most 24 hours plus one step, so a longer per-minute window is only held in memory.
         """
-        self.battery_temperature_history = self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, "battery_temperature_history", scale=1.0, increment=False, smoothing=False)
+        # One sensor per inverter is averaged, not summed as minute_data_import_export() sums an energy total: the plan
+        # models one combined battery, and the rate grid learner reads the same average (average_temperature_minutes)
+        entity_ids = battery_temperature_entities(self.get_arg("battery_temperature_history", indirect=False))
+        self.battery_temperature_history = average_temperature_minutes([self.minute_data_import_export(BATTERY_TEMPERATURE_HISTORY_DAYS, self.now_utc, entity_id, scale=1.0, increment=False, smoothing=False) for entity_id in entity_ids])
         self.battery_temperature_prediction = self.predict_battery_temperature(self.battery_temperature_history, step=PREDICT_STEP)
         self.log("Fetched battery temperature history data, current temperature {}°C".format(self.battery_temperature_history.get(0, None)))
         self.check_battery_temperature_history_stuck(self.battery_temperature_history)
@@ -4285,6 +4310,11 @@ class Fetch:
         # empty (a new install) once its reads have failed on BATTERY_RATE_GRID_LOAD_ATTEMPTS cycles spanning at least
         # BATTERY_RATE_GRID_LOAD_WAIT_MINUTES; until then a save waits, so a storage outage cannot replace a year of evidence
         # with one scan. The scanned days are kept in memory meanwhile and merged with the store once it reads back.
+        # Saved at least daily even when nothing changed, and once after the store first reads back in this run, so a store
+        # written with an older (or no) expiry gets the current one and a quiet store's expiry keeps moving (#6225)
+        last_save = self.battery_rate_grid_last_save.get(kind)
+        if self.battery_rate_grid_loaded.get(kind) and self.battery_rate_grid_samples.get(kind) and (last_save is None or (self.now_utc - last_save) >= timedelta(minutes=BATTERY_RATE_GRID_RESAVE_MINUTES)):
+            save = True
         store_ready = self.battery_rate_grid_loaded.get(kind) or (len(failures) >= BATTERY_RATE_GRID_LOAD_ATTEMPTS and (self.now_utc - failures[0]) >= timedelta(minutes=BATTERY_RATE_GRID_LOAD_WAIT_MINUTES))
         self.battery_rate_grid_pending_save[kind] = bool(save and storage and not store_ready)
         if save and storage and store_ready:
@@ -4293,8 +4323,12 @@ class Fetch:
                 self.battery_rate_grid_loaded[kind] = True
                 failures.clear()
             try:
-                if not run_async(storage.save("predbat", key, {"samples": self.battery_rate_grid_samples.get(kind, {}), "updated": self.battery_rate_grid_updated.get(kind)}, format="json")):
+                if not run_async(
+                    storage.save("predbat", key, {"samples": self.battery_rate_grid_samples.get(kind, {}), "updated": self.battery_rate_grid_updated.get(kind)}, format="json", expiry=self.now_utc + timedelta(days=BATTERY_RATE_GRID_STORE_EXPIRY_DAYS))
+                ):
                     self.log("Warn: {}: failed to save the evidence".format(key))
+                else:
+                    self.battery_rate_grid_last_save[kind] = self.now_utc
             except Exception as e:
                 self.log("Warn: {}: failed to save the evidence: {}".format(key, e))
 

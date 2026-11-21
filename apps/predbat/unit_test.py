@@ -32,6 +32,7 @@ from tests.test_plot import run_plot_tests
 from tests.test_predict_pv_power import run_predict_pv_power_tests
 from tests.test_dashboard_device_class import test_dashboard_device_class
 from tests.test_inverter_config_sensor import test_inverter_config_sensor
+from tests.test_solar_surplus import run_solar_surplus_tests
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
 from tests.test_prediction_batch import run_prediction_batch_tests
 from tests.test_kernel_static_cache import run_kernel_static_cache_tests
@@ -110,7 +111,10 @@ from tests.test_plan_preclip import run_plan_preclip_tests
 from tests.test_replay_manual_times import run_replay_manual_times_tests
 from tests.test_plan_version_replace import run_plan_version_replace_tests
 from tests.test_plan_charge_keep import run_plan_charge_keep_tests
+from tests.test_pv_calibration import run_pv_calibration_tests
 from tests.test_pv_calibration_clipping import run_pv_calibration_clipping_tests
+from tests.test_pv_calibration_scan import run_pv_calibration_scan_tests
+from tests.test_pv_calibration_update import run_pv_calibration_update_tests
 from tests.test_pv_calibration_day_scaling import run_pv_calibration_day_scaling_tests
 from tests.test_export_commitment import run_export_commitment_tests
 from tests.test_export_threshold_per_step import run_export_threshold_per_step_tests
@@ -186,6 +190,7 @@ from tests.test_web_discovery import run_web_discovery_tests
 from tests.test_web_components_layout import run_web_components_layout_tests
 from tests.test_web_history_table import run_web_history_table_tests
 from tests.test_web_charts import run_web_charts_tests
+from tests.test_web_pv_calibration_chart import run_web_pv_calibration_chart_tests
 from tests.test_web_chart_grouping import run_web_chart_grouping_tests
 from tests.test_web_entity_unit_resolution import run_web_entity_unit_resolution_tests
 from tests.test_web_attributes_history import run_web_attributes_history_tests
@@ -379,6 +384,7 @@ from tests.test_myenergi import test_myenergi
 from tests.test_wallbox import test_wallbox
 from tests.test_hypervolt import test_hypervolt
 from tests.test_car_charger_control import run_car_charger_control_tests
+from tests.test_car_cancel import run_car_cancel_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
@@ -392,7 +398,14 @@ from tests.test_ml_memory import run_ml_memory_tests
 from tests.test_ml_training_perf import run_ml_training_perf_tests
 from tests.test_temperature import test_temperature
 from tests.test_http_sync import run_http_sync_tests
-from tests.test_battery_temperature_fetch import test_battery_temperature_fetch, test_battery_temperature_history_stuck_warning, test_battery_temperature_history_stuck_warning_fetch, test_battery_temperature_history_stuck_warning_once
+from tests.test_battery_temperature_fetch import (
+    test_battery_temperature_fetch,
+    test_battery_temperature_fetch_average,
+    test_battery_temperature_history_stuck_warning,
+    test_battery_temperature_history_stuck_warning_fetch,
+    test_battery_temperature_history_stuck_warning_once,
+    test_templates_set_battery_temperature_history,
+)
 from tests.test_oauth_mixin import run_oauth_mixin_tests
 from tests.test_fox_oauth import run_fox_oauth_tests
 from tests.test_band_rate_text import test_band_rate_text
@@ -590,6 +603,7 @@ def main():
         ("predict_pv_power", run_predict_pv_power_tests, "predict_pv_power plan-interval scaling tests", False),
         ("dashboard_device_class", test_dashboard_device_class, "Dashboard sensor device_class regression tests (#3352)", False),
         ("inverter_config_sensor", test_inverter_config_sensor, "Aggregated static prediction inputs published as sensor.<prefix>_inverter_config", False),
+        ("solar_surplus", run_solar_surplus_tests, "Solar surplus power and force export slot sensor tests", False),
         ("model_kernel", run_model_kernel_tests, "Model tests run with the C++ prediction kernel enabled", False),
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
@@ -754,6 +768,7 @@ def main():
         ("web_annual_plan_route", test_web_annual_plan_route, "Annual web tab captured-plan route tests", False),
         ("web_annual_pages", test_web_annual_pages, "Annual web tab config/viewer/compare page split and nav tests", False),
         ("web_history_table", run_web_history_table_tests, "Web /entity history table bucketing tests", False),
+        ("web_pv_calibration_chart", run_web_pv_calibration_chart_tests, "PV Calibration page: status table, slot and day evidence charts", False),
         ("web_charts", run_web_charts_tests, "Web chart rendering tests (percent/special-character units)", False),
         ("web_chart_grouping", run_web_chart_grouping_tests, "Web /entity chart numeric vs timeline grouping tests", False),
         ("web_entity_unit_resolution", run_web_entity_unit_resolution_tests, "Web /entity chart unit/name resolution tests", False),
@@ -942,6 +957,7 @@ def main():
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
         ("givtcp_rest", run_givtcp_rest_tests, "GivTCP REST client write/retry/transport tests", False),
         ("car_charger_control", run_car_charger_control_tests, "Shared Predbat-led EV charger control tests", False),
+        ("car_cancel", run_car_cancel_tests, "Cancel a car slot for export tests", False),
         # myenergi Zappi and Eddi unit tests
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
         ("wallbox", test_wallbox, "Wallbox EV charger tests (transport, normalisation, publishing, auto-config, controls, plan-led charging)", False),
@@ -959,9 +975,11 @@ def main():
         # External Temperature API tests
         ("http_sync", run_http_sync_tests, "Synchronous aiohttp HTTP helper (replaces requests) and no-requests guard", False),
         ("battery_temperature_fetch", test_battery_temperature_fetch, "Battery temperature history fetched for the prediction window only", False),
+        ("battery_temperature_fetch_average", test_battery_temperature_fetch_average, "Battery temperature history from several sensors is their average, not their sum", False),
         ("battery_temperature_stuck_warning", test_battery_temperature_history_stuck_warning, "Battery temperature history stuck at 0 warns, naming the GivTCP rename (#6193)", False),
         ("battery_temperature_stuck_warning_fetch", test_battery_temperature_history_stuck_warning_fetch, "Battery temperature stuck warning through the real fetch path (#6193)", False),
         ("battery_temperature_stuck_warning_once", test_battery_temperature_history_stuck_warning_once, "Battery temperature stuck warning reported once, curve-aware wording (#6193)", False),
+        ("templates_battery_temperature_history", test_templates_set_battery_temperature_history, "apps.yaml templates that set battery_temperature also set battery_temperature_history (#6270)", False),
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
         ("rate_text_scan", test_rate_text_scan, "Rate text scan tests (multi-band min/max range grouping)", False),
@@ -1000,6 +1018,9 @@ def main():
         ("replay_manual_times", run_replay_manual_times_tests, "manual_all_times is derived from the manual time lists, including in a debug replay", False),
         ("plan_version_replace", run_plan_version_replace_tests, "A plan made by another Predbat version is always replaced", False),
         ("plan_charge_keep", run_plan_charge_keep_tests, "calculate_plan works out the running charge once for optimise_charge_limit to keep", False),
+        ("pv_calibration", run_pv_calibration_tests, "PV calibration: shrunk fit, band, evidence merge", False),
+        ("pv_calibration_scan", run_pv_calibration_scan_tests, "PV calibration: history scanned into per-slot day evidence", False),
+        ("pv_calibration_update", run_pv_calibration_update_tests, "PV calibration: evidence storage, scan schedule and save guards", False),
         ("pv_calibration_clipping", run_pv_calibration_clipping_tests, "PV calibration does not learn inverter clipping as forecast error", False),
         ("pv_calibration_day_scaling", run_pv_calibration_day_scaling_tests, "PV calibration per-day scaling keeps dull days at raw x adjustment", False),
         ("export_commitment", run_export_commitment_tests, "Forced-export commitment / anti-flapping tests", False),

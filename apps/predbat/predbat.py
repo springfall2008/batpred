@@ -36,7 +36,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.8.1"
+THIS_VERSION = "v9.9.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -603,6 +603,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # does not cover octopus_intelligent_slot: Octopus goes on wiring its dispatch sensor there
         # as the record of completed dispatches, and Ohme adds octopus_intelligent_planned_slot (#5413).
         self.car_slot_owner = None
+        # Cars a charger component is force-holding off: car_n -> end of the hold (UTC, aware). Empty when none
+        self.car_force_hold_until = {}
+        # Cars whose slots Predbat planned this cycle (plan_car_charging), so an export may cancel them
+        self.car_planned_by_predbat = set()
+        # Cars a charger component can force-hold off: car_n -> the component's log name
+        self.car_force_holdable = {}
+        # (car_n, index) of the car slots an export may cancel this cycle, see calculate_plan()
+        self.car_cancel_keys = frozenset()
+        # car_n -> (start, end) of the car slots the plan cancels for an export, set by publish_car_plan()
+        self.car_cancelled_for_export = {}
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
@@ -693,6 +703,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_rate_grid_load_failures = {}  # "charge"/"discharge" -> times of cycles whose store reads all came back empty
         self.battery_rate_grid_pending_save = {}  # "charge"/"discharge" -> True while a save waits for the store to read back
         self.battery_rate_grid_last_success = {}  # "charge"/"discharge" -> time of the last scan whose history read succeeded
+        self.battery_rate_grid_last_save = {}  # "charge"/"discharge" -> time of the last successful save of the evidence
         self.battery_rate_grid_history_days = 28  # battery_rate_grid_history_days: days a scan reads until one has succeeded
         self.battery_rate_grid_scan_days = 2  # battery_rate_grid_scan_days: days a daily scan reads
         self.isCharging = False

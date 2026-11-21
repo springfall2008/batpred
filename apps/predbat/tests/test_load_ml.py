@@ -2507,6 +2507,78 @@ def _test_component_fetch_load_data():
 
         print("    ✓ Rate history is fetched as optional data")
 
+    async def test_rate_results_not_padded(with_history=True):
+        """The results attribute of predbat.rates / rates_export only starts at yesterday's midnight. Minutes older than
+        that must come from the rate history (or be left out, so the stored database keeps them), not be padded with the
+        oldest results value - that padding flattened 21+ days of rate history and overwrote the saved one (GH#6147)."""
+        from datetime import timedelta
+        from const import PREDICT_STEP
+
+        mock_base = MockBase()
+        yesterday = mock_base.midnight_utc - timedelta(days=1)
+        import_results = {}
+        export_results = {}
+        for slot in range(0, 4 * 48):  # yesterday 00:00 to two days ahead, 30 minute slots
+            stamp = (yesterday + timedelta(minutes=30 * slot)).strftime("%Y-%m-%dT%H:%M:%S%z")
+            import_results[stamp] = 6.6 if slot % 48 < 14 else 35.0
+            export_results[stamp] = 12.0 if slot % 48 < 14 else 15.0
+
+        def mock_get_state_wrapper(entity_id, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
+            if attribute == "results" and entity_id == "predbat.rates":
+                return import_results
+            if attribute == "results" and entity_id == "predbat.rates_export":
+                return export_results
+            return default
+
+        days = 7
+        history_minutes = days * 24 * 60
+
+        def mock_import_export(days_to_fetch, now_utc, key, **kwargs):
+            """Recorder history of the rates (20p import / 5p export) over the whole window, nothing for other keys"""
+            if not with_history:
+                return {}
+            if key == "predbat.rates":
+                return {minute: 20.0 for minute in range(history_minutes)}
+            if key == "predbat.rates_export":
+                return {minute: 5.0 for minute in range(history_minutes)}
+            return {}
+
+        load_data, age = create_load_minutes(days)
+        mock_base.get_state_wrapper = mock_get_state_wrapper
+        mock_base.minute_data_load = MagicMock(return_value=(load_data, age))
+        mock_base.minute_data_import_export = MagicMock(side_effect=mock_import_export)
+        mock_base.fill_load_from_power = MagicMock(side_effect=lambda x, y: x)
+
+        component = LoadMLComponent(mock_base, load_ml_enable=True)
+        result_data, result_age, _, _, _, import_rates, export_rates = await component._fetch_load_data()
+        assert result_data is not None and result_age == days, f"Expected {days} days of load data, got {result_age}"
+
+        oldest_result = int((mock_base.now_utc - yesterday).total_seconds() / 60)
+        recent = oldest_result - 30
+        assert import_rates[recent] in (6.6, 35.0) and export_rates[recent] in (12.0, 15.0), f"Minute {recent} should come from results, got {import_rates[recent]} / {export_rates[recent]}"
+        assert import_rates[-60] in (6.6, 35.0), f"Future rates should come from results, got {import_rates[-60]}"
+        for minute in (oldest_result + 60, 3 * 24 * 60, history_minutes - 2 * PREDICT_STEP):
+            minute = minute - minute % PREDICT_STEP
+            if with_history:
+                assert import_rates.get(minute) == 20.0, f"Import rate at minute {minute} should come from the history (20.0), got {import_rates.get(minute)}"
+                assert export_rates.get(minute) == 5.0, f"Export rate at minute {minute} should come from the history (5.0), got {export_rates.get(minute)}"
+            else:
+                assert minute not in import_rates, f"Import rate at minute {minute} is older than the results and should be left out, got {import_rates.get(minute)}"
+                assert minute not in export_rates, f"Export rate at minute {minute} is older than the results and should be left out, got {export_rates.get(minute)}"
+
+        if not with_history:
+            # Merged into the stored history, the older stored rates survive and the fresh results win where they exist
+            component.load_data = {minute: 0.1 for minute in range(0, history_minutes, PREDICT_STEP)}
+            component.import_rates_data = {minute: 25.0 for minute in range(0, history_minutes, PREDICT_STEP)}
+            component.export_rates_data = {minute: 8.0 for minute in range(0, history_minutes, PREDICT_STEP)}
+            component._merge_fetch_data(result_data, result_age, 0, {}, {}, import_rates, export_rates)
+            minute = 3 * 24 * 60
+            assert component.import_rates_data[minute] == 25.0, f"Stored import rate at minute {minute} was overwritten with {component.import_rates_data[minute]}"
+            assert component.export_rates_data[minute] == 8.0, f"Stored export rate at minute {minute} was overwritten with {component.export_rates_data[minute]}"
+            assert component.import_rates_data[recent] in (6.6, 35.0), f"Fresh results should win over the stored rate, got {component.import_rates_data[recent]}"
+
+        print("    ✓ Rate results are not padded over older history ({})".format("recorder history" if with_history else "stored history"))
+
     # Test: iBoost/diverter energy is subtracted from the training load, as the standard forecast does (GH#5825)
     async def test_iboost_energy_subtraction(iboost_energy_subtract=True):
         """With iboost_energy_today configured and iboost_energy_subtract on, each step's load loses that step's
@@ -2622,6 +2694,8 @@ def _test_component_fetch_load_data():
     run_async(test_temperature_no_data())
     run_async(test_step_size_calculation())
     run_async(test_rate_history_is_optional())
+    run_async(test_rate_results_not_padded())
+    run_async(test_rate_results_not_padded(with_history=False))
     run_async(test_iboost_energy_subtraction())
     run_async(test_iboost_energy_subtraction(iboost_energy_subtract=False))
     run_async(test_iboost_before_car_threshold())

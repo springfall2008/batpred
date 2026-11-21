@@ -104,6 +104,42 @@ def _make(args=None):
     return my_predbat, inv
 
 
+def _make_two(battery_power):
+    """
+    A PredBat with two 10 kWh, 2.6 kW inverters. Each has its own SoC and charge/discharge rate sensors (inverter 1's
+    mirror inverter 0's history), and battery_power is set as given, e.g. a site-wide sensor on inverter 0 and 0 on
+    inverter 1, the way GE Cloud configures an EMS.
+    """
+    my_predbat, inv0 = _make()
+    my_predbat.args["soc_percent"] = ["sensor.soc_percent", "sensor.soc_percent_1"]
+    my_predbat.args["charge_rate"] = ["number.charge_rate", "number.charge_rate_1"]
+    my_predbat.args["discharge_rate"] = ["number.discharge_rate", "number.discharge_rate_1"]
+    my_predbat.args["battery_power"] = battery_power
+    my_predbat.args["battery_power_invert"] = [False, False]
+    inv1 = Inverter(my_predbat, 1)
+    inv1.battery_rate_max_charge = RATED_W / 60000
+    inv1.battery_rate_max_discharge = RATED_W / 60000
+    inv1.battery_rate_max_export = RATED_W / 60000
+    inv1.soc_max = 10.0
+    inv1.battery_scaling = 1.0
+    my_predbat.num_inverters = 2
+    my_predbat.inverters = [inv0, inv1]
+    return my_predbat, inv0
+
+
+def _install_two(my_predbat, block):
+    """Install a block for inverter 0's sensors and give inverter 1's sensors the same history."""
+    _install(my_predbat, block)
+    single = my_predbat.ha_interface.get_history
+    aliases = {"sensor.soc_percent_1": "sensor.soc_percent", "number.charge_rate_1": "number.charge_rate", "number.discharge_rate_1": "number.discharge_rate"}
+
+    def mock_get_history(entity_id, now=None, days=30):
+        """Inverter 1's sensors read inverter 0's history."""
+        return single(aliases.get(entity_id, entity_id), now=now, days=days)
+
+    my_predbat.ha_interface.get_history = mock_get_history
+
+
 def _charge(minutes, power=-1560, temp=15.3, soc=40):
     """A full-rate charge block."""
     return [("Charging", RATED_W, power, soc, temp, -RATED_W) for _ in range(minutes)]
@@ -264,37 +300,118 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     _, samples = _scan(block)
     failed |= _check("t8", _segments(samples) == [], samples)
 
-    print("Test 9: inverter_limit_charge caps the charge rate the evidence is measured against")
+    print("Test 9: a site-wide battery_power on inverter 0 (0 on the others) is measured against the whole fleet's rate")
+    # Both inverters charge at their full 2.6 kW and the site-wide sensor reads the 5.2 kW total: that is the rated rate,
+    # not twice it, so it must not be divided by inverter 0's 2.6 kW alone (#6226)
+    my_predbat, inv = _make_two(["sensor.battery_power", 0])
+    _install_two(my_predbat, _charge(25, power=-2 * RATED_W))
+    segments = _segments(inv.find_rate_grid_samples(False))
+    failed |= _check("t9 charge", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+    my_predbat, inv = _make_two(["sensor.battery_power", 0])
+    _install_two(my_predbat, _export(25, power=2 * RATED_W, grid=4000))
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t9 discharge", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+
+    print("Test 9b: battery_power missing on inverter 1 (not 0) still learns from inverter 0 alone")
+    my_predbat, inv = _make_two(["sensor.battery_power"])
+    _install_two(my_predbat, _charge(25, power=-RATED_W))
+    segments = _segments(inv.find_rate_grid_samples(False))
+    failed |= _check("t9b", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+
+    print("Test 9c: with a site-wide battery_power, another inverter's missing history stops the learning rather than learning from inverter 0 alone")
+    # Inverter 0 alone would divide the site's power by its own maximum, the ~N x samples #6226 fixes
+    my_predbat, inv = _make_two(["sensor.battery_power", 0])
+    _install_two(my_predbat, _charge(25, power=-2 * RATED_W))
+    two = my_predbat.ha_interface.get_history
+
+    def no_soc_1(entity_id, now=None, days=30):
+        """Inverter 1's SoC sensor has no recorded history."""
+        return None if entity_id == "sensor.soc_percent_1" else two(entity_id, now=now, days=days)
+
+    my_predbat.ha_interface.get_history = no_soc_1
+    samples = inv.find_rate_grid_samples(False)
+    failed |= _check("t9c missing history", samples is None, samples)
+    my_predbat, inv = _make_two(["sensor.battery_power", 0])
+    my_predbat.args["soc_percent"] = ["sensor.soc_percent"]
+    _install_two(my_predbat, _charge(25, power=-2 * RATED_W))
+    samples = inv.find_rate_grid_samples(False)
+    failed |= _check("t9c missing setting", samples is None, samples)
+
+    print("Test 9e: the fleet is every inverter, as the plan's fetch loop sums them, even one whose soc_max reads 0")
+    # Dropping it would leave inverter 0 alone against the site-wide power: the ~N x samples again
+    my_predbat, inv = _make_two(["sensor.battery_power", 0])
+    my_predbat.inverters[1].soc_max = 0
+    _install_two(my_predbat, _charge(25, power=-2 * RATED_W))
+    segments = _segments(inv.find_rate_grid_samples(False))
+    failed |= _check("t9e", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+
+    print("Test 9d: an empty battery_power entry is a site-wide sensor on inverter 0, as a 0 is")
+    my_predbat, inv = _make_two(["sensor.battery_power", ""])
+    _install_two(my_predbat, _charge(25, power=-2 * RATED_W))
+    segments = _segments(inv.find_rate_grid_samples(False))
+    failed |= _check("t9d", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+
+    print("Test 10: battery_temperature_history as a list is read as the fleet's average temperature, as the plan reads it")
+    second_sensor = "sensor.battery_temperature_2"
+    # A reading of exactly 0 is a missing one: with another sensor reading, that one is used
+    for sensors, offset, expected in (([TEMP_SENSOR], 10, 15.3), ([TEMP_SENSOR, second_sensor], 10, 20.3), ([TEMP_SENSOR, second_sensor], None, 15.3)):
+        my_predbat, inv = _make()
+        my_predbat.args["battery_temperature_history"] = sensors
+        _install(my_predbat, _charge(25))
+        single = my_predbat.ha_interface.get_history
+
+        def mock_get_history(entity_id, now=None, days=30, single=single, offset=offset):
+            """The second sensor reads `offset` degrees warmer than the first, or exactly 0 when offset is None."""
+            if entity_id != second_sensor:
+                return single(entity_id, now=now, days=days)
+            return [[dict(record, state=0 if offset is None else float(record["state"]) + offset) for record in single(TEMP_SENSOR, now=now, days=days)[0]]]
+
+        my_predbat.ha_interface.get_history = mock_get_history
+        segments = _segments(inv.find_rate_grid_samples(False))
+        failed |= _check("t10 {} sensors, second {}".format(len(sensors), "at 0" if offset is None else "+{}".format(offset)), len(segments) == 3 and all(abs(s[1] - expected) < 1e-6 for s in segments), segments)
+
+    print("Test 11: battery_temperature_history given as a list does not break the scan (#6222)")
+
+    def temperature_list(my_predbat):
+        """apps.yaml gives battery_temperature_history as a list, one sensor per inverter."""
+        my_predbat.args["battery_temperature_history"] = [TEMP_SENSOR]
+
+    _, samples = _scan(_charge(25), setup=temperature_list)
+    segments = _segments(samples)
+    failed |= _check("t11 count", len(segments) == 3, segments)
+    failed |= _check("t11 temperature", all(abs(s[1] - 15.3) < 1e-6 for s in segments), segments)
+
+    print("Test 12: inverter_limit_charge caps the charge rate the evidence is measured against")
     limits = {"battery_rate_max": [RATED_W], "inverter_limit_charge": [1300]}
     my_predbat, inv = _make(limits)
-    failed |= _check("t9 charge rate capped", abs(inv.battery_rate_max_charge * 60000 - 1300) < 1e-6, inv.battery_rate_max_charge * 60000)
+    failed |= _check("t12 charge rate capped", abs(inv.battery_rate_max_charge * 60000 - 1300) < 1e-6, inv.battery_rate_max_charge * 60000)
     _install(my_predbat, [("Charging", 1300, -1300, 40, 15.3, -1300) for _ in range(25)])
     segments = _segments(inv.find_rate_grid_samples(False))
-    failed |= _check("t9 a charge at the capped rate is full rate", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+    failed |= _check("t12 a charge at the capped rate is full rate", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
 
-    print("Test 10: inverter_limit_export below the discharge rating - forced exports run at the export cap")
+    print("Test 13: inverter_limit_export below the discharge rating - forced exports run at the export cap")
     limits = {"battery_rate_max": [RATED_W], "inverter_limit_export": [1300]}
     my_predbat, inv = _make(limits)
-    failed |= _check("t10 export rate capped", abs(inv.battery_rate_max_export * 60000 - 1300) < 1e-6 and abs(inv.battery_rate_max_discharge * 60000 - RATED_W) < 1e-6)
+    failed |= _check("t13 export rate capped", abs(inv.battery_rate_max_export * 60000 - 1300) < 1e-6 and abs(inv.battery_rate_max_discharge * 60000 - RATED_W) < 1e-6)
     # An export written at the cap that delivered it: the battery was not the limit, so it is not a curve dip
     _install(my_predbat, _export(25, power=1300, rate=1300))
     segments = _segments(inv.find_rate_grid_samples(True))
-    failed |= _check("t10 an export at the cap is evidence", len(segments) == 3, segments)
-    failed |= _check("t10 an export at the cap records no battery limit", all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+    failed |= _check("t13 an export at the cap is evidence", len(segments) == 3, segments)
+    failed |= _check("t13 an export at the cap records no battery limit", all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
     # The battery tapering below the cap is a real limit, recorded against the discharge rating the plan scales the grid by
     my_predbat, inv = _make(limits)
     _install(my_predbat, _export(25, power=650, rate=1300))
     segments = _segments(inv.find_rate_grid_samples(True))
-    failed |= _check("t10 a taper below the cap is recorded in kW of the discharge rating", len(segments) == 3 and all(abs(s[2] - 650 / RATED_W) < 1e-6 for s in segments), segments)
+    failed |= _check("t13 a taper below the cap is recorded in kW of the discharge rating", len(segments) == 3 and all(abs(s[2] - 650 / RATED_W) < 1e-6 for s in segments), segments)
     # An export written below the cap (low power export) is not full rate
     my_predbat, inv = _make(limits)
     _install(my_predbat, _export(25, power=650, rate=650))
-    failed |= _check("t10 an export below the cap is not full rate", _segments(inv.find_rate_grid_samples(True)) == [])
+    failed |= _check("t13 an export below the cap is not full rate", _segments(inv.find_rate_grid_samples(True)) == [])
 
-    print("Test 11: inverter_limit_export above the discharge rating - the curve is relative to the export path")
+    print("Test 14: inverter_limit_export above the discharge rating - the curve is relative to the export path")
     limits = {"battery_rate_max": [RATED_W], "inverter_limit_discharge": [1300], "inverter_limit_export": [RATED_W]}
     my_predbat, inv = _make(limits)
     _install(my_predbat, _export(25, power=1560, rate=RATED_W))
     segments = _segments(inv.find_rate_grid_samples(True))
-    failed |= _check("t11", len(segments) == 3 and all(abs(s[2] - 0.6) < 1e-6 for s in segments), segments)
+    failed |= _check("t14", len(segments) == 3 and all(abs(s[2] - 0.6) < 1e-6 for s in segments), segments)
     return failed
