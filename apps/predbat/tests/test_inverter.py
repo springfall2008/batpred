@@ -1923,10 +1923,12 @@ def test_adjust_ge_eco_toggle_warns_once(ha, inv):
     """
     An eco toggle that cannot be written is warned about once, not every cycle (#4909).
 
-    GivEnergy 3-phase inverters have no eco mode register, so GE Cloud creates no enable_eco_mode switch
-    and adjust_inverter_mode() runs against nothing on every plan cycle. A mode select bound in its place
-    has no turn_on service, so writing it would retry an invalid call. Both are skipped with a single
-    warning, which is said again only once the problem changes or has been fixed and comes back.
+    A mode select bound in place of the enable_eco_mode switch has no turn_on service, so writing it would
+    retry an invalid call; an inverter_mode that is not configured at all has nothing to write. Both are
+    skipped with a single warning, which is said again only once the problem changes or has been fixed and
+    comes back. An empty entry in a configured inverter_mode is deliberate - GE Cloud leaves one for a
+    3-phase inverter, which has no eco mode, and for one that exports at full power in eco mode (#6005) -
+    so it is skipped without a warning.
     """
     failed = False
     print("Test: eco_toggle_warns_once")
@@ -1984,13 +1986,33 @@ def test_adjust_ge_eco_toggle_warns_once(ha, inv):
             print("ERROR: a missing eco toggle should not log a mode change every cycle: {}".format(log_messages))
             failed = True
         if status_errors:
-            print("ERROR: a missing eco toggle is expected on 3-phase hardware and should not be a status error: {}".format(status_errors))
+            print("ERROR: a missing inverter_mode should only be logged, not be a status error: {}".format(status_errors))
             failed = True
         # Nothing can be written, so the window-change sleep that waits for the write to settle is skipped too
         inv.adjust_inverter_mode(True, changed_start_end=True)
         if sleeps:
             print("ERROR: adjust_inverter_mode slept {} with no eco toggle to write".format(sleeps))
             failed = True
+
+        # An empty entry in a configured inverter_mode, as GE Cloud leaves it, in each form it can take: skipped
+        # with no warning, no status error, no sleep and no write
+        for empty in [None, "", [None], ["switch.other_inverter_eco", None]]:
+            warnings_before = sum(1 for msg in log_messages if msg.startswith("Warn:"))
+            errors_before = len(status_errors)
+            del sleeps[:]
+            # Forget the missing-config warning above, so a warning here would be seen rather than deduplicated
+            inv.eco_toggle_warned = None
+            inv.base.args["inverter_mode"] = empty
+            inv.id = 1 if isinstance(empty, list) and len(empty) > 1 else 0
+            for force_export in [True, False]:
+                inv.adjust_inverter_mode(force_export, changed_start_end=True)
+            inv.id = orig_inv_state["id"]
+            if sum(1 for msg in log_messages if msg.startswith("Warn:")) != warnings_before or len(status_errors) != errors_before or sleeps:
+                print("ERROR: an empty inverter_mode entry {} should be skipped quietly: logs {} status {} sleeps {}".format(empty, log_messages[-3:], status_errors[errors_before:], sleeps))
+                failed = True
+            if any("current mode is" in msg for msg in log_messages):
+                print("ERROR: an empty inverter_mode entry {} should not log a mode change: {}".format(empty, log_messages))
+                failed = True
 
         # A mode select bound in its place: a new problem, so warned once, and never written
         inv.base.args["inverter_mode"] = "select.givtcp_mode"
@@ -2109,8 +2131,8 @@ def test_adjust_ge_eco_toggle_missing_entity(test_name, inv, force_export, inver
 
     inverter_mode_arg:
       - "unset": remove inverter_mode from args (expect warning)
-      - None: inverter_mode set but empty for this inverter, as GE Cloud leaves a 3-phase unit in a mixed
-        fleet (expect warning - it is said once now, so there is no per-cycle noise left to spare)
+      - None: inverter_mode set but empty for this inverter, as GE Cloud leaves a 3-phase unit or one that
+        exports at full power in eco mode (expect no warning)
     """
     failed = False
     print("Test: {} force_export={}".format(test_name, force_export))
@@ -6544,8 +6566,8 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_adjust_ge_eco_toggle("eco_toggle_no_change_export", ha, inv, "off", True, "off")
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_enable", inv, False, "unset", True)
     failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_unset_export", inv, True, "unset", True)
-    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_enable", inv, False, None, True)
-    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_export", inv, True, None, True)
+    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_enable", inv, False, None, False)
+    failed |= test_adjust_ge_eco_toggle_missing_entity("eco_toggle_missing_entity_none_export", inv, True, None, False)
     failed |= test_adjust_ge_eco_toggle_warns_once(ha, inv)
     failed |= test_fox_no_predbat_inverter_mode_control("fox_no_predbat_inverter_mode_control", my_predbat)
     if failed:
