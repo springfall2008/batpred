@@ -18,6 +18,7 @@ plans and select the one with the lowest cost metric.
 """
 
 from datetime import timedelta
+from currency import round_currency
 from const import KEEP_TARGET_MIN_RATE, PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90, RUN_EVERY, TIME_FORMAT, EXPORT_LIMIT_FREEZE, EXPORT_LIMIT_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_FREEZE, EXPORT_MODE_IDLE
 
 from utils import (
@@ -106,6 +107,7 @@ class Prediction(PredictionBatch):
         # Set before the kernel context is built below, which copies the table into it
         self.car_cancel = car_cancel
         if base:
+            self.currency_scale = base.currency_scale
             self.minutes_now = base.minutes_now
             self.log = base.log
             self.time_abs_str = base.time_abs_str
@@ -912,7 +914,7 @@ class Prediction(PredictionBatch):
                 minute_timestamp = self.midnight_utc + timedelta(seconds=60 * minute_absolute)
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 predict_soc_time[stamp] = round(soc, 3)
-                metric_time[stamp] = round(metric, 3)
+                metric_time[stamp] = round_currency(metric, self.currency_scale, 3)
                 load_kwh_time[stamp] = round(load_kwh, 3)
                 pv_kwh_time[stamp] = round(pv_kwh, 2)
                 import_kwh_time[stamp] = round(import_kwh, 2)
@@ -923,7 +925,7 @@ class Prediction(PredictionBatch):
                 record_time[stamp] = 0 if record else soc_max
                 if enable_save_stats or enable_save_scenario:
                     self.predict_soc_best[minute] = round(soc, 3)
-                    self.predict_metric_best[minute] = round(metric, 3)
+                    self.predict_metric_best[minute] = round_currency(metric, self.currency_scale, 3)
                 if enable_save_stats:
                     self.predict_iboost_best[minute] = round(iboost_today_kwh, 2)
                     self.predict_carbon_best[minute] = round(carbon_g, 0)
@@ -1026,13 +1028,13 @@ class Prediction(PredictionBatch):
 
                 # Boost on gas vs import rate
                 if self.iboost_gas and self.rate_gas:
-                    gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
+                    gas_rate = self.rate_gas.get(minute_absolute, 99 * self.currency_scale) * self.iboost_gas_scale
                     if import_rate > gas_rate:
                         iboost_rate_okay = False
 
                 # Boost on gas vs export rate
                 if self.iboost_gas_export and self.rate_gas:
-                    gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
+                    gas_rate = self.rate_gas.get(minute_absolute, 99 * self.currency_scale) * self.iboost_gas_scale
                     if export_rate > gas_rate:
                         iboost_rate_okay = False
 
@@ -1459,13 +1461,13 @@ class Prediction(PredictionBatch):
             # Metric keep - pretend the battery is empty and you have to import instead of using the battery
             if best_soc_keep > 0 and soc <= best_soc_keep:
                 # A manual or alert floor still costs something to miss at a free or negative rate (#5162)
-                keep_rate = max(import_rate, KEEP_TARGET_MIN_RATE) if alert_keep > 0 else import_rate
+                keep_rate = max(import_rate, KEEP_TARGET_MIN_RATE * self.currency_scale) if alert_keep > 0 else import_rate
                 metric_keep += (best_soc_keep - soc) * keep_rate * keep_minute_scaling * step / 60.0
 
             # Metric keep max - pretend the excess above the ceiling should have been exported instead of held
             if best_soc_max >= 0 and soc >= best_soc_max:
                 # Likewise a ceiling still costs something to break at a free or negative export rate (#5162)
-                metric_keep += (soc - best_soc_max) * max(export_rate, KEEP_TARGET_MIN_RATE) * keep_minute_scaling * step / 60.0
+                metric_keep += (soc - best_soc_max) * max(export_rate, KEEP_TARGET_MIN_RATE * self.currency_scale) * keep_minute_scaling * step / 60.0
 
             if diff > 0:
                 # Import
@@ -1580,8 +1582,8 @@ class Prediction(PredictionBatch):
             self.final_car_soc = final_car_soc
             self.predict_car_soc_time = predict_car_soc_time
             self.final_soc = round(final_soc, 4)
-            self.final_metric = round(final_metric, 4)
-            self.final_metric_keep = round(final_metric_keep, 4)
+            self.final_metric = round_currency(final_metric, self.currency_scale)
+            self.final_metric_keep = round_currency(final_metric_keep, self.currency_scale)
             self.final_import_kwh = round(final_import_kwh, 4)
             self.final_import_kwh_battery = round(final_import_kwh_battery, 4)
             self.final_import_kwh_house = round(final_import_kwh_house, 4)
@@ -1619,7 +1621,7 @@ class Prediction(PredictionBatch):
 
         if sim_hash is not None:
             self.prediction_cache[sim_hash] = (
-                round(final_metric, 4),
+                round_currency(final_metric, self.currency_scale),
                 round(final_import_kwh_battery, 4),
                 round(final_import_kwh_house, 4),
                 round(final_export_kwh, 4),
@@ -1627,7 +1629,7 @@ class Prediction(PredictionBatch):
                 round(final_soc, 4),
                 soc_min_minute,
                 round(final_battery_cycle, 4),
-                round(final_metric_keep, 4),
+                round_currency(final_metric_keep, self.currency_scale),
                 round(final_iboost_kwh, 4),
                 round(final_carbon_g, 4),
                 [],
@@ -1639,7 +1641,7 @@ class Prediction(PredictionBatch):
             )
 
         return (
-            round(final_metric, 4),
+            round_currency(final_metric, self.currency_scale),
             round(final_import_kwh_battery, 4),
             round(final_import_kwh_house, 4),
             round(final_export_kwh, 4),
@@ -1647,7 +1649,7 @@ class Prediction(PredictionBatch):
             round(final_soc, 4),
             soc_min_minute,
             round(final_battery_cycle, 4),
-            round(final_metric_keep, 4),
+            round_currency(final_metric_keep, self.currency_scale),
             round(final_iboost_kwh, 4),
             round(final_carbon_g, 4),
             predict_soc if series else {},

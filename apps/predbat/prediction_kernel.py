@@ -22,6 +22,8 @@ rejected at load time rather than producing divergent results.
 
 import array
 import ctypes
+from currency import round_currency
+
 import struct
 import os
 import platform
@@ -35,10 +37,10 @@ from utils import in_car_slot, in_iboost_slot
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 # ABI 11: scalar results come back already rounded to 4dp. ABI 13 (car cancel branch) adds the car slot cancel table and cancel_floor_kw to
 # PkContext; ABI 12 (main) the rate grid curve rows; ABI 14 is both.
-KERNEL_ABI_VERSION = 14
+KERNEL_ABI_VERSION = 15
 # Parity 22 (car cancel branch): an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted -
 # merged with main's parity 20. Parity 23 (main): the battery rate grids. Parity 24: both.
-KERNEL_PARITY_REVISION = 24
+KERNEL_PARITY_REVISION = 25
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -154,6 +156,7 @@ class PkContext(ctypes.Structure):
         ("iboost_on_export", ctypes.c_int32),
         ("has_rate_gas", ctypes.c_int32),
         ("has_iboost_plan", ctypes.c_int32),
+        ("currency_scale", ctypes.c_double),
     ]
 
 
@@ -764,7 +767,7 @@ def build_static_context_arrays(pred, n_steps, minutes_now, num_cars):
         discharge_curve_row.append(step_rows[1])
         carbon.append(pred.carbon_intensity.get(minute, 0) if pred.carbon_intensity else 0)
         # Gas rate pre-scaled by iboost_gas_scale - mirrors prediction.py:719/725
-        gas_rate.append((pred.rate_gas.get(minute_absolute, 99) * pred.iboost_gas_scale) if pred.rate_gas else 0)
+        gas_rate.append((pred.rate_gas.get(minute_absolute, 99 * pred.currency_scale) * pred.iboost_gas_scale) if pred.rate_gas else 0)
         iboost_plan_load.append(in_iboost_slot(minute_absolute, pred.iboost_plan) if pred.iboost_plan else 0)
         if num_cars > 0:
             car_load, car_rate_slot = in_car_slot(minute_absolute, num_cars, pred.car_charging_slots)
@@ -916,6 +919,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_on_export = 1 if pred.iboost_on_export else 0
         ctx.has_rate_gas = 1 if pred.rate_gas else 0
         ctx.has_iboost_plan = 1 if pred.iboost_plan else 0
+        ctx.currency_scale = pred.currency_scale
 
         handle = lib.pk_context_create(ctypes.byref(ctx))
         if handle:
@@ -977,11 +981,12 @@ def kernel_result_tuple(pred, result, predict_soc):
 
     Shared by the single-scenario and batch paths - mirrors prediction.py:626-628, 1266-1284.
 
-    The ten scalar fields arrive already rounded to 4dp (the kernel's round4_fast, ABI 11), so they
-    are copied as they are. round(x, 4) on each was most of what converting a result cost - about
-    1.5us of the 1.7us per simulation, paid on the calling thread for every job in a batch. The kernel
-    rounds the scaled value rather than the exact binary one, so a field can sit one unit in the 4th
-    decimal place away from what round(x, 4) gives; test_kernel_parity allows for exactly that.
+    Most scalar fields arrive rounded to four decimal places by the native kernel and can be copied
+    directly, avoiding per-field Python rounding in large batches. At currency_scale == 1 the
+    final_metric and metric_keep fields follow that same fast path. At a non-unit scale the kernel
+    returns those two monetary fields unrounded; Python applies round_currency() at this boundary
+    so a fixed native 4dp pre-round cannot erase a currency-calibrated decision boundary.
+    Small native-vs-Python binary rounding differences at scale 1 are covered by kernel parity tests.
     """
     car_charging_soc_next = pred.car_charging_soc_next[:]
     if result.car_soc_next_valid:
@@ -991,9 +996,10 @@ def kernel_result_tuple(pred, result, predict_soc):
             car_charging_soc_next[car_n] = car_soc_next[car_n]
 
     iboost_next = result.iboost_next if pred.iboost_enable else pred.iboost_next
+    currency_scale = pred.currency_scale
 
     return (
-        result.final_metric,
+        round_currency(result.final_metric, currency_scale) if currency_scale != 1.0 else result.final_metric,
         result.import_kwh_battery,
         result.import_kwh_house,
         result.export_kwh,
@@ -1001,7 +1007,7 @@ def kernel_result_tuple(pred, result, predict_soc):
         result.final_soc,
         result.soc_min_minute,
         result.battery_cycle,
-        result.metric_keep,
+        round_currency(result.metric_keep, currency_scale) if currency_scale != 1.0 else result.metric_keep,
         result.final_iboost,
         result.final_carbon_g,
         predict_soc,

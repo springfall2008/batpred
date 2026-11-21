@@ -20,6 +20,7 @@ from const import MINUTE_WATT
 from utils import dp0, dp2
 import yaml
 import copy
+from currency import round_currency
 
 # TODO:
 # 1. Update web UI to show a chart of historical differences
@@ -369,11 +370,12 @@ class Compare:
         # rates is checked against them as they are, so only this tariff's override can make it differ.
         import_match = rate_import_match if (import_replaced and rate_import_match) else rate_import_base
         export_match = rate_export_match if (export_replaced and rate_export_match) else rate_export_base
+        scale = pb.currency_scale
         for minute in range(pb.minutes_now, pb.forecast_minutes + pb.minutes_now):
-            if dp2(pb.rate_import.get(minute, 0)) != dp2(import_match.get(minute, 0)):
+            if round_currency(pb.rate_import.get(minute, 0), scale, 2) != round_currency(import_match.get(minute, 0), scale, 2):
                 self.log("Compare rate import is different, minute {} changed from {} to {}".format(minute, import_match.get(minute, 0), pb.rate_import.get(minute, 0)))
                 return False
-            if dp2(pb.rate_export.get(minute, 0)) != dp2(export_match.get(minute, 0)):
+            if round_currency(pb.rate_export.get(minute, 0), scale, 2) != round_currency(export_match.get(minute, 0), scale, 2):
                 self.log("Compare rate export is different, minute {} changed from {} to {}".format(minute, export_match.get(minute, 0), pb.rate_export.get(minute, 0)))
                 return False
         return True
@@ -385,7 +387,8 @@ class Compare:
         """
         minutes_now = self.pb.minutes_now
         overlap = [minute for minute in rates if minute >= minutes_now and minute in live_rates]
-        return bool(overlap) and all(dp2(rates[minute]) == dp2(live_rates[minute]) for minute in overlap)
+        scale = self.pb.currency_scale
+        return bool(overlap) and all(round_currency(rates[minute], scale, 2) == round_currency(live_rates[minute], scale, 2) for minute in overlap)
 
     def apply_hardware_overrides(self, tariff, my_predbat):
         """
@@ -524,7 +527,7 @@ class Compare:
             "soc_min10": dp2(soc_min10),
             "battery_cycle": dp2(battery_cycle),
             "battery_cycle10": dp2(battery_cycle10),
-            "metric": dp2(metric),
+            "metric": round_currency(metric, my_predbat.currency_scale, 2),
             "metric_keep": dp2(metric_keep),
             "metric_keep10": dp2(metric_keep10),
             "final_iboost": dp2(final_iboost),
@@ -537,7 +540,8 @@ class Compare:
             "end_record": end_record,
         }
         for item in result_data:
-            result_data[item] = dp2(result_data[item])
+            if item != "metric":
+                result_data[item] = dp2(result_data[item])
         result_data["html"] = html
         result_data["raw"] = raw_plan
         result_data["date"] = my_predbat.now_utc.strftime("%Y-%m-%d %H:%M:%S")
@@ -616,7 +620,7 @@ class Compare:
         Recommend the best tariff
         """
         best_selected = ""
-        best_metric = 9999999999
+        best_metric = float("inf")
 
         for compare in compare_list:
             tariff_id = compare.get("id", "")

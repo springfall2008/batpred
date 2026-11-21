@@ -665,7 +665,12 @@ class UserInterface:
                 if value == int(value):
                     value = int(value)
                 item[bound] = value
-        self.log("Scaled the range of money settings by currency_scale {}".format(scale))
+            # Extend upstream PR #6156: calibrate monetary input_number increments as well.
+            # Preserve both built-in defaults and explicitly configured values in local minor units.
+            if "step" in item:
+                step = round(item["step"] * scale, 4)
+                item["step"] = int(step) if step == int(step) else step
+        self.log("Scaled the ranges and steps of money settings by currency_scale {}".format(scale))
 
     def convert_currency_unit(self, unit):
         """
@@ -1351,7 +1356,10 @@ class UserInterface:
             ha_value = None
 
             if not enabled:
-                item["value"] = None
+                if self.currency_scale == 1.0 or item.get("unit") not in CURRENCY_UNITS:
+                    item["value"] = None
+                else:
+                    item.setdefault("value", None)
 
                 # Remove the state if the entity still exists
                 ha_value = self.get_state_wrapper(entity)
@@ -1399,6 +1407,14 @@ class UserInterface:
                     # of, say, 30 passes straight through unclamped).
                     item_min = item.get("min", None)
                     item_max = item.get("max", None)
+                    if self.currency_scale != 1.0 and item.get("unit") in CURRENCY_UNITS:
+                        # Preserve stored monetary values beyond calibrated limits only for scaled installs.
+                        # Widen the advertised slider for this value, with a visible warning.
+                        if (item_min is not None and ha_value < item_min) or (item_max is not None and ha_value > item_max):
+                            self.record_status("Warn: Preserving monetary config {}={} outside calibrated range [{}, {}]; extending range".format(name, ha_value, item_min, item_max), had_errors=True)
+                            item["min"] = min(item_min, ha_value)
+                            item["max"] = max(item_max, ha_value)
+                            item_min, item_max = item["min"], item["max"]
                     if item_min is not None and ha_value < item_min:
                         self.record_status("Warn: Config item {} value {} is below the minimum {} - clamping to {}".format(name, ha_value, item_min, item_min), had_errors=True)
                         ha_value = float(item_min)
