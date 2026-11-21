@@ -4269,7 +4269,7 @@ class Fetch:
             # yet still scanned successfully); whether the key still matches is decided when the scan runs
             stored_key = data.get("scan_key")
             measured_key = self.battery_rate_grid_scan_basis.get(kind)
-            if current and measured_key is not None and not (isinstance(stored_key, list) and self.rate_grid_scan_key_matches(measured_key, stored_key)):
+            if current and stored_samples and measured_key is not None and not (isinstance(stored_key, list) and self.rate_grid_scan_key_matches(measured_key, stored_key)):
                 # Days scanned while the store could not be read, under another key, are now mixed with the stored ones: no key
                 # describes them all, so the next scan (once the current key settles) reads the full window
                 self.battery_rate_grid_scan_basis[kind] = None
@@ -4386,7 +4386,6 @@ class Fetch:
         if quick and changed:
             due = False
         if due:
-            self.battery_rate_grid_basis_wait_since.pop(kind, None)
             self.battery_rate_grid_last_scan[kind] = self.now_utc
             stored = self.battery_rate_grid_samples.get(kind, {})
             # Until a scan has succeeded, read as far back as battery_rate_grid_history_days; after that only the days since the
@@ -4406,6 +4405,8 @@ class Fetch:
                 # Saved after every successful scan once the store has read back, so the stored last_success (and key) are current
                 # for a restart; while it hasn't, only new evidence is worth a pending save that may later replace it
                 self.battery_rate_grid_last_success[kind] = self.now_utc
+                # A failed read keeps the wait, so its hourly retry does not start a fresh one
+                self.battery_rate_grid_basis_wait_since.pop(kind, None)
                 if full_read:
                     self.battery_rate_grid_scan_basis[kind] = scan_key
                     self.battery_rate_grid_basis_unconfirmed[kind] = changed and not settled
@@ -4502,7 +4503,8 @@ class Fetch:
     def rate_grid_scan_key(self, discharge):
         """
         What a rate grid sample is measured against for one direction, as a JSON-safe list: the rated rate (W), the
-        battery size (None with a soc_percent sensor), battery_loss and battery_rate_max_scaling (or _discharge).
+        battery size (None with a soc_percent sensor), battery_loss and battery_rate_max_scaling (or _discharge), and for
+        discharge the export cap (W) the forced exports were written at.
         find_rate_grid_samples() divides the battery power by the rated rate, loss and scaling, and a soc_kw reading by the
         size, so samples stored under a different key are scaled differently and the stored days need re-reading.
         battery_rate_grid_history_days is included too, so raising it reads the deeper window once. So are
@@ -4515,7 +4517,9 @@ class Fetch:
         settings = hashlib.sha1(json.dumps(self.rate_grid_scan_settings(discharge), sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
         # The SoC of a sample is soc_kw / battery size, but a soc_percent sensor's is the percentage itself
         size = None if "soc_percent" in self.args else round(self.soc_max, 3)
-        return [round(rated * MINUTE_WATT, 1), size, round(self.battery_loss, 4), round(scaling, 4), self.battery_rate_grid_history_days, BATTERY_RATE_GRID_SCAN_VERSION, settings]
+        # Discharge evidence is forced exports, written at the export cap (inverter_limit_export), which sets what counts as full rate (#6247)
+        export_cap = round(self.battery_rate_max_export * MINUTE_WATT, 0) if discharge else None
+        return [round(rated * MINUTE_WATT, 1), size, round(self.battery_loss, 4), round(scaling, 4), self.battery_rate_grid_history_days, BATTERY_RATE_GRID_SCAN_VERSION, settings, export_cap]
 
     def rate_grid_scan_settings(self, discharge):
         """
