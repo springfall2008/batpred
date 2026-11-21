@@ -141,9 +141,9 @@ def _export(minutes, power=1560, grid=1000, status="Exporting"):
 
 
 def _pin_local_time(my_predbat, hour, minute=0):
-    """Pin now (now_utc) to today's hour:minute local time, so a block a fixed number of hours back lands at a known time of day."""
-    local = my_predbat.now_utc.astimezone(my_predbat.local_tz) if getattr(my_predbat, "local_tz", None) else my_predbat.now_utc
-    my_predbat.now_utc = local.replace(hour=hour, minute=minute, second=0, microsecond=0).astimezone(my_predbat.now_utc.tzinfo)
+    """Pin Predbat's clock (now_utc, midnight_utc, minutes_now) to today's hour:minute local time, so a block a fixed number of hours back lands at a known time of day."""
+    wall_clock = my_predbat.now_utc.replace(tzinfo=None, hour=hour, minute=minute, second=0, microsecond=0)
+    my_predbat.update_time(print=False, now=my_predbat.local_tz.localize(wall_clock))
 
 
 def _segments(samples):
@@ -165,14 +165,24 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     failed = False
 
     print("Test 1: a 25-minute full-rate charge gives three 5-minute segments")
-    # Now is pinned to 18:00 local, so the block (26 hours back) runs 16:00-16:25 the day before: the day is checked below, and
-    # with the real clock a run between about 13:45 and 14:10 put the block across the noon-to-noon day boundary
+    # Now is pinned to 18:00 local, so the block (26 hours back) runs 16:00-16:25 yesterday, after yesterday's noon: one
+    # noon-to-noon day, named by yesterday's date. With the real clock, a now of 13:45 or 13:50 put the block across the
+    # boundary instead - Test 1a pins that case
     my_predbat, samples = _scan(_charge(25), setup=lambda p: _pin_local_time(p, 18))
     segments = _segments(samples)
+    yesterday = (my_predbat.now_utc.date() - timedelta(days=1)).strftime("%Y-%m-%d")
     failed |= _check("t1 count", len(segments) == 3, segments)
     failed |= _check("t1 values", all(abs(s[0] - 40) < 1e-6 and abs(s[1] - 15.3) < 1e-6 and abs(s[2] - 0.6) < 1e-6 for s in segments), segments)
-    expected_day = charge_day(my_predbat.now_utc, BLOCK_START_HOURS * 60 - 12, getattr(my_predbat, "local_tz", None))
-    failed |= _check("t1 day", list(samples.keys()) == [expected_day], (list(samples.keys()), expected_day))
+    failed |= _check("t1 day", list(samples.keys()) == [yesterday], (list(samples.keys()), yesterday))
+
+    print("Test 1a: a run across local noon is split between the two noon-to-noon days, each segment by its centre minute")
+    # Now 13:50, so the block runs 11:50-12:15 yesterday and its segment centres are 11:57, 12:02 and 12:07. 11:57 is before
+    # yesterday's noon, so it belongs to the day that started at noon the day before
+    my_predbat, samples = _scan(_charge(25), setup=lambda p: _pin_local_time(p, 13, 50))
+    yesterday = (my_predbat.now_utc.date() - timedelta(days=1)).strftime("%Y-%m-%d")
+    day_before = (my_predbat.now_utc.date() - timedelta(days=2)).strftime("%Y-%m-%d")
+    counts = {day: len(entries) for day, entries in (samples or {}).items()}
+    failed |= _check("t1a split", counts == {day_before: 1, yesterday: 2}, (counts, day_before, yesterday))
 
     print("Test 1b: a scan reads only the days it is asked for")
     my_predbat, inv = _make()
