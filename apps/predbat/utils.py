@@ -42,6 +42,8 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    OCTOPUS_API_URL,
+    OCTOPUS_LEGACY_API_HOST,
     BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
     BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
 )
@@ -1449,6 +1451,18 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True, whole_span=F
         first_minute = int(max_age.total_seconds() / 60)
         mdata = {minute: value for minute, value in mdata.items() if minute <= first_minute}
     return [mdata, max_days]
+
+
+OCTOPUS_LEGACY_API_RE = re.compile(r"^https?://" + re.escape(OCTOPUS_LEGACY_API_HOST) + r"(?=[/?#:]|$)", re.IGNORECASE)
+
+
+def migrate_octopus_url(url):
+    """Return url with the retired Octopus API host (api.octopus.energy) replaced by its successor (GH#5786).
+
+    Anything else - another host, a non-string, None - is returned unchanged."""
+    if not isinstance(url, str):
+        return url
+    return OCTOPUS_LEGACY_API_RE.sub(OCTOPUS_API_URL, url, count=1)
 
 
 def filter_payment_method(rates, preferred="DIRECT_DEBIT"):

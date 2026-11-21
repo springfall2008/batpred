@@ -30,15 +30,18 @@ Below is a suggestion of various Octopus tariff combinations (valid October 2025
 You will need to change **dno_region** to match your region code if you decide to use this template - see list of [Electricity region codes](https://energy-stats.uk/dno-region-codes-explained/).
 
 From time to time Octopus change and withdraw their tariffs so the URL's the compare function uses might stop working.<BR>
-A full list of available Octopus products is at <https://api.octopus.energy/v1/products/>.
+A full list of available Octopus products is at <https://api.oegb-kraken.energy/v1/products/>.
+
+Octopus has moved its API from `api.octopus.energy` to `api.oegb-kraken.energy`, and the old address will stop working in due course.
+If your URLs still use `api.octopus.energy`, Predbat fetches them from the new address for you and logs a reminder; change them to `api.oegb-kraken.energy` when convenient.
 
 If you view this page, search for the tariff by name, then copy the URL it shows into a new tab.
 
-E.g. <https://api.octopus.energy/v1/products/GO-VAR-22-10-14/>
+E.g. <https://api.oegb-kraken.energy/v1/products/GO-VAR-22-10-14/>
 
 Look through that page to find the right URL for usage charges in your DNO area
 
-<https://api.octopus.energy/v1/products/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-A/standard-unit-rates>
+<https://api.oegb-kraken.energy/v1/products/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-A/standard-unit-rates>
 
 (For area A)
 
@@ -80,48 +83,48 @@ If you do not set an import or export rate for a particular tariff then your exi
         - rate: 16.5
     - id: 'igo_fixed'
       name: 'Intelligent GO import/Fixed export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
     - id: 'igo_agile'
       name: 'Intelligent GO import/Agile export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{dno_region}/standard-unit-rates/'
     - id: 'go_fixed'
       name: 'GO import/Fixed export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
     - id: 'go_agile'
       name: 'GO import/Agile export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/GO-VAR-22-10-14/electricity-tariffs/E-1R-GO-VAR-22-10-14-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{dno_region}/standard-unit-rates/'
     - id: 'agile_fixed'
       name: 'Agile import/Fixed export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
     - id: 'agile_agile'
       name: 'Agile import/Agile export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{dno_region}/standard-unit-rates/'
     - id: 'flux'
       name: 'Flux import/Export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-{dno_region}/standard-unit-rates'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-{dno_region}/standard-unit-rates'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/FLUX-IMPORT-23-02-14/electricity-tariffs/E-1R-FLUX-IMPORT-23-02-14-{dno_region}/standard-unit-rates'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/FLUX-EXPORT-23-02-14/electricity-tariffs/E-1R-FLUX-EXPORT-23-02-14-{dno_region}/standard-unit-rates'
     - id: 'cosy_fixed'
       name: 'Cosy import/Fixed export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-{dno_region}/standard-unit-rates'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-{dno_region}/standard-unit-rates'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
     - id: 'cosy_agile'
       name: 'Cosy import/Agile export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-{dno_region}/standard-unit-rates'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/COSY-22-12-08/electricity-tariffs/E-1R-COSY-22-12-08-{dno_region}/standard-unit-rates'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-{dno_region}/standard-unit-rates/'
     - id: 'snug_fixed'
       name: 'Snug import/Fixed export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/SNUG-24-11-07/electricity-tariffs/E-1R-SNUG-24-11-07-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/SNUG-24-11-07/electricity-tariffs/E-1R-SNUG-24-11-07-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
     - id: 'iflux'
       name: 'Intelligent Flux import/export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/INTELLI-FLUX-IMPORT-23-07-14/electricity-tariffs/E-1R-INTELLI-FLUX-IMPORT-23-07-14-{dno_region}/standard-unit-rates/'
 ```
 
 ## Running a comparison
@@ -167,7 +170,7 @@ For example, to model a tariff combined with a higher minimum SoC target:
 ```yaml
     - id: 'agile_high_soc'
       name: 'Agile with higher SoC floor'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/'
       config:
         best_soc_min: 2.0
 ```
