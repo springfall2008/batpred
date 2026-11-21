@@ -445,6 +445,18 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         restarted.now_utc += timedelta(minutes=5)
         restarted.battery_rate_grid_update(scanner, False)
         failed |= _check("t4d a fallback size on the first cycle after a restart waits, then reads 2 days", scanner.days.get(False) == [2] and isinstance(saved_4d, dict), scanner.days.get(False))
+        # And when the store only reads back on the read just before the scan, its key still counts for the wait (two hours
+        # on, after the last restart's save)
+        restarted = _make({"battery_charge_power_curve": {100: 0.5}})
+        restarted.now_utc = my_predbat.now_utc + timedelta(hours=2)
+        restarted.soc_max = 8.0
+        restarted.components = MockStorageComponents(FlakyStorage(storage_4d, 1))
+        scanner = FakeInverter()
+        restarted.battery_rate_grid_update(scanner, False)
+        restarted.soc_max = 12.0
+        restarted.now_utc += timedelta(minutes=5)
+        restarted.battery_rate_grid_update(scanner, False)
+        failed |= _check("t4d a store read back just before the scan still makes a fallback size wait", scanner.days.get(False) == [2], scanner.days.get(False))
 
         print("Test 4e: a store that reads back late under another key has its days re-measured (#6287)")
         my_predbat = _make({"battery_charge_power_curve": {100: 0.5}})
@@ -460,7 +472,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         my_predbat.battery_rate_grid_update(inv, False)
         my_predbat.now_utc += timedelta(minutes=5)
         my_predbat.battery_rate_grid_update(inv, False)
-        failed |= _check("t4e the store's own key wins once it reads back", my_predbat.battery_rate_grid_scan_key.get("charge") == old_key, my_predbat.battery_rate_grid_scan_key.get("charge"))
+        failed |= _check("t4e the store's own key wins once it reads back", my_predbat.battery_rate_grid_scan_basis.get("charge") == old_key, my_predbat.battery_rate_grid_scan_basis.get("charge"))
         my_predbat.now_utc += timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES)
         for _ in range(3):
             my_predbat.battery_rate_grid_update(inv, False)
