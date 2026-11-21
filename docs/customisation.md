@@ -754,6 +754,14 @@ Gas rates can be considered if iBoost is used for heating water, and the system 
 
 - **input_number.predbat_iboost_gas_scale** Allows gas rates (set in `apps.yaml`) to be scaled before comparison with electric rates, to account for lower gas boiler efficiency. Should be set to the reciprocal of the boiler efficiency, i.e. 1.25 for an 80% efficient gas boiler - default 1.0.
 
+In the plan, each kind of diversion is limited only by the rates of the energy it uses:
+
+- Diverting while Predbat charges the battery (**switch.predbat_iboost_charging**) uses grid energy, so only the import limits apply: **iboost_rate_threshold** and **iboost_gas**.
+- Diverting excess solar (**switch.predbat_iboost_solar_excess**) uses solar that would otherwise be exported, so only the export limits apply: **iboost_rate_threshold_export** and **iboost_gas_export**.
+- Diverting any solar (**switch.predbat_iboost_solar** without excess) takes solar that would otherwise cover the house or be exported, so both the import and the export limits apply.
+
+So with both gas switches on, excess solar is still diverted when export rates are below gas, even while import rates are above it.
+
 ### iBoost output data
 
 When switch.predbat_iboost_enable is turned On, Predbat creates the configuration entities in the sections above. When it is turned Off, those entities are kept but their friendly names are prefixed with "[Disabled]" and they are omitted from the generated dashboard. The predbat.iboost_best and binary_sensor.predbat_iboost_active entities are published on every plan publish regardless of the switch, showing 0 kWh and off when iBoost is disabled. The iBoost column of the Predbat plan only appears when switch.predbat_iboost_enable is True.

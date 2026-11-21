@@ -1013,28 +1013,31 @@ class Prediction(PredictionBatch):
                                 self.predict_car_hold_best[minute] = True
 
             # Iboost
-            iboost_rate_okay = True
+            iboost_import_okay = True
+            iboost_export_okay = True
             iboost_amount = 0
 
-            # IBoost energy rate control
+            # IBoost energy rate control. The import limits (iboost_rate_threshold, iboost_gas) gate what the diverter takes
+            # instead of importing, the export limits (iboost_rate_threshold_export, iboost_gas_export) what it takes instead of
+            # exporting, so each mode is gated only by the rates of the energy it uses (#4473)
             if self.iboost_enable:
                 # Boost on energy rates
                 if import_rate > self.iboost_rate_threshold:
-                    iboost_rate_okay = False
+                    iboost_import_okay = False
                 if export_rate > self.iboost_rate_threshold_export:
-                    iboost_rate_okay = False
+                    iboost_export_okay = False
 
                 # Boost on gas vs import rate
                 if self.iboost_gas and self.rate_gas:
                     gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
                     if import_rate > gas_rate:
-                        iboost_rate_okay = False
+                        iboost_import_okay = False
 
                 # Boost on gas vs export rate
                 if self.iboost_gas_export and self.rate_gas:
                     gas_rate = self.rate_gas.get(minute_absolute, 99) * self.iboost_gas_scale
                     if export_rate > gas_rate:
-                        iboost_rate_okay = False
+                        iboost_export_okay = False
 
                 # IBoost solar diverter on load, don't do on discharge
                 # IBoost based on plan for given rates
@@ -1042,8 +1045,8 @@ class Prediction(PredictionBatch):
                     iboost_load = in_iboost_slot(minute_absolute, self.iboost_plan) * step / 60.0
                     iboost_amount = min(iboost_load, self.iboost_max_power * step, max(self.iboost_max_energy - iboost_today_kwh, 0))
 
-                # IBoost based on Predbat charging
-                if self.iboost_charging and iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy:
+                # IBoost based on Predbat charging: grid energy, so only the import limits apply
+                if self.iboost_charging and iboost_import_okay and iboost_today_kwh < self.iboost_max_energy:
                     if charge_window_active:
                         iboost_amount = min(self.iboost_max_power * step, max(self.iboost_max_energy - iboost_today_kwh, 0))
 
@@ -1058,9 +1061,16 @@ class Prediction(PredictionBatch):
                 # Iboost load added
                 load_yesterday += iboost_amount
 
-                # iBoost Solar diversion model
+                # iBoost Solar diversion model: any solar, which would otherwise cover the load (or charge the battery) or be
+                # exported, so both the import and the export limits apply
                 if self.iboost_solar and not self.iboost_solar_excess:
-                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (pv_now > (self.iboost_min_power * step) and ((soc * 100.0 / soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
+                    if (
+                        iboost_import_okay
+                        and iboost_export_okay
+                        and iboost_today_kwh < self.iboost_max_energy
+                        and (pv_now > (self.iboost_min_power * step) and ((soc * 100.0 / soc_max) >= self.iboost_min_soc))
+                        and (self.iboost_on_export or (export_window_n < 0))
+                    ):
                         iboost_pv_amount = min(pv_now, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         pv_now -= iboost_pv_amount
                         iboost_amount += iboost_pv_amount
@@ -1421,12 +1431,12 @@ class Prediction(PredictionBatch):
 
             # Iboost finally count
             if self.iboost_enable:
-                # iBoost Solar diversion model
+                # iBoost Solar diversion model: only solar that would otherwise be exported, so only the export limits apply
                 if self.iboost_solar and self.iboost_solar_excess:
                     excess = 0
                     if diff < 0:
                         excess = -diff
-                    if iboost_rate_okay and iboost_today_kwh < self.iboost_max_energy and (excess > (self.iboost_min_power * step) and ((soc * 100.0 / soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
+                    if iboost_export_okay and iboost_today_kwh < self.iboost_max_energy and (excess > (self.iboost_min_power * step) and ((soc * 100.0 / soc_max) >= self.iboost_min_soc)) and (self.iboost_on_export or (export_window_n < 0)):
                         iboost_pv_amount = min(excess, max(self.iboost_max_power * step - iboost_amount, 0), max(self.iboost_max_energy - iboost_today_kwh - iboost_amount, 0))
                         load_yesterday += iboost_pv_amount
                         iboost_amount += iboost_pv_amount
