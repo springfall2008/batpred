@@ -91,7 +91,9 @@
 // Parity 22 (car cancel branch): the car cancel branch's parity 21 merged with main's parity 20.
 // Parity 21 to 23 (main): the battery rate grids - each step's charge and discharge rate from a rate grid curve row.
 // Parity 24: the car cancel branch's parity 22 merged with main's parity 23.
-#define PK_PARITY_REVISION 24
+// Parity 25: with reserve control on, a charge window holding at its limit (a freeze included) lets the
+// battery leak battery_rate_min below the limit each step, rather than holding it exactly (GH#6269).
+#define PK_PARITY_REVISION 25
 #define PK_MAX_CARS 8
 #define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
@@ -993,8 +995,9 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 // Charge freeze via reserve
                 charge_limit_n = std::max(soc, reserve);
             }
+            // The reserve is the charge limit minus the minimum battery rate, as it can leak a little (GH#6269)
             if (c->set_reserve_enable && (soc >= charge_limit_n)) {
-                reserve_expected = std::max(charge_limit_n, reserve);
+                reserve_expected = std::max(charge_limit_n - battery_rate_min * step, reserve);
             }
         }
 

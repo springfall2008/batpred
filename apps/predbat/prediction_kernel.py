@@ -37,8 +37,9 @@ from utils import in_car_slot, in_iboost_slot
 # PkContext; ABI 12 (main) the rate grid curve rows; ABI 14 is both.
 KERNEL_ABI_VERSION = 14
 # Parity 22 (car cancel branch): an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted -
-# merged with main's parity 20. Parity 23 (main): the battery rate grids. Parity 24: both.
-KERNEL_PARITY_REVISION = 24
+# merged with main's parity 20. Parity 23 (main): the battery rate grids. Parity 24: both. Parity 25: a held charge window leaks
+# battery_rate_min below its limit with reserve control on (GH#6269).
+KERNEL_PARITY_REVISION = 25
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
