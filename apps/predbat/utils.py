@@ -298,6 +298,8 @@ class MinuteArray:
 # sensors. As Python objects they were the only !!python/object tags in a fresh dump, and a newer dump on an older
 # tree failed to load on them (GH#5719).
 DEBUG_EXCLUDE_LIST = [
+    "load_forecast_guard_classic",  # Transient per-fetch forecast and filtered-history cache.
+    "load_forecast_guard",  # Runtime evidence helper; its public summary is on load_ml_accuracy.
     "ha_interface",
     "components",
     "coordinator",
