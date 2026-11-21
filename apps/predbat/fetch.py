@@ -18,7 +18,7 @@ battery temperature, and other sensor inputs. Converts all data to per-minute
 dictionaries for use by the prediction engine.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from utils import (
     average_temperature_minutes,
     battery_temperature_entities,
@@ -2693,7 +2693,8 @@ class Fetch:
             # The past minutes no car charged in, which use none of the Octopus Intelligent daily cap (#6252): read once
             # every car's dispatches are in, before the car plans below and the rates count the cap with them
             if save:
-                self.octopus_cap_record(self.now_utc_real, save="cycle")
+                # Stamped when read, not with the cycle's clock, which was taken before the fetch and the poll's last reading
+                self.octopus_cap_record(datetime.now(timezone.utc), save="cycle")
                 self.octopus_cap_idle = self.octopus_cap_idle_load()
                 self.octopus_cap_idle_midnight = self.midnight_utc
 

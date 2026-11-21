@@ -9,7 +9,7 @@
 # pylint: disable=attribute-defined-outside-init
 
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from tests.test_infra import reset_rates
 from const import REPEAT_FULL_LOG_SECONDS
 from utils import RepeatLogGate
@@ -831,6 +831,7 @@ def run_cap_actual_charging_tests(my_predbat, midnight_utc, time_format):
         "octopus_cap_idle",
         "octopus_cap_idle_midnight",
         "octopus_cap_idle_reason",
+        "octopus_cap_published",
         "dynamic_load_car_sensors",
         "midnight_utc",
         "components",
@@ -954,7 +955,8 @@ def run_cap_actual_charging_tests(my_predbat, midnight_utc, time_format):
         load(spans(), skip=range(400, 410))
         failed |= check_idle("cap_actual_long_gap", list(range(-720, 399)) + list(range(410, settled)), range(399, 410))
 
-        # A restart keeps the record through storage, but the time Predbat was down is not known even when short
+        # A restart keeps the record through storage, but the time Predbat was down is not known even when short, and the
+        # last 10 minutes before it come off, as a charge reported late can no longer cut them
         print("\n**** Cap actual charging: restart ****")
         store = {}
 
@@ -974,9 +976,35 @@ def run_cap_actual_charging_tests(my_predbat, midnight_utc, time_format):
         my_predbat.components = type("Components", (), {"get_component": lambda self, name: fake_storage if name == "storage" else None})()
         try:
             load(spans((480, 490)), restart_at=520)
-            failed |= check_idle("cap_actual_restart", list(range(-720, 470)) + list(range(490, 519)) + list(range(520, settled)), list(range(470, 490)) + [519])
+            failed |= check_idle("cap_actual_restart", list(range(-720, 470)) + list(range(490, 509)) + list(range(520, settled)), list(range(470, 490)) + list(range(509, 520)))
             if not store.get(("predbat", "octopus_cap")):
                 print("ERROR: cap_actual_restart: the record was not saved")
+                failed = True
+
+            # A cut that failed to save is saved again on the next cycle, though the record has not changed since
+            print("\n**** Cap actual charging: a failed save is tried again ****")
+            load(spans())
+            my_predbat.octopus_cap_save()
+            fail_saves = [True]
+            real_save = FakeStorage.save
+
+            async def failing_save(self, module, filename, data, format="yaml", expiry=None):
+                """Fail while fail_saves is set"""
+                if fail_saves:
+                    return False
+                return await real_save(self, module, filename, data, format=format, expiry=expiry)
+
+            FakeStorage.save = failing_save
+            try:
+                live[0] = True
+                my_predbat.octopus_cap_record(midnight_utc + timedelta(minutes=minutes_now + 1))
+                fail_saves.clear()
+                my_predbat.octopus_cap_record(midnight_utc + timedelta(minutes=minutes_now + 2), save="cycle")
+            finally:
+                FakeStorage.save = real_save
+            saved_runs = (store.get(("predbat", "octopus_cap")) or {}).get("runs")
+            if saved_runs != my_predbat.octopus_cap_runs:
+                print("ERROR: cap_actual_save_retry: saved {} but the record is {}".format(saved_runs, my_predbat.octopus_cap_runs))
                 failed = True
         finally:
             my_predbat.components = None
@@ -998,9 +1026,29 @@ def run_cap_actual_charging_tests(my_predbat, midnight_utc, time_format):
         # ...a car with dispatches but no sensor could be charging in any minute
         load(spans((480, 490)), spans(), sensors=[0])
         failed |= check_none("cap_actual_two_cars_no_sensor")
+        # ...including when it only had dispatches after the record was taken without it
+        load(spans((480, 490)), spans(), slot_cars=[0], sensors=[0])
+        my_predbat.octopus_slots = [["dispatch"], ["dispatch"]]
+        my_predbat.octopus_cap_idle = my_predbat.octopus_cap_idle_load()
+        failed |= check_none("cap_actual_late_car_no_sensor")
         # ...but a car with no dispatches and no sensor does not stop the saving
         load(spans((480, 490)), spans(), slot_cars=[0], sensors=[0])
         failed |= check_idle("cap_actual_other_car_no_sensor", list(range(-720, 470)) + list(range(490, settled)), range(470, 490))
+
+        # The 15 second poll adds a reading on the real clock, and nothing before the first cycle has set midnight_utc
+        print("\n**** Cap actual charging: the poll ****")
+        load(spans())
+        before = [list(run) for run in my_predbat.octopus_cap_runs]
+        my_predbat.midnight_utc = None
+        my_predbat.octopus_cap_poll()
+        my_predbat.midnight_utc = midnight_utc
+        if my_predbat.octopus_cap_runs != before:
+            print("ERROR: cap_actual_poll: the poll recorded before midnight_utc was set")
+            failed = True
+        my_predbat.octopus_cap_poll()
+        if not my_predbat.octopus_cap_last or abs(my_predbat.octopus_cap_last[0] - datetime.now(timezone.utc).timestamp()) > 60:
+            print("ERROR: cap_actual_poll: the poll should record on the real clock, got {}".format(my_predbat.octopus_cap_last))
+            failed = True
 
         # With no cap (octopus_slot_max 48, the default off IOG-SMB tariffs) nothing is recorded
         print("\n**** Cap actual charging: no cap ****")
@@ -1008,6 +1056,12 @@ def run_cap_actual_charging_tests(my_predbat, midnight_utc, time_format):
         failed |= check_none("cap_actual_no_cap")
         if my_predbat.octopus_cap_runs:
             print("ERROR: cap_actual_no_cap: nothing should be recorded")
+            failed = True
+        # ...and the cap used sensor, published before, is cleared rather than left showing the last figures
+        my_predbat.octopus_cap_published = True
+        my_predbat.publish_octopus_cap()
+        if my_predbat.get_state_wrapper(my_predbat.prefix + ".octopus_cap_used") != 0:
+            print("ERROR: cap_actual_no_cap: octopus_cap_used should be cleared to 0")
             failed = True
 
         # Under the window billing rule the whole planned window is billed whether the car charges or not, so it is counted whole

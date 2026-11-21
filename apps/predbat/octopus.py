@@ -3983,8 +3983,9 @@ class Octopus:
         evidence - ends the stretch, so a minute nothing was known about counts. A reading that is not "not charging" also
         takes OCTOPUS_CAP_LAG_MINUTES off the end of the stretch before it, as a charger's sensor can report a charge late.
 
-        With save True the record is written to storage when a stretch starts or is cut, and on each cycle (save "cycle")
-        while it has grown, so a restart keeps it (see octopus_cap_load()).
+        With save True the record is written to storage when a stretch is cut, and on each cycle (save "cycle") when it has
+        changed, so a restart keeps it (see octopus_cap_load()). A new or longer stretch can wait for the cycle, as losing
+        it only loses some of the saving; a cut cannot, or a restart would bring back the minutes it took off.
         """
         if not self.octopus_cap_counts() or not self.octopus_cap_cars():
             return
@@ -3992,13 +3993,12 @@ class Octopus:
         reading = self.octopus_cap_reading()
         runs = self.octopus_cap_runs
         last = self.octopus_cap_last
-        changed = False
+        cut = False
         if reading:
             if runs and last and last[1] and runs[-1][1] == last[0] and now_ts - last[0] <= OCTOPUS_CAP_BRIDGE_MINUTES * 60:
                 runs[-1][1] = now_ts
             else:
                 runs.append([now_ts, now_ts])
-                changed = True
         else:
             trim_from = now_ts - OCTOPUS_CAP_LAG_MINUTES * 60
             kept = []
@@ -4008,12 +4008,12 @@ class Octopus:
                 elif start < trim_from:
                     kept.append([start, trim_from])
             if kept != runs:
-                changed = True
+                cut = True
             runs = kept
         oldest = now_ts - OCTOPUS_CAP_KEEP_DAYS * 24 * 60 * 60
         self.octopus_cap_runs = [run for run in runs if run[1] >= oldest]
         self.octopus_cap_last = (now_ts, reading)
-        if save and (changed or save == "cycle"):
+        if save and (cut or save == "cycle"):
             self.octopus_cap_save()
 
     def octopus_cap_save(self):
@@ -4025,11 +4025,14 @@ class Octopus:
         storage = self.components.get_component("storage") if self.components else None
         if not storage:
             return
-        # Recorded whether or not the write works, so a failing store is not retried every 15 seconds
-        self.octopus_cap_saved = [list(run) for run in self.octopus_cap_runs]
+        runs = [list(run) for run in self.octopus_cap_runs]
         try:
             expiry = datetime.now(timezone.utc) + timedelta(days=OCTOPUS_CAP_KEEP_DAYS)
-            if not run_async(storage.save("predbat", "octopus_cap", {"runs": self.octopus_cap_saved}, format="json", expiry=expiry)):
+            if run_async(storage.save("predbat", "octopus_cap", {"runs": runs}, format="json", expiry=expiry)):
+                # Only once written: a cut that failed to save must be tried again, or a restart would bring back the
+                # minutes it took off
+                self.octopus_cap_saved = runs
+            else:
                 self.log("Warn: Octopus Intelligent: failed to save the record of the time no car charged in")
         except Exception as e:
             self.log("Warn: Octopus Intelligent: failed to save the record of the time no car charged in: {}".format(e))
@@ -4037,7 +4040,8 @@ class Octopus:
     def octopus_cap_load(self):
         """
         Restore octopus_cap_runs, saved by octopus_cap_save(), at start up. The latest reading is not restored, so the first
-        reading after a restart starts a new stretch: the time Predbat was not running is not known.
+        reading after a restart starts a new stretch: the time Predbat was not running is not known. The last
+        OCTOPUS_CAP_LAG_MINUTES of the latest stretch are taken off too, as a charge reported late can no longer cut them.
         """
         storage = self.components.get_component("storage") if self.components else None
         if not storage:
@@ -4058,8 +4062,13 @@ class Octopus:
                 continue
             if start <= end:
                 restored.append([start, end])
-        self.octopus_cap_runs = sorted(restored)
-        self.octopus_cap_saved = [list(run) for run in self.octopus_cap_runs]
+        restored.sort()
+        if restored:
+            # Only the latest stretch can still need its end cutting: each earlier one was ended by a reading that cut it
+            restored[-1][1] -= OCTOPUS_CAP_LAG_MINUTES * 60
+            if restored[-1][1] < restored[-1][0]:
+                restored.pop()
+        self.octopus_cap_runs = restored
 
     def octopus_cap_poll(self, now=None):
         """
@@ -4094,6 +4103,9 @@ class Octopus:
             if reason:
                 self.log("Octopus Intelligent: counting the daily cap in whole dispatch minutes, as {}".format(reason))
             self.octopus_cap_idle_reason = reason
+        if reason:
+            # The record was taken without that car, which could have charged in any of it
+            return None
 
         midnight_ts = self.midnight_utc.timestamp()
         cutoff = midnight_ts - 12 * 60 * 60
@@ -4586,11 +4598,17 @@ class Octopus:
 
     def publish_octopus_cap(self):
         """
-        Publish how much of the Octopus Intelligent daily cap is used (see octopus_cap_usage()), when there is one.
+        Publish how much of the Octopus Intelligent daily cap is used (see octopus_cap_usage()), when there is one, and 0
+        once there is not.
         """
         usage = self.octopus_cap_usage()
         if usage is None:
+            if self.octopus_cap_published:
+                # Cleared rather than left showing the last period's figures
+                self.dashboard_item(self.prefix + ".octopus_cap_used", state=0, attributes={"friendly_name": "Predbat Octopus Intelligent daily cap used", "state_class": "measurement", "unit_of_measurement": "min", "icon": "mdi:timer-sand"})
+                self.octopus_cap_published = False
             return
+        self.octopus_cap_published = True
         self.dashboard_item(
             self.prefix + ".octopus_cap_used",
             state=usage["used"],

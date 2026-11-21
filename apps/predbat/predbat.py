@@ -600,6 +600,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_cap_runs = []
         self.octopus_cap_saved = None
         self.octopus_cap_last = None
+        self.octopus_cap_published = False  # Whether predbat.octopus_cap_used has been published, so it is cleared once
         # The past minutes no car charged in, read each cycle, and why there are none, as last logged (octopus_cap_idle_load())
         self.octopus_cap_idle = None
         self.octopus_cap_idle_midnight = None
