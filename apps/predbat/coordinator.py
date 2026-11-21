@@ -48,8 +48,9 @@ CAPABILITY_KEYS = (
 # inverter.py uses when a row leaves it out. A record may state one, but leaving it out is not a gap:
 # the field takes base's value, or this default - the rate_step_percent_of_capacity pattern. Only the
 # rows that need one (EnphaseCloud and TESLA set reserve_above_soc_charges_from_grid, TESLA alone sets
-# reserve_full_only_above_80, SIG alone sets reserve_via_discharge_rate) have to state it.
-OPTIONAL_CAPABILITY_DEFAULTS = {"reserve_above_soc_charges_from_grid": False, "reserve_full_only_above_80": False, "reserve_via_discharge_rate": False}
+# reserve_full_only_above_80, SIG alone sets reserve_via_discharge_rate, HanchuCloud alone sets
+# charge_rate_ahead_of_window) have to state it.
+OPTIONAL_CAPABILITY_DEFAULTS = {"reserve_above_soc_charges_from_grid": False, "reserve_full_only_above_80": False, "reserve_via_discharge_rate": False, "charge_rate_ahead_of_window": False}
 
 # INVERTER_DEF presence flags -> the settings that must be bound to a real rw entity for the flag to be
 # True. inverter.py creates a dummy entity for exactly these settings when the flag is False

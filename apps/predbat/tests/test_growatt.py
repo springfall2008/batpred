@@ -421,7 +421,10 @@ def test_growatt_registration_and_schema():
 
 def test_growatt_inverter_definition_is_complete():
     entry = INVERTER_DEF["GrowattCloud"]
-    reference = set(INVERTER_DEF["HanchuCloud"])
+    # Optional capabilities a row may leave out (inverter.py defaults them) are not part of the reference
+    from coordinator import OPTIONAL_CAPABILITY_DEFAULTS
+
+    reference = set(INVERTER_DEF["HanchuCloud"]) - set(OPTIONAL_CAPABILITY_DEFAULTS)
     assert not (reference - set(entry))
     assert entry["output_charge_control"] == "power"
     assert entry["has_target_soc"] is True

@@ -159,6 +159,10 @@ HANCHU_CAPABILITIES = {
     "charge_discharge_with_rate": False,
     "charge_control_immediate": False,
     "target_soc_used_for_discharge": True,
+    # CHG_PWR_LMT does not throttle solar charging while no charge slot is running (a DC-coupled unit
+    # charged at 4.9 kW from 5.2 kW of PV with the limit at 3.5 kW and no slot set), so the low-power
+    # rate can go out with the early-armed window without holding back solar before it (batpred#6190).
+    "charge_rate_ahead_of_window": True,
 }
 
 

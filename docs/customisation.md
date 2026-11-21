@@ -546,6 +546,7 @@ lowest possible rate to meet the charge target. This is only really effective fo
 If this setting is turned on, it is strongly recommended that you create a [charge rate grid](apps-yaml.md#battery-rate-grids) (learned automatically, or set a battery_charge_power_curve in apps.yaml)
 as otherwise the low power charge may not reach the charge target in time.
 The minimum requested charge rate used in this mode is 400 watts (subject to inverter/battery minimum rate limits).
+On most inverters a charge window set up ahead of its start opens at the inverter's maximum rate until Predbat's first run inside it sets the low-power rate; on inverters whose charge rate does not limit solar charging before a charge slot starts (currently Hanchu ESS Cloud), the low-power rate is written with the window, so it opens at that rate.
 This setting is off by default.
 
 Low-power charging is skipped for any charge window whose forecast solar production averages above **input_number.predbat_low_power_pv_threshold_w**,
