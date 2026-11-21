@@ -271,6 +271,24 @@ def test_hainterface_api_call_silent_mode(my_predbat=None):
         else:
             print("✓ Warning suppressed in silent mode")
 
+    # A gateway's 502 while Home Assistant restarts: initialize() polls silently every 5 seconds, so no line each time
+    gateway_logs = []
+    ha_interface.log = lambda msg: (gateway_logs.append(msg), original_log(msg))
+    with patch("ha.http_get") as mock_get:
+        mock_get.return_value = create_mock_requests_response(502, json_error=True)
+        result = ha_interface.api_call("/api/services", silent=True)
+        if result is not None or [msg for msg in gateway_logs if "HTTP 502" in msg]:
+            print("ERROR: A silent call should return None and log nothing for a 502, got {} and {}".format(result, gateway_logs))
+            failed += 1
+        else:
+            print("✓ 502 not logged in silent mode")
+        ha_interface.api_call("/api/services")
+        if not [msg for msg in gateway_logs if "Warn: HTTP 502" in msg]:
+            print("ERROR: A non-silent call should log the 502, got {}".format(gateway_logs))
+            failed += 1
+        else:
+            print("✓ 502 logged when not silent")
+
     return failed
 
 
