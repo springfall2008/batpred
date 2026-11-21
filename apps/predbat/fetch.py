@@ -75,6 +75,7 @@ from const import (
 from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
+from currency import round_currency
 
 import ast
 import copy
@@ -3325,7 +3326,7 @@ class Fetch:
             pv_light_dark_last = pv_state
 
         if rate_low_count:
-            rate_low_average = dp2(rate_low_average / rate_low_count)
+            rate_low_average = round_currency(rate_low_average / rate_low_count, self.currency_scale, 2)
         return rate_low_start, rate_low_end, rate_low_average
 
     def pre_saving_for_session_minutes(self, pre_saving, saving_minutes):
@@ -3613,10 +3614,10 @@ class Fetch:
         """
         Work out min and max rates
         """
-        rate_min = 99999
+        rate_min = float("inf")
         rate_min_minute = 0
         rate_max_minute = 0
-        rate_max = 0
+        rate_max = -float("inf")
         rate_average = 0
         rate_n = 0
         rate = 0
@@ -3636,10 +3637,11 @@ class Fetch:
                     rate_average += rate
                     rate_n += 1
                 minute += 1
-        if rate_n:
-            rate_average /= rate_n
+        if not rate_n:
+            return 99999, 0, 0, rate_min_minute, rate_max_minute
+        rate_average /= rate_n
 
-        return dp2(rate_min), dp2(rate_max), dp2(rate_average), rate_min_minute, rate_max_minute
+        return round_currency(rate_min, self.currency_scale, 2), round_currency(rate_max, self.currency_scale, 2), round_currency(rate_average, self.currency_scale, 2), rate_min_minute, rate_max_minute
 
     def rate_base_min_max(self, rates):
         """
@@ -3671,8 +3673,8 @@ class Fetch:
         if not saving_minutes or not rate_base:
             return self.rate_minmax(rates)[:3]
 
-        rate_min = 99999
-        rate_max = 0
+        rate_min = float("inf")
+        rate_max = -float("inf")
         rate_total = 0
         rate_n = 0
 
@@ -3694,7 +3696,7 @@ class Fetch:
         if rate_n == 0:
             return self.rate_minmax(rates)[:3]
 
-        return dp2(rate_min), dp2(rate_max), dp2(rate_total / rate_n)
+        return round_currency(rate_min, self.currency_scale, 2), round_currency(rate_max, self.currency_scale, 2), round_currency(rate_total / rate_n, self.currency_scale, 2)
 
     def rate_min_forward_calc(self, rates):
         """
@@ -3728,15 +3730,15 @@ class Fetch:
         pv_light_dark = pv_light_dark or {}
         minute = start_minute
         found_rates = []
-        lowest = 99
-        highest = -99
+        lowest = float("inf")
+        highest = -float("inf")
 
         while True:
             rate_low_start, rate_low_end, rate_low_average = self.find_charge_window(rates, minute, threshold_rate, find_high, alt_rates=alt_rates, pv_light_dark=pv_light_dark)
             window = {}
             window["start"] = rate_low_start
             window["end"] = rate_low_end
-            window["average"] = dp2(rate_low_average)
+            window["average"] = round_currency(rate_low_average, self.currency_scale, 2)
 
             if rate_low_start >= 0:
                 if (return_raw or (rate_low_end > self.minutes_now)) and (rate_low_end - rate_low_start) >= rate_low_min_window:
@@ -3750,7 +3752,7 @@ class Fetch:
             else:
                 break
 
-        return found_rates, lowest, highest
+        return (found_rates, lowest, highest) if found_rates else (found_rates, 99, -99)
 
     def find_low_rate_windows(self, alt_rates=None, pv_light_dark=None):
         """
@@ -3856,31 +3858,31 @@ class Fetch:
         self.rate_import_tariff_max = rate_max
 
         if self.rate_low_threshold > 0:
-            self.rate_import_cost_threshold = dp2(rate_average * self.rate_low_threshold)
+            self.rate_import_cost_threshold = round_currency(rate_average * self.rate_low_threshold, self.currency_scale, 2)
         else:
             # In automatic mode select the only rate or everything but the most expensive
             if (rate_max == rate_min) or (rate_export_max > rate_max) or have_alerts or have_manual_soc:
-                self.rate_import_cost_threshold = rate_max + 0.1
+                self.rate_import_cost_threshold = rate_max + 0.1 * self.currency_scale
             else:
-                self.rate_import_cost_threshold = rate_max - 0.5
+                self.rate_import_cost_threshold = rate_max - 0.5 * self.currency_scale
 
         # When we plan car on the rates we need to include all the rates up to the max car price
         if car_planning_on_rates:
-            self.rate_import_cost_threshold = max(self.rate_import_cost_threshold, car_charging_max_price + 0.1)
+            self.rate_import_cost_threshold = max(self.rate_import_cost_threshold, car_charging_max_price + 0.1 * self.currency_scale)
 
         # Ahead of an event worth charging for, every tariff slot is a candidate, as when export beats import above
         self.rate_import_pre_event_end = self.find_event_pre_charge(rate_max)
-        self.rate_import_pre_event_threshold = rate_max + 0.1
+        self.rate_import_pre_event_threshold = rate_max + 0.1 * self.currency_scale
 
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
-            self.rate_export_cost_threshold = dp2(rate_export_average * self.rate_high_threshold)
+            self.rate_export_cost_threshold = round_currency(rate_export_average * self.rate_high_threshold, self.currency_scale, 2)
         else:
             # In automatic mode select the only rate or everything but the most cheapest
             if (rate_export_max == rate_export_min) or (rate_export_min > rate_min) or have_alerts:
-                self.rate_export_cost_threshold = rate_export_min - 0.1
+                self.rate_export_cost_threshold = rate_export_min - 0.1 * self.currency_scale
             else:
-                self.rate_export_cost_threshold = rate_export_min + 0.5
+                self.rate_export_cost_threshold = rate_export_min + 0.5 * self.currency_scale
 
         self.log(
             "Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(

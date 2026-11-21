@@ -82,7 +82,9 @@ def run_currency_scale_tests(my_predbat):
         for bad in ["twenty", 0.5, -3, "nan", "inf"]:
             print("  [currency_scale] {!r} is ignored".format(bad))
             _restart(my_predbat, currency_scale=bad)
+            # A rejected scale falls back to scale=1, including its original limits and clamp.
             failed |= _check("metric_min_improvement_export range with {!r}".format(bad), _range(my_predbat, "metric_min_improvement_export"), (-50, 50.0))
+            failed |= _check("clamped monetary value with {!r}".format(bad), my_predbat.config_index["metric_min_improvement_export"]["value"], 50)
             failed |= _check("currency_scale attribute with {!r}".format(bad), getattr(my_predbat, "currency_scale", None), 1.0)
     finally:
         my_predbat.args.clear()

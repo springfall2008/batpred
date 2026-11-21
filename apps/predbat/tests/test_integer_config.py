@@ -249,10 +249,8 @@ def test_config_item_range_clamp(my_predbat):
     assert my_predbat.had_errors is False, "In-range config value should not flag had_errors"
     print("✓ In-range value (0.3) passes through unclamped")
 
-    # Test 4: an integer-step item with a float-typed max (metric_min_improvement_plan: step=1,
-    # max=250.0) must still come out as an int after clamping, not the raw float max - clamping
-    # runs before the integer-preservation check, so it needs to re-apply after the clamp rather
-    # than just handing back the schema's float boundary value untouched.
+    # Test 4: at the default currency scale, an integer-step monetary item must still
+    # clamp to its declared float-typed max and preserve integer formatting.
     int_item = None
     for config_item in my_predbat.CONFIG_ITEMS:
         if config_item.get("name") == "metric_min_improvement_plan":
@@ -271,10 +269,12 @@ def test_config_item_range_clamp(my_predbat):
     my_predbat.expose_config("metric_min_improvement_plan", 300, force_ha=True)
     my_predbat.had_errors = False
     my_predbat.load_user_config()
+    assert my_predbat.currency_scale == 1.0, "This test exercises the unscaled compatibility path"
     assert int_item["value"] == 250, f"Expected clamp to max 250, got {int_item['value']}"
+    assert int_item["max"] == 250.0, f"Default-scale range should stay unchanged, got {int_item['max']}"
     assert isinstance(int_item["value"], int), f"Clamped value for an integer-step item should stay an int, got {type(int_item['value'])}"
     assert my_predbat.had_errors is True, "Out-of-range config value should flag had_errors"
-    print("✓ Above-max value (300) on an integer-step item clamps to an int (250), not a float")
+    print("✓ Above-max monetary value (300) clamps to 250 as an int at currency_scale=1")
 
     my_predbat.expose_config("metric_min_improvement_plan", int_item.get("default"), force_ha=True)
     my_predbat.expose_config("expert_mode", original_expert_mode, force_ha=True)

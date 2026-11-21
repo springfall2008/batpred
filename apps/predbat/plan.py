@@ -19,6 +19,7 @@ call to the C++ prediction kernel, which is where the threading now lives.
 """
 
 from datetime import datetime, timedelta, timezone
+from currency import round_currency
 from multiprocessing import cpu_count
 from const import (
     CLOUD_FACTOR_PV10,
@@ -673,7 +674,7 @@ class Plan:
             period_start = (self.minutes_now // 30) * 30
             run_minute = self.minutes_now
             while self.io_adjusted.get(run_minute, False) and run_minute < self.minutes_now + self.forecast_minutes:
-                credit[run_minute] = IO_CONFIRMED_CREDIT / (1 + (run_minute - period_start) // 30)
+                credit[run_minute] = (IO_CONFIRMED_CREDIT * self.currency_scale) / (1 + (run_minute - period_start) // 30)
                 run_minute += 1
         self.io_confirmed_credit = credit
 
@@ -1230,7 +1231,7 @@ class Plan:
         region_end=None,
         fast=False,
         quiet=False,
-        best_metric=9999999,
+        best_metric=float("inf"),
         best_cost=0,
         best_keep=0,
         best_soc_min=None,
@@ -1268,8 +1269,8 @@ class Plan:
         if levels_score is None:
             levels_score = {}
         else:
-            best_level_score = 9999999
-            worst_level_score = -9999999
+            best_level_score = float("inf")
+            worst_level_score = -float("inf")
             # Work out the best levels score so far
             for price in price_set:
                 best_level_score = min(best_level_score, levels_score[price])
@@ -1290,7 +1291,7 @@ class Plan:
             export_enable = False
 
         # Most expensive first
-        all_prices = price_set[::] + [dp1(price_set[-1] - 1)]
+        all_prices = price_set[::] + [round_currency(price_set[-1] - self.currency_scale, self.currency_scale, 1)]
         if not quiet:
             self.log("All prices {}".format(all_prices))
             if region_start:
@@ -1403,7 +1404,7 @@ class Plan:
         # Start loop of trials
         for loop_price in all_prices:
             if best_level_score is not None:
-                this_level_score = levels_score.get(loop_price, 9999999)
+                this_level_score = levels_score.get(loop_price, float("inf"))
                 if abs(this_level_score - best_level_score) > (0.2 * level_score_range):
                     if self.debug_enable:
                         self.log("Skipping price {} as level score {} is not within 20% of best {}".format(loop_price, this_level_score, best_level_score))
@@ -1539,7 +1540,7 @@ class Plan:
                                     try_value = tried_list[try_hash]
                                     if try_value is not True:
                                         if loop_price not in levels_score:
-                                            levels_score[loop_price] = 9999999
+                                            levels_score[loop_price] = float("inf")
                                         levels_score[loop_price] = min(levels_score[loop_price], tried_list[try_hash])
                                     continue
 
@@ -1626,7 +1627,7 @@ class Plan:
                             )
 
                     if loop_price not in levels_score:
-                        levels_score[loop_price] = 9999999
+                        levels_score[loop_price] = float("inf")
                     levels_score[loop_price] = min(levels_score[loop_price], metric)
 
                     # For the first pass just pick the most cost effective threshold, consider soc keep later
@@ -2092,7 +2093,7 @@ class Plan:
             return True
         if improvement >= 0 and fragmentation_new < fragmentation_prev:
             return True
-        if self.io_confirmed_tiebreak and improvement > 0 and cost_prev is not None and cost_new is not None and dp2(cost_new) <= dp2(cost_prev):
+        if self.io_confirmed_tiebreak and improvement > 0 and cost_prev is not None and cost_new is not None and round_currency(cost_new, self.currency_scale, 2) <= round_currency(cost_prev, self.currency_scale, 2):
             return True
         return False
 
@@ -2812,7 +2813,7 @@ class Plan:
         # The export tariff's own minimum, before any saving/Axle session - rate_export_min is scanned with them in
         export_min = self.rate_export_min if self.rate_export_min_base is None else self.rate_export_min_base
         rate_export_min = export_min * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle - rate_min
-        return max(rate_min, 1.0, rate_export_min)
+        return max(rate_min, self.currency_scale, rate_export_min)
 
     def compute_metric(self, end_record, soc, soc10, cost, cost10, final_iboost, final_iboost10, battery_cycle, metric_keep, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh, soc90=None, cost90=None, final_iboost90=0.0):
         """
@@ -2858,7 +2859,7 @@ class Plan:
         # Adjustment for battery cycles metric
         metric += battery_cycle * self.metric_battery_cycle + metric_keep
 
-        return dp4(metric), dp4(battery_value)
+        return round_currency(metric, self.currency_scale), round_currency(battery_value, self.currency_scale)
 
     def optimise_charge_limit(self, window_n, record_charge_windows, charge_limit, charge_window, export_window, export_limits, all_n=None, end_record=None, freeze_only=False, allow_freeze=True):
         """
@@ -2868,9 +2869,9 @@ class Plan:
         best_soc = self.soc_max
         best_soc_min = 0
         best_soc_min_minute = 0
-        best_metric = 9999999
+        best_metric = float("inf")
         best_metric_first = best_metric
-        best_metric_plan = 9999999
+        best_metric_plan = float("inf")
         best_cost = 0
         best_import = 0
         best_soc_step = self.best_soc_step
@@ -3157,20 +3158,20 @@ class Plan:
             # to try to avoid constant small changes to SoC target by forcing to keep the current % during a charge period
             # if changing it has little impact - the same weighting a running export gets
             if keep_charge_target is not None and keep_charge_target == calc_percent_limit(try_soc, self.soc_max):
-                metric -= max(0.5, self.metric_min_improvement)
+                metric -= max(0.5 * self.currency_scale, self.metric_min_improvement)
 
             if try_soc == best_soc_min_setting:
                 # Minor weighting to 0%
-                metric -= 0.003
+                metric -= 0.003 * self.currency_scale
             elif try_soc == self.soc_max:
                 # Minor weighting to 100%
-                metric -= 0.002
+                metric -= 0.002 * self.currency_scale
             elif self.set_charge_freeze and try_soc == self.reserve:
                 # Minor weighting to freeze
-                metric -= 0.001
+                metric -= 0.001 * self.currency_scale
 
             # Round metric to 4 DP
-            metric = dp4(metric)
+            metric = round_currency(metric, self.currency_scale)
 
             if self.debug_enable:
                 self.log(
@@ -3343,11 +3344,11 @@ class Plan:
         # instruction - not False. It used to be returned as a bare False and compared numerically,
         # where it read as 0: a full discharge, the opposite of the intent.
         best_export = pack_export_limit(EXPORT_MODE_IDLE)
-        best_metric = 9999999
-        best_score = 9999999
-        best_metric_plan = 9999999
-        off_metric = 9999999
-        off_gate = 9999999
+        best_metric = float("inf")
+        best_score = float("inf")
+        best_metric_plan = float("inf")
+        off_metric = float("inf")
+        off_gate = float("inf")
         best_cost = 0
         best_soc_min = 0
         best_soc_min_minute = 0
@@ -3477,10 +3478,10 @@ class Plan:
 
             if export_mode_of(this_export_limit) == EXPORT_MODE_IDLE:
                 # Minor weighting to off
-                metric -= 0.002
+                metric -= 0.002 * self.currency_scale
             elif export_limit_is_full_discharge(this_export_limit):
                 # Minor weighting to 0%
-                metric -= 0.001
+                metric -= 0.001 * self.currency_scale
 
             # Adjust to try to keep existing windows
             keep_export = False
@@ -3494,11 +3495,11 @@ class Plan:
                     # same bonus cancels it out and lets "stop now, restart later in this window" win, which is
                     # the export flapping this commitment exists to prevent.
                     if start <= self.minutes_now:
-                        metric -= max(0.5, self.metric_min_improvement_export)
+                        metric -= max(0.5 * self.currency_scale, self.metric_min_improvement_export)
                         keep_export = True
 
             # Round metric to 4 DP
-            metric = dp4(metric)
+            metric = round_currency(metric, self.currency_scale)
 
             if self.debug_enable:
                 self.log(
@@ -3540,7 +3541,7 @@ class Plan:
             # It prevents export oscillation on near-flat multi-slot price peaks where exporting now versus
             # holding and exporting the adjacent equal-priced slot is otherwise a cost coin-toss each cycle.
             if keep_export:
-                min_improvement_scaled = min(min_improvement_scaled, -max(0.5, self.metric_min_improvement_export))
+                min_improvement_scaled = min(min_improvement_scaled, -max(0.5 * self.currency_scale, self.metric_min_improvement_export))
 
             # Rank on the metric plus the option's share of the threshold, so every 5 minutes of export has to earn
             # its share: a step that earns less is only kept when the steps beyond it more than repay it. An export
@@ -3566,7 +3567,7 @@ class Plan:
                 best_import = import_kwh_battery + import_kwh_house
 
             # Store the metric and gate metric for export off
-            if off_metric == 9999999:
+            if off_metric == float("inf"):
                 off_metric = metric
                 off_gate = gate
 
@@ -3606,12 +3607,6 @@ class Plan:
                 )
 
         return best_export, best_start, best_metric, best_cost, best_soc_min, best_soc_min_minute, best_keep, best_cycle, best_carbon, best_import, best_metric_plan
-
-    def window_sort_func(self, window):
-        """
-        Helper sort index function
-        """
-        return float(window["key"])
 
     def window_sort_func_start(self, window):
         """
@@ -3665,7 +3660,7 @@ class Plan:
         if hours_ahead > IO_ADJUST_DISCOUNT_HORIZON_HOURS:
             # Distant period: suppress the discount but keep any penalty
             gradient = max(gradient, 0.0)
-        return gradient
+        return gradient * self.currency_scale
 
     def sort_window_by_price_combined(self, charge_windows, export_windows, calculate_import_low_export=False, calculate_export_high_import=False):
         """
@@ -3687,39 +3682,39 @@ class Plan:
                 average = window["average"] / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
                 if self.carbon_enable:
                     carbon_intensity = self.carbon_intensity.get(max(window["start"] - self.minutes_now, 0), 0)
-                    average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
+                    average += round_currency(carbon_intensity * self.carbon_metric / 1000.0, self.currency_scale, 1)
                 if window["start"] in charge_io_run_starts:
                     # IOG (planned-dispatch) slot: apply the earlier-charge skew gradient
                     average += self._io_rate_adjustment(window["start"], charge_io_run_starts[window["start"]])
                 average += self.metric_self_sufficiency
-                average = dp2(average)  # Round to nearest 0.01 penny to avoid too many bands
+                average = round_currency(average, self.currency_scale, 2)  # Round in calibrated monetary units to bound the number of bands
                 if calculate_import_low_export:
-                    average_export = dp2((self.rate_export.get(window["start"], 0) + self.rate_export.get(window["end"] - PREDICT_STEP, 0)) / 2)
+                    average_export = round_currency((self.rate_export.get(window["start"], 0) + self.rate_export.get(window["end"] - PREDICT_STEP, 0)) / 2, self.currency_scale, 2)
                 else:
                     average_export = 0
                 window_start = window["start"]
-                sort_key = "%04.2f_%04.2f_%04d_c%02d" % (5000 - average, 5000 - average_export, 9999 - window_start, id)
+                sort_key = (0, -average, -average_export, -window_start, "c%02d" % id)
                 window_sort.append(sort_key)
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "c"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = dp1(average / 2) * 2  # Round to nearest 0.2 penny to avoid too many bands
-                window_links[sort_key]["average_secondary"] = dp1(average_export)  # Round to nearest 0.1 penny to avoid too many bands
+                window_links[sort_key]["average"] = round_currency(average / 2, self.currency_scale, 1) * 2  # 0.2 calibrated penny bands
+                window_links[sort_key]["average_secondary"] = round_currency(average_export, self.currency_scale, 1)  # 0.1 calibrated penny bands
 
                 if self.set_charge_freeze:
                     average = window["average"]
                     if self.carbon_enable:
                         carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
-                        average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
+                        average += round_currency(carbon_intensity * self.carbon_metric / 1000.0, self.currency_scale, 1)
                     average += self.metric_self_sufficiency
-                    average = dp2(average)  # Round to nearest 0.01 penny to avoid too many bands
-                    sort_key = "%04.2f_%04.2f_%04d_cf%02d" % (5000 - average, 5000 - average_export, 9999 - window_start, id)
+                    average = round_currency(average, self.currency_scale, 2)  # Round in calibrated monetary units to bound the number of bands
+                    sort_key = (0, -average, -average_export, -window_start, "cf%02d" % id)
                     window_sort.append(sort_key)
                     window_links[sort_key] = {}
                     window_links[sort_key]["type"] = "cf"
                     window_links[sort_key]["id"] = id
-                    window_links[sort_key]["average"] = dp1(average / 2) * 2  # Round to nearest 0.2 penny to avoid too many bands
-                    window_links[sort_key]["average_secondary"] = dp1(average_export)  # Round to nearest 0.1 penny to avoid too many bands
+                    window_links[sort_key]["average"] = round_currency(average / 2, self.currency_scale, 1) * 2  # 0.2 calibrated penny bands
+                    window_links[sort_key]["average_secondary"] = round_currency(average_export, self.currency_scale, 1)  # 0.1 calibrated penny bands
 
                 id += 1
 
@@ -3732,26 +3727,26 @@ class Plan:
                 average = window["average"] * self.inverter_loss * self.battery_loss_discharge - self.metric_battery_cycle
                 if self.carbon_enable:
                     carbon_intensity = self.carbon_intensity.get(max(window["start"] - self.minutes_now, 0), 0)
-                    average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
-                average = dp1(average)  # Round to nearest 0.01 penny to avoid too many bands
+                    average += round_currency(carbon_intensity * self.carbon_metric / 1000.0, self.currency_scale, 1)
+                average = round_currency(average, self.currency_scale, 1)  # Round in calibrated monetary units to bound the number of bands
                 if calculate_export_high_import:
-                    average_import = dp2((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2)
+                    average_import = round_currency((self.rate_import.get(window["start"], 0) + self.rate_import.get(window["end"] - PREDICT_STEP, 0)) / 2, self.currency_scale, 2)
                     if window["start"] in export_io_run_starts:
                         # IOG (planned-dispatch) slot on the import side: apply the earlier-charge skew gradient
                         average_import += self._io_rate_adjustment(window["start"], export_io_run_starts[window["start"]])
                 else:
                     average_import = 0
                 window_start = window["start"]
-                sort_key = "%04.2f_%04.2f_%04d_d%02d" % (5000 - average, 5000 - average_import, 9999 - window_start, id)
+                sort_key = (0, -average, -average_import, -window_start, "d%02d" % id)
                 if not self.calculate_export_first:
                     # Push export last if first is not set
-                    sort_key = "zz_" + sort_key
+                    sort_key = (1,) + sort_key[1:]
                 window_sort.append(sort_key)
                 window_links[sort_key] = {}
                 window_links[sort_key]["type"] = "d"
                 window_links[sort_key]["id"] = id
-                window_links[sort_key]["average"] = dp1(average / 2) * 2  # Round to nearest 0.2 penny to avoid too many bands
-                window_links[sort_key]["average_secondary"] = dp1(average_import)  # Round to nearest 0.1 penny to avoid too many bands
+                window_links[sort_key]["average"] = round_currency(average / 2, self.currency_scale, 1) * 2  # 0.2 calibrated penny bands
+                window_links[sort_key]["average_secondary"] = round_currency(average_import, self.currency_scale, 1)  # 0.1 calibrated penny bands
 
                 if self.set_export_freeze:
                     pv_period = 0
@@ -3762,18 +3757,18 @@ class Plan:
                         average = window["average"]
                         if self.carbon_enable:
                             carbon_intensity = self.carbon_intensity.get(window["start"] - self.minutes_now, 0)
-                            average += dp1(carbon_intensity * self.carbon_metric / 1000.0)
-                        average = dp2(average)  # Round to nearest 0.01 penny to avoid too many bands
-                        sort_key = "%04.2f_%04.2f_%04d_df%02d" % (5000 - average, 5000 - average_import, 9999 - window_start, id)
+                            average += round_currency(carbon_intensity * self.carbon_metric / 1000.0, self.currency_scale, 1)
+                        average = round_currency(average, self.currency_scale, 2)  # Round in calibrated monetary units to bound the number of bands
+                        sort_key = (0, -average, -average_import, -window_start, "df%02d" % id)
                         if not self.calculate_export_first:
                             # Push export last if first is not set
-                            sort_key = "zz_" + sort_key
+                            sort_key = (1,) + sort_key[1:]
                         window_sort.append(sort_key)
                         window_links[sort_key] = {}
                         window_links[sort_key]["type"] = "df"
                         window_links[sort_key]["id"] = id
-                        window_links[sort_key]["average"] = dp1(average / 2) * 2  # Round to nearest 0.2 penny to avoid too many bands
-                        window_links[sort_key]["average_secondary"] = dp1(average_import)  # Round to nearest 0.1 penny to avoid too many bands
+                        window_links[sort_key]["average"] = round_currency(average / 2, self.currency_scale, 1) * 2  # 0.2 calibrated penny bands
+                        window_links[sort_key]["average_secondary"] = round_currency(average_import, self.currency_scale, 1)  # 0.1 calibrated penny bands
 
                 id += 1
 
@@ -3830,11 +3825,11 @@ class Plan:
         for window in window_with_id:
             window["id"] = wid
             if reverse_time:
-                window["key"] = "%04.2f%02d" % (5000 - window["average"], 999 - window["id"])
+                window["key"] = (-round_currency(window["average"], self.currency_scale, 2), -window["id"])
             else:
-                window["key"] = "%04.2f%02d" % (5000 - window["average"], window["id"])
+                window["key"] = (-round_currency(window["average"], self.currency_scale, 2), window["id"])
             wid += 1
-        window_with_id.sort(key=self.window_sort_func)
+        window_with_id.sort(key=lambda window: window["key"])
         id_list = []
         for window in window_with_id:
             id_list.append(window["id"])
@@ -3879,7 +3874,7 @@ class Plan:
                 # Combine two windows of the same charge target provided the rates are the same or low power mode is off (low power mode can skew the charge into the more expensive slot)
                 new_window_best[-1]["end"] = end
                 new_window_best[-1]["target"] = window.get("target", limit)
-                new_window_best[-1]["average"] = dp2((new_window_best[-1]["average"] + window["average"]) / 2)
+                new_window_best[-1]["average"] = round_currency((new_window_best[-1]["average"] + window["average"]) / 2, self.currency_scale, 2)
                 if self.debug_enable:
                     self.log("Combine charge slot {} with previous (same target) - target soc {} kWh slot {} start {} end {} limit {}".format(window_n, new_limit_best[-1], new_window_best[-1], start, end, limit))
             elif (
@@ -3998,7 +3993,7 @@ class Plan:
         weightings), and the fix was to gate on the unadjusted whole-plan metric, which is what this
         trial uses. An in-progress export worth anything at all fails the gate and is kept.
         """
-        eps = 0.02
+        eps = 0.02 * self.currency_scale
         soc_eps = 0.1
         record_limit = self.end_record + self.minutes_now
         baseline = None
@@ -4276,7 +4271,7 @@ class Plan:
 
         Returns the number of merges made.
         """
-        eps = 0.02
+        eps = 0.02 * self.currency_scale
         windows = list(self.export_window_best)
         limits = list(self.export_limits_best)
         baseline = None
@@ -4901,7 +4896,7 @@ class Plan:
         # defaults negative (it deliberately breaks ties towards later windows) which for a
         # symmetric charge swap would let the metric increase and cause churn, so use a small
         # positive gate here: a swap is only kept if it lowers the metric by at least this amount.
-        min_improvement_swap = 0.1
+        min_improvement_swap = 0.1 * self.currency_scale
 
         swapped_target = {}
         swapped = True
