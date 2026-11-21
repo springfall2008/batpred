@@ -246,10 +246,19 @@ def marginal_costs_thresholds_non_positive_min(my_predbat):
     failed = False
 
     # A positive minimum keeps exactly the old thresholds, however small it is next to the range
-    for rate_min, rate_max in ((10.0, 35.0), (13.0, 40.0), (7.0, 30.0), (25.0, 25.0), (20.0, 80.0), (15.0, 100.0), (3.0, 35.0), (0.5, 30.0)):
+    for rate_min, rate_max, expected_cheap, expected_moderate in (
+        (10.0, 35.0, 12.0, 17.5),
+        (13.0, 40.0, 15.6, 20.0),
+        (7.0, 30.0, 8.4, 15.0),
+        (25.0, 25.0, 30.0, 37.5),
+        (20.0, 80.0, 24.0, 40.0),
+        (15.0, 100.0, 18.0, 50.0),
+        (3.0, 35.0, 3.6, 17.5),
+        (0.5, 30.0, 0.6, 15.0),
+    ):
         cheap, moderate = marginal_thresholds(rate_min, rate_max)
-        if abs(cheap - rate_min * 1.2) > 1e-9 or abs(moderate - max(rate_max * 0.5, rate_min * 1.5)) > 1e-9:
-            print("ERROR: thresholds for {}..{} are {}/{} but expected the unchanged {}/{}".format(rate_min, rate_max, cheap, moderate, rate_min * 1.2, max(rate_max * 0.5, rate_min * 1.5)))
+        if abs(cheap - expected_cheap) > 1e-9 or abs(moderate - expected_moderate) > 1e-9:
+            print("ERROR: thresholds for {}..{} are {}/{} but expected the unchanged {}/{}".format(rate_min, rate_max, cheap, moderate, expected_cheap, expected_moderate))
             failed = True
 
     # A 0p or negative minimum: cheap is 5% of the range above it, never below 0p. rate_minmax() never lets rate_max fall below 0
@@ -259,19 +268,20 @@ def marginal_costs_thresholds_non_positive_min(my_predbat):
             print("ERROR: thresholds for {}..{} are {}/{} but expected {}/{}".format(rate_min, rate_max, cheap, moderate, expected_cheap, expected_moderate))
             failed = True
 
-    # Published sensors: the cheapest slot of a plunge-pricing day, and of a day whose minimum is 0p, reads cheap
+    # Published sensors: a marginal cost at the minimum of a plunge-pricing window, or near a 0p minimum, reads cheap; one above
+    # the band reads moderate
     first_time_label = my_predbat.marginal_time_labels[0]
-    for rate_min, cost in ((-5.0, -5.0), (0.0, 0.3)):
+    for rate_min, cost, expected_cheap in ((-5.0, -5.0, "on"), (0.0, 0.3, "on"), (0.0, 2.0, "off"), (-5.0, 0.5, "off"), (-1.0, 1.0, "off")):
         my_predbat.marginal_costs_matrix = {kwh: {first_time_label: cost} for kwh in MARGINAL_EXTRA_KWH_LEVELS}
         my_predbat.rate_min_base = rate_min
         my_predbat.rate_max_base = 35.0
         my_predbat.publish_marginal_costs()
         for state_name in MARGINAL_EXTRA_KWH_LEVEL_NAMES:
-            for kind, expected in (("cheap", "on"), ("moderate", "off")):
+            for kind, expected in (("cheap", expected_cheap), ("moderate", "off" if expected_cheap == "on" else "on")):
                 bs_key = "binary_sensor.{}_marginal_rate_now_{}_is_{}".format(my_predbat.prefix, state_name, kind)
                 bs_state = my_predbat.dashboard_values.get(bs_key, {}).get("state")
                 if bs_state != expected:
-                    print("ERROR: minimum {}p: '{}' = '{}' but expected '{}' ({}p is the cheapest slot)".format(rate_min, bs_key, bs_state, expected, cost))
+                    print("ERROR: minimum {}p, marginal cost {}p: '{}' = '{}' but expected '{}'".format(rate_min, cost, bs_key, bs_state, expected))
                     failed = True
     return failed
 

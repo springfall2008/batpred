@@ -709,7 +709,7 @@ relative to the import rate range over the forecast window:
 
 The cheap/moderate thresholds are computed relative to the import rate range over the forecast window, which can include tomorrow's rates once they are published:
 
-- **Cheap threshold** = `rate_min × 1.2` when `rate_min` is above 0p. When it is 0p or negative (Agile plunge pricing), `rate_min + (rate_max − rate_min) × 0.05`, but never below 0p, so the cheapest slots, and any marginal cost of 0p or less, read cheap
+- **Cheap threshold** = `rate_min × 1.2` when `rate_min` is above 0p. When it is 0p or negative (Agile plunge pricing), `rate_min + (rate_max − rate_min) × 0.05`, but never below 0p, so a marginal cost at or near the window's minimum rate, and any marginal cost of 0p or less, reads cheap. The marginal cost can sit above the slot's rate (when the extra energy would come from the battery instead), so the cheapest slot doesn't always read cheap
 - **Moderate threshold** = `max(rate_max × 0.5, rate_min × 1.5)`
 
 `rate_min` and `rate_max` are the base tariff's lowest and highest import rates, the same values as the sensor's `rate_min`/`rate_max` attributes.
