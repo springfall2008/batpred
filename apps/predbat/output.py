@@ -318,22 +318,43 @@ class Output:
     charging schedules, and financial metric summaries.
     """
 
-    def publish_car_plan(self):
+    def publish_car_plan(self, after_plan=False):
         """
         Publish the car charging plan
+
+        after_plan is True for the publish straight after planning, False for the one at fetch, before it.
         """
         postfix = ""
+        # Always derived fresh from the plan as it stands, which at fetch time is last cycle's, so then only what the last
+        # publish cancelled or a charger is holding off (see car_cancelled_for_export_windows()): the slots it cancels are
+        # left out of the plan, and listed apart so a charger holds the car off for them (cancelled_for_export)
+        self.car_cancelled_for_export = self.car_cancelled_for_export_windows(after_plan=after_plan)
         for car_n in range(self.num_cars):
             # A list of its own per car - shared, every car after the first also carried the windows of
             # the cars before it, and a charger driven from its car's plan would charge in them
             plan = []
             if car_n > 0:
                 postfix = "_" + str(car_n)
-            if not self.car_charging_slots[car_n]:
+            cancelled_windows = self.car_cancelled_for_export.get(car_n, [])
+            cancelled_for_export = []
+            live_slots = []
+            for window in self.car_charging_slots[car_n]:
+                if (window["start"], window["end"]) in cancelled_windows:
+                    cancelled_for_export.append({"start": self.time_abs_str(window.get("start_orig", window["start"])), "end": self.time_abs_str(window["end"])})
+                else:
+                    live_slots.append(window)
+            if not live_slots:
                 self.dashboard_item(
                     "binary_sensor." + self.prefix + "_car_charging_slot" + postfix,
                     state="off",
-                    attributes={"planned": plan, "cost": None, "kWh": None, "friendly_name": "Predbat car charging slot" + postfix, "icon": "mdi:home-lightning-bolt-outline"},
+                    attributes={
+                        "planned": plan,
+                        "cost": None,
+                        "kWh": None,
+                        "cancelled_for_export": cancelled_for_export,
+                        "friendly_name": "Predbat car charging slot" + postfix,
+                        "icon": "mdi:home-lightning-bolt-outline",
+                    },
                 )
                 self.dashboard_item(
                     self.prefix + ".car_charging_start" + postfix,
@@ -349,7 +370,7 @@ class Output:
                     },
                 )
             else:
-                window = self.car_charging_slots[car_n][0]
+                window = live_slots[0]
                 if self.minutes_now >= window["start"] and self.minutes_now < window["end"] and window["kwh"] > 0:
                     slot = True
                 else:
@@ -381,7 +402,7 @@ class Output:
 
                 total_kwh = 0
                 total_cost = 0
-                for window in self.car_charging_slots[car_n]:
+                for window in live_slots:
                     start = self.time_abs_str(window.get("start_orig", window["start"]))
                     end = self.time_abs_str(window["end"])
                     kwh = dp2(window["kwh"])
@@ -407,6 +428,7 @@ class Output:
                         "planned": plan,
                         "cost": dp2(total_cost),
                         "kwh": dp2(total_kwh),
+                        "cancelled_for_export": cancelled_for_export,
                         "friendly_name": "Predbat car charging slot" + postfix,
                         "icon": "mdi:home-lightning-bolt-outline",
                     },
@@ -4406,9 +4428,10 @@ class Output:
 
     @staticmethod
     def history_billing_mark(billing):
-        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a credited event or its credit changes, or an Axle event or saving session changes; None without billing."""
+        """A mark that changes whenever any billed half-hour arrives, import or export, a late one filling a gap included, a billed half-hour's cost is revised, a credited event or its credit changes, or an Axle event or saving session changes; None without billing."""
         slots = (billing or {}).get("slots") or {}
-        mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] for leg in ("import", "export")]
+        # The totals catch a half-hour revised in place, as when Octopus re-prices an Intelligent dispatch's a day or so later (#6252)
+        mark = [[len(slots.get(leg) or {}), max(slots.get(leg) or {}, default=None)] + [round(sum((slot or {}).get(field) or 0.0 for slot in (slots.get(leg) or {}).values()), 4) for field in ("cost", "kwh", "standing")] for leg in ("import", "export")]
         mark.append([[event.get("start"), event.get("credit")] for event in (billing or {}).get("credit_events") or []])
         # Only Axle events over the billed half-hours: a managed price curve adds future ones every few minutes and an old one ages out every
         # half-hour, neither of which changes a billed row
@@ -4641,7 +4664,8 @@ class Output:
     def calculate_history_days(self):
         """Build the History view for the days before yesterday, for the day picker, and publish them as predbat.plan_history.
 
-        Rebuilt once per local date, or sooner when new billing has been published (its complete_until moves on).
+        Rebuilt once per local date, or sooner when the billing changes: new billing published (its complete_until moves on)
+        or a billed half-hour revised in place, as when Octopus re-prices an Intelligent dispatch a day or so later.
         Only days the loaded load history reaches (max_days_previous) and the recorded rates cover are built.
         """
         today = self.now_utc.astimezone(self.local_tz).date()

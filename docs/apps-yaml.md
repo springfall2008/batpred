@@ -644,6 +644,7 @@ The default is 0.
 
 When set above 0 it also spreads out the Octopus/Kraken billing reads shown in the History view: the first read after Predbat starts waits a random 0-30 minutes,
 and each day's billing query waits a further random 0-60 seconds, so many installations restarted together don't all query the supplier at once.
+Each wait between billing reads is also three hours give or take a random amount of up to 27 minutes, so installations whose reads once lined up drift apart again.
 
 ```yaml
   plan_random_delay: 30
