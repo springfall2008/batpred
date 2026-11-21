@@ -479,6 +479,12 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 - On cloud/REST paths the inverter-time sensor advances only with the poll, so `check_clock_skew()` can measure data age, not skew (GH#5562, open).
 - Tests: `./run_all --test inverter`
 
+### Window times a day long (`execute.py` "avoid wrap")
+
+- Charge/export windows are written as clock times, so one a full day long (merged charge and freeze slots reaching this time tomorrow) has equal start and end: the inverter reads no window, the next cycle sees "not within the window" and a charge falls through to the `isCharging` branch that sends `charge_freeze_service` (status still "Charging"). Log sign: `Adjust idle time, charge 06:30:00-06:30:00`.
+- Moving the start on to the current slot did not shorten the window; the end is now cut to a minute short of a day after it. Only inverters with `can_span_midnight` hit it; the others are capped at the day end.
+- Tests: `./run_all --test execute` (`charge_window_exactly_one_day`, `export_window_exactly_one_day`, `export_window_wrap_avoid`)
+
 ### LuxPower (no code — `templates/luxpower.yaml` only)
 
 - No LuxPower code, `INVERTER_DEF` entry or component: support is template mapping only. The stock template targets LuxPython (`lux_*`); `lxp_*` entities come from the cloud integration. Start with what the user mapped and which integration publishes it (GH#5661).

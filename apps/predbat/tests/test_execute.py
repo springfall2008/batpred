@@ -3516,6 +3516,28 @@ def run_execute_tests(my_predbat):
         assert_charge_start_time_minutes=my_predbat.minutes_now,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 23 * 60,
     )
+    if failed:
+        return failed
+
+    # Merged charge/freeze slots running exactly a day past the slot start: moving the start on to the current slot
+    # leaves start and end on the same clock time (read back as no window, so the charge fell through to a freeze),
+    # so the end must be cut to a minute short of a day
+    failed |= run_execute_test(
+        my_predbat,
+        "charge_window_exactly_one_day",
+        charge_window_best=[{"start": 12 * 60, "end": 12 * 60 + 24 * 60, "average": 1}],
+        charge_limit_best=charge_limit_best,
+        set_charge_window=True,
+        set_export_window=True,
+        minutes_now=12 * 60 + 15,
+        assert_charge_time_enable=True,
+        assert_status="Charging",
+        assert_charge_start_time_minutes=12 * 60,
+        assert_charge_end_time_minutes=12 * 60 + 24 * 60 - 1,
+    )
+    if failed:
+        return failed
+
     # Reproduce an EMS which still holds yesterday's 23:30 start after midnight.
     # A capable inverter keeps the overnight window; a same-day device starts at 00:00.
     for can_span_midnight in [False, True]:
@@ -4970,6 +4992,25 @@ def run_execute_tests(my_predbat):
     if failed:
         return failed
 
+    # Export window running a day past its start: the end (with the 1 minute export margin) must stay short of a day
+    failed |= run_execute_test(
+        my_predbat,
+        "export_window_exactly_one_day",
+        export_window_best=[{"start": 12 * 60, "end": 12 * 60 + 24 * 60, "average": 1}],
+        export_limits_best=export_limits_best,
+        assert_force_export=True,
+        set_charge_window=True,
+        set_export_window=True,
+        soc_kw=10,
+        minutes_now=12 * 60 + 15,
+        assert_status="Exporting",
+        assert_immediate_soc_target=0,
+        assert_discharge_start_time_minutes=12 * 60,
+        assert_discharge_end_time_minutes=12 * 60 + 24 * 60 - 1,
+    )
+    if failed:
+        return failed
+
     # Can span midnight false test
     for inverter in my_predbat.inverters:
         inverter.inv_can_span_midnight = False
@@ -5630,7 +5671,8 @@ def run_execute_tests(my_predbat):
         return failed
 
     # Export window would wrap over 24 hours (lines 330-331): start time gets realigned to the
-    # nearest plan_interval_minutes boundary rather than left far in the past
+    # nearest plan_interval_minutes boundary rather than left far in the past, and the end is cut
+    # to a minute short of a day (written as clock times, a 25 hour window would end at 13:01 today)
     export_window_best_long = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 1500, "average": 1}]
     for inverter in my_predbat.inverters:
         inverter.discharge_start_time_minutes = -1
@@ -5645,7 +5687,7 @@ def run_execute_tests(my_predbat):
         assert_status="Exporting",
         assert_force_export=True,
         assert_discharge_start_time_minutes=my_predbat.minutes_now,
-        assert_discharge_end_time_minutes=my_predbat.minutes_now + 1500 + 1,
+        assert_discharge_end_time_minutes=my_predbat.minutes_now + 24 * 60 - 1,
         assert_immediate_soc_target=0,
     )
     if failed:
