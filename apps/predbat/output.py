@@ -1328,6 +1328,18 @@ class Output:
             sources["90"] = (self.predict_soc_best90, self.predict_metric_best90, self.pv_forecast_minute90_step, self.load_minutes_step90)
         return sources
 
+    def plan_local_stamp(self, minute):
+        """
+        The instant minute real minutes after midnight_utc, in the configured timezone
+
+        midnight_utc carries the UTC offset of the run that built it (now with the clock set to 00:00), so
+        midnight_utc + timedelta(minutes=minute) prints that one offset's wall clock for every slot. Across a clock change
+        the slots on the other side were labelled an hour out (GH#1566): adding the minutes in UTC and converting back gives
+        the wall clock the slot really has. The UTC add is right even after the change, when midnight_utc is an hour away
+        from the real start of the day, because the minute keys count from the same midnight_utc anchor.
+        """
+        return (self.midnight_utc.astimezone(timezone.utc) + timedelta(minutes=minute)).astimezone(self.local_tz)
+
     def plan_row_scenarios(self, scenario_sources, minute_relative_start, minute_relative_slot_end, expected):
         """
         A plan row's values under each other scenario, in PLAN_SCENARIO_FIELDS order (#5871).
@@ -1457,7 +1469,7 @@ class Output:
             minute_end = minute_relative_end + self.minutes_now
             minute_relative_slot_end = min(minute_relative_end, self.forecast_minutes - PREDICT_STEP)
 
-            minute_timestamp = self.midnight_utc + timedelta(minutes=(minute_relative_start + self.minutes_now))
+            minute_timestamp = self.plan_local_stamp(minute_relative_start + self.minutes_now)
 
             rate_start = minute_timestamp
             # From minute_start, not the aligned interval start: the first row covers now to the end of its
@@ -1742,7 +1754,7 @@ class Output:
                         holding_for_car_segment = self.plan_row_holding_for_car(minute_start, start, car_hold_minutes)
 
                         soc_change_this = self.predict_soc_best.get(max(start - self.minutes_now, 0), 0.0) - self.predict_soc_best.get(minute_relative_start, 0.0)
-                        split_time_str = (self.midnight_utc + timedelta(minutes=start)).strftime("%H:%M")
+                        split_time_str = self.plan_local_stamp(start).strftime("%H:%M")
                         if holding_for_car_segment:
                             state = "&#128663;"
                             reason_parts.append({"code": "hold_for_car_before_export", "params": {"split_time": split_time_str}})
