@@ -435,6 +435,9 @@ class UserInterface:
         Returns:
         None
         """
+        # Explicit writes, including deletion, supersede pending discovery for this argument.
+        self.unmatched_args.pop(arg, None)
+        getattr(self, "_auto_config_pending", {}).pop(arg, None)
         if value is None:
             if arg in self.args:
                 del self.args[arg]
@@ -1639,35 +1642,65 @@ class UserInterface:
                     break
         return matched, arg_value
 
+    def _resolve_arg_re_pending(self, arg, value, state_keys):
+        """Return match status, safe consumer value and a partially resolved retry value.
+
+        Freeze successful matches in the retry value so later passes only match missing
+        leaves. Keep list positions and dictionary keys, using None for disabled leaves.
+        """
+        if isinstance(value, (list, dict)):
+            entries = enumerate(value) if isinstance(value, list) else value.items()
+            resolved = [] if isinstance(value, list) else {}
+            pending = [] if isinstance(value, list) else {}
+            matched = True
+            for key, item in entries:
+                item_matched, item_resolved, item_pending = self._resolve_arg_re_pending(arg, item, state_keys)
+                matched = matched and item_matched
+                if isinstance(value, list):
+                    resolved.append(item_resolved)
+                    pending.append(item_pending)
+                else:
+                    resolved[key] = item_resolved
+                    pending[key] = item_pending
+            return matched, resolved, pending
+        matched, resolved = self.resolve_arg_re(arg, value, state_keys)
+        return matched, resolved if matched else None, resolved
+
     def auto_config(self, final=False):
-        """
-        Auto configure
-        match arguments with sensors
-        """
+        """Resolve entity patterns, retaining missing leaves outside consumer arguments.
 
-        states = self.get_state_wrapper()
-        state_keys = states.keys()
-        disabled = []
+        Return whether effective configuration changed. Finalisation warns about missing
+        arguments but does not discard their patterns, including optional arguments that
+        do not cause a validation error.
+        """
+        state_keys = tuple(self.get_state_wrapper())
+        previous = getattr(self, "_auto_config_pending", {})
+        sources = dict(self.args)
+        for arg, (pending, resolved, warned) in previous.items():
+            # A component or user edit supersedes the saved pattern, not the other way round.
+            if self.args.get(arg) == resolved:
+                sources[arg] = pending
         self.unmatched_args = {}
-
-        # Find each arg re to match
+        self._auto_config_pending = {}
         changed = False
-        for arg in self.args:
-            arg_value = self.args[arg]
-            matched, arg_value = self.resolve_arg_re(arg, arg_value, state_keys)
+        for arg, source in sources.items():
+            matched, resolved, pending = self._resolve_arg_re_pending(arg, source, state_keys)
             if not matched:
-                if final:
-                    self.log("Warn: Regular expression argument: {} unable to match {}, now will disable".format(arg, arg_value))
-                    disabled.append(arg)
+                self.unmatched_args[arg] = pending
+                warned = previous.get(arg, (None, None, False))[2]
+                self._auto_config_pending[arg] = (pending, copy.deepcopy(resolved), warned or final)
+                if final and not warned:
+                    self.log("Warn: Regular expression argument: {} not fully matched, disabling missing items until discovery succeeds".format(arg))
+            if resolved is None and not matched:
+                changed = arg in self.args or changed
+                self.args.pop(arg, None)
             else:
-                self.args[arg] = arg_value
-                changed = True
+                changed = arg not in self.args or self.args[arg] != resolved or changed
+                self.args[arg] = resolved
 
-        # Remove unmatched keys
-        for key in disabled:
-            self.unmatched_args[key] = self.args[key]
-            del self.args[key]
-            changed = True
+        # The Apps page is public diagnostic state; partial retry trees may contain
+        # already resolved credentials alongside missing leaves. Keep those private.
+        self.unmatched_args = mask_secret_args(self.unmatched_args)
 
         # A `re:` pattern can resolve to a live HA entity's state/attribute - a credential-shaped
         # value from a third-party integration is exactly what redact_strings/redact_strings_labelled
@@ -1680,6 +1713,7 @@ class UserInterface:
         # until Predbat next restarts.
         if changed:
             self._invalidate_log_secret_pattern()
+        return changed
 
     def split_command_index(self, command):
         """

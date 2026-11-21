@@ -326,6 +326,7 @@ DEBUG_EXCLUDE_LIST = [
     "battery_discharge_rate_grid",
     "control_ledger",
     "control_monitor",
+    "_auto_config_pending",
 ]
 
 

@@ -169,6 +169,14 @@ Once you have completed your `apps.yaml` and started Predbat you may want to ope
 in a red background as those do not match (it's okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
 match can be ignored if you are not supporting that feature (e.g. Car SoC if you don't have a car).
 
+Predbat retains unmatched `re:` patterns and checks them again on its normal 15-second timer,
+when no prediction is running. Until a match appears, a scalar argument is disabled and a missing
+list or dictionary member is `None`. These pending patterns remain visible on the Apps page.
+When an entity appears, Predbat restores the missing value, refreshes its watch list and requests
+validation and a new plan. Values that already matched are not rematched. This discovery retry
+continues independently of the bounded configuration validation retries described below.
+Editing or reloading the configuration replaces the old pending patterns.
+
 As an example these do not match and are shown in the web interface in red, I'm ignoring them as I only have one inverter and I'm using
 the Predbat internal Solcast rather than the external integration:
 
