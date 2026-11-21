@@ -236,6 +236,7 @@ class TestHAInterface:
         self.service_store = []
         self.service_store_fail = set()
         self.db_primary = False
+        self.db_enable = False
         # Set by create_predbat() so set_state_external() can route a CONFIG_ITEMS entity's
         # change through the real switch/input_number/select service simulation, the same way
         # HAInterface.set_state_external() does. None for the handful of narrower component

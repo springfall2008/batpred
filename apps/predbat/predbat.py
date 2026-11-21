@@ -596,6 +596,11 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
+        # The past minutes no car charged in, read each cycle, and why there are none, as last logged (octopus_cap_idle_load())
+        self.octopus_cap_idle = None
+        self.octopus_cap_idle_midnight = None
+        self.octopus_cap_idle_reason = None
+        self.octopus_cap_started = datetime.now(timezone.utc)  # A sensor Predbat publishes is only known from here
         # Which component's automatic_config() owns octopus_ready_time/octopus_charge_limit.
         # Both OctopusAPI and OhmeAPI can wire them, and Octopus re-runs its automatic_config
         # whenever the tariff or intelligent device set moves - without a claim it silently takes the

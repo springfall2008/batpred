@@ -108,6 +108,8 @@ OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_MINUTES = 30  # octopus_slot_max is set in 30-minute slots, the cap itself is counted in dispatch minutes (#5510)
 IO_RATE_TOLERANCE = 0.01  # A dispatch lowers a rate by pence; anything closer is rate_min_base's dp2 rounding against the unrounded tariff feed (#5392)
 OCTOPUS_SLOT_MIN_MINUTES = 5  # Shorter dispatches are only low rate where the car was seen charging (dispatch_too_short())
+OCTOPUS_CAP_LAG_MINUTES = 2 * PREDICT_STEP  # The minutes before a car_charging_now reading of charging (or no reading) count towards the daily cap too, and so do the latest ones (#6252)
+OCTOPUS_CAP_HISTORY_DAYS = 2  # car_charging_now history read for that, back past the start of the previous midday-to-midday period
 
 # Per-device settings read from the Octopus intelligent settings query. Kept as a list so a poll
 # whose settings query fails can carry the previous values forward rather than dropping the device.
@@ -3927,11 +3929,146 @@ class Octopus:
 
         The cap is on minutes of charging, so minutes are what is counted against it: the start and
         end Octopus sends for a completed dispatch and the planned start and end of one still to
-        come, as they are, with no rounding to half hours (#5510). How long the car really drew power
-        inside a dispatch is left to Octopus and not worked out here. octopus_slot_max stays in
-        30-minute slots, as it is set in apps.yaml.
+        come, as they are, with no rounding to half hours (#5510). Octopus counts "the actual amount
+        of time the car is charged for", but reports completed dispatches in whole half hours, so the
+        past minutes no car's car_charging_now history shows charging in use none of the cap (#6252,
+        see octopus_cap_idle_load() and take_cap_dispatch_minutes()). octopus_slot_max stays in 30-minute
+        slots, as it is set in apps.yaml.
         """
         return self.get_octopus_slot_max() * OCTOPUS_SLOT_MAX_MINUTES
+
+    def octopus_cap_counts(self):
+        """
+        Whether the minutes no car charged in can matter: the daily cap is shorter than a day, and not under the window
+        billing rule (dispatch_billing_window()), where the whole planned window is billed whether the car charges or not.
+        """
+        return self.get_octopus_cap_minutes() < 24 * 60 and not self.dispatch_billing_window()
+
+    def octopus_cap_idle_load(self):
+        """
+        The past minutes, as minutes past midnight_utc, in which no car charged, from every car's car_charging_now history,
+        or None when there is nothing to go by. Read once a cycle by fetch_sensor_data_cars() into self.octopus_cap_idle,
+        once the dispatches are in and before the car plans and the rates count the cap.
+
+        Octopus counts the time the car actually charged towards the daily cap, but reports its completed dispatches in
+        whole half hours, so a half hour the car charged for two minutes of would otherwise use thirty (#6252). The cap is
+        per account, so which car charged does not matter, whatever Octopus controls (the car or the charger): a minute is
+        only idle when every car's history reads not charging through it. A car with no car_charging_now sensor, or no
+        history for it, could be charging in any minute, so then nothing is idle. Home Assistant records the history
+        whatever Predbat is doing, so minutes it missed while planning, or restarting, are known too - except for a sensor
+        Predbat publishes itself (a charger component's), which holds its last value while Predbat is not running.
+        """
+        if not (self.num_cars and self.octopus_slots and any(self.octopus_slots[: self.num_cars]) and self.octopus_cap_counts()):
+            return None
+        reason = None
+        idle = None
+        read = {}  # Each entity's idle minutes, read once however many cars share it
+        if self.ha_interface and self.ha_interface.db_primary and self.ha_interface.db_enable:
+            # The history is then Predbat's own record of the states it was sent, with nothing while it was not running
+            reason = "the history comes from Predbat's own database (db_primary)"
+        for car_n in range(self.num_cars if not reason else 0):
+            entity_id = self.dynamic_load_car_sensors.get(car_n)
+            if not entity_id:
+                reason = "car {} has no car_charging_now sensor".format(car_n)
+                break
+            if entity_id not in read:
+                read[entity_id] = self.octopus_cap_entity_idle(entity_id)
+            if read[entity_id] is None:
+                reason = "car {} has no car_charging_now history ({})".format(car_n, entity_id)
+                break
+            idle = read[entity_id] if idle is None else idle & read[entity_id]
+        if reason:
+            idle = None
+        # Logged only when the cause changes
+        if reason != self.octopus_cap_idle_reason:
+            if reason:
+                self.log("Octopus Intelligent: counting the daily cap in whole dispatch minutes, as {}".format(reason))
+            self.octopus_cap_idle_reason = reason
+        return idle or None
+
+    def octopus_cap_entity_idle(self, entity_id):
+        """
+        The past minutes, as minutes past midnight_utc, that entity_id, a car's car_charging_now sensor, read not charging
+        through (see car_charging_now_value()), or None when it has no history.
+
+        Home Assistant records a state when it changes, so each record holds until the next, and the last one until the
+        history was last read successfully (a cached history that has failed to refresh says nothing about since). A
+        sensor Predbat publishes itself (a charger component's, such as sensor.predbat_ohme_power_watts or
+        binary_sensor.predbat_gateway_*_charging) is only known from when Predbat started, as it held its last value in
+        Home Assistant while Predbat was not running. A minute is only idle when it lies wholly inside a "not charging" stretch, and not
+        within OCTOPUS_CAP_LAG_MINUTES before a stretch reading charging or with no reading ("unknown", "unavailable"), as a
+        charger's sensor can report a charge late - nor within that long of now, as the latest stretch may still be one of
+        those. Nothing before the first record, or before midday yesterday (the earliest start of the current
+        midday-to-midday period, and before midnight, so today's past dispatches are all covered), is idle.
+        """
+        history = self.get_history_wrapper(entity_id=entity_id, days=OCTOPUS_CAP_HISTORY_DAYS, required=False)
+        records = []  # (minutes past midnight_utc, True/False/None)
+        for sample in history[0] if history and history[0] else []:
+            try:
+                minute = (str2time(sample["last_updated"]) - self.midnight_utc).total_seconds() / 60.0
+            except (ValueError, TypeError, KeyError):
+                continue
+            state = sample.get("state")
+            unit = (sample.get("attributes") or {}).get("unit_of_measurement")
+            if str(unit).lower() in ("w", "kw", "mw"):
+                # A charging power sensor, in watts as the live reading converts it (required_unit="W")
+                try:
+                    state = self.unit_conversion(entity_id, float(state), unit, "W")
+                except (ValueError, TypeError):
+                    pass
+            records.append((minute, self.car_charging_now_value(state)))
+        if not records:
+            return None
+        records.sort(key=lambda record: record[0])
+        # Consecutive records with the same reading are one stretch, so a sensor that records often (a power sensor's
+        # standby watts) still gives the whole minutes inside it
+        merged = []
+        for record in records:
+            if not merged or merged[-1][1] != record[1]:
+                merged.append(record)
+        records = merged
+
+        # On the real clock, as the records are, not clock_skew's
+        now_minute = (self.now_utc_real - self.midnight_utc).total_seconds() / 60.0
+        checked = self.octopus_cap_history_checked(entity_id)
+        if checked is not None:
+            now_minute = min(now_minute, checked)
+        cutoff = -12 * 60  # Midday yesterday
+        domain, _, object_id = entity_id.partition(".")
+        if domain == self.prefix or object_id.startswith(self.prefix + "_"):
+            cutoff = max(cutoff, (self.octopus_cap_started - self.midnight_utc).total_seconds() / 60.0)
+        idle = set()
+        busy = set()
+        for index, (start, charging) in enumerate(records):
+            end = records[index + 1][0] if index + 1 < len(records) else now_minute
+            if end <= cutoff:
+                continue
+            if charging is False:
+                idle.update(range(math.ceil(max(start, cutoff)), math.floor(min(end, now_minute))))
+            else:
+                busy.update(range(math.floor(start) - OCTOPUS_CAP_LAG_MINUTES, math.ceil(end)))
+        settled = math.floor(now_minute) - OCTOPUS_CAP_LAG_MINUTES
+        return {minute for minute in idle if minute < settled and minute not in busy}
+
+    def octopus_cap_history_checked(self, entity_id):
+        """
+        When entity_id's cached history was last read from Home Assistant successfully, as minutes past midnight_utc, or
+        None when the history is not cached (it is then read afresh).
+        """
+        ha_history = self.components.get_component("ha_history") if self.components else None
+        checked = ha_history.history_checked.get(entity_id) if ha_history else None
+        if checked is None:
+            return None
+        return (datetime.fromtimestamp(checked, timezone.utc) - self.midnight_utc).total_seconds() / 60.0
+
+    def octopus_cap_idle_minutes(self):
+        """
+        The past minutes no car charged in, which use none of the daily cap (see take_cap_dispatch_minutes()), or None.
+        """
+        if not self.octopus_cap_idle or self.octopus_cap_idle_midnight != self.midnight_utc or not self.octopus_cap_counts():
+            # Built for another day's midnight_utc: calculate_yesterday() re-runs the car plan with the clock a day back
+            return None
+        return self.octopus_cap_idle
 
     @staticmethod
     def minute_runs(start_minutes, end_minutes, minutes):
@@ -3948,17 +4085,24 @@ class Octopus:
                 runs.append([minute, minute + 1, inside])
         return runs
 
-    @staticmethod
-    def take_cap_minutes(minutes_per_day, day_offset, wanted_minutes, cap_minutes):
+    def take_cap_dispatch_minutes(self, minutes_per_day, day_offset, wanted_minutes, cap_minutes, idle_minutes):
         """
-        Charge dispatch minutes to a midday-to-midday period's budget, returning how many of them fitted.
+        Charge a dispatch's minutes, in time order, to a midday-to-midday period's budget, returning the ones that fitted.
 
-        Shared by load_octopus_slots() and rate_add_io_slots() so the two count the cap the same way.
+        Shared by octopus_cap_segments() and rate_add_io_slots() so the two count the cap the same way. A past minute
+        no car charged in (idle_minutes, from octopus_cap_idle_minutes()) fits while any of the budget is left but uses
+        none of it: Octopus counts the time the car actually charged for, not the half hours it bills in (#6252).
         """
+        granted = []
         used_minutes = minutes_per_day.get(day_offset, 0)
-        granted_minutes = max(0, min(wanted_minutes, cap_minutes - used_minutes))
-        minutes_per_day[day_offset] = used_minutes + granted_minutes
-        return granted_minutes
+        for minute in wanted_minutes:
+            if used_minutes >= cap_minutes:
+                break
+            if not (idle_minutes and minute < self.minutes_now and minute in idle_minutes):
+                used_minutes += 1
+            granted.append(minute)
+        minutes_per_day[day_offset] = used_minutes
+        return granted
 
     def build_dispatch_timeline(self, car_n, completed, started, planned, window_before_hours=4, window_after_hours=24, step=30):
         """
@@ -4340,6 +4484,7 @@ class Octopus:
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         cap_minutes = self.get_octopus_cap_minutes()
+        idle_minutes = self.octopus_cap_idle_minutes()
         minutes_per_day = {}  # Track dispatch minutes used per midday-to-midday period
         budget_minutes = set()  # The minutes, of any car's dispatch, that fitted the budget
 
@@ -4368,8 +4513,7 @@ class Octopus:
             if capped:
                 day_offset = (dispatch_start - 720) // (24 * 60)
                 wanted_minutes = [minute for minute in range(start_minutes, end_minutes) if minute not in budget_minutes]
-                granted_minutes = self.take_cap_minutes(minutes_per_day, day_offset, len(wanted_minutes), cap_minutes)
-                budget_minutes.update(wanted_minutes[:granted_minutes])
+                budget_minutes.update(self.take_cap_dispatch_minutes(minutes_per_day, day_offset, wanted_minutes, cap_minutes, idle_minutes))
             if slot_car == car_n:
                 own_segments.append((slot, capped))
         return own_segments, budget_minutes
@@ -4387,12 +4531,21 @@ class Octopus:
         if car_n >= self.num_cars:
             return over_cap
         own_segments, budget_minutes = self.octopus_cap_segments(car_n, octopus_slots)
+        idle_minutes = self.octopus_cap_idle_minutes()
         for slot, capped in own_segments:
             start_minutes, end_minutes, kwh = slot[0], slot[1], slot[2]
             if not capped or end_minutes <= start_minutes:
                 continue
-            kwh_per_minute = kwh / (end_minutes - start_minutes)
-            for minute in range(start_minutes, end_minutes):
+            # A past minute no car charged in (octopus_cap_idle_minutes()) has none of the segment's energy, over the cap or
+            # not: it goes to the minutes the car charged in, at no more than the car's charging rate (the energy of a
+            # dispatch still running is Octopus's plan for all of it)
+            charging_minutes = [minute for minute in range(start_minutes, end_minutes) if not (idle_minutes and minute in idle_minutes)]
+            if not charging_minutes:
+                continue
+            kwh_per_minute = kwh / len(charging_minutes)
+            if len(charging_minutes) < end_minutes - start_minutes:
+                kwh_per_minute = min(kwh_per_minute, max(kwh / (end_minutes - start_minutes), self.car_charging_rate[car_n] / 60.0))
+            for minute in charging_minutes:
                 if minute not in budget_minutes:
                     over_cap[minute] = over_cap.get(minute, 0.0) + kwh_per_minute
         return over_cap
@@ -4512,8 +4665,8 @@ class Octopus:
         Add in any planned octopus slots
 
         Octopus limits cheap dispatches to 6 hours per midday-to-midday period on some tariffs. That
-        budget is counted in the minutes of each dispatch as Octopus sends them, see
-        get_octopus_cap_minutes(). The budget is per account, so every car's dispatches use it up
+        budget is counted in the minutes of each dispatch as Octopus sends them, less any past minute
+        the car did not charge in, see get_octopus_cap_minutes(). The budget is per account, so every car's dispatches use it up
         (see octopus_account_slots()), earliest first and in clock time - a minute two cars' dispatches
         share is counted once - and only car_n's are priced here. The cheap rate is still stamped by
         whole plan periods: a period with any dispatch minute inside the budget is cheap throughout,
@@ -4521,6 +4674,7 @@ class Octopus:
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         cap_minutes = self.get_octopus_cap_minutes()
+        idle_minutes = self.octopus_cap_idle_minutes()
 
         # Dispatch minutes charged to each 24-hour period (keyed by day offset from midday)
         # Period 0 = noon today to 11:59 tomorrow, Period -1 = noon yesterday to 11:59 today, etc.
@@ -4584,8 +4738,7 @@ class Octopus:
                     slot_strip_from = strip_from if slot_car == car_n else self.dynamic_load_car_strip_from(slot_car)
                     dispatch_minutes = [minute for minute in range(max(dispatch_start, start_minutes), min(dispatch_end, end_minutes)) if not self.io_slot_minute_withheld(minute, slot_strip_from)]
                     wanted_minutes = [minute for minute in dispatch_minutes if minute not in budget_minutes]
-                    granted_minutes = self.take_cap_minutes(minutes_per_day, day_offset, len(wanted_minutes), cap_minutes)
-                    budget_minutes.update(wanted_minutes[:granted_minutes])
+                    budget_minutes.update(self.take_cap_dispatch_minutes(minutes_per_day, day_offset, wanted_minutes, cap_minutes, idle_minutes))
                     if slot_car != car_n:
                         continue  # Another car's dispatch only uses up the budget, its own call prices it
                     budget_periods.update((minute // plan_interval_minutes) * plan_interval_minutes for minute in dispatch_minutes if minute in budget_minutes)
