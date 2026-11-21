@@ -108,8 +108,9 @@ OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_MINUTES = 30  # octopus_slot_max is set in 30-minute slots, the cap itself is counted in dispatch minutes (#5510)
 IO_RATE_TOLERANCE = 0.01  # A dispatch lowers a rate by pence; anything closer is rate_min_base's dp2 rounding against the unrounded tariff feed (#5392)
 OCTOPUS_SLOT_MIN_MINUTES = 5  # Shorter dispatches are only low rate where the car was seen charging (dispatch_too_short())
-OCTOPUS_CAP_LAG_MINUTES = 2 * PREDICT_STEP  # The minutes before a car_charging_now reading of charging (or no reading) count towards the daily cap too, and so do the latest ones (#6252)
-OCTOPUS_CAP_HISTORY_DAYS = 2  # car_charging_now history read for that, back past the start of the previous midday-to-midday period
+OCTOPUS_CAP_LAG_MINUTES = 2 * PREDICT_STEP  # The minutes before a car charging reading (or no reading) count towards the daily cap too, and so do the latest ones (#6252)
+OCTOPUS_CAP_BRIDGE_MINUTES = PREDICT_STEP  # Two "not charging" readings this close are one stretch of the record of the time no car charged in, across a plan cycle
+OCTOPUS_CAP_KEEP_DAYS = 2  # That record is kept this long, past the start of the previous midday-to-midday period
 
 # Per-device settings read from the Octopus intelligent settings query. Kept as a list so a poll
 # whose settings query fails can carry the previous values forward rather than dropping the device.
@@ -3931,8 +3932,8 @@ class Octopus:
         end Octopus sends for a completed dispatch and the planned start and end of one still to
         come, as they are, with no rounding to half hours (#5510). Octopus counts "the actual amount
         of time the car is charged for", but reports completed dispatches in whole half hours, so the
-        past minutes no car's car_charging_now history shows charging in use none of the cap (#6252,
-        see octopus_cap_idle_load() and take_cap_dispatch_minutes()). octopus_slot_max stays in 30-minute
+        past minutes Predbat saw no car charging in use none of the cap (#6252, see octopus_cap_record()
+        and take_cap_dispatch_minutes()). octopus_slot_max stays in 30-minute
         slots, as it is set in apps.yaml.
         """
         return self.get_octopus_slot_max() * OCTOPUS_SLOT_MAX_MINUTES
@@ -3944,122 +3945,165 @@ class Octopus:
         """
         return self.get_octopus_cap_minutes() < 24 * 60 and not self.dispatch_billing_window()
 
+    def octopus_cap_cars(self):
+        """
+        The cars with Octopus Intelligent dispatches, whose charging uses the daily cap.
+        """
+        return [car_n for car_n in range(min(self.num_cars, len(self.octopus_slots))) if self.octopus_slots[car_n]]
+
+    def octopus_cap_reading(self):
+        """
+        Whether, right now, no car is charging for the daily cap: True (no car charging), False (a car charging) or None (no
+        evidence either way).
+
+        The same reading the dispatch check takes (dynamic_load_car_evidence()): any car's car_charging_now reading charging
+        counts, whichever car has the dispatches, as Predbat cannot tell which charger the dispatched car is on. Otherwise
+        every car with dispatches must read not charging on its own sensor. The low-load test the dispatch check falls back on
+        for a car without a sensor is not used: it averages the five minutes before the last cycle rather than reading now,
+        so it cannot say which minutes were idle.
+        """
+        cars = self.octopus_cap_cars()
+        if not cars:
+            return None
+        if self.dynamic_load_any_car_charging_now():
+            return False
+        for car_n in cars:
+            if car_n not in self.dynamic_load_car_sensors or self.car_charging_now_reading(car_n) is None:
+                return None
+        return True
+
+    def octopus_cap_record(self, now, save=True):
+        """
+        Add a reading taken at now (see octopus_cap_reading()) to octopus_cap_runs, the stretches of time no car was charging
+        in, as [start, end] in seconds since the epoch on the real clock. Called every cycle and from the 15 second poll.
+
+        The record counts the cap the safe way round: a minute uses the cap unless the record shows no car charging through
+        it. Two "not charging" readings at most OCTOPUS_CAP_BRIDGE_MINUTES apart are one stretch, which bridges the poll
+        being skipped while the plan is calculated. Anything longer - Predbat restarting or stopped, a charging reading, or no
+        evidence - ends the stretch, so a minute nothing was known about counts. A reading that is not "not charging" also
+        takes OCTOPUS_CAP_LAG_MINUTES off the end of the stretch before it, as a charger's sensor can report a charge late.
+
+        With save True the record is written to storage when a stretch starts or is cut, and on each cycle (save "cycle")
+        while it has grown, so a restart keeps it (see octopus_cap_load()).
+        """
+        if not self.octopus_cap_counts() or not self.octopus_cap_cars():
+            return
+        now_ts = now.timestamp()
+        reading = self.octopus_cap_reading()
+        runs = self.octopus_cap_runs
+        last = self.octopus_cap_last
+        changed = False
+        if reading:
+            if runs and last and last[1] and runs[-1][1] == last[0] and now_ts - last[0] <= OCTOPUS_CAP_BRIDGE_MINUTES * 60:
+                runs[-1][1] = now_ts
+            else:
+                runs.append([now_ts, now_ts])
+                changed = True
+        else:
+            trim_from = now_ts - OCTOPUS_CAP_LAG_MINUTES * 60
+            kept = []
+            for start, end in runs:
+                if end <= trim_from:
+                    kept.append([start, end])
+                elif start < trim_from:
+                    kept.append([start, trim_from])
+            if kept != runs:
+                changed = True
+            runs = kept
+        oldest = now_ts - OCTOPUS_CAP_KEEP_DAYS * 24 * 60 * 60
+        self.octopus_cap_runs = [run for run in runs if run[1] >= oldest]
+        self.octopus_cap_last = (now_ts, reading)
+        if save and (changed or save == "cycle"):
+            self.octopus_cap_save()
+
+    def octopus_cap_save(self):
+        """
+        Write octopus_cap_runs to storage when it differs from what was last written.
+        """
+        if self.octopus_cap_runs == self.octopus_cap_saved:
+            return
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        # Recorded whether or not the write works, so a failing store is not retried every 15 seconds
+        self.octopus_cap_saved = [list(run) for run in self.octopus_cap_runs]
+        try:
+            expiry = datetime.now(timezone.utc) + timedelta(days=OCTOPUS_CAP_KEEP_DAYS)
+            if not run_async(storage.save("predbat", "octopus_cap", {"runs": self.octopus_cap_saved}, format="json", expiry=expiry)):
+                self.log("Warn: Octopus Intelligent: failed to save the record of the time no car charged in")
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to save the record of the time no car charged in: {}".format(e))
+
+    def octopus_cap_load(self):
+        """
+        Restore octopus_cap_runs, saved by octopus_cap_save(), at start up. The latest reading is not restored, so the first
+        reading after a restart starts a new stretch: the time Predbat was not running is not known.
+        """
+        storage = self.components.get_component("storage") if self.components else None
+        if not storage:
+            return
+        try:
+            data = run_async(storage.load("predbat", "octopus_cap"))
+        except Exception as e:
+            self.log("Warn: Octopus Intelligent: failed to load the record of the time no car charged in: {}".format(e))
+            return
+        runs = data.get("runs") if isinstance(data, dict) else None
+        if not isinstance(runs, list):
+            return
+        restored = []
+        for run in runs:
+            try:
+                start, end = float(run[0]), float(run[1])
+            except (ValueError, TypeError, IndexError, KeyError):
+                continue
+            if start <= end:
+                restored.append([start, end])
+        self.octopus_cap_runs = sorted(restored)
+        self.octopus_cap_saved = [list(run) for run in self.octopus_cap_runs]
+
+    def octopus_cap_poll(self, now=None):
+        """
+        Called from the 15 second loop between plan cycles: add a reading to the record of the time no car charged in (see
+        octopus_cap_record()).
+        """
+        if not self.num_cars or self.midnight_utc is None:
+            return
+        self.octopus_cap_record(now if now is not None else datetime.now(timezone.utc))
+
     def octopus_cap_idle_load(self):
         """
-        The past minutes, as minutes past midnight_utc, in which no car charged, from every car's car_charging_now history,
-        or None when there is nothing to go by. Read once a cycle by fetch_sensor_data_cars() into self.octopus_cap_idle,
-        once the dispatches are in and before the car plans and the rates count the cap.
+        The past minutes, as minutes past midnight_utc, in which no car charged, from octopus_cap_runs, or None when there
+        are none. Read once a cycle by fetch_sensor_data_cars() into self.octopus_cap_idle, once the dispatches are in and
+        before the car plans and the rates count the cap.
 
         Octopus counts the time the car actually charged towards the daily cap, but reports its completed dispatches in
-        whole half hours, so a half hour the car charged for two minutes of would otherwise use thirty (#6252). The cap is
-        per account, so which car charged does not matter, whatever Octopus controls (the car or the charger): a minute is
-        only idle when every car's history reads not charging through it. A car with no car_charging_now sensor, or no
-        history for it, could be charging in any minute, so then nothing is idle. Home Assistant records the history
-        whatever Predbat is doing, so minutes it missed while planning, or restarting, are known too - except for a sensor
-        Predbat publishes itself (a charger component's), which holds its last value while Predbat is not running.
+        whole half hours, so a half hour the car charged for two minutes of would otherwise use thirty (#6252). A minute
+        is only idle when it lies wholly inside a stretch of the record, and not within OCTOPUS_CAP_LAG_MINUTES of now, as
+        a late charging reading may still cut the stretch. Nothing before midday yesterday (the earliest start of the
+        current midday-to-midday period) is needed.
         """
-        if not (self.num_cars and self.octopus_slots and any(self.octopus_slots[: self.num_cars]) and self.octopus_cap_counts()):
+        cars = self.octopus_cap_cars() if self.num_cars and self.octopus_cap_counts() else []
+        if not cars:
             return None
-        reason = None
-        idle = None
-        read = {}  # Each entity's idle minutes, read once however many cars share it
-        if self.ha_interface and self.ha_interface.db_primary and self.ha_interface.db_enable:
-            # The history is then Predbat's own record of the states it was sent, with nothing while it was not running
-            reason = "the history comes from Predbat's own database (db_primary)"
-        for car_n in range(self.num_cars if not reason else 0):
-            entity_id = self.dynamic_load_car_sensors.get(car_n)
-            if not entity_id:
-                reason = "car {} has no car_charging_now sensor".format(car_n)
-                break
-            if entity_id not in read:
-                read[entity_id] = self.octopus_cap_entity_idle(entity_id)
-            if read[entity_id] is None:
-                reason = "car {} has no car_charging_now history ({})".format(car_n, entity_id)
-                break
-            idle = read[entity_id] if idle is None else idle & read[entity_id]
-        if reason:
-            idle = None
         # Logged only when the cause changes
+        reason = None
+        missing = [car_n for car_n in cars if car_n not in self.dynamic_load_car_sensors]
+        if missing:
+            reason = "car(s) {} have no car_charging_now sensor".format(missing)
         if reason != self.octopus_cap_idle_reason:
             if reason:
                 self.log("Octopus Intelligent: counting the daily cap in whole dispatch minutes, as {}".format(reason))
             self.octopus_cap_idle_reason = reason
-        return idle or None
 
-    def octopus_cap_entity_idle(self, entity_id):
-        """
-        The past minutes, as minutes past midnight_utc, that entity_id, a car's car_charging_now sensor, read not charging
-        through (see car_charging_now_value()), or None when it has no history.
-
-        Home Assistant records a state when it changes, so each record holds until the next, and the last one until the
-        history was last read successfully (a cached history that has failed to refresh says nothing about since). A
-        sensor Predbat publishes itself (a charger component's, such as sensor.predbat_ohme_power_watts or
-        binary_sensor.predbat_gateway_*_charging) is only known from when Predbat started, as it held its last value in
-        Home Assistant while Predbat was not running. A minute is only idle when it lies wholly inside a "not charging" stretch, and not
-        within OCTOPUS_CAP_LAG_MINUTES before a stretch reading charging or with no reading ("unknown", "unavailable"), as a
-        charger's sensor can report a charge late - nor within that long of now, as the latest stretch may still be one of
-        those. Nothing before the first record, or before midday yesterday (the earliest start of the current
-        midday-to-midday period, and before midnight, so today's past dispatches are all covered), is idle.
-        """
-        history = self.get_history_wrapper(entity_id=entity_id, days=OCTOPUS_CAP_HISTORY_DAYS, required=False)
-        records = []  # (minutes past midnight_utc, True/False/None)
-        for sample in history[0] if history and history[0] else []:
-            try:
-                minute = (str2time(sample["last_updated"]) - self.midnight_utc).total_seconds() / 60.0
-            except (ValueError, TypeError, KeyError):
-                continue
-            state = sample.get("state")
-            unit = (sample.get("attributes") or {}).get("unit_of_measurement")
-            if str(unit).lower() in ("w", "kw", "mw"):
-                # A charging power sensor, in watts as the live reading converts it (required_unit="W")
-                try:
-                    state = self.unit_conversion(entity_id, float(state), unit, "W")
-                except (ValueError, TypeError):
-                    pass
-            records.append((minute, self.car_charging_now_value(state)))
-        if not records:
-            return None
-        records.sort(key=lambda record: record[0])
-        # Consecutive records with the same reading are one stretch, so a sensor that records often (a power sensor's
-        # standby watts) still gives the whole minutes inside it
-        merged = []
-        for record in records:
-            if not merged or merged[-1][1] != record[1]:
-                merged.append(record)
-        records = merged
-
-        # On the real clock, as the records are, not clock_skew's
-        now_minute = (self.now_utc_real - self.midnight_utc).total_seconds() / 60.0
-        checked = self.octopus_cap_history_checked(entity_id)
-        if checked is not None:
-            now_minute = min(now_minute, checked)
-        cutoff = -12 * 60  # Midday yesterday
-        domain, _, object_id = entity_id.partition(".")
-        if domain == self.prefix or object_id.startswith(self.prefix + "_"):
-            cutoff = max(cutoff, (self.octopus_cap_started - self.midnight_utc).total_seconds() / 60.0)
+        midnight_ts = self.midnight_utc.timestamp()
+        cutoff = midnight_ts - 12 * 60 * 60
+        settled = self.now_utc_real.timestamp() - OCTOPUS_CAP_LAG_MINUTES * 60
         idle = set()
-        busy = set()
-        for index, (start, charging) in enumerate(records):
-            end = records[index + 1][0] if index + 1 < len(records) else now_minute
-            if end <= cutoff:
-                continue
-            if charging is False:
-                idle.update(range(math.ceil(max(start, cutoff)), math.floor(min(end, now_minute))))
-            else:
-                busy.update(range(math.floor(start) - OCTOPUS_CAP_LAG_MINUTES, math.ceil(end)))
-        settled = math.floor(now_minute) - OCTOPUS_CAP_LAG_MINUTES
-        return {minute for minute in idle if minute < settled and minute not in busy}
-
-    def octopus_cap_history_checked(self, entity_id):
-        """
-        When entity_id's cached history was last read from Home Assistant successfully, as minutes past midnight_utc, or
-        None when the history is not cached (it is then read afresh).
-        """
-        ha_history = self.components.get_component("ha_history") if self.components else None
-        checked = ha_history.history_checked.get(entity_id) if ha_history else None
-        if checked is None:
-            return None
-        return (datetime.fromtimestamp(checked, timezone.utc) - self.midnight_utc).total_seconds() / 60.0
+        for start, end in self.octopus_cap_runs:
+            start, end = max(start, cutoff), min(end, settled)
+            if end > start:
+                idle.update(range(math.ceil((start - midnight_ts) / 60.0), math.floor((end - midnight_ts) / 60.0)))
+        return idle or None
 
     def octopus_cap_idle_minutes(self):
         """

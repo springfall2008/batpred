@@ -2528,7 +2528,7 @@ class Fetch:
         self.octopus_slots_planned = {}
         if save:
             # Read below once the dispatches are in; none without Octopus Intelligent slots. A compare.py run (save False)
-            # keeps this cycle's, as the history is the same whatever the tariff
+            # keeps this cycle's, as the record is the same whatever the tariff
             self.octopus_cap_idle = None
 
         if entity_id_list:
@@ -2692,6 +2692,7 @@ class Fetch:
             # The past minutes no car charged in, which use none of the Octopus Intelligent daily cap (#6252): read once
             # every car's dispatches are in, before the car plans below and the rates count the cap with them
             if save:
+                self.octopus_cap_record(self.now_utc_real, save="cycle")
                 self.octopus_cap_idle = self.octopus_cap_idle_load()
                 self.octopus_cap_idle_midnight = self.midnight_utc
 

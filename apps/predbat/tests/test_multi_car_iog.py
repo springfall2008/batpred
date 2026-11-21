@@ -263,15 +263,16 @@ def run_multi_car_iog_load_slots_test(testname, my_predbat):
         },
     )
 
-    # Both cars' car_charging_now history reads not charging all day, so the past minutes use none of the daily cap
-    # (#6252): read once the dispatches are in, so the read must come after them in fetch_sensor_data_cars()
+    # Both cars have read not charging since yesterday, so the past minutes use none of the daily cap (#6252): recorded
+    # and read once the dispatches are in, so this must come after them in fetch_sensor_data_cars()
     saved_slot_max = my_predbat.args.get("octopus_slot_max")
     saved_sensors = my_predbat.dynamic_load_car_sensors
     my_predbat.args["octopus_slot_max"] = 12
     my_predbat.dynamic_load_car_sensors = {0: "binary_sensor.car1_charging", 1: "binary_sensor.car2_charging"}
-    off_since = (my_predbat.midnight_utc - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S%z")
-    my_predbat.get_history_wrapper = lambda entity_id, days=30, required=True, tracked=True: [[{"state": "off", "last_updated": off_since}]]
     my_predbat.car_charging_now_reading = lambda car_n: False
+    now_ts = my_predbat.now_utc_real.timestamp()
+    my_predbat.octopus_cap_runs = [[now_ts - 24 * 60 * 60, now_ts]]
+    my_predbat.octopus_cap_last = (now_ts, True)
 
     # This is the real function that contained the bug - call it directly.
     # Before the fix, car_charging_soc was initialized AFTER the IOG loop, so
@@ -285,7 +286,8 @@ def run_multi_car_iog_load_slots_test(testname, my_predbat):
         idle_read = my_predbat.octopus_cap_idle
         my_predbat.octopus_cap_idle = None
         my_predbat.octopus_cap_idle_midnight = None
-        my_predbat.__dict__.pop("get_history_wrapper", None)
+        my_predbat.octopus_cap_runs = []
+        my_predbat.octopus_cap_last = None
         my_predbat.__dict__.pop("car_charging_now_reading", None)
         my_predbat.dynamic_load_car_sensors = saved_sensors
         if saved_slot_max is None:
