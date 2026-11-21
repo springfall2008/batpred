@@ -69,6 +69,7 @@ from const import (
     BATTERY_RATE_GRID_RESAVE_MINUTES,
     BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE,
     BATTERY_RATE_GRID_SCAN_VERSION,
+    BATTERY_RATE_GRID_KEY_SETTLE_CYCLES,
     BATTERY_RATE_GRID_MAX_AGE_DAYS,
     BATTERY_RATE_GRID_RETRY_MINUTES,
     BATTERY_RATE_GRID_SCAN_MINUTES,
@@ -4328,7 +4329,21 @@ class Fetch:
         # A scan whose history read failed is tried again within the hour; one that succeeded, a day later
         succeeded = last_success is not None and last_scan is not None and last_success >= last_scan
         interval = BATTERY_RATE_GRID_SCAN_MINUTES if succeeded else BATTERY_RATE_GRID_RETRY_MINUTES
-        if last_scan is None or (self.now_utc - last_scan) >= timedelta(minutes=interval):
+        due = last_scan is None or (self.now_utc - last_scan) >= timedelta(minutes=interval)
+        # A key that has just changed away from the one the stored samples were measured under may be a passing value (a rated
+        # rate or battery size read as its default while an entity is unavailable): the scan waits until it holds for a second
+        # cycle, so one bad reading cannot re-measure every stored day against it. At most BATTERY_RATE_GRID_KEY_SETTLE_CYCLES
+        # cycles, so a key that never settles still gets scanned
+        previous_key = self.battery_rate_grid_previous_key.get(kind)
+        self.battery_rate_grid_previous_key[kind] = scan_key
+        measured_key = self.battery_rate_grid_scan_key.get(kind)
+        just_changed = previous_key is not None and not self.rate_grid_scan_key_matches(previous_key, scan_key) and not self.rate_grid_scan_key_matches(measured_key, scan_key)
+        if due and just_changed and self.battery_rate_grid_key_waits.get(kind, 0) < BATTERY_RATE_GRID_KEY_SETTLE_CYCLES:
+            self.battery_rate_grid_key_waits[kind] = self.battery_rate_grid_key_waits.get(kind, 0) + 1
+            self.log("Info: battery {} rate grid scan waits a cycle, what it is measured against has just changed".format(kind))
+            due = False
+        if due:
+            self.battery_rate_grid_key_waits[kind] = 0
             self.battery_rate_grid_last_scan[kind] = self.now_utc
             if not self.battery_rate_grid_loaded.get(kind):
                 # Read again just before merging, as the old learners did

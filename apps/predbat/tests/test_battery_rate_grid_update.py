@@ -375,6 +375,38 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         saved_live = run_async(storage.load("predbat", "battery_rate_grid_charge"))
         failed |= _check("t4b and stamps the new key", saved_live.get("scan_key") == my_predbat.rate_grid_scan_key(False), saved_live.get("scan_key"))
 
+        print("Test 4d: a key that changes for one cycle when a scan is due does not re-measure the stored days (#6287)")
+        my_predbat = _make({"battery_charge_power_curve": {100: 0.5}})
+        my_predbat.components = MockStorageComponents(make_test_storage(my_predbat, tmpdir + "/t4d"))
+        inv = FakeInverter()
+        inv.scan[False] = _samples(my_predbat)
+        _settle(my_predbat, inv)
+        first = len(inv.days[False])
+        my_predbat.now_utc += timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES)
+        my_predbat.soc_max = 8.0  # a fallback size while an entity is unavailable, for one cycle
+        my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t4d the due scan waits", len(inv.days[False]) == first, inv.days[False])
+        my_predbat.soc_max = 10.0
+        my_predbat.now_utc += timedelta(minutes=5)
+        my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t4d and then reads 2 days", inv.days[False][first:] == [2], inv.days[False])
+        # A key that changes every cycle still gets its scan, after BATTERY_RATE_GRID_KEY_SETTLE_CYCLES waits
+        first = len(inv.days[False])
+        my_predbat.now_utc += timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES)
+        for size in (8.0, 7.0, 6.0, 5.0, 4.0):
+            my_predbat.soc_max = size
+            my_predbat.battery_rate_grid_update(inv, False)
+            my_predbat.now_utc += timedelta(minutes=5)
+        failed |= _check("t4d a key that never settles is scanned on the fourth cycle", inv.days[False][first:] == [28] and my_predbat.battery_rate_grid_scan_key["charge"][1] == 5.0, (inv.days[False], my_predbat.battery_rate_grid_scan_key["charge"]))
+        # A changed key that holds is scanned on its second cycle, reading the full window
+        first = len(inv.days[False])
+        my_predbat.now_utc += timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES)
+        my_predbat.soc_max = 12.0
+        my_predbat.battery_rate_grid_update(inv, False)
+        my_predbat.now_utc += timedelta(minutes=5)
+        my_predbat.battery_rate_grid_update(inv, False)
+        failed |= _check("t4d a change that holds reads the full window on its second cycle", inv.days[False][first:] == [28], inv.days[False])
+
         print("Test 4c: a direction whose scans never find evidence still restarts with a short scan (#6287)")
         my_predbat = _make()
         storage = make_test_storage(my_predbat, tmpdir + "/t4c")

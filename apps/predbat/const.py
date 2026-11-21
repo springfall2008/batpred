@@ -166,6 +166,7 @@ BATTERY_RATE_GRID_UNKNOWN_TEMP = 20  # An exact 0 reading is treated as missing 
 BATTERY_RATE_GRID_SCAN_MINUTES = 24 * 60  # Gap between history scans for grid evidence
 BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE = 0.02  # Battery size drift (battery_scaling_auto, SoH) within this fraction doesn't force a full rate grid history read (#6287)
 BATTERY_RATE_GRID_SCAN_VERSION = 1  # Part of the rate grid scan key: bump when find_rate_grid_samples() changes what it finds or how it measures it, so the next scan re-reads the full window (#6287)
+BATTERY_RATE_GRID_KEY_SETTLE_CYCLES = 3  # A due rate grid scan waits at most this many cycles for a just-changed scan key to hold for a second cycle (#6287)
 BATTERY_RATE_GRID_RESAVE_MINUTES = 24 * 60  # The evidence is saved at least this often even when unchanged, so its expiry keeps moving (#6225)
 BATTERY_RATE_GRID_FIRST_SCAN_DAYS = 28  # battery_rate_grid_history_days default: until a scan has succeeded, read this many days of history (or as many as there are)
 BATTERY_RATE_GRID_DAILY_SCAN_DAYS = 2  # battery_rate_grid_scan_days default: later scans read this many - a day since the last plus a day's overlap - widened to cover a longer gap
