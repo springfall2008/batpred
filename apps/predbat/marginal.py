@@ -32,9 +32,9 @@ def marginal_thresholds(rate_min, rate_max):
     The (cheap, moderate) marginal cost thresholds for base import rates running from rate_min to rate_max.
 
     With a positive minimum, cheap is rate_min x 1.2, within 20% of the cheapest rate. Multiplying doesn't widen a 0p
-    or negative minimum, though: at -5p it put the threshold at -6p, below the cheapest rate, and at 0p at 0, so nothing
-    could read cheap on a plunge-pricing day (#5826). There, cheap is instead 5% of the range above the minimum, and
-    never below 0p, so a marginal cost of 0p or less always reads cheap.
+    or negative minimum, though: at 0p it put the threshold at 0, so only a marginal cost of 0p or less read cheap, and at
+    -5p at -6p, below the cheapest rate, so not even a cost at the minimum did (#5826). There, cheap is instead 5% of the
+    range above the minimum, and never below 0p, so a marginal cost of 0p or less always reads cheap.
     """
     if rate_min > 0:
         cheap_threshold = rate_min * 1.2

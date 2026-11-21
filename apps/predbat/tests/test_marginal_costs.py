@@ -240,7 +240,7 @@ def test_marginal_costs(my_predbat):
 
 def marginal_costs_thresholds_non_positive_min(my_predbat):
     """
-    The cheapest slot reads cheap when the day's lowest rate is negative or 0p, and positive-minimum days keep rate_min x 1.2 (#5826).
+    A cost at the minimum reads cheap when the forecast window's lowest rate is negative or 0p, and positive minima keep rate_min x 1.2 (#5826).
     """
     print("*** Running test: marginal_costs thresholds with a negative or 0p minimum")
     failed = False
@@ -271,6 +271,7 @@ def marginal_costs_thresholds_non_positive_min(my_predbat):
     # Published sensors: a marginal cost at the minimum of a plunge-pricing window, or near a 0p minimum, reads cheap; one above
     # the band reads moderate
     first_time_label = my_predbat.marginal_time_labels[0]
+    saved = (my_predbat.marginal_costs_matrix, my_predbat.rate_min_base, my_predbat.rate_max_base)
     for rate_min, cost, expected_cheap in ((-5.0, -5.0, "on"), (0.0, 0.3, "on"), (0.0, 2.0, "off"), (-5.0, 0.5, "off"), (-1.0, 1.0, "off")):
         my_predbat.marginal_costs_matrix = {kwh: {first_time_label: cost} for kwh in MARGINAL_EXTRA_KWH_LEVELS}
         my_predbat.rate_min_base = rate_min
@@ -283,6 +284,7 @@ def marginal_costs_thresholds_non_positive_min(my_predbat):
                 if bs_state != expected:
                     print("ERROR: minimum {}p, marginal cost {}p: '{}' = '{}' but expected '{}'".format(rate_min, cost, bs_key, bs_state, expected))
                     failed = True
+    my_predbat.marginal_costs_matrix, my_predbat.rate_min_base, my_predbat.rate_max_base = saved
     return failed
 
 
