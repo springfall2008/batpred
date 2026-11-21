@@ -196,6 +196,8 @@ Clients that connect through OAuth instead of a fixed `Authorization` header, su
 
 When the client opens the authorization page, enter your `mcp_secret` to approve it. A client that registers itself is given no secret of its own, so it can only connect through that page.
 
+The page names the site the approval will be sent to, such as `claude.ai`. Anyone who can reach the port can register a client, so only enter your secret on a page you reached by connecting the client yourself, and check that site first. Predbat refuses a return address that no real client needs: a plain `http://` address anywhere but this computer (`localhost`, `127.0.0.1`), one with a `#` fragment or a user name in it, or a `javascript:`, `data:` or `file:` link. It shows an error page instead of sending you there. Desktop clients that listen on `localhost`, and apps with their own address scheme such as `cursor://`, are accepted.
+
 An OAuth token carries scopes. A token with only `mcp:read` can call the tools that read Predbat but not `set_config` or `set_plan_override`, which need `mcp:write` or `mcp:control`. The scopes are the ones the client asks for when it opens the authorization page. When it fetches the token it can narrow them, but it cannot add a scope it did not ask for there. A client that asks for none of the three gets all three, as does the `Authorization: Bearer <your mcp_secret>` header.
 
 Tokens are signed with a random key that Predbat creates on first start and keeps in its cache, so they survive a restart. Changing `mcp_secret` replaces the key, which revokes every token issued so far. After upgrading from a version before this change, each OAuth client has to authorise once more. A cloud-hosted client such as claude.ai connects from the internet rather than your home network, so read the security note above before you expose the port.
@@ -543,6 +545,28 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
 | `automatic_split_pv` | Boolean | No | false | `ge_cloud_automatic_split_pv` | Set to `true` to also include standalone PV-only inverters' solar readings in `pv_today`/`pv_power`, in addition to battery inverters |
+
+#### EMS house load (gecloud)
+
+With an EMS, `ge_cloud_automatic` sets `load_today` to `sensor.predbat_gecloud_<ems serial>_consumption_derived_today`.
+This is the house load so far today, worked out from the EMS's daily counters by energy balance:
+grid import − grid export + solar + battery discharge − battery charge.
+The Predbat hub works out house load the same way.
+
+Predbat does not use the EMS's own consumption counters, for two reasons:
+
+- **`consumption_total`** counts battery charging from the grid as house load, so it reads well above the real load
+  whenever the battery charges from the grid.
+- **`consumption_today`** reads low and can fall during the day.
+
+GivEnergy resets the five daily counters at slightly different moments around midnight. Each counter is therefore held
+at its highest value of the day. Once a counter resets, the sensor reads 0 until they all have, for at most an hour.
+A reset in progress is kept in storage, so it carries on through a restart.
+
+**Upgrading from a version that used `consumption_total`.** The load history recorded before the change was measured
+with the old counter and stays high until it ages out of `days_previous`; the new sensor has no history at first.
+For the first few days the load forecast therefore still leans on the old, inflated figures. This corrects itself, and
+needs no action.
 
 #### Register reads (gecloud)
 
@@ -1195,6 +1219,10 @@ It asks for your Wallbox password, so the password never appears in your shell h
 
 To try a control by hand, add one of `--pause`, `--resume`, `--resume-schedule`, `--lock`, `--unlock`, `--max-current <amps>` or `--eco-smart <off|eco_mode|full_solar>`, with `--charger <id>` to choose a charger other than the first. The charger's state is printed again a few seconds later so you can see whether it took effect.
 
+`--ocpp <on|off>` connects the charger to its OCPP backend or hands it to the Wallbox cloud, then prints the connection type and `connectionStatus` (4 is connected); the password is never printed.
+
+`--force-hold <minutes>` runs the force hold described under [Holding a charger off for an export](#holding-a-charger-off-for-an-export-wallbox) by hand: it switches on **car_charging_cancel_for_export**, publishes one cancelled window of that length for the chosen charger and then polls every 30 seconds, printing the charger and the hold, until the charger is handed back. Press Ctrl-C once to end the window early and hand the charger back; Predbat keeps polling until the hand-back is confirmed, which can take a few minutes. A second Ctrl-C gives up, and a process that is killed cannot hand back (nothing is saved between runs), so if the charger is left off OCPP run `--ocpp on`. Try it with the car plugged in but outside an Octopus dispatch first.
+
 #### What it publishes (wallbox)
 
 For each charger, with `<id>` being the Wallbox charger id:
@@ -1209,6 +1237,7 @@ For each charger, with `<id>` being the Wallbox charger id:
 | `binary_sensor.predbat_wallbox_<id>_charging` | On while the car is charging |
 | `switch.predbat_wallbox_<id>_charging` | Turn off to pause charging, on to resume a paused session |
 | `switch.predbat_wallbox_<id>_locked` | Lock or unlock the charger |
+| `switch.predbat_wallbox_<id>_ocpp` | Connect the charger to its OCPP backend (on) or hand it back to the Wallbox cloud (off) |
 | `number.predbat_wallbox_<id>_max_charging_current` | Maximum charging current in A |
 | `select.predbat_wallbox_<id>_eco_smart` | Eco-Smart mode: `off`, `eco_mode` or `full_solar`. Only on chargers with Eco-Smart |
 
@@ -1243,6 +1272,23 @@ Things to know:
 - Predbat-led charging is disabled for a charger run by an OCPP backend (its status sensor's `operation_mode` reads `ocpp`). The backend decides when that charger charges, so Predbat leaves it alone and logs a warning once. Other chargers on the account are still controlled.
 - Predbat never unlocks a locked charger, and cannot pause or resume one. While a charger is locked Predbat-led charging leaves it alone and logs a warning once. A charger Predbat had paused is resumed once you unlock it.
 - Some cars go to sleep when charging is paused and do not wake when it is resumed. If yours does, Predbat-led charging will not suit it.
+
+#### Holding a charger off for an export (wallbox)
+
+`switch.predbat_wallbox_<id>_ocpp` shows whether the charger is run by an OCPP backend, such as Octopus for Intelligent Octopus Go, and turning it off hands the charger to the Wallbox cloud. Predbat uses the same switch when it holds a charger off.
+
+When **car_charging_cancel_for_export** is on and the plan cancels a car charging slot so the battery can export, Predbat holds that car's charger off for the cancelled slot, starting 5 minutes ahead. This works whoever would otherwise charge the car, Octopus included, and it does not need `wallbox_control`, but it does need `wallbox_automatic`, which is what makes each charger its own car. Telling Octopus to suspend does not stop a Pulsar, so Predbat does what stops it:
+
+- A charger run by an OCPP backend is switched off OCPP first, then paused once it reports it has left OCPP mode. The backend can no longer start the charge.
+- Any other charger is paused. One you had already paused is left paused, and is not resumed when the hold ends.
+- At the end of the hold, or if the switch is turned off, Predbat goes read only or guest charging is turned on, an OCPP charger is switched back on and its backend restarts the charge by itself; any other charger Predbat paused is resumed and handed back to its own schedule and Eco-Smart, as at the end of Predbat-led charging. The hand-back is retried until the charger confirms it. Reconnecting to OCPP took about 2.5 minutes in testing, and Wallbox can answer the first attempt with an error, which is retried.
+
+Things to know:
+
+- Wallbox's cloud, and the Home Assistant Wallbox integration, can go on showing `Charging` for minutes after the charger has stopped. Predbat reads the charger afresh each cycle during a hold and tolerates this, but the sensor lags.
+- **car_charging_cancel_for_export** is off by default. With it on, the plan cancels a slot only when the export over it is worth more than buying the car's energy back (at least a full-rate charge for the slot) at 1.1 times the peak import rate, which in practice means events such as saving sessions, so most days nothing is held. The cancelled slots are listed in the `cancelled_for_export` attribute of the car's slot sensor; see [Cancelling a car slot for an export](car-charging.md#cancelling-a-car-slot-for-an-export).
+- While Predbat is in read only mode or guest charging is on, the plan does not count the car as one a Wallbox can hold, so its slots are not cancelled unless Predbat leads its charging.
+- A car that is unplugged is not held, and nor is one while guest charging is on.
 
 #### Configuration Options (wallbox)
 

@@ -18,7 +18,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from annual_http import fetch_json
-from utils import filter_payment_method, minute_data
+from utils import filter_payment_method, migrate_octopus_url, minute_data
 
 MINUTES_PER_DAY = 24 * 60
 
@@ -108,11 +108,13 @@ class AnnualTariff:
         self.unpaid_export_months = set()
 
     def _resolve_url(self, url, name, dno_region=None):
-        """Substitute templated arguments such as {dno_region} into a tariff URL, without mutating predbat.args."""
+        """Substitute templated arguments such as {dno_region} into a tariff URL, without mutating predbat.args.
+
+        A URL naming the old Octopus API address is moved to the new one (GH#5786)."""
         if not url:
             return None
         extra_args = {"dno_region": dno_region} if dno_region else None
-        return self.predbat.resolve_arg(name, url, indirect=False, extra_args=extra_args)
+        return migrate_octopus_url(self.predbat.resolve_arg(name, url, indirect=False, extra_args=extra_args))
 
     @staticmethod
     def _url_cache_id(url):
@@ -171,7 +173,8 @@ class AnnualTariff:
                 truncated = True
                 break
             rows += data["results"]
-            url = data.get("next", None)
+            # The new host still links further pages on the old one (GH#5786)
+            url = migrate_octopus_url(data.get("next", None))
             pages += 1
 
         # A run only reaches its natural end when `url` runs out on its own. If a page

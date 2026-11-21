@@ -206,25 +206,28 @@ def test_download_open_meteo_data_basic(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             sorted_data, max_kwh = run_async(test_api.solar.download_open_meteo_data())
 
-        if len(sorted_data) != 2:
-            print(f"ERROR: Expected 2 data points (12:00 and 13:00), got {len(sorted_data)}")
+        # Open-Meteo radiation is the mean over the preceding hour, so the samples at 12:00, 13:00
+        # and 14:00 are the hours starting 11:00, 12:00 and 13:00.
+        if len(sorted_data) != 3:
+            print(f"ERROR: Expected 3 data points (the hours starting 11:00, 12:00 and 13:00), got {len(sorted_data)}")
             failed = True
 
         if abs(max_kwh - 3.0) > 0.001:
             print(f"ERROR: max_kwh expected 3.0, got {max_kwh}")
             failed = True
 
-        # With trapezoidal integration, the 12:00 slot = 0.5*(pv50_at_12 + pv50_at_13).
-        # pv50 = (GTI/1000) * kwp * eta_temp where eta_temp uses cell temperature from SAPM model
+        # The hour starting 11:00 is the 12:00 sample alone: pv50 = (GTI/1000) * kwp * eta_temp,
+        # with eta_temp from the SAPM cell temperature model
         if sorted_data:
+            if not sorted_data[0].get("period_start", "").startswith("2025-06-15T11:00"):
+                print(f"ERROR: first period should start at 11:00, got {sorted_data[0].get('period_start')}")
+                failed = True
             pv50 = sorted_data[0].get("pv_estimate", 0)
             t_cell_12 = pvwatts_cell_temperature(500.0, 25.0, 1.0)
             eta_temp_12 = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell_12 - 25.0)))
-            t_cell_13 = pvwatts_cell_temperature(600.0, 25.0, 1.0)
-            eta_temp_13 = max(0.5, min(1.1, 1.0 - 0.004 * (t_cell_13 - 25.0)))
-            expected_pv50 = round(0.5 * ((500.0 / 1000.0) * 3.0 * eta_temp_12 + (600.0 / 1000.0) * 3.0 * eta_temp_13), 4)
+            expected_pv50 = round((500.0 / 1000.0) * 3.0 * eta_temp_12, 4)
             if abs(pv50 - expected_pv50) > 0.001:
-                print(f"ERROR: pv_estimate at 12:00 expected {expected_pv50}, got {pv50}")
+                print(f"ERROR: pv_estimate for 11:00-12:00 expected {expected_pv50}, got {pv50}")
                 failed = True
 
             # pv_estimate10 should be from ensemble P10
@@ -252,7 +255,7 @@ def test_download_open_meteo_data_temperature_derating(my_predbat):
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         # GTI=1000, T=45°C, wind=1.0 m/s: T_cell via SAPM model, eta = 1 - 0.004*(T_cell-25)
-        # pv50 = (1000/1000) * 4.0 * eta_temp  (same at both ends → trapz average equals point value)
+        # pv50 = (1000/1000) * 4.0 * eta_temp  (each sample is the mean of the hour before it)
         forecast_response = _make_forecast_response(times=["2025-06-15T12:00", "2025-06-15T13:00"], gti=[1000.0, 1000.0], temp=[45.0, 45.0], wind=[1.0, 1.0])
         ensemble_response = _make_ensemble_response(times=["2025-06-15T12:00", "2025-06-15T13:00"], members={"global_tilted_irradiance_member01": [900.0, 900.0]})
         test_api.set_mock_response("api.open-meteo.com", forecast_response)
@@ -313,7 +316,7 @@ def test_download_open_meteo_data_multi_config(my_predbat):
             failed = True
 
         # Each array: GTI=1000, T=25°C, wind=1.0 m/s → cell temp via SAPM, pv50 = (1000/1000)*2.0*eta
-        # Same at both ends → trapz average equals point value
+        # Each sample is the mean of the hour before it
         if sorted_data:
             pv50 = sorted_data[0].get("pv_estimate", 0)
             t_cell = pvwatts_cell_temperature(1000.0, 25.0, 1.0)
@@ -386,7 +389,7 @@ def test_download_open_meteo_data_cool_temp_efficiency(my_predbat):
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         # 10 degC ambient, 200 W/m2, 1 m/s wind: SAPM T_cell < 25 degC -> eta > 1.0
-        # Same at both ends → trapz average equals point value
+        # Each sample is the mean of the hour before it
         forecast_response = _make_forecast_response(times=["2025-04-15T12:00", "2025-04-15T13:00"], gti=[200.0, 200.0], temp=[10.0, 10.0], wind=[1.0, 1.0])
         ensemble_response = _make_ensemble_response(times=["2025-04-15T12:00", "2025-04-15T13:00"], members={"global_tilted_irradiance_member01": [150.0, 150.0]})
         test_api.set_mock_response("api.open-meteo.com", forecast_response)
@@ -436,7 +439,7 @@ def test_download_open_meteo_data_no_gti_returns_zero(my_predbat):
         test_api.solar.open_meteo_forecast = [{"latitude": 51.5, "longitude": -0.1, "declination": 35, "azimuth": 180, "kwp": 3.0, "efficiency": 1.0}]
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
-        # GTI=None at night — same at both ends so trapz average is also zero
+        # GTI=None at night counts as zero, so the hour before it is dark
         forecast_response = _make_forecast_response(times=["2025-06-15T02:00", "2025-06-15T03:00"], gti=[None, None], temp=[15.0, 15.0])
         ensemble_response = _make_ensemble_response(times=["2025-06-15T02:00", "2025-06-15T03:00"], members={"global_tilted_irradiance_member01": [None, None]})
         test_api.set_mock_response("api.open-meteo.com", forecast_response)
@@ -449,7 +452,7 @@ def test_download_open_meteo_data_no_gti_returns_zero(my_predbat):
             sorted_data, _ = run_async(test_api.solar.download_open_meteo_data())
 
         if not sorted_data:
-            print("ERROR: Expected one data point, got none")
+            print("ERROR: Expected at least one data point, got none")
             failed = True
         else:
             pv50 = sorted_data[0].get("pv_estimate", -1)
@@ -482,7 +485,7 @@ def test_download_open_meteo_data_two_aspect_configs(my_predbat):
         test_api.solar.open_meteo_forecast_max_age = 1.0
 
         times = ["2025-06-15T12:00", "2025-06-15T13:00"]
-        # Array 1 (WSW): 400 W/m²   Array 2 (NW): 200 W/m²  (same at both ends → trapz average = point value)
+        # Array 1 (WSW): 400 W/m²   Array 2 (NW): 200 W/m²  (each sample is the mean of the hour before it)
         forecast_wsw = {"hourly": {"time": times, "global_tilted_irradiance": [400.0, 400.0], "temperature_2m": [25.0, 25.0], "wind_speed_10m": [1.0, 1.0]}}
         forecast_nw = {"hourly": {"time": times, "global_tilted_irradiance": [200.0, 200.0], "temperature_2m": [25.0, 25.0], "wind_speed_10m": [1.0, 1.0]}}
         ensemble_wsw = {"hourly": {"time": times, "global_tilted_irradiance_member01": [320.0, 320.0]}}

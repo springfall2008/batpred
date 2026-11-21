@@ -32,6 +32,7 @@ from tests.test_plot import run_plot_tests
 from tests.test_predict_pv_power import run_predict_pv_power_tests
 from tests.test_dashboard_device_class import test_dashboard_device_class
 from tests.test_inverter_config_sensor import test_inverter_config_sensor
+from tests.test_solar_surplus import run_solar_surplus_tests
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
 from tests.test_prediction_batch import run_prediction_batch_tests
 from tests.test_kernel_static_cache import run_kernel_static_cache_tests
@@ -163,6 +164,7 @@ from tests.test_hainterface_api import run_hainterface_api_tests
 from tests.test_hainterface_service import run_hainterface_service_tests
 from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
+from tests.test_hainterface_owned_controls import run_hainterface_owned_controls_tests
 from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
@@ -322,6 +324,7 @@ from tests.test_annual_profiles import test_annual_profiles
 from tests.test_annual_load import test_annual_load, test_annual_load_octopus
 from tests.test_annual_weather import test_annual_weather, test_annual_weather_orientation_cache, test_annual_weather_window
 from tests.test_annual_tariff import test_annual_tariff
+from tests.test_octopus_domain import test_octopus_domain
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_iog_car_need_gate import run_iog_car_need_gate_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
@@ -365,6 +368,7 @@ from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_
 from tests import network_guard
 from tests.test_network_guard import test_network_guard
 from tests.test_debug_yaml_cache import test_debug_yaml_cache
+from tests.test_debug_yaml_safe_load import run_debug_yaml_safe_load_tests
 from tests.test_gecloud_budget import run_gecloud_budget_harness_tests, run_gecloud_api_budget
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
@@ -383,6 +387,7 @@ from tests.test_myenergi import test_myenergi
 from tests.test_wallbox import test_wallbox
 from tests.test_hypervolt import test_hypervolt
 from tests.test_car_charger_control import run_car_charger_control_tests
+from tests.test_car_cancel import run_car_cancel_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
@@ -402,6 +407,7 @@ from tests.test_battery_temperature_fetch import (
     test_battery_temperature_history_stuck_warning,
     test_battery_temperature_history_stuck_warning_fetch,
     test_battery_temperature_history_stuck_warning_once,
+    test_templates_set_battery_temperature_history,
 )
 from tests.test_oauth_mixin import run_oauth_mixin_tests
 from tests.test_fox_oauth import run_fox_oauth_tests
@@ -600,6 +606,7 @@ def main():
         ("predict_pv_power", run_predict_pv_power_tests, "predict_pv_power plan-interval scaling tests", False),
         ("dashboard_device_class", test_dashboard_device_class, "Dashboard sensor device_class regression tests (#3352)", False),
         ("inverter_config_sensor", test_inverter_config_sensor, "Aggregated static prediction inputs published as sensor.<prefix>_inverter_config", False),
+        ("solar_surplus", run_solar_surplus_tests, "Solar surplus power and force export slot sensor tests", False),
         ("model_kernel", run_model_kernel_tests, "Model tests run with the C++ prediction kernel enabled", False),
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
@@ -862,6 +869,7 @@ def main():
         ("annual_weather_orientation_cache", test_annual_weather_orientation_cache, "Annual weather cache keys separate roof orientations", False),
         ("annual_weather_window", test_annual_weather_window, "Annual weather month-window fetch tests", False),
         ("annual_tariff", test_annual_tariff, "Annual prediction tariff tests", False),
+        ("octopus_domain", test_octopus_domain, "Octopus API domain move to api.oegb-kraken.energy (GH#5786)", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
@@ -931,6 +939,8 @@ def main():
         ("hainterface_lifecycle", run_hainterface_lifecycle_tests, "HAInterface lifecycle tests", False),
         # HAInterface websocket tests
         ("hainterface_websocket", run_hainterface_websocket_tests, "HAInterface websocket tests", False),
+        # HAInterface routing of Predbat-published controls (#6223)
+        ("hainterface_owned_controls", run_hainterface_owned_controls_tests, "HAInterface Predbat-published control routing tests", False),
         # History chunking (long windows fetched in pieces) tests
         ("history_chunking", run_history_chunking_tests, "History chunking tests", False),
         # Carbon Intensity API unit tests
@@ -953,6 +963,7 @@ def main():
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
         ("givtcp_rest", run_givtcp_rest_tests, "GivTCP REST client write/retry/transport tests", False),
         ("car_charger_control", run_car_charger_control_tests, "Shared Predbat-led EV charger control tests", False),
+        ("car_cancel", run_car_cancel_tests, "Cancel a car slot for export tests", False),
         # myenergi Zappi and Eddi unit tests
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
         ("wallbox", test_wallbox, "Wallbox EV charger tests (transport, normalisation, publishing, auto-config, controls, plan-led charging)", False),
@@ -974,6 +985,7 @@ def main():
         ("battery_temperature_stuck_warning", test_battery_temperature_history_stuck_warning, "Battery temperature history stuck at 0 warns, naming the GivTCP rename (#6193)", False),
         ("battery_temperature_stuck_warning_fetch", test_battery_temperature_history_stuck_warning_fetch, "Battery temperature stuck warning through the real fetch path (#6193)", False),
         ("battery_temperature_stuck_warning_once", test_battery_temperature_history_stuck_warning_once, "Battery temperature stuck warning reported once, curve-aware wording (#6193)", False),
+        ("templates_battery_temperature_history", test_templates_set_battery_temperature_history, "apps.yaml templates that set battery_temperature also set battery_temperature_history (#6270)", False),
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
         ("rate_text_scan", test_rate_text_scan, "Rate text scan tests (multi-band min/max range grouping)", False),
@@ -1027,6 +1039,7 @@ def main():
         ("optimise_swap_export", run_optimise_swap_export_tests, "Optimise pairwise export-window swap tests", False),
         ("network_guard", test_network_guard, "Unit tests may not reach the network: non-local lookups and connects fail the test", False),
         ("debug_yaml_cache", test_debug_yaml_cache, "Debug dump parse cache used by the test runner", False),
+        ("debug_yaml_safe_load", run_debug_yaml_safe_load_tests, "Replaying a debug dump never runs code the dump names", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", False),
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
