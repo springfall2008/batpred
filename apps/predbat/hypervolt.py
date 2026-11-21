@@ -205,16 +205,17 @@ def apply_session(charger, result):
             # true_milli_amps and voltage already show ~30 A at 231 V, so current x voltage wins then
             charger.power_w = measured
         # A message with neither leaves the last power alone
-    if "session" in result and result["session"] != charger.session_id:
+    session = result.get("session")
+    if session is not None and str(session) != str(charger.session_id):
         # A new session: its energy starts again from whatever this message says.
         # The first session id seen since start-up may be a session already part-way through, so its energy is unknown until watt_hours arrives,
-        # and energy held from earlier messages without a session id can't be carried into it either
+        # and energy held from earlier messages without a session id can't be carried into it either. A null session id is not a new session
         charger.session_energy_kwh = 0.0 if charger.session_id is not None else None
-        charger.session_id = result["session"]
+        charger.session_id = session
     watt_hours = _to_float(result.get("watt_hours"))
     if watt_hours is not None:
         kwh = round(watt_hours / 1000.0, 3)
-        if charger.session_energy_kwh is None or (charger.api_version >= 3 and "session" not in result and kwh < charger.session_energy_kwh):
+        if charger.session_energy_kwh is None or (charger.api_version >= 3 and session is None and kwh < charger.session_energy_kwh):
             # Unknown until now, or on V3, which sends no session id, a drop in watt_hours: a session ended and a new one started
             charger.session_energy_kwh = kwh
         else:

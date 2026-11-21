@@ -698,29 +698,64 @@ def test_session_energy_unknown_after_restart():
     # A later new session still starts again from 0
     apply_session(charger, {"charging": True, "session": 6})
     assert charger.session_energy_kwh == 0.0 and charger.session_id == 6
+    # A null session id, or the same id as text, is not a new session
+    apply_session(charger, {"charging": True, "session": 6, "watt_hours": 1200})
+    apply_session(charger, {"charging": True, "session": None})
+    apply_session(charger, {"charging": True, "session": "6"})
+    assert charger.session_energy_kwh == 1.2 and str(charger.session_id) == "6", (charger.session_energy_kwh, charger.session_id)
     # Energy held from messages without a session id isn't carried into the first session id seen
     v3 = HypervoltCharger(V3_ID, api_version=3)
     apply_session(v3, {"charging": True, "watt_hours": 17836})
+    apply_session(v3, {"charging": True, "session": 9})
+    assert v3.session_energy_kwh is None and v3.session_id == 9, v3.session_energy_kwh
     apply_session(v3, {"charging": True, "session": 9, "watt_hours": 500})
-    assert v3.session_energy_kwh == 0.5 and v3.session_id == 9
+    assert v3.session_energy_kwh == 0.5
     print("  ✓ Session energy unknown after a restart")
 
 
 def test_restart_history_counts_session_once():
-    """A restart mid-session read back through minute_data counts the session once with 'unavailable', twice with 0 (#6285)."""
+    """
+    A restart mid-session, published by the component and read back through minute_data as car_charging_energy reads it,
+    counts the session once; the 0 the old code published counted it twice (#6285).
+    """
     now = datetime.datetime(2026, 11, 20, 12, 0, tzinfo=datetime.timezone.utc)
     start = now - datetime.timedelta(minutes=120)
+    entity = "sensor.predbat_hypervolt_{}_session_energy".format(V2_ID)
+    history = []
 
-    def counted(restart_state):
-        """Energy counted for a 5 kWh session whose sensor reads restart_state for 10 minutes at 4.5 kWh."""
-        history = [{"state": str(round(4.5 * minute / 90, 3)), "last_updated": (start + datetime.timedelta(minutes=minute)).isoformat()} for minute in range(0, 91, 5)]
-        for minute, state in ((91, restart_state), (101, "4.5"), (115, "5.0")):
-            history.append({"state": state, "last_updated": (start + datetime.timedelta(minutes=minute)).isoformat()})
-        data, _ = minute_data(history, 1, now, "state", "last_updated", backwards=True, smoothing=True, scale=1.0, clean_increment=True, can_modify_history=True)
+    def publish(component, minute):
+        """Publish the component's chargers and record the session energy state at this minute."""
+        run_async(component.publish_data())
+        history.append({"state": str(component.base.entities[entity]["state"]), "last_updated": (start + datetime.timedelta(minutes=minute)).isoformat()})
+
+    before = HypervoltCharger(V2_ID, charging=True, last_message=time.time())
+    component = _make_component([before])
+    component.update_car_order([V2_ID])
+    apply_session(before, {"charging": True, "session": 5, "watt_hours": 0})
+    for minute in range(0, 91, 5):
+        apply_session(before, {"charging": True, "session": 5, "watt_hours": round(4500 * minute / 90)})
+        publish(component, minute)
+    # Predbat restarts: a new component and charger record, heard from (a snapshot and a session message without watt_hours)
+    after = HypervoltCharger(V2_ID, charging=True, last_message=time.time())
+    component = _make_component([after])
+    component.update_car_order([V2_ID])
+    apply_snapshot(after, MOCK_SNAPSHOT)
+    apply_session(after, {"charging": True, "session": 5})
+    publish(component, 91)
+    for minute, watt_hours in ((101, 4500), (115, 5000)):
+        apply_session(after, {"charging": True, "session": 5, "watt_hours": watt_hours})
+        publish(component, minute)
+
+    def counted(states):
+        """Energy minute_data counts over these states."""
+        data, _ = minute_data([dict(entry) for entry in states], 1, now, "state", "last_updated", backwards=True, smoothing=True, scale=1.0, clean_increment=True, can_modify_history=True)
         return data[0] - data[max(data)]
 
-    assert abs(counted("0.0") - 9.5) < 0.01, counted("0.0")
-    assert abs(counted("unavailable") - 5.0) < 0.01, counted("unavailable")
+    assert history[-3]["state"] == "unavailable", history[-3]
+    assert abs(counted(history) - 5.0) < 0.01, counted(history)
+    # The 0 the old code published at the restart
+    old = [dict(entry, state="0.0") if entry["state"] == "unavailable" else entry for entry in history]
+    assert abs(counted(old) - 9.5) < 0.01, counted(old)
     print("  ✓ Restart history counts the session once")
 
 
@@ -730,6 +765,13 @@ def test_publishes_unavailable_session_energy_until_known():
     assert run_async(component.run(0, True)) is True
     entity = "sensor.predbat_hypervolt_{}_session_energy".format(V3_ID)
     assert component.base.entities[entity]["state"] == "unavailable", component.base.entities[entity]
+    charger = component.transport.chargers[V3_ID]
+    apply_session(charger, {"charging": True, "session": 3, "watt_hours": 2100})
+    run_async(component.publish_data())
+    assert component.base.entities[entity]["state"] == 2.1, component.base.entities[entity]
+    apply_session(charger, {"charging": True, "session": 4})
+    run_async(component.publish_data())
+    assert component.base.entities[entity]["state"] == 0.0, component.base.entities[entity]
     print("  ✓ Session energy unavailable until known")
 
 
