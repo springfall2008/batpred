@@ -12,6 +12,7 @@ nav:
     - apps-yaml.md
     - energy-rates.md
     - components.md
+    - luxpower-vpp.md
     - discovery-catalogue.md
     - load-ml.md
     - car-charging.md
