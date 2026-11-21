@@ -164,6 +164,7 @@ from tests.test_hainterface_api import run_hainterface_api_tests
 from tests.test_hainterface_service import run_hainterface_service_tests
 from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
+from tests.test_hainterface_owned_controls import run_hainterface_owned_controls_tests
 from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
@@ -935,6 +936,8 @@ def main():
         ("hainterface_lifecycle", run_hainterface_lifecycle_tests, "HAInterface lifecycle tests", False),
         # HAInterface websocket tests
         ("hainterface_websocket", run_hainterface_websocket_tests, "HAInterface websocket tests", False),
+        # HAInterface routing of Predbat-published controls (#6223)
+        ("hainterface_owned_controls", run_hainterface_owned_controls_tests, "HAInterface Predbat-published control routing tests", False),
         # History chunking (long windows fetched in pieces) tests
         ("history_chunking", run_history_chunking_tests, "History chunking tests", False),
         # Carbon Intensity API unit tests
