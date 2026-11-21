@@ -291,6 +291,10 @@ class MinuteArray:
 # carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
 # The rate grid evidence (a year of samples) and the grids derived from the learned ones are rebuilt on replay
 # (rate_grids()), so only battery_rate_grid_learned is dumped - every debug_history snapshot would otherwise carry them.
+# control_ledger and control_monitor are execution-side runtime state: a replay only re-plans (calculate_plan), so it
+# never reads them, and the events they hold already reach predbat.log and the control_conflicts/control_failures
+# sensors. As Python objects they were the only !!python/object tags in a fresh dump, and a newer dump on an older
+# tree failed to load on them (GH#5719).
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -318,6 +322,8 @@ DEBUG_EXCLUDE_LIST = [
     "battery_rate_grid_manual",
     "battery_charge_rate_grid",
     "battery_discharge_rate_grid",
+    "control_ledger",
+    "control_monitor",
 ]
 
 

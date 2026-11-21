@@ -275,6 +275,7 @@ foxess
 foxesscloud
 frameon
 freephase
+frombuffer
 fromisoformat
 fronius
 funcs
