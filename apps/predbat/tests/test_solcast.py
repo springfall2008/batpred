@@ -2885,8 +2885,8 @@ def test_fetch_pv_forecast_open_meteo_first_hourly_slots(my_predbat):
         with patch("solcast.aiohttp.ClientSession", side_effect=create_mock_session):
             run_async(test_api.solar.fetch_pv_forecast())
 
-        # Two hourly periods are produced from three instant samples, trapezoidally integrated
-        # and temperature corrected by solar_model.gti_hourly_to_period_kwh.
+        # Three hourly periods (each sample is the mean of the hour before it), temperature
+        # corrected by solar_model.gti_hourly_to_period_kwh.
         expected_kwh = round(day_zero_kwh(captured.get("data", []), test_api.mock_base.midnight_utc), 2)
         failed |= check_slot_scaling(test_api, captured, 60, expected_kwh, "Open-Meteo as the primary hourly source")
 

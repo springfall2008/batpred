@@ -266,8 +266,8 @@ def test_web_annual(my_predbat):
         # get_arg()'s default indirect=True treats any dotted string as a Home Assistant
         # entity id to resolve; a URL is full of dots, so this only passes if the URL
         # fields are read with indirect=False.
-        import_url = "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/"
-        export_url = "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+        import_url = "https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-A/standard-unit-rates/"
+        export_url = "https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
         my_predbat.args["rates_import_octopus_url"] = import_url
         my_predbat.args["rates_export_octopus_url"] = export_url
         config = make_page(my_predbat).prefill_config()
@@ -742,7 +742,7 @@ def test_web_annual_form(my_predbat):
         # Anything reading the HTML rather than rendering it saw a dropdown with no
         # selection, and the page stated no baseline where it means the price cap.
         custom_baseline = make_page(my_predbat).prefill_config()
-        custom_baseline["baseline_tariff"] = {"import_octopus_url": "https://api.octopus.energy/v1/products/MY-OWN-DEAL/x/", "rates_export": [{"rate": 4.1}]}
+        custom_baseline["baseline_tariff"] = {"import_octopus_url": "https://api.oegb-kraken.energy/v1/products/MY-OWN-DEAL/x/", "rates_export": [{"rate": 4.1}]}
         custom_select = re.search(r'<select id="baseline_tariff_id".*?</select>', make_page(my_predbat).render_form(custom_baseline), re.S)
         if not custom_select or len(re.findall(r"selected", custom_select.group(0))) != 1:
             print("  ERROR: exactly one baseline option should be selected, got {}".format(custom_select.group(0) if custom_select else None))
@@ -1577,8 +1577,8 @@ def sample_run_results():
             # would not be what a real run stores, and would quietly stop matching the
             # catalogue that names it.
             "tariff": {
-                "import_octopus_url": "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/",
-                "export_octopus_url": "https://api.octopus.energy/v1/products/OUTGOING-PRIME-FIX-12M-26-06-23/electricity-tariffs/E-1R-OUTGOING-PRIME-FIX-12M-26-06-23-{dno_region}/standard-unit-rates/",
+                "import_octopus_url": "https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{dno_region}/standard-unit-rates/",
+                "export_octopus_url": "https://api.oegb-kraken.energy/v1/products/OUTGOING-PRIME-FIX-12M-26-06-23/electricity-tariffs/E-1R-OUTGOING-PRIME-FIX-12M-26-06-23-{dno_region}/standard-unit-rates/",
                 "dno_region": "A",
                 "standing_charge_p_per_day": 60.0,
             },
@@ -2183,7 +2183,7 @@ def test_web_annual_pages(my_predbat):
             "id": "odd",
             "label": "System Delta",
             "summary": {
-                "tariff": {"import_octopus_url": "https://api.octopus.energy/v1/products/MY-OWN-DEAL-24/electricity-tariffs/x/", "rates_export": [{"rate": 21.5}]},
+                "tariff": {"import_octopus_url": "https://api.oegb-kraken.energy/v1/products/MY-OWN-DEAL-24/electricity-tariffs/x/", "rates_export": [{"rate": 21.5}]},
                 "baseline_tariff": {},
                 "payback_years": {},
             },
