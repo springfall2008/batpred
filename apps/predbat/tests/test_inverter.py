@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from utils import calc_percent_limit, is_entity_id
 from tests.test_infra import TestHAInterface, run_async
 from predbat import PredBat
-from inverter import Inverter, within_fuzzy
+from inverter import Inverter, within_fuzzy, SOLIS_MISSING_SWITCH_CHARGE, SOLIS_MISSING_SWITCH_HOLD
 from givtcp_rest import GivTCPRest
 from config import INVERTER_DEF
 from const import INVERTER_MAX_RETRY, MINUTE_WATT, TIME_FORMAT_SECONDS
@@ -234,6 +234,58 @@ def test_solis_gs_current_hold(my_predbat, ha):
                 ha.dummy_items[key] = saved_items[key]
             else:
                 ha.dummy_items.pop(key, None)
+    return failed
+
+
+def test_solis_energy_control_missing_warnings(my_predbat, ha):
+    """
+    With no energy_control_switch on GS_fb00, a freeze or hold warns that it cannot be enforced, as a charge warns
+    that grid charging cannot be made sure of; each is a warning at most hourly and Info in between, and idle says
+    nothing. On GS the charge enable warns the same way (#5857).
+    """
+    failed = False
+    print("Test: solis_fb00_missing_switch_warnings")
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_now = my_predbat.now_utc
+    prefix = "energy_control_switch is not set in apps.yaml, so "
+    for inverter_type, steps, expected in (
+        (
+            "GS_fb00",
+            ("freeze", "freeze", "charge", "charge", "idle", "later", "freeze"),
+            [("Warn", SOLIS_MISSING_SWITCH_HOLD), ("Info", SOLIS_MISSING_SWITCH_HOLD), ("Warn", SOLIS_MISSING_SWITCH_CHARGE), ("Info", SOLIS_MISSING_SWITCH_CHARGE), ("Warn", SOLIS_MISSING_SWITCH_HOLD)],
+        ),
+        ("GS", ("enable_charge", "enable_charge", "enable_discharge"), [("Warn", SOLIS_MISSING_SWITCH_CHARGE), ("Info", SOLIS_MISSING_SWITCH_CHARGE)]),
+    ):
+        log_messages = []
+        orig_log = my_predbat.log
+        try:
+            my_predbat.args["inverter_type"] = [inverter_type]
+            my_predbat.args.pop("energy_control_switch", None)
+            ha.dummy_items["number.charge_limit"] = 100
+            inv = Inverter(my_predbat, 0, quiet=True)
+            inv.sleep = dummy_sleep
+            inv.soc_percent = 50
+            my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+            for step in steps:
+                if step == "freeze":
+                    inv.adjust_charge_immediate(50, freeze=True)
+                elif step in ("charge", "idle"):
+                    inv.adjust_charge_immediate(100 if step == "charge" else 0)
+                elif step == "later":
+                    my_predbat.now_utc += timedelta(minutes=61)
+                else:
+                    inv.alt_charge_discharge_enable(step.split("_")[1], True)
+        finally:
+            my_predbat.log = orig_log
+            my_predbat.now_utc = saved_now
+            my_predbat.args.clear()
+            my_predbat.args.update(saved_args)
+
+        missing = [msg for msg in log_messages if prefix in msg]
+        want = ["{}: Inverter 0 {}{}".format(level, prefix, text) for level, text in expected]
+        if missing != want:
+            print("ERROR: solis_missing_switch_warnings {}: expected {} got {}".format(inverter_type, want, missing))
+            failed = True
     return failed
 
 
@@ -6387,6 +6439,8 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_solis_energy_control("solis_fb00_already_backup_reserve", my_predbat, ha, "GS_fb00", "Backup/Reserve", charge, "Backup/Reserve")
     failed |= test_solis_energy_control("solis_fb00_unavailable", my_predbat, ha, "GS_fb00", "unavailable", charge, "Backup/Reserve")
     failed |= test_solis_energy_control("solis_fb00_not_configured", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", charge, "Self-Use - No Grid Charging", configured=False)
+    failed |= test_solis_energy_control("solis_fb00_freeze_not_configured", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", freeze, "Self-Use - No Grid Charging", configured=False)
+    failed |= test_solis_energy_control_missing_warnings(my_predbat, ha)
     failed |= test_solis_energy_control("solis_fb00_freeze_blocks_grid", my_predbat, ha, "GS_fb00", "Backup/Reserve", freeze, "Backup/Reserve - No Grid Charging")
     failed |= test_solis_energy_control("solis_fb00_freeze_already_blocked", my_predbat, ha, "GS_fb00", "Backup/Reserve - No Grid Charging", freeze, "Backup/Reserve - No Grid Charging")
     failed |= test_solis_energy_control("solis_fb00_freeze_export_feed_in", my_predbat, ha, "GS_fb00", "Backup/Reserve", export_freeze, "Feed-in priority - No Grid Charging")

@@ -52,6 +52,11 @@ from utils import calc_percent_limit, compute_window_minutes, dp0, dp1, dp2, dp3
 
 TIME_FORMAT_HMS = "%H:%M:%S"
 
+# What a missing energy_control_switch stops Predbat enforcing on a Solis, for write_solis_energy_control() to warn about (#5857)
+SOLIS_MISSING_SWITCH_WARN_MINUTES = 60
+SOLIS_MISSING_SWITCH_CHARGE = "Predbat cannot make sure the inverter allows grid charging"
+SOLIS_MISSING_SWITCH_HOLD = "a freeze or hold cannot be enforced: the battery keeps discharging without the Battery Reserve mode, or imports from the grid to reach the raised reserve while grid charging is allowed"
+
 # Sentinel for "this side has committed nothing yet", distinct from any real commit key a caller
 # might use - including None, which adjust_charge_window() can legitimately produce for an unset
 # window time.
@@ -413,6 +418,8 @@ class Inverter(BatteryCurve):
         self.battery_scaling_invalid_warned = False
         # Set once battery_min_soc naming a reserve entity has been warned about (#4013); cleared when it no longer does
         self.battery_min_soc_is_reserve_warned = False
+        # What a missing energy_control_switch stops Predbat enforcing -> when it was last warned about (#5857)
+        self.solis_energy_control_missing_warned = {}
         # Commit-once state, keyed by scope - see commit_needed(). Each entry is the last state that
         # scope actually committed to this inverter; a scope absent from the dict has committed
         # nothing yet in this run, so its next call commits once. commit_pending marks a scope whose
@@ -3209,7 +3216,7 @@ class Inverter(BatteryCurve):
             # adjust_charge_immediate / adjust_export_immediate instead.
             solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
             new_switch = 35 if (enable or direction == "eco") else 33
-            self.write_solis_energy_control(new_switch, solax_modes, f"{direction} {enable}", warn_missing=(direction == "charge" and enable))
+            self.write_solis_energy_control(new_switch, solax_modes, f"{direction} {enable}", missing_warning=SOLIS_MISSING_SWITCH_CHARGE if (direction == "charge" and enable) else None)
 
         # MQTT
         if direction == "charge" and enable:
@@ -3222,19 +3229,26 @@ class Inverter(BatteryCurve):
         else:
             self.mqtt_message("set/auto", payload="true")
 
-    def write_solis_energy_control(self, new_switch, solax_modes, reason, warn_missing=False):
+    def write_solis_energy_control(self, new_switch, solax_modes, reason, missing_warning=None):
         """
         Put the Solis Energy Storage Control Switch on mode value new_switch, writing only when it differs.
 
         solax_modes maps the Solax Modbus plugin's option names to their values, which differ between the
         pre-FB00 and FB00 plugins. A switch state the table does not know (e.g. unavailable) counts as a
-        difference. With no energy_control_switch configured nothing is written, and warn_missing says
-        whether that deserves a warning - only while charging, when a switch without grid charging stops it.
+        difference. With no energy_control_switch configured nothing is written, and missing_warning, when
+        given, says what that stops Predbat enforcing: a charge (a switch without grid charging stops it), or
+        on FB00 a freeze or hold (the raised reserve only holds with the Battery Reserve bit, and grid charging must
+        be off). Each is a warning at most every SOLIS_MISSING_SWITCH_WARN_MINUTES and Info in between, so it stays
+        visible without a warning every cycle (#5857).
         """
         entity_id = self.base.get_arg("energy_control_switch", indirect=False, index=self.id)
         if not entity_id:
-            if warn_missing:
-                self.base.log(f"Warn: Inverter {self.id} energy_control_switch is not set in apps.yaml, so Predbat cannot make sure the inverter allows grid charging")
+            if missing_warning:
+                last_warned = self.solis_energy_control_missing_warned.get(missing_warning)
+                level = "Info" if last_warned is not None and (self.base.now_utc - last_warned) < timedelta(minutes=SOLIS_MISSING_SWITCH_WARN_MINUTES) else "Warn"
+                if level == "Warn":
+                    self.solis_energy_control_missing_warned[missing_warning] = self.base.now_utc
+                self.base.log(f"{level}: Inverter {self.id} energy_control_switch is not set in apps.yaml, so {missing_warning}")
             return
 
         old_mode = str(self.base.get_state_wrapper(entity_id, ""))
@@ -3393,7 +3407,8 @@ class Inverter(BatteryCurve):
         # is raised. Exporting cycles drive it from adjust_export_immediate, and GS from mimic_target_soc instead.
         if self.inv_has_target_soc and self.inv_has_solis_energy_control:
             reason = "freeze or hold" if freeze else "charge" if target_soc > 0 else "idle"
-            self.write_solis_energy_control(17 if freeze else 49, SOLAX_SOLIS_MODES_FB00, reason, warn_missing=(target_soc > 0 and not freeze))
+            missing_warning = SOLIS_MISSING_SWITCH_HOLD if freeze else SOLIS_MISSING_SWITCH_CHARGE if target_soc > 0 else None
+            self.write_solis_energy_control(17 if freeze else 49, SOLAX_SOLIS_MODES_FB00, reason, missing_warning=missing_warning)
 
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
