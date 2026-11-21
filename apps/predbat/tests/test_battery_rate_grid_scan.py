@@ -140,6 +140,12 @@ def _export(minutes, power=1560, grid=1000, status="Exporting"):
     return [(status, RATED_W, power, 60, 15.3, grid) for _ in range(minutes)]
 
 
+def _pin_local_time(my_predbat, hour, minute=0):
+    """Pin now (now_utc) to today's hour:minute local time, so a block a fixed number of hours back lands at a known time of day."""
+    local = my_predbat.now_utc.astimezone(my_predbat.local_tz) if getattr(my_predbat, "local_tz", None) else my_predbat.now_utc
+    my_predbat.now_utc = local.replace(hour=hour, minute=minute, second=0, microsecond=0).astimezone(my_predbat.now_utc.tzinfo)
+
+
 def _segments(samples):
     """All segments in a samples dict."""
     return [entry for entries in (samples or {}).values() for entry in entries]
@@ -159,7 +165,9 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     failed = False
 
     print("Test 1: a 25-minute full-rate charge gives three 5-minute segments")
-    my_predbat, samples = _scan(_charge(25))
+    # Now is pinned to 18:00 local, so the block (26 hours back) runs 16:00-16:25 the day before: the day is checked below, and
+    # with the real clock a run between about 13:45 and 14:10 put the block across the noon-to-noon day boundary
+    my_predbat, samples = _scan(_charge(25), setup=lambda p: _pin_local_time(p, 18))
     segments = _segments(samples)
     failed |= _check("t1 count", len(segments) == 3, segments)
     failed |= _check("t1 values", all(abs(s[0] - 40) < 1e-6 and abs(s[1] - 15.3) < 1e-6 and abs(s[2] - 0.6) < 1e-6 for s in segments), segments)
