@@ -4271,6 +4271,44 @@ class Fetch:
                     self.battery_rate_grid_last_success[kind] = restored
             return True
 
+        def load_empty_scan():
+            """
+            Restore the last success from the record a scan that found no evidence writes, as such a direction (often discharge,
+            on a system that never force-exports) has no evidence store to keep it in. Only when its key still matches and the
+            stored time is not ahead of the clock; a failed read leaves the first scan reading the full window
+            """
+            data = None
+            try:
+                data = run_async(storage.load("predbat", key + "_empty_scan"))
+            except Exception as e:
+                self.log("Warn: {}_empty_scan: failed to load: {}".format(key, e))
+            if not isinstance(data, dict) or not self.rate_grid_scan_key_matches(data.get("scan_key"), scan_key):
+                return
+            try:
+                restored = strptime_aware(data.get("last_success"), TIME_FORMAT)
+            except (ValueError, TypeError):
+                return
+            if restored <= self.now_utc:
+                self.battery_rate_grid_last_success[kind] = restored
+                if self.battery_rate_grid_scan_key.get(kind) is None:
+                    self.battery_rate_grid_scan_key[kind] = data["scan_key"]
+
+        def save_empty_scan():
+            """Record a successful scan while no evidence is held, kept apart from the evidence store so it can never replace it."""
+            try:
+                if not run_async(
+                    storage.save(
+                        "predbat",
+                        key + "_empty_scan",
+                        {"last_success": self.now_utc.strftime(TIME_FORMAT), "scan_key": self.battery_rate_grid_scan_key.get(kind)},
+                        format="json",
+                        expiry=self.now_utc + timedelta(days=BATTERY_RATE_GRID_STORE_EXPIRY_DAYS),
+                    )
+                ):
+                    self.log("Warn: {}_empty_scan: failed to save".format(key))
+            except Exception as e:
+                self.log("Warn: {}_empty_scan: failed to save: {}".format(key, e))
+
         refit = kind not in self.battery_rate_grid_learned or self.battery_rate_grid_fit_key.get(kind) != manual_key
         save = self.battery_rate_grid_pending_save.get(kind, False)
         failures = self.battery_rate_grid_load_failures.setdefault(kind, [])  # one time per cycle whose reads all came back empty
@@ -4286,6 +4324,11 @@ class Fetch:
             if not self.battery_rate_grid_loaded.get(kind):
                 # Read again just before merging, as the old learners did
                 refit |= load_store()
+                last_success = self.battery_rate_grid_last_success.get(kind)
+            if last_success is None and storage and not self.battery_rate_grid_samples.get(kind) and not self.battery_rate_grid_empty_scan_read.get(kind):
+                # No evidence to restore the last success from: try the no-evidence scan record, once a run
+                self.battery_rate_grid_empty_scan_read[kind] = True
+                load_empty_scan()
                 last_success = self.battery_rate_grid_last_success.get(kind)
             stored = self.battery_rate_grid_samples.get(kind, {})
             # Until a scan has succeeded, read as far back as battery_rate_grid_history_days; after that only the days since the
@@ -4310,6 +4353,8 @@ class Fetch:
                 merged = merge_rate_grid_samples(stored, scanned, today, BATTERY_RATE_GRID_MAX_AGE_DAYS, getattr(inverter, "curve_scan_coverage", {}).get("grid_" + kind))
                 save = save or merged != stored or bool(self.battery_rate_grid_loaded.get(kind))
                 self.battery_rate_grid_samples[kind] = merged
+                if not merged and storage:
+                    save_empty_scan()
             refit = True
         save = save or merged_on_load[0]
         if self.battery_rate_grid_loaded.get(kind):

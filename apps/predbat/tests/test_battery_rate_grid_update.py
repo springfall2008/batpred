@@ -22,7 +22,7 @@ import yaml
 from battery_rate_grid import rate_grid_curve
 from utils import rate_curve_function
 from config import APPS_SCHEMA
-from const import BATTERY_RATE_GRID_MAX_AGE_DAYS, BATTERY_RATE_GRID_RESAVE_MINUTES, BATTERY_RATE_GRID_SCAN_MINUTES
+from const import BATTERY_RATE_GRID_MAX_AGE_DAYS, BATTERY_RATE_GRID_RESAVE_MINUTES, BATTERY_RATE_GRID_SCAN_MINUTES, TIME_FORMAT
 
 
 class FakeInverter:
@@ -336,6 +336,47 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         failed |= _check("t4b the next scan after a live change reads the full window", inv.days[False][len(days_before) :] == [28], inv.days[False])
         saved_live = run_async(storage.load("predbat", "battery_rate_grid_charge"))
         failed |= _check("t4b and stamps the new key", saved_live.get("scan_key") == my_predbat.rate_grid_scan_key(False), saved_live.get("scan_key"))
+
+        print("Test 4c: a direction whose scans never find evidence still restarts with a short scan (#6287)")
+        my_predbat = _make()
+        storage = make_test_storage(my_predbat, tmpdir + "/t4c")
+        my_predbat.components = MockStorageComponents(storage)
+        inv = FakeInverter()  # the discharge scans find nothing, as on a system that never force-exports
+        for _ in range(26 * 12):
+            my_predbat.battery_rate_grid_update(inv, True)
+            my_predbat.now_utc += timedelta(minutes=5)
+        failed |= _check("t4c two scans in 26 hours", inv.days.get(True) == [28, 2], inv.days.get(True))
+        failed |= _check("t4c no evidence store written", run_async(storage.load("predbat", "battery_rate_grid_discharge")) is None)
+        record = run_async(storage.load("predbat", "battery_rate_grid_discharge_empty_scan"))
+        failed |= _check("t4c no-evidence record saved", isinstance(record, dict) and isinstance(record.get("last_success"), str) and record.get("scan_key") == my_predbat.rate_grid_scan_key(True), record)
+
+        def restart_empty(setup=None, record_payload=None, evidence=None, fails=0):
+            """
+            A new instance an hour after the original's clock, on a store holding only the no-evidence record (or
+            `record_payload`, and the evidence store `evidence` when given); returns the days its first discharge scan read.
+            """
+            restarts[0] += 1
+            store = make_test_storage(my_predbat, tmpdir + "/t4c_{}".format(restarts[0]))
+            run_async(store.save("predbat", "battery_rate_grid_discharge_empty_scan", record_payload or record, format="json"))
+            if evidence is not None:
+                run_async(store.save("predbat", "battery_rate_grid_discharge", evidence, format="json"))
+            restarted = _make()
+            restarted.now_utc = my_predbat.now_utc + timedelta(hours=1)
+            if setup:
+                setup(restarted)
+            restarted.components = MockStorageComponents(FlakyStorage(store, fails))
+            scanner = FakeInverter()
+            restarted.battery_rate_grid_update(scanner, True)
+            return scanner.days.get(True)
+
+        failed |= _check("t4c a restart reads 2 days", restart_empty() == [2], restart_empty())
+        failed |= _check("t4c a battery_loss change reads the full window", restart_empty(lossier_battery) == [28])
+        future = (my_predbat.now_utc + timedelta(days=2)).strftime(TIME_FORMAT)
+        failed |= _check("t4c a record ahead of the clock reads the full window", restart_empty(record_payload=dict(record, last_success=future)) == [28])
+        # A store written before this change holds evidence but no last success: the record does not stand in for it
+        failed |= _check("t4c evidence without a last success reads the full window", restart_empty(evidence={"samples": _samples(my_predbat)}) == [28])
+        # The two evidence store reads and then the record read all fail
+        failed |= _check("t4c a failed record read reads the full window", restart_empty(fails=3) == [28])
 
         print("Test 5: auto off - the manual curve is used, the evidence is still gathered and stored")
         my_predbat = _make({"battery_charge_power_curve": {100: 0.5}, "battery_rate_grid_auto": False})
