@@ -169,8 +169,11 @@ Once you have completed your `apps.yaml` and started Predbat you may want to ope
 in a red background as those do not match (it's okay for a 2nd inverter not to match if you only have one configured). Regular expressions that do not
 match can be ignored if you are not supporting that feature (e.g. Car SoC if you don't have a car).
 
-Predbat retains unmatched `re:` patterns and checks them again on its normal 15-second timer,
-when no prediction is running. Until a match appears, a scalar argument is disabled and a missing
+Predbat retains unmatched `re:` patterns and retries only pending arguments when no prediction is running.
+The first retry is after one minute. Unchanged retries back off to two, four and then five minutes,
+and continue every five minutes indefinitely. A recovered value resets the delay to one minute.
+Retries use the normal 15-second timer, so a running prediction can delay discovery further.
+Until a match appears, a scalar argument is disabled and a missing
 list or dictionary member is `None`. These pending patterns remain visible on the Apps page.
 When an entity appears, Predbat restores the missing value, refreshes its watch list and requests
 validation and a new plan. Values that already matched are not rematched. This discovery retry

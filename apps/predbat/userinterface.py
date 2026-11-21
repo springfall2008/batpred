@@ -30,6 +30,7 @@ import yaml
 import re
 import copy
 import sys
+import time
 from const import (
     TIME_FORMAT,
     PREDBAT_MODE_OPTIONS,
@@ -437,7 +438,7 @@ class UserInterface:
         """
         # Explicit writes, including deletion, supersede pending discovery for this argument.
         self.unmatched_args.pop(arg, None)
-        getattr(self, "_auto_config_pending", {}).pop(arg, None)
+        self._auto_config_pending.pop(arg, None)
         if value is None:
             if arg in self.args:
                 del self.args[arg]
@@ -1666,20 +1667,33 @@ class UserInterface:
         matched, resolved = self.resolve_arg_re(arg, value, state_keys)
         return matched, resolved if matched else None, resolved
 
-    def auto_config(self, final=False):
+    def retry_auto_config(self):
+        """Retry pending arguments with a 1-to-5-minute backoff, never during prediction."""
+        if not self._auto_config_pending or self.prediction_started or time.monotonic() < self._auto_config_next_retry:
+            return False
+        changed = self.auto_config(final=True, pending_only=True)
+        self._auto_config_retry_delay = 60 if changed else min(self._auto_config_retry_delay * 2, 300)
+        self._auto_config_next_retry = time.monotonic() + self._auto_config_retry_delay
+        return changed
+
+    def auto_config(self, final=False, pending_only=False):
         """Resolve entity patterns, retaining missing leaves outside consumer arguments.
 
         Return whether effective configuration changed. Finalisation warns about missing
         arguments but does not discard their patterns, including optional arguments that
-        do not cause a validation error.
+        do not cause a validation error. Timer retries restrict resolution to pending args;
+        startup and explicit reconfiguration still resolve the full configuration.
         """
-        state_keys = tuple(self.get_state_wrapper())
-        previous = getattr(self, "_auto_config_pending", {})
-        sources = dict(self.args)
+        previous = self._auto_config_pending
+        sources = {} if pending_only else dict(self.args)
         for arg, (pending, resolved, warned) in previous.items():
             # A component or user edit supersedes the saved pattern, not the other way round.
             if self.args.get(arg) == resolved:
                 sources[arg] = pending
+        state_keys = tuple(self.get_state_wrapper()) if sources else ()
+        if not pending_only:
+            self._auto_config_retry_delay = 60
+            self._auto_config_next_retry = time.monotonic() + self._auto_config_retry_delay
         self.unmatched_args = {}
         self._auto_config_pending = {}
         changed = False
@@ -1706,7 +1720,7 @@ class UserInterface:
         # value from a third-party integration is exactly what redact_strings/redact_strings_labelled
         # exist to catch (GH#4770) - and a disabled key's removal changes what collect_log_secret_values()
         # sees from args too. Unlike set_arg() (this class's only other args mutator, which invalidates
-        # unconditionally on every call), auto_config() runs over every configured arg on each call, so
+        # unconditionally on every call), auto_config() can resolve several arguments in one pass, so
         # invalidating once at the end - only when something actually changed - avoids rebuilding the
         # pattern key-by-key while still closing the gap: a value resolved or removed here must not keep
         # leaking under the stale pattern (or keep being redacted after a redact_strings entry is removed)

@@ -1,13 +1,15 @@
 """Offline regressions for entity regexes missing during startup."""
 
 import copy
+import asyncio
 import unittest
 from types import MethodType, SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from predbat import PredBat
 from userinterface import UserInterface
 from utils import SECRET_MASK, is_debug_excluded_key
+from web import WebInterface
 
 
 class DiscoveryProbe(UserInterface):
@@ -17,9 +19,31 @@ class DiscoveryProbe(UserInterface):
         """Attach synthetic configuration and an initially empty HA state cache."""
         self.args = copy.deepcopy(args)
         self.unmatched_args = {}
+        self._auto_config_pending = {}
+        self._auto_config_next_retry = 0
+        self._auto_config_retry_delay = 60
         self.states = {}
         self.log = Mock()
         self._invalidate_log_secret_pattern = Mock()
+
+    def prepare_timer(self):
+        """Stub unrelated timer work while exercising discovery and replanning unchanged."""
+        self.ha_interface = SimpleNamespace(websocket_active=True, db_primary=False)
+        self.prediction_started = False
+        self.update_pending = False
+        self.check_entity_refresh = Mock()
+        self.validate_config_check_retry = Mock()
+        self.dynamic_load_car_poll = Mock()
+        self.car_charging_now_poll = Mock()
+        self.load_user_config = Mock()
+        self.validate_config = Mock(return_value=0)
+        self.validate_config_schedule_retry = Mock()
+        self.update_pred = Mock()
+        self.create_entity_list = Mock()
+        self.expose_config = Mock()
+        self.get_arg = Mock(return_value=[])
+        self.inverter_data_last_fetch = None
+        self.quick_inverter_data_update = Mock()
 
     def get_state_wrapper(self):
         """Return synthetic entities only."""
@@ -118,6 +142,7 @@ class RegexRecoveryTests(unittest.TestCase):
         probe.inverter_data_last_fetch = None
         probe.quick_inverter_data_update = Mock()
         probe.watch_list = []
+        probe._auto_config_next_retry = 0
         PredBat.update_time_loop(probe, None)
         self.assertEqual(probe.args["octopus_free_session"], "event.late_ready")
         probe.update_pred.assert_called_once_with(scheduled=False)
@@ -132,6 +157,7 @@ class RegexRecoveryTests(unittest.TestCase):
         probe.ha_interface = SimpleNamespace(websocket_active=True, db_primary=False)
         probe.prediction_started = True
         probe.update_pending = False
+        probe._auto_config_next_retry = 0
         probe.check_entity_refresh = Mock()
         probe.validate_config_check_retry = Mock()
         PredBat.update_time_loop(probe, None)
@@ -181,6 +207,146 @@ class RegexRecoveryTests(unittest.TestCase):
         probe.states = {"sensor.late_ready": {}}
         probe.auto_config(final=True)
         self.assertEqual(probe.args["example_token"], ["synthetic-private-value", "sensor.late_ready"])
+
+    def test_steady_state_timer_backoff(self):
+        """Permanently optional patterns scan only pending args and never warn or replan again."""
+        for source in ("re:sensor.missing", ["re:sensor.missing"], {"late": "re:sensor.missing"}):
+            with self.subTest(source=source), patch("userinterface.time.monotonic", return_value=0) as clock:
+                probe = DiscoveryProbe({"optional": source, "fixed": "sensor.fixed"})
+                probe.prepare_timer()
+                probe.auto_config()
+                probe.auto_config(final=True)
+                self.assertEqual(len([call for call in probe.log.call_args_list if call.args[0].startswith("Warn:")]), 1)
+                probe.log.reset_mock()
+                probe._invalidate_log_secret_pattern.reset_mock()
+                probe.get_state_wrapper = Mock(return_value={})
+                probe._resolve_arg_re_pending = Mock(wraps=probe._resolve_arg_re_pending)
+                scan_times = []
+                for tick in range(15, 1801, 15):
+                    clock.return_value = tick
+                    before = probe.get_state_wrapper.call_count
+                    PredBat.update_time_loop(probe, None)
+                    if probe.get_state_wrapper.call_count != before:
+                        scan_times.append(tick)
+                self.assertEqual(scan_times, [60, 180, 420, 720, 1020, 1320, 1620])
+                self.assertTrue(all(call.args[0] == "optional" for call in probe._resolve_arg_re_pending.call_args_list))
+                probe.log.assert_not_called()
+                probe.update_pred.assert_not_called()
+                probe.validate_config.assert_not_called()
+                probe._invalidate_log_secret_pattern.assert_not_called()
+
+    def test_recovery_after_maximum_backoff(self):
+        """Scalar, list and dict settings recover indefinitely, with exactly one new plan."""
+        for source, expected in (("re:sensor.late_.*", "sensor.late_ready"), (["re:sensor.late_.*"], ["sensor.late_ready"]), ({"late": "re:sensor.late_.*"}, {"late": "sensor.late_ready"})):
+            with self.subTest(source=source), patch("userinterface.time.monotonic", return_value=0) as clock:
+                probe = DiscoveryProbe({"setting": source})
+                probe.prepare_timer()
+                probe.auto_config(final=True)
+                for tick in range(15, 3601, 15):
+                    clock.return_value = tick
+                    PredBat.update_time_loop(probe, None)
+                self.assertEqual(probe._auto_config_retry_delay, 300)
+                due = probe._auto_config_next_retry
+                probe.states = {"sensor.late_ready": {}}
+                clock.return_value = due - 15
+                PredBat.update_time_loop(probe, None)
+                probe.update_pred.assert_not_called()
+                clock.return_value = due
+                PredBat.update_time_loop(probe, None)
+                self.assertEqual(probe.args["setting"], expected)
+                self.assertEqual(probe._auto_config_pending, {})
+                self.assertEqual(probe.unmatched_args, {})
+                self.assertEqual(probe._auto_config_retry_delay, 60)
+                for tick in range(int(due) + 15, int(due) + 601, 15):
+                    clock.return_value = tick
+                    PredBat.update_time_loop(probe, None)
+                probe.update_pred.assert_called_once_with(scheduled=False)
+                probe.validate_config.assert_called_once()
+
+    def test_timer_partial_recovery_resets_backoff(self):
+        """Progress shortens the next retry while preserving already resolved siblings."""
+        with patch("userinterface.time.monotonic", return_value=0) as clock:
+            probe = DiscoveryProbe({"setting": ["re:sensor.first_.*", {"late": "re:sensor.second_.*"}]})
+            probe.prepare_timer()
+            probe.auto_config(final=True)
+            for tick in (60, 180, 420):
+                clock.return_value = tick
+                PredBat.update_time_loop(probe, None)
+            self.assertEqual(probe._auto_config_retry_delay, 300)
+            probe.states = {"sensor.first_ready": {}}
+            clock.return_value = 720
+            PredBat.update_time_loop(probe, None)
+            self.assertEqual(probe.args["setting"], ["sensor.first_ready", {"late": None}])
+            self.assertEqual(probe._auto_config_next_retry, 780)
+            probe.states = {"sensor.first_other": {}, "sensor.second_ready": {}}
+            clock.return_value = 780
+            PredBat.update_time_loop(probe, None)
+            self.assertEqual(probe.args["setting"], ["sensor.first_ready", {"late": "sensor.second_ready"}])
+            self.assertEqual(probe.update_pred.call_count, 2)
+
+    def test_timer_drops_superseded_pending_values(self):
+        """Explicit writes and direct overrides cancel pending work without scanning HA."""
+        with patch("userinterface.time.monotonic", return_value=0) as clock:
+            probe = DiscoveryProbe({"direct": ["re:sensor.late_.*"], "explicit": "re:sensor.late_.*", "deleted": "re:sensor.late_.*"})
+            probe.prepare_timer()
+            probe.auto_config(final=True)
+            probe.args["direct"] = ["sensor.replacement"]
+            probe.set_arg("explicit", "sensor.fixed")
+            probe.set_arg("deleted", None)
+            probe.get_state_wrapper = Mock(return_value={"sensor.late_ready": {}})
+            clock.return_value = 60
+            PredBat.update_time_loop(probe, None)
+            self.assertEqual(probe.args, {"direct": ["sensor.replacement"], "explicit": "sensor.fixed"})
+            self.assertEqual(probe._auto_config_pending, {})
+            self.assertEqual(probe.unmatched_args, {})
+            probe.get_state_wrapper.assert_not_called()
+            probe.update_pred.assert_not_called()
+
+    def test_due_retry_waits_for_prediction(self):
+        """An overdue retry leaves args and its deadline untouched until prediction ends."""
+        with patch("userinterface.time.monotonic", return_value=0) as clock:
+            probe = DiscoveryProbe({"setting": ["re:sensor.late_.*"]})
+            probe.prepare_timer()
+            probe.auto_config(final=True)
+            probe.states = {"sensor.late_ready": {}}
+            probe.get_state_wrapper = Mock(return_value=probe.states)
+            clock.return_value = 600
+            probe.prediction_started = True
+            PredBat.update_time_loop(probe, None)
+            self.assertEqual(probe.args["setting"], [None])
+            self.assertEqual(probe._auto_config_next_retry, 60)
+            probe.get_state_wrapper.assert_not_called()
+            probe.prediction_started = False
+            PredBat.update_time_loop(probe, None)
+            self.assertEqual(probe.args["setting"], ["sensor.late_ready"])
+            probe.update_pred.assert_called_once_with(scheduled=False)
+
+    def test_apps_pending_rows_are_unique(self):
+        """Render one highlighted row per pending scalar or container without leaking secrets."""
+        probe = DiscoveryProbe({"scalar": "re:sensor.missing", "list": ["re:sensor.missing"], "dict": {"late": "re:sensor.missing"}, "example_token": ["synthetic-private-value", "re:sensor.missing"]})
+        probe.auto_config(final=True)
+        probe.arg_errors = {}
+        probe.arg_warnings = {}
+        interface = WebInterface.__new__(WebInterface)
+        interface.base = probe
+        interface.args = probe.args
+        interface.get_header = Mock(return_value="<html>")
+        interface.get_state_wrapper = Mock(return_value={})
+        interface.resolve_value_raw = Mock(side_effect=lambda arg, value: value)
+        interface.render_type = Mock(side_effect=lambda arg, value, *args: str(value))
+        interface.is_editable_value = Mock(return_value=False)
+        interface.secret_row_attr = Mock(return_value="")
+        text = asyncio.run(interface.html_apps(None)).text
+        for arg in ("scalar", "list", "dict", "example_token"):
+            self.assertEqual(text.count('data-arg-name="{}"'.format(arg)), 1)
+        self.assertEqual(text.count('title="Missing items pending entity discovery"'), 3)
+        self.assertNotIn("synthetic-private-value", text)
+        probe.states = {"sensor.missing": {}}
+        probe.auto_config(final=True)
+        text = asyncio.run(interface.html_apps(None)).text
+        for arg in ("scalar", "list", "dict", "example_token"):
+            self.assertEqual(text.count('data-arg-name="{}"'.format(arg)), 1)
+        self.assertNotIn("Missing items pending entity discovery", text)
 
 
 def run_regex_recovery_tests(my_predbat):

@@ -356,6 +356,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.soc_kwh_history = {}
         self.unmatched_args = {}
         self._auto_config_pending = {}
+        self._auto_config_next_retry = 0
+        self._auto_config_retry_delay = 60
         self.define_service_list()
         self.stop_thread = False
 
@@ -2684,10 +2686,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.check_entity_refresh()
         # Missing optional entities may pass validation, so discovery must not depend on
         # the bounded validation retry sequence. Never mutate args during a prediction.
-        if self.unmatched_args and not self.prediction_started:
-            if self.auto_config(final=True):
-                self.watch_list = self.get_arg("watch_list", [], indirect=False)
-                self.update_pending = True
+        if self.retry_auto_config():
+            self.watch_list = self.get_arg("watch_list", [], indirect=False)
+            self.update_pending = True
         self.validate_config_check_retry()
         if not self.prediction_started:
             # A car's charging slots cancelled or resumed by dynamic load - replan now, not in 5 minutes
