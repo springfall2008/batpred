@@ -1900,6 +1900,8 @@ class Fetch:
             # override active during a saving session). set_rate_thresholds() reads this frozen set,
             # not the live rate_import_replicated dict, so a later overwrite here can't erase the
             # "this was a saving minute" provenance it depends on (GH#5050).
+            # Compare.apply_axle_sessions() repeats the Axle part of this sequence for a compared tariff's own
+            # rates (#4042) - keep the two in step.
             self.rate_import_saving_minutes = {minute for minute, tag in self.rate_import_replicated.items() if tag == "saving"}
             import_rates, self.rate_import_pre_saving = self.apply_rate_overrides(
                 import_rates, self.rate_import_pre_saving, self.rate_import_saving_minutes, self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.manual_import_rates, True, self.rate_import_replicated

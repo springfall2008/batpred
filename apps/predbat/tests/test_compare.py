@@ -52,6 +52,8 @@ class _FakePredbat:
         self.prefix = "predbat"
         self.currency_symbols = ["£", "p"]
         self.comparisons = {}
+        # As PredBat.__init__ sets it - fetch_rates() reads it for the Axle sessions (#4042)
+        self.axle_sessions = []
 
     def log(self, msg):
         """Discard log messages."""

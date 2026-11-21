@@ -399,10 +399,15 @@ class Compare:
         Stamp the live cycle's Axle VPP sessions onto a side of the compared tariff that supplied its own rates,
         as fetch_sensor_data() does for the live tariff: the pre-session snapshot and saving-minute set are
         rebuilt from this tariff's rates so set_rate_thresholds() and any override treat those minutes as events.
+
+        Mirrors the session blocks in fetch_sensor_data() (fetch.py, import and export sides): snapshot
+        pre_saving before load_axle_slot() mutates the rates in place, then freeze the "saving"-tagged minutes
+        before the caller's rates_*_override can tag them again (GH#5050). Keep the two in step. fetch_sensor_data()
+        takes its snapshot before the Octopus saving/free sessions as well, which the compared tariff never
+        carries, so only the Axle step is repeated here.
         """
         pb = self.pb
-        axle_sessions = getattr(pb, "axle_sessions", None) or []
-        if not axle_sessions:
+        if not pb.axle_sessions:
             return
         if export:
             replicated = pb.rate_export_replicated
@@ -410,7 +415,7 @@ class Compare:
         else:
             replicated = pb.rate_import_replicated
             pb.rate_import_pre_saving = dict(rates)
-        load_axle_slot(pb, axle_sessions, rates, export=export, rate_replicate=replicated)
+        load_axle_slot(pb, pb.axle_sessions, rates, export=export, rate_replicate=replicated)
         saving_minutes = {minute for minute, tag in replicated.items() if tag == "saving"}
         if export:
             pb.rate_export_saving_minutes = saving_minutes
