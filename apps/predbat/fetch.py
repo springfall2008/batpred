@@ -1584,6 +1584,8 @@ class Fetch:
         Fetch all the data, e.g. energy rates, load, PV predictions, car plan etc.
         """
 
+        # Counterfactuals are reusable only within this fetch, after its load inputs are complete.
+        self.load_forecast_guard_classic = None
         prev_octopus_slots = self.octopus_slots.copy()
         prev_octopus_saving_slots = self.octopus_saving_slots.copy()
         prev_octopus_free_slots = self.octopus_free_slots.copy()
@@ -1647,7 +1649,7 @@ class Fetch:
         load_ml_forecast = {}
         if load_ml_enabled and self.get_arg("load_ml_source", False):
             load_ml_forecast = self.fetch_ml_load_forecast(self.now_utc, save=save)
-            if not save and guard_mode == "auto" and getattr(self, "load_forecast_guard_veto", False):
+            if not save and guard_mode == "auto" and self.load_forecast_guard_veto:
                 load_ml_forecast = {}
             if load_ml_forecast:
                 self.load_forecast_only = True  # Use only ML forecast for load if enabled and we have data
@@ -2021,21 +2023,26 @@ class Fetch:
                 selected_ml, guard_changed = self.apply_load_forecast_guard(load_ml_forecast)
                 veto = bool(load_ml_forecast) and not selected_ml
                 load_ml_forecast = selected_ml
-            guard_changed |= veto != getattr(self, "load_forecast_guard_veto", False)
+            guard_changed |= veto != self.load_forecast_guard_veto
             self.load_forecast_guard_veto = veto
 
         if self.load_minutes and not self.load_forecast_only and not self.load_forecast_history:
             # Apply modal filter to historical data. Skipped for days_previous_auto: the weighted-bucket
             # forecast deliberately ignores missing-data buckets, so the gap-filling/padding the modal filter
             # applies would mask exactly the gaps it is designed to exclude.
-            self.previous_days_modal_filter(self.load_minutes)
+            cached = self.load_forecast_guard_classic
+            if cached is not None and cached[1] is not None:
+                self.load_minutes, self.days_previous, self.days_previous_weight = cached[1]
+            else:
+                self.previous_days_modal_filter(self.load_minutes)
             self.log("Historical days now {} weight {}".format(self.days_previous, self.days_previous_weight))
 
         # Weighted-bucket historical load forecast (days_previous_auto). Built here as it needs load_minutes
         # after the power fill. load_ml takes precedence if it already set the forecast-only load source.
         # Also runs with under a day of history, forecasting from what has been recorded today (batpred#5548).
         if self.load_forecast_history and self.load_minutes and not self.load_forecast_only:
-            hist_forecast = self.compute_load_forecast_history(self.now_utc)
+            cached = self.load_forecast_guard_classic
+            hist_forecast = cached[0] if cached is not None else self.compute_load_forecast_history(self.now_utc)
             if hist_forecast:
                 self.load_forecast_only = True
                 for minute, value in hist_forecast.items():
@@ -4440,7 +4447,9 @@ class Fetch:
     def classic_load_forecast_for_guard(self):
         """Build the unadjusted classic forecast without changing the selected source."""
         if self.load_forecast_history:
-            return self.compute_load_forecast_history(self.now_utc)
+            forecast = self.compute_load_forecast_history(self.now_utc)
+            self.load_forecast_guard_classic = (forecast, None)
+            return forecast
         # The modal filter changes the load history in place, so reproduce it on
         # a private copy when scoring the manual days_previous forecast.
         data = self.load_minutes.copy()
@@ -4456,6 +4465,7 @@ class Fetch:
                     forecast[minute + offset] = dp4(cumulative + energy * offset / PREDICT_STEP)
                 cumulative += energy
             forecast[minute + PREDICT_STEP] = dp4(cumulative)
+            self.load_forecast_guard_classic = (forecast, (data, self.days_previous.copy(), self.days_previous_weight.copy()))
             return forecast
         finally:
             self.days_previous, self.days_previous_weight = days, weights
@@ -4479,7 +4489,7 @@ class Fetch:
                     combined[minute] = combined.get(minute, 0) + value
             forecast_only = self.get_arg("load_forecast_only", False)
         except Exception as exc:
-            first_failure = not getattr(self, "load_forecast_guard_failed", False)
+            first_failure = not self.load_forecast_guard_failed
             if first_failure:
                 self.log("Warn: Load forecast accuracy unavailable; continuing with configured load sources: {}".format(exc))
             self.load_forecast_guard_failed = True
@@ -4505,7 +4515,7 @@ class Fetch:
         """Measured household energy in a UTC interval; never fill missing actuals with a forecast."""
         now = int(self.now_utc.timestamp() // 60)
         newer, older = now - start - duration, now - start
-        if newer < 0 or getattr(self, "load_minutes_source", "") not in ("load_today", "ge_cloud"):
+        if newer < 0 or self.load_minutes_source not in ("load_today", "ge_cloud"):
             return None
         channels = [self.load_minutes]
         if self.car_charging_hold:
@@ -4544,7 +4554,7 @@ class Fetch:
         ]
         definition.extend([self.car_charging_hold, self.iboost_energy_subtract, self.base_load])
         fingerprint = hashlib.sha256(json.dumps(definition, sort_keys=True, default=str).encode()).hexdigest()
-        guard = getattr(self, "load_forecast_guard", None)
+        guard = self.load_forecast_guard
         if guard is None or guard.fingerprint != fingerprint:
             guard = self.load_forecast_guard = LoadForecastGuard(fingerprint)
         storage = self.components.get_component("storage") if self.components else None
@@ -4579,21 +4589,21 @@ class Fetch:
         available = bool(ml_forecast)
         if not available:
             guard.require_new_evidence(now)
-            reason = getattr(self, "load_ml_forecast_problem", "ml_unavailable")
+            reason = self.load_ml_forecast_problem
         if planning_ml is None:
             planning_ml = available
         requested = self.get_arg("load_ml_source", False)
         external_only = self.get_arg("load_forecast_only", False)
         # Historical is ineligible with an explicit external-only configuration.
         # Veto ML there only if another forecast would remain in the plan.
-        has_external = len(getattr(self, "load_forecast_array", [])) > int(planning_ml)
+        has_external = len(self.load_forecast_array) > int(planning_ml)
         alternative_available = bool(classic_forecast) and (not external_only or has_external)
         fallback = guard.fallback or not available
         use_ml = planning_ml and not (mode == "auto" and alternative_available and fallback)
         if fallback and not alternative_available and planning_ml and mode == "auto":
             reason = "classic_unavailable"
         selected = "ml" if requested and use_ml else "external" if external_only else "classic"
-        previous = getattr(self, "load_forecast_guard_selected", None)
+        previous = self.load_forecast_guard_selected
         self.load_forecast_guard_selected = selected
         message = (selected, reason, mode)
         if message != guard.last_message:

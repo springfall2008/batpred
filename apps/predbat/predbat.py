@@ -737,6 +737,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.load_minutes_source = None
         self.load_forecast = {}
         self.load_forecast_array = []
+        # Prospective accuracy state is initialised before the first planning cycle.
+        self.load_forecast_guard = None
+        self.load_forecast_guard_selected = None
+        self.load_ml_forecast_problem = "ml_unavailable"
+        self.load_forecast_guard_classic = None
+        self.load_forecast_guard_veto = False
+        self.load_forecast_guard_failed = False
         self.pv_forecast_minute = {}
         self.pv_forecast_minute10 = {}
         self.pv_forecast_minute90 = {}

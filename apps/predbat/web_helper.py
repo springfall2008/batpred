@@ -10596,3 +10596,38 @@ function escapeHtml(text) {
 }
 </script>
     """
+
+
+def get_load_ml_accuracy_css():
+    """Return the shared, responsive light/dark styles for forecast accuracy panels."""
+    return """<style>
+.load-accuracy {margin:16px 0 22px;padding:18px;border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;color:#172033;max-width:1100px;box-sizing:border-box;}
+.load-accuracy h2 {display:block;margin:0 0 12px;font-size:22px;}
+.load-accuracy p {white-space:normal;margin:10px 0;line-height:1.5;}
+.load-accuracy .la-status {display:inline-block;padding:6px 12px;border-radius:6px;font-weight:bold;background:#dbeafe;color:#164178;}
+.load-accuracy .la-warning {background:#fff1c2;color:#713f12;}
+.load-accuracy .la-cards {display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:16px 0;}
+.load-accuracy .la-card {padding:12px;background:#fff;border:1px solid #dbe2ea;border-radius:8px;}
+.load-accuracy .la-label {display:block;font-size:13px;color:#475569;margin-bottom:5px;}
+.load-accuracy .la-mode-form {display:flex;flex-wrap:wrap;gap:8px;align-items:center;}
+.load-accuracy select,.load-accuracy button {font:inherit;font-size:14px;padding:6px 8px;border:1px solid #94a3b8;border-radius:5px;}
+.load-accuracy select {background:#fff;color:#172033;max-width:100%;}
+.load-accuracy button {background:#dbeafe;color:#164178;cursor:pointer;}
+.load-accuracy .la-table {overflow-x:auto;}
+.load-accuracy table {width:100%;border:0;padding:0;border-collapse:collapse;text-align:left;}
+.load-accuracy th,.load-accuracy td {padding:10px 12px;border-bottom:1px solid #dbe2ea;white-space:normal;}
+.load-accuracy th {background:transparent;color:inherit;}
+.load-accuracy thead th {background:#e2e8f0;}
+.load-accuracy small {display:block;font-weight:normal;color:#475569;margin-top:4px;}
+.load-accuracy .la-best {font-weight:bold;color:#166534;}
+body.dark-mode .load-accuracy {background:#1e293b;border-color:#475569;color:#f1f5f9;}
+body.dark-mode .load-accuracy .la-card {background:#263449;border-color:#475569;}
+body.dark-mode .load-accuracy select {background:#1e293b;color:#f1f5f9;}
+body.dark-mode .load-accuracy .la-label,body.dark-mode .load-accuracy small {color:#cbd5e1;}
+body.dark-mode .load-accuracy th,body.dark-mode .load-accuracy td {border-color:#475569;}
+body.dark-mode .load-accuracy th {background:transparent;color:inherit;}
+body.dark-mode .load-accuracy thead th {background:#334155;}
+body.dark-mode .load-accuracy .la-best {color:#86efac;}
+@media(max-width:600px) {.load-accuracy {padding:12px;} .load-accuracy th,.load-accuracy td {padding:8px 6px;font-size:13px;}}
+</style>
+"""

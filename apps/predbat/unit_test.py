@@ -394,6 +394,7 @@ from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
 from tests.test_load_ml_rollout import run_load_ml_rollout_tests
 from tests.test_load_forecast_guard import run_load_forecast_guard_tests
+from tests.test_load_forecast_guard_fetch import run_load_forecast_guard_fetch_tests
 from tests.test_load_ml_guard_mode import run_load_ml_guard_mode_tests
 from tests.test_ml_memory import run_ml_memory_tests
 from tests.test_ml_training_perf import run_ml_training_perf_tests
@@ -1066,6 +1067,7 @@ def main():
         # Autoregressive rollout collapse: long-range forecast must keep repeatable daily events (#4673)
         ("load_ml_rollout", run_load_ml_rollout_tests, "ML load rollout vs daily-pattern blend tests", False),
         ("load_forecast_guard", run_load_forecast_guard_tests, "Prospective load forecast accuracy and optional classic fallback", False),
+        ("load_forecast_guard_fetch", run_load_forecast_guard_fetch_tests, "Real fetch-cycle guard wiring, historical reuse and replanning", False),
         ("load_ml_guard_mode", run_load_ml_guard_mode_tests, "LoadML guard mode controls, saved choices and legacy defaults", False),
         # ML training memory: dataset construction, normalisation dtype and statistics accuracy
         ("ml_memory", run_ml_memory_tests, "ML training memory tests", False),

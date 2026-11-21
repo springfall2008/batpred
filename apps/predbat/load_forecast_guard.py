@@ -1,3 +1,14 @@
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# fmt off
+# pylint: disable=consider-using-f-string
+# pylint: disable=line-too-long
+# pylint: disable=attribute-defined-outside-init
+#
+
 """Prospective household-load forecast scores and an optional, conservative source guard.
 
 Evidence is recorded before consumption occurs. Both sources are scored over the same
