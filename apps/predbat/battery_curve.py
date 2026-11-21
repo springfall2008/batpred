@@ -371,12 +371,12 @@ class BatteryCurve:
         The rate is recorded as learn_charge_curve() recorded it - battery power / rated maximum / battery_loss - with
         battery_rate_max_scaling (or _discharge) divided out, so it is relative to the rated rate. The full rate is the
         rate the history was written at (load_curve_history() "max_power"), so inverter_limit_charge, and for the forced
-        exports inverter_limit_export, set what counts as full rate. The export cap limits what reaches the grid, and the
-        battery supplies the house load on top of it, so the most it can deliver in a forced export is the smaller of its
-        rating and the cap plus the load. When the cap is below the discharge rating, a minute whose grid export reached the
-        cap was held back by the cap rather than the battery, so it is recorded as 1.0 (no battery limit seen) rather than as
-        battery power / rating, which would read as a curve dip; one whose export stayed below the cap had the battery as
-        the limit and is recorded in kW against the discharge rating. When the cap is above the rating the rate is
+        exports inverter_limit_export, set what counts as full rate (the smaller of the cap and the rating). Predbat writes the
+        export cap as the battery's discharge rate, so when the cap is below the discharge rating a minute where the battery
+        reached the cap was held back by the cap rather than the battery: it is recorded as 1.0 (no battery limit seen)
+        rather than as cap / rating, which would read as a curve dip. One where the battery stayed below the cap had the
+        battery as the limit and is recorded in kW against the discharge rating. A minute whose grid export reached
+        export_limit is recorded as 1.0 the same way (find_export_limited_minutes). When the cap is above the rating the rate is
         still recorded against the discharge rating (above 1.0 when the battery beat it, capped at BATTERY_RATE_GRID_MAX by
         the fit), so the house-load ceiling is the kW measured. With more than one
         inverter the combined battery is scanned (load_curve_history()).
@@ -394,6 +394,8 @@ class BatteryCurve:
             # An export cap of 0 (inverter_limit_export) means no forced exports, so there is no evidence to find: skip the history
             # read, and return no evidence rather than None (missing history) so the scan is not retried every hour
             self.log("Inverter {} {}: inverter_limit_export is 0, so there are no forced exports to learn from".format(self.id, purpose))
+            # No coverage: a coverage left from an earlier scan would make the merge drop the stored days after it as "found nothing"
+            self.record_curve_scan_coverage("grid_discharge", 0)
             return {}
         history = self.load_curve_history(discharge, purpose, days=days)
         if history is None:
@@ -410,11 +412,15 @@ class BatteryCurve:
             return None
         if max_power <= 0:
             # Learning from this inverter alone (load_curve_history() fell back to it) and its export cap is 0: no forced exports
+            self.record_curve_scan_coverage("grid_discharge", 0)
             return {}
-        # Under the rating (an export cap below it) a minute whose export reached the cap is not a battery limit
+        # Under the rating (an export cap below it) a minute where the battery reached the cap is not a battery limit
         capped = discharge and max_power < reference_power
-        min_rate = max_power * BATTERY_RATE_GRID_FULL_RATE
-        min_power = max(max_power * BATTERY_RATE_GRID_MIN_POWER, 1.0)
+        # Full rate is the written cap, or the rating when the cap is above it: a rate written at the rating or more asks the
+        # battery for all it can give
+        full_power = min(max_power, reference_power)
+        min_rate = full_power * BATTERY_RATE_GRID_FULL_RATE
+        min_power = max(full_power * BATTERY_RATE_GRID_MIN_POWER, 1.0)
         limited = set()
         grid_power = self.load_grid_power_minutes(days)
         if grid_power is not None:
@@ -461,9 +467,9 @@ class BatteryCurve:
                 if temp is None or temp == 0:
                     return None
             delivered = abs(power) / battery_loss / scaling
-            if minute in limited or (capped and grid_power.get(minute, 0) >= max_power * BATTERY_RATE_GRID_FULL_RATE):
-                # The grid export reached export_limit, or the export cap: the battery covered the house load on top and the limit,
-                # not the battery's SoC or temperature, held it back
+            if minute in limited or (capped and delivered >= max_power * BATTERY_RATE_GRID_FULL_RATE):
+                # The grid export reached export_limit, or the battery reached the export cap written as its discharge rate: the
+                # limit, not the battery's SoC or temperature, held it back
                 return (soc / soc_max * 100.0, temp, 1.0)
             return (soc / soc_max * 100.0, temp, delivered / reference_power)
 
