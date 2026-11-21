@@ -1903,7 +1903,7 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         return failed
     # #4473: each mode is gated only by the rates of the energy it uses. Gas at 6p sits between export (5p) and import (10p)
     failed |= simple_scenario(
-        "iboost_pv_excess_import_gas_blocked",
+        "iboost_pv_excess_ignores_import_gas",
         my_predbat,
         0,
         1,
@@ -1924,7 +1924,7 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         assert_iboost_running_solar=True,
     )
     failed |= simple_scenario(
-        "iboost_pv_excess_import_threshold_blocked",
+        "iboost_pv_excess_ignores_import_threshold",
         my_predbat,
         0,
         1,
@@ -1981,7 +1981,7 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         assert_iboost_running_solar=False,
     )
     failed |= simple_scenario(
-        "iboost_charge_export_gas_blocked",
+        "iboost_charge_ignores_export_gas",
         my_predbat,
         0,
         0,
@@ -2019,6 +2019,63 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         assert_final_iboost=0,
         charge_period_divide=2,
         export_limit=1,
+    )
+    failed |= simple_scenario(
+        "iboost_charge_ignores_export_threshold",
+        my_predbat,
+        0,
+        0,
+        assert_final_metric=import_rate * (10 + 12),
+        assert_final_soc=10,
+        with_battery=True,
+        charge=10,
+        battery_size=10,
+        iboost_enable=True,
+        iboost_charging=True,
+        iboost_rate_threshold_export=export_rate - 1,
+        assert_final_iboost=12,
+        charge_period_divide=2,
+        export_limit=1,
+        assert_iboost_running=True,
+        assert_iboost_running_full=True,
+    )
+    # Plain solar diversion keeps both limits: the export ones block it too
+    failed |= simple_scenario(
+        "iboost_pv_any_export_gas_still_blocks",
+        my_predbat,
+        0,
+        1,
+        assert_final_metric=-export_rate * 24,
+        assert_final_soc=100,
+        battery_soc=100,
+        battery_size=100,
+        with_battery=True,
+        iboost_enable=True,
+        iboost_solar=True,
+        iboost_gas_export=True,
+        rate_gas=4.0,
+        gas_scale=1.0,
+        assert_final_iboost=0,
+        assert_iboost_running=False,
+        assert_iboost_running_solar=False,
+    )
+    failed |= simple_scenario(
+        "iboost_pv_excess_export_threshold_blocks",
+        my_predbat,
+        0,
+        1,
+        assert_final_metric=-export_rate * 24,
+        assert_final_soc=100,
+        battery_soc=100,
+        battery_size=100,
+        with_battery=True,
+        iboost_enable=True,
+        iboost_solar=True,
+        iboost_solar_excess=True,
+        iboost_rate_threshold_export=export_rate - 1,
+        assert_final_iboost=0,
+        assert_iboost_running=False,
+        assert_iboost_running_solar=False,
     )
     if failed:
         return failed

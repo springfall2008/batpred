@@ -740,7 +740,7 @@ If **switch.predbat_iboost_enable** is True, but **switch.predbat_iboost_solar**
 
 ### iBoost energy rate filtering
 
-Import/export rate thresholds can be set to restrict slot selection.
+Import/export rate thresholds can be set to restrict slot selection. Which of them apply depends on the kind of diversion, as described below.
 
 - **input_number.predbat_iboost_rate_threshold** Sets the maximum import rate (in pence) that the diverter will trigger on - default 100.
 
@@ -748,9 +748,9 @@ Import/export rate thresholds can be set to restrict slot selection.
 
 Gas rates can be considered if iBoost is used for heating water, and the system has the option of using either a gas boiler or immersion heater to do so. Gas rates have to be configured in `apps.yaml` using either **metric_octopus_gas** or **rates_gas** depending upon whether the Octopus Integration is used.
 
-- **switch.predbat_iboost_gas** Whether the diverter will only operate when electricity import rates are lower than gas rates - default False.
+- **switch.predbat_iboost_gas** Whether the diverter will only operate when electricity import rates are lower than gas rates (for the kinds of diversion the import limits apply to, below) - default False.
 
-- **switch.predbat_iboost_gas_export** Whether the diverter will only operate when electricity export rates are lower than gas rates - default False.
+- **switch.predbat_iboost_gas_export** Whether the diverter will only operate when electricity export rates are lower than gas rates (for the kinds of diversion the export limits apply to, below) - default False.
 
 - **input_number.predbat_iboost_gas_scale** Allows gas rates (set in `apps.yaml`) to be scaled before comparison with electric rates, to account for lower gas boiler efficiency. Should be set to the reciprocal of the boiler efficiency, i.e. 1.25 for an 80% efficient gas boiler - default 1.0.
 
@@ -759,6 +759,8 @@ In the plan, each kind of diversion is limited only by the rates of the energy i
 - Diverting while Predbat charges the battery (**switch.predbat_iboost_charging**) uses grid energy, so only the import limits apply: **iboost_rate_threshold** and **iboost_gas**.
 - Diverting excess solar (**switch.predbat_iboost_solar_excess**) uses solar that would otherwise be exported, so only the export limits apply: **iboost_rate_threshold_export** and **iboost_gas_export**.
 - Diverting any solar (**switch.predbat_iboost_solar** without excess) takes solar that would otherwise cover the house or be exported, so both the import and the export limits apply.
+
+- The rate-based plan (**switch.predbat_iboost_smart**, or iBoost with neither solar nor charging diversion on) still applies both the import and the export limits to the slots it picks.
 
 So with both gas switches on, excess solar is still diverted when export rates are below gas, even while import rates are above it.
 

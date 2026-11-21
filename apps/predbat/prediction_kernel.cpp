@@ -91,6 +91,7 @@
 // Parity 22 (car cancel branch): the car cancel branch's parity 21 merged with main's parity 20.
 // Parity 21 to 23 (main): the battery rate grids - each step's charge and discharge rate from a rate grid curve row.
 // Parity 24: the car cancel branch's parity 22 merged with main's parity 23.
+// Parity 25: iBoost limits per mode - import limits gate the charging-linked boost, export limits excess-solar diversion, both plain solar diversion (#4473).
 #define PK_PARITY_REVISION 25
 #define PK_MAX_CARS 8
 #define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
