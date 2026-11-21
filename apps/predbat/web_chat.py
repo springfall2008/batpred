@@ -20,11 +20,12 @@ import copy
 import json
 import re
 import time
+from urllib.parse import urlsplit
 
 from aiohttp import web
 from ruamel.yaml import YAML
 
-from chat import AgentNotReadyError, ChatBusyError, PROVIDER_DEFAULT_URLS, PROVIDER_SETUP_HINTS, PROVIDERS, conversation_model_for, default_model_for
+from chat import AgentNotReadyError, ChatBusyError, PROVIDER_DEFAULT_URLS, PROVIDER_SETUP_HINTS, PROVIDERS, conversation_model_for, default_model_for, default_url_for
 from utils import ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH
 
 SSE_POLL_SECONDS = 0.1
@@ -54,6 +55,21 @@ PROVIDER_NAME_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$")
 KEEP_EXISTING_KEY = object()
 
 APPS_YAML_PATH = "apps.yaml"
+
+
+def same_endpoint(first, second):
+    """Return True when two provider URLs are the same endpoint: scheme and host compared without case, a trailing slash ignored."""
+
+    def normalised(url):
+        """Return (scheme, host and port, path, query) for a URL, lower-casing the scheme and host and dropping a trailing slash."""
+        try:
+            parts = urlsplit(str(url or "").strip())
+        except ValueError:
+            return None
+        return parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query
+
+    first_parts = normalised(first)
+    return first_parts is not None and first_parts == normalised(second)
 
 
 def format_sse_event(event):
@@ -491,14 +507,27 @@ class WebChat:
         """Return the API key apps.yaml holds for a named provider, or None.
 
         Server-side only. It exists so the Settings dialog can probe an existing provider's model
-        list, or save an edit to its URL, without the browser ever being sent the key and asked to
-        hand it back - a round trip that would put a credential in a page, in a POST body and in
-        anything logging either.
+        list, or save an edit to another of its fields, without the browser ever being sent the key
+        and asked to hand it back - a round trip that would put a credential in a page, in a POST
+        body and in anything logging either. Callers must not send it anywhere but the provider's
+        saved URL: see _saved_key_moved().
         """
         for entry in agent.providers:
             if entry["name"] == name:
                 return entry["api_key"]
         return None
+
+    def _saved_key_moved(self, agent, name, url):
+        """Return True when a provider has a saved API key and url is not the endpoint it was saved for.
+
+        The saved key is only ever sent to the URL it was entered for. Without this check, a request
+        naming an existing provider, a new URL and no key would have Predbat send that provider's key
+        to whatever URL the request gave - so a new URL needs its key typed in again.
+        """
+        for entry in agent.providers:
+            if entry["name"] == name:
+                return bool(entry["api_key"]) and not same_endpoint(entry["url"], url)
+        return False
 
     def _clean_provider(self, agent, posted, seen):
         """Validate one posted provider entry, returning (entry, error message).
@@ -538,6 +567,8 @@ class WebChat:
         saved = self._saved_api_key(agent, original)
         api_key = posted.get("api_key")
         if api_key is None or api_key == SECRET_MASK:
+            if self._saved_key_moved(agent, original, url):
+                return None, "The URL for '{}' has changed, so enter its API key again - Predbat only sends a saved key to the URL it was saved with".format(name)
             api_key = KEEP_EXISTING_KEY
         else:
             api_key = str(api_key).strip() or None
@@ -638,7 +669,10 @@ class WebChat:
         url = str(body.get("url") or "").strip() or default_url_for(api_type)
         api_key = body.get("api_key")
         if api_key is None or api_key == SECRET_MASK:
-            api_key = self._saved_api_key(agent, str(body.get("name") or "").strip())
+            name = str(body.get("name") or "").strip()
+            if self._saved_key_moved(agent, name, url):
+                return web.json_response({"models": [], "error": "Enter the API key to ask a different URL - Predbat only sends a saved key to the URL it was saved with."})
+            api_key = self._saved_api_key(agent, name)
         else:
             api_key = str(api_key).strip() or None
         probed, error = await self._marshal(agent, agent.probe_models(api_type, url, api_key))

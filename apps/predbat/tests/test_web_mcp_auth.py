@@ -23,6 +23,7 @@ from urllib.parse import parse_qs, urlparse
 from datetime import datetime, timedelta, timezone
 
 import jwt_hs256
+import web_mcp
 from agent_tools import TOOL_DEFS
 from web_mcp import PredbatMCPServer, MCPServerWrapper, MCP_STORAGE_MODULE, MCP_SIGNING_KEY_FILE
 
@@ -371,6 +372,105 @@ def test_mcp_authorise_page_escapes(my_predbat):
     return failed
 
 
+def test_mcp_redirect_uri_checked(my_predbat):
+    """An unusable redirect_uri is refused with a page of its own, never redirected to, at authorise and at registration"""
+    failed = False
+    print("**** Testing MCP refuses unusable redirect addresses ****")
+    server = make_server(my_predbat)
+
+    print("Test: which redirect addresses are accepted")
+    accepted = ["https://claude.ai/api/mcp/auth_callback", "https://example.com/cb?x=1", "http://localhost:33418/cb", "http://127.0.0.1:8080/", "http://[::1]:9000/cb", "cursor://oauth/callback"]
+    refused = [
+        None,
+        "",
+        "javascript:alert(1)",
+        "JavaScript:alert(1)",
+        "data:text/html,hi",
+        "file:///etc/passwd",
+        "http://evil.example/cb",
+        "http://192.168.1.10/cb",
+        "https:///nohost",
+        "https://claude.ai@evil.example/cb",
+        "https://example.com/cb#frag",
+        "/relative/cb",
+        "not a uri",
+    ]
+    for uri in accepted:
+        if web_mcp.redirect_uri_problem(uri):
+            print("  ERROR: {} was refused: {}".format(uri, web_mcp.redirect_uri_problem(uri)))
+            failed = True
+    for uri in refused:
+        if not web_mcp.redirect_uri_problem(uri):
+            print("  ERROR: {!r} was accepted".format(uri))
+            failed = True
+
+    def get(query):
+        """Open the authorise page with a query string; return the response."""
+        return asyncio.run(server.oauth_authorize(FakeJsonRequest(method="GET", query=query)))
+
+    good = {"client_id": "connector", "redirect_uri": "https://example.com/cb", "response_type": "code", "state": "s1", "code_challenge": "abc", "code_challenge_method": "S256"}
+
+    print("Test: a bad or missing redirect_uri, or a missing client_id, shows a page and redirects nowhere")
+    for label, query in (
+        ("a javascript: redirect", dict(good, redirect_uri="javascript:alert(1)")),
+        ("a plain http redirect to another machine", dict(good, redirect_uri="http://evil.example/cb")),
+        ("no redirect_uri", {key: value for key, value in good.items() if key != "redirect_uri"}),
+        ("no client_id", {key: value for key, value in good.items() if key != "client_id"}),
+        ("no redirect_uri and no PKCE", {"client_id": "connector", "response_type": "code"}),
+    ):
+        response = get(query)
+        if response.status != 400 or "Location" in response.headers or "cannot be used" not in response.text:
+            print("  ERROR: {} gave {} {}".format(label, response.status, dict(response.headers)))
+            failed = True
+
+    print("Test: once the redirect_uri is checked, an error in the rest still goes back to it")
+    response = get(dict(good, code_challenge_method="plain"))
+    if response.status not in (302, 303) or not response.headers.get("Location", "").startswith("https://example.com/cb?"):
+        print("  ERROR: a bad PKCE method gave {} {}".format(response.status, response.headers.get("Location")))
+        failed = True
+
+    print("Test: the sign-in page names where the approval goes")
+    response = get(good)
+    if response.status != 200 or "<strong>example.com</strong> access to Predbat" not in response.text:
+        print("  ERROR: the sign-in page does not name the destination: {}".format(response.status))
+        failed = True
+
+    print("Test: a posted form with a bad redirect_uri gets no code, even with the right secret")
+    form = dict(good, redirect_uri="https://example.com/cb#steal", secret=TEST_SECRET)
+    response = asyncio.run(server.oauth_authorize(FakeJsonRequest(form=form)))
+    if response.status != 400 or "Location" in response.headers or server.authorization_codes:
+        print("  ERROR: a posted bad redirect_uri gave {} and {} codes".format(response.status, len(server.authorization_codes)))
+        failed = True
+
+    print("Test: the authorisation code and state are not written to the log")
+    logged = []
+    original_log = server.log
+    server.log = logged.append
+    try:
+        response = asyncio.run(server.oauth_authorize(FakeJsonRequest(form=dict(good, state="state-that-must-not-be-logged", secret=TEST_SECRET))))
+    finally:
+        server.log = original_log
+    code = parse_qs(urlparse(response.headers.get("Location", "")).query).get("code", [None])[0]
+    if not code:
+        print("  ERROR: a good form gave no code: {}".format(response.status))
+        failed = True
+    elif any(code in line or "state-that-must-not-be-logged" in line for line in logged):
+        print("  ERROR: the log holds the code or state: {}".format(logged))
+        failed = True
+
+    print("Test: registration refuses the same addresses authorise would")
+    for uris in (["javascript:alert(1)"], ["https://example.com/cb", "http://evil.example/cb"], "https://example.com/cb"):
+        status, data = call(server.oauth_register, FakeJsonRequest({"client_name": "probe", "redirect_uris": uris}))
+        if status != 400 or data.get("error") != "invalid_redirect_uri":
+            print("  ERROR: registering {} gave {} {}".format(uris, status, data))
+            failed = True
+    status, data = call(server.oauth_register, FakeJsonRequest({"client_name": "desktop", "redirect_uris": ["http://127.0.0.1:33418/cb", "cursor://oauth/callback"]}))
+    if status != 201:
+        print("  ERROR: a loopback and an app-scheme redirect were refused: {} {}".format(status, data))
+        failed = True
+    return failed
+
+
 def test_mcp_base_url_behind_proxy(my_predbat):
     """Behind a TLS-terminating proxy or tunnel the discovery documents advertise https, and tokens for that URL are accepted"""
     failed = False
@@ -460,5 +560,6 @@ def run_web_mcp_auth_tests(my_predbat):
     failed |= test_mcp_scopes_enforced(my_predbat)
     failed |= test_mcp_public_client_flow(my_predbat)
     failed |= test_mcp_authorise_page_escapes(my_predbat)
+    failed |= test_mcp_redirect_uri_checked(my_predbat)
     failed |= test_mcp_base_url_behind_proxy(my_predbat)
     return failed
