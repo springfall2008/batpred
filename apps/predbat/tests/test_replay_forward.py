@@ -10,7 +10,8 @@ from types import SimpleNamespace
 
 from utils import MinuteArray
 from tests.test_single_debug import apply_overrides
-from tests.replay_forward import parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact, apply_logged_sessions, apply_logged_dispatch, replay_records, plan_metrics, write_replay_json, yaml_stand_in, run_gap
+from battery_rate_grid import combine_rate_grid, forecast_grid_temperatures, rate_grid_curve
+from tests.replay_forward import apply_logged_rate_grids, parse_windows, parse_log, shift_counter, set_export_window, summarise, first_window, plan_state_now, model_car_charging_now, rebuild_io_rates, run_soc, chart_replay, simulate_soc, install_logged_load_divergence, remove_logged_load_divergence, soc_rms_error, version_change, apply_logged_load_forecast, apply_logged_pv_forecast, parse_log, parse_override, rescan_rate_stats, counter_gain, crosses_midnight, shift_cumulative, shift_windows, roll_over_midnight, apply_run, today_values, apply_logged_rates, apply_logged_load_exact, apply_logged_pv_exact, apply_logged_sessions, apply_logged_dispatch, replay_records, plan_metrics, write_replay_json, yaml_stand_in, run_gap
 
 SAMPLE_LOG = """2026-10-01 08:30:00.575570: --------------- PredBat - update at 2026-10-01 08:30:00+01:00 with clock skew 0 minutes, minutes now 510
 2026-10-01 08:30:00.577646: Predbat /config/github.py repository springfall2008/batpred version v9.3.3 currently running, latest version is v9.3.3, latest beta is v9.3.3
@@ -1120,6 +1121,175 @@ def test_rebuild_io_rates(my_predbat):
     return 0
 
 
+def run_marker(time_text, minutes_now):
+    """A log's "PredBat - update" line for a run at time_text (local, +00:00) and minutes_now."""
+    return "{}.000000: --------------- PredBat - update at {}+00:00 with clock skew 0 minutes, minutes now {}".format(time_text, time_text, minutes_now)
+
+
+def soc_line(time_text):
+    """An inverter SoC line, which every kept run needs."""
+    return "{}.100000: Inverter 0 SoC: 10.00kWh 55%, current charge rate 9200W, current discharge rate 9660W, current battery power 0W".format(time_text)
+
+
+def capture_lines(my_predbat, function):
+    """Run function with my_predbat.log captured, returning what it logged, timestamped as the live log is."""
+    lines = []
+    missing = object()
+    previous = my_predbat.__dict__.get("log", missing)
+    my_predbat.log = lambda message, *args, **kwargs: lines.append(str(message))
+    try:
+        function()
+    finally:
+        if previous is missing:
+            del my_predbat.log
+        else:
+            my_predbat.log = previous
+    return lines
+
+
+def test_battery_temperature_round_trip(my_predbat):
+    """The forecast live plans with on each run is the one the replay rebuilds: from a line, from a line carried past a dropped
+    run, from the last line moved on when nothing was logged, and across midnight."""
+    missing = object()
+    saved = {key: my_predbat.__dict__.get(key, missing) for key in ("minutes_now", "forecast_minutes", "midnight_utc", "battery_temperature_prediction", "replay_temperature_logged")}
+    failed = 0
+    try:
+        my_predbat.forecast_minutes = 30
+        my_predbat.midnight_utc = datetime(2026, 11, 16, tzinfo=timezone.utc)
+        my_predbat.replay_temperature_logged = None
+        # Live's forecast at each run: (time, minutes_now, prediction); the 23:55 run is dropped (no SoC line)
+        live = [
+            ("2026-11-16 23:40:00", 1420, {0: 14.2, 5: 14.6, 10: 15.1, 15: 15.4, 20: 15.9, 25: 16.3}, True),
+            ("2026-11-16 23:45:00", 1425, {0: 14.9, 5: 15.2, 10: 15.6, 15: 15.8, 20: 16.1, 25: 16.7}, True),
+            ("2026-11-16 23:50:00", 1430, {0: 15.2, 5: 15.6, 10: 15.6, 15: 17.0, 20: 17.2, 25: 17.3}, True),
+            ("2026-11-16 23:55:00", 1435, {0: 15.5, 5: 16.2, 10: 17.1, 15: 17.4, 20: 17.9, 25: 18.0}, False),
+            ("2026-11-17 00:00:00", 0, {0: 16.0, 5: 17.0, 10: 17.5, 15: 17.9, 20: 18.0, 25: 18.0}, True),
+        ]
+        text = []
+        expected = []
+        for time_text, minutes_now, prediction, kept in live:
+            if minutes_now == 0:
+                my_predbat.midnight_utc += timedelta(days=1)
+            my_predbat.minutes_now = minutes_now
+            my_predbat.battery_temperature_prediction = prediction
+            text.append(run_marker(time_text, minutes_now))
+            text += ["{}.050000: {}".format(time_text, line) for line in capture_lines(my_predbat, my_predbat.log_replay_battery_temperature)]
+            if kept:
+                text.append(soc_line(time_text))
+                expected.append({minute: forecast_grid_temperatures(prediction, 5)[minute // 5] for minute in prediction})
+        # 23:45 needs no line (the 23:40 one moved on gives it); the dropped 23:55 run's line must reach 00:00, which logs its own
+        logged_at = [line[11:16] for line in text if "battery temperature forecast changed" in line]
+        if logged_at != ["23:40", "23:50", "23:55", "00:00"]:
+            print("ERROR: expected temperature lines at 23:40, 23:50, 23:55 and 00:00, got {}".format(logged_at))
+            failed += 1
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "predbat.log")
+            with open(path, "w") as handle:
+                handle.write("\n".join(text) + "\n")
+            runs = parse_log(path)
+        bat = SimpleNamespace(
+            minutes_now=1415, now_utc=datetime(2026, 11, 16, 23, 35, tzinfo=timezone.utc), midnight_utc=datetime(2026, 11, 16, tzinfo=timezone.utc), forecast_minutes=30, load_minutes={}, import_today={}, export_today={}, pv_today={}, inverters=[], rate_export={}, soc_max=18.0, load_forecast=None, load_forecast_array=[], car_charging_slots=[], replay_temperature_line=None
+        )
+        prev = {"today": None, "force": None, "time": "2026-11-16 23:35:00+00:00"}
+        for index, run in enumerate(runs):
+            if run["minutes_now"] == 0:
+                roll_over_midnight(bat)
+            apply_run(bat, prev, run)
+            prev = run
+            if bat.battery_temperature_prediction != expected[index]:
+                print("ERROR: run at {} replayed the forecast {}, live planned with {}".format(run["time"], bat.battery_temperature_prediction, expected[index]))
+                failed += 1
+        # With no line in a run, the last one is moved on with the clock
+        bat.minutes_now = 10
+        apply_run(bat, prev, {"time": "2026-11-17 00:10:00+00:00", "minutes_now": 10, "soc": ("10.0", "55", "0")})
+        if bat.battery_temperature_prediction != {0: 17, 5: 17, 10: 18, 15: 18, 20: 18, 25: 18}:
+            print("ERROR: the last line should be moved on to 00:10: {}".format(bat.battery_temperature_prediction))
+            failed += 1
+        # A line logged by a dropped run, with the next kept run logging none, carries to that run
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "predbat.log")
+            with open(path, "w") as handle:
+                handle.write("\n".join([
+                    run_marker("2026-11-17 00:20:00", 20),
+                    "2026-11-17 00:20:00.050000: Replay input: battery temperature forecast changed, whole degrees every 5 minutes from 00:20 [[9, 2], [10, 4]]",
+                    run_marker("2026-11-17 00:25:00", 25),
+                    soc_line("2026-11-17 00:25:00"),
+                ]) + "\n")
+            carried = parse_log(path)
+        bat.replay_temperature_line = None
+        apply_run(bat, {"today": None, "force": None, "time": "2026-11-17 00:20:00+00:00"}, carried[0])
+        if len(carried) != 1 or bat.battery_temperature_prediction != {0: 9, 5: 10, 10: 10, 15: 10, 20: 10, 25: 10}:
+            print("ERROR: a dropped run's temperature line should carry to the next kept run: {}".format(bat.battery_temperature_prediction))
+            failed += 1
+        # A line carried over from before midnight moves back a day
+        bat.replay_temperature_line = None
+        apply_run(bat, {"today": None, "force": None, "time": "2026-11-17 00:10:00+00:00"}, {"time": "2026-11-17 00:15:00+00:00", "minutes_now": 15, "soc": ("10.0", "55", "0"), "temperature": (1435, 5, [15, 16, 17, 17, 17, 18])})
+        if bat.replay_temperature_line[0] != -5 or bat.battery_temperature_prediction != {0: 17, 5: 18, 10: 18, 15: 18, 20: 18, 25: 18}:
+            print("ERROR: a line from before midnight should move back a day: {} {}".format(bat.replay_temperature_line, bat.battery_temperature_prediction))
+            failed += 1
+    finally:
+        for key, value in saved.items():
+            if value is missing:
+                my_predbat.__dict__.pop(key, None)
+            else:
+                setattr(my_predbat, key, value)
+    return failed
+
+
+def test_grid_degrees_plan_alike():
+    """rate_grid_curve gives a reading and the degree the temperature line logs for it the same curve - what lets the line
+    carry degrees rather than readings: exact 0, either side of freezing, past both ends of the grid, and fractional readings."""
+    learned = {"temp_low": -5, "rows": [[0.2 + 0.01 * row] * 101 for row in range(30)]}
+    learned["zero_row"] = [0.99] * 101
+    manual = {"temp_low": -20, "rows": [[1.0] * 101 for _ in range(61)], "zero_row": [1.0] * 101, "caps": [0.1 + 0.01 * degree for degree in range(61)], "zero_cap": 0.33}
+    failed = 0
+    for grid in (combine_rate_grid(learned, manual), manual, combine_rate_grid(dict(learned, temp_low=None, rows=learned["rows"][:1]), manual), None):
+        for reading in (0, 0.0, 0.4, -0.4, 0.99, -0.99, 1.0, 12.7, -3.5, -20.0, -27.3, 40.0, 45.6, 18):
+            degree = forecast_grid_temperatures({0: reading}, 5)[0]
+            if rate_grid_curve(grid, reading, rated=0.1) != rate_grid_curve(grid, degree, rated=0.1):
+                print("ERROR: reading {} and its logged degree {} give different curves".format(reading, degree))
+                failed += 1
+    return failed
+
+
+def test_rate_grids_round_trip(my_predbat):
+    """A learned grid logged live is the one the replay plans with: the engine grid rate_grids() builds from it matches live's."""
+    missing = object()
+    saved = {key: my_predbat.__dict__.get(key, missing) for key in ("battery_rate_grid_learned", "replay_rate_grids_signature", "battery_rate_grid_auto")}
+    failed = 0
+    try:
+        my_predbat.battery_rate_grid_auto = True
+        my_predbat.replay_rate_grids_signature = None
+        charge = {"temp_low": 5, "rows": [[1.0] * 80 + [0.4] * 21, [1.0] * 90 + [0.5] * 11], "cells": 40, "days": 5, "segments": 300, "temp_range": [5, 6]}
+        charge["zero_row"] = charge["rows"][-1]
+        my_predbat.battery_rate_grid_learned = {"charge": charge, "discharge": None}
+        live_grids = my_predbat.rate_grids()
+        lines = capture_lines(my_predbat, my_predbat.log_replay_rate_grids)
+        text = [run_marker("2026-11-16 10:00:00", 600), soc_line("2026-11-16 10:00:00")] + ["2026-11-16 10:00:00.050000: " + line for line in lines]
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "predbat.log")
+            with open(path, "w") as handle:
+                handle.write("\n".join(text) + "\n")
+            run = parse_log(path)[0]
+        # The replay starts from a yaml with nothing learned
+        my_predbat.battery_rate_grid_learned = {}
+        if my_predbat.rate_grids() == live_grids:
+            print("ERROR: the test needs the learned grid to change the engine grid")
+            failed += 1
+        apply_logged_rate_grids(my_predbat, run["rate_grids"])
+        if my_predbat.rate_grids() != live_grids:
+            print("ERROR: the replayed engine grids should be live's")
+            failed += 1
+    finally:
+        for key, value in saved.items():
+            if value is missing:
+                my_predbat.__dict__.pop(key, None)
+            else:
+                setattr(my_predbat, key, value)
+        my_predbat.rate_grids()
+    return failed
+
+
 def run_replay_forward_tests(my_predbat):
     """Run every forward replay test, returning a non-zero count on failure."""
     failed = 0
@@ -1161,4 +1331,7 @@ def run_replay_forward_tests(my_predbat):
     failed += test_old_log_formats()
     failed += test_rebuild_io_rates(my_predbat)
     failed += test_multi_inverter_soc()
+    failed += test_battery_temperature_round_trip(my_predbat)
+    failed += test_rate_grids_round_trip(my_predbat)
+    failed += test_grid_degrees_plan_alike()
     return failed

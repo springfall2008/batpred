@@ -37,7 +37,7 @@ from utils import (
     is_entity_id,
     intelligent_device_is_charger,
 )
-from battery_rate_grid import clean_rate_grid_samples, combine_rate_grid, fit_rate_grid, manual_rate_grid, merge_rate_grid_samples, rate_grid_table
+from battery_rate_grid import clean_rate_grid_samples, combine_rate_grid, fit_rate_grid, manual_rate_grid, merge_rate_grid_samples, rate_grid_table, forecast_grid_temperatures, shift_grid_temperatures, value_runs, learned_grid_to_log
 from battery_curve import charge_day
 from const import (
     MINUTE_WATT,
@@ -1507,6 +1507,52 @@ class Fetch:
             )
         except Exception as e:
             self.log("Warn: Unable to log the state for replay: {}".format(e))
+
+    def log_replay_battery_temperature(self):
+        """Log the battery temperature forecast as the rate grids read it, whenever the last line no longer gives it.
+
+        The plan picks each step's charge and discharge ceilings from the rate grids by that step's forecast battery
+        temperature, and the forecast is rebuilt from the temperature history every cycle, which a replay does not
+        have. It is logged as the whole degree the grids read at each step (forecast_grid_temperatures), as runs of
+        [degree, steps]. A new line is written only when shifting the last one to now (shift_grid_temperatures, which
+        the replay uses too) would not give the current forecast, and once a day; nothing while there is no forecast.
+        Never raises - this runs every cycle on the main loop.
+        """
+        try:
+            degrees = forecast_grid_temperatures(self.battery_temperature_prediction or {}, PREDICT_STEP)
+            logged = getattr(self, "replay_temperature_logged", None)
+            if not degrees and (logged is None or not logged[2]):
+                return
+            if logged is not None and logged[0] == self.midnight_utc:
+                current = {index * PREDICT_STEP: degree for index, degree in enumerate(degrees)}
+                # Over the forecast's own length, so a forecast shorter than the horizon still matches its shifted line
+                if degrees and shift_grid_temperatures(logged[2], self.minutes_now - logged[1], len(degrees) * PREDICT_STEP, PREDICT_STEP) == current:
+                    return
+            self.replay_temperature_logged = (self.midnight_utc, self.minutes_now, degrees)
+            self.log("Replay input: battery temperature forecast changed, whole degrees every {} minutes from {} {}".format(PREDICT_STEP, self.replay_clock(self.minutes_now), value_runs(degrees)))
+        except Exception as e:
+            self.log("Warn: Unable to log the battery temperature forecast for replay: {}".format(e))
+
+    def log_replay_rate_grids(self):
+        """Log the learned charge and discharge rate grids whenever they change.
+
+        The plan's battery ceilings come from them (rate_grids), and they are refitted from the history the learner
+        scans every day, which a replay does not run. Each grid's rows are logged as runs (learned_grid_to_log), in
+        one dict whose repr reads back exactly with ast.literal_eval. Never raises - this runs every cycle on the main loop.
+        """
+
+        def learned():
+            """Both learned grids as the line holds them."""
+            return {kind: learned_grid_to_log(self.battery_rate_grid_learned.get(kind)) for kind in ("charge", "discharge")}
+
+        def build():
+            """The line, once its dict is known to read back exactly."""
+            text = repr(learned())
+            ast.literal_eval(text)
+            return "Replay input: rate grids learned changed {}".format(text)
+
+        # The grids are replaced, never changed in place, when refitted: compare the objects (identity first) rather than encode them every cycle
+        self.log_replay_changed("replay_rate_grids_signature", lambda: (self.battery_rate_grid_learned.get("charge"), self.battery_rate_grid_learned.get("discharge")), build, "learned rate grids")
 
     def fetch_pv_forecast_and_dawn(self, save=True):
         """
