@@ -373,8 +373,9 @@ class BatteryCurve:
         exports inverter_limit_export, set what counts as full rate. When the export cap is below the discharge rating an
         export that reached the cap shows only that the battery could do at least that much, so it is recorded as 1.0 (no
         battery limit seen) rather than as cap / rating, which would read as a curve dip; one the battery held below the
-        cap is a real limit and is recorded in kW against the discharge rating. When the cap is above the rating the rate
-        is relative to the cap, so the plan scales the curve with the export path (utils.rate_curve_ceiling). With more than one
+        cap is a real limit and is recorded in kW against the discharge rating. When the cap is above the rating the rate is
+        still recorded against the discharge rating (above 1.0 when the battery beat it, capped at BATTERY_RATE_GRID_MAX by
+        the fit), so the house-load ceiling is the kW measured. With more than one
         inverter the combined battery is scanned (load_curve_history()).
 
         Args:
@@ -395,11 +396,15 @@ class BatteryCurve:
             min_len = min(min_len, len(temperature))
         max_power = history["max_power"]
         soc_max = history["soc_max"]
-        if max_power <= 0 or soc_max <= 0:
+        # The rate is recorded against the rating the plan scales the grid by, whatever the export cap
+        reference_power = history.get("rated_power", max_power)
+        if reference_power <= 0 or soc_max <= 0:
             return None
-        # What the rate is recorded against: the rating, or the written full rate when that is above it (an export cap above
-        # the discharge rating). Below it (an export cap under the rating) a minute at the cap is not a battery limit.
-        reference_power = max(history.get("rated_power", max_power), max_power)
+        if max_power <= 0:
+            # An export cap of 0 never writes a forced export at a rate, so there is no evidence to find: scan as before against
+            # the rating, so the scan succeeds with nothing and settles into the daily scan rather than retrying every hour
+            max_power = reference_power
+        # Under the rating (an export cap below it) a minute at the cap is not a battery limit
         capped = max_power < reference_power
         min_rate = max_power * BATTERY_RATE_GRID_FULL_RATE
         min_power = max(max_power * BATTERY_RATE_GRID_MIN_POWER, 1.0)

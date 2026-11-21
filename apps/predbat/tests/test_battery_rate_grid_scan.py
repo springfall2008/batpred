@@ -408,10 +408,21 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     _install(my_predbat, _export(25, power=650, rate=650))
     failed |= _check("t13 an export below the cap is not full rate", _segments(inv.find_rate_grid_samples(True)) == [])
 
-    print("Test 14: inverter_limit_export above the discharge rating - the curve is relative to the export path")
+    print("Test 14: inverter_limit_export above the discharge rating - the rate is still recorded against the discharge rating")
+    # The house-load step reads the grid against the discharge rating, so a taper the battery held at 1000 W is 1000 / 1300 there
     limits = {"battery_rate_max": [RATED_W], "inverter_limit_discharge": [1300], "inverter_limit_export": [RATED_W]}
     my_predbat, inv = _make(limits)
-    _install(my_predbat, _export(25, power=1560, rate=RATED_W))
+    _install(my_predbat, _export(25, power=1000, rate=RATED_W))
     segments = _segments(inv.find_rate_grid_samples(True))
-    failed |= _check("t14", len(segments) == 3 and all(abs(s[2] - 0.6) < 1e-6 for s in segments), segments)
+    failed |= _check("t14 taper", len(segments) == 3 and all(abs(s[2] - 1000 / 1300) < 1e-4 for s in segments), segments)
+    my_predbat, inv = _make(limits)
+    _install(my_predbat, _export(25, power=1300, rate=1300))
+    failed |= _check("t14 an export written at the discharge rating is under the export cap, so not full rate", _segments(inv.find_rate_grid_samples(True)) == [])
+
+    print("Test 15: an export cap of 0 scans against the discharge rating, so the scan succeeds (and logs) instead of returning None")
+    my_predbat, inv = _make({"battery_rate_max": [RATED_W], "inverter_limit_export": [0]})
+    failed |= _check("t15 cap is 0", inv.battery_rate_max_export == 0, inv.battery_rate_max_export)
+    _install(my_predbat, _export(25, power=1560, rate=0))
+    samples = inv.find_rate_grid_samples(True)
+    failed |= _check("t15 scan succeeds with no evidence", samples == {}, samples)
     return failed
