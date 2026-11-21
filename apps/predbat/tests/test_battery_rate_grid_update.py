@@ -17,6 +17,7 @@ from datetime import timedelta
 from tests.test_infra import TestHAInterface, MockStorageComponents, make_test_storage, run_async
 from predbat import PredBat
 from battery_curve import charge_day
+import fetch as fetch_module
 import yaml
 
 from battery_rate_grid import rate_grid_curve
@@ -314,6 +315,39 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         day = sorted(saved["samples"])[0]
         days, _ = restart(1, samples_only_in_memory, payload=dict(saved, samples={day: "not a sample list"}))
         failed |= _check("t4b a store that lost samples to cleaning reads the full window", days == [28], days)
+
+        # A fix to a setting the scan reads re-measures the days the history holds; an unrelated setting does not
+        def set_arg(name, value):
+            """A setup that changes one apps.yaml setting."""
+
+            def setup(restarted):
+                """Set it."""
+                restarted.args[name] = value
+
+            return setup
+
+        for name, value in (("battery_power_invert", True), ("grid_power", "sensor.another_grid_power"), ("battery_temperature_history", "sensor.battery_temperature"), ("charge_rate", "number.another_charge_rate")):
+            days, _ = restart(1, set_arg(name, value))
+            failed |= _check("t4b a change to {} reads the full window".format(name), days == [28], days)
+        days, _ = restart(1, set_arg("export_limit", 3000))
+        failed |= _check("t4b export_limit is not part of the charge key", days == [2], days)
+        days, _ = restart(1, set_arg("car_charging_battery_size", 77))
+        failed |= _check("t4b an unrelated setting keeps the short read", days == [2], days)
+        scan_version = fetch_module.BATTERY_RATE_GRID_SCAN_VERSION
+        fetch_module.BATTERY_RATE_GRID_SCAN_VERSION = scan_version + 1
+        try:
+            days, _ = restart(1)
+        finally:
+            fetch_module.BATTERY_RATE_GRID_SCAN_VERSION = scan_version
+        failed |= _check("t4b a new scan version reads the full window", days == [28], days)
+        key_discharge, export_limit = my_predbat.rate_grid_scan_key(True), my_predbat.args.get("export_limit")
+        my_predbat.args["export_limit"] = 3000
+        failed |= _check("t4b export_limit is part of the discharge key", my_predbat.rate_grid_scan_key(True) != key_discharge, key_discharge)
+        if export_limit is None:
+            my_predbat.args.pop("export_limit")
+        else:
+            my_predbat.args["export_limit"] = export_limit
+
         damaged_rows = {stored_day: list(entries) for stored_day, entries in saved["samples"].items()}
         damaged_rows[day] = damaged_rows[day] + [["bad"]]
         days, _ = restart(1, payload=dict(saved, samples=damaged_rows))

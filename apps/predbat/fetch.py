@@ -68,6 +68,7 @@ from const import (
     BATTERY_RATE_GRID_LOAD_WAIT_MINUTES,
     BATTERY_RATE_GRID_RESAVE_MINUTES,
     BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE,
+    BATTERY_RATE_GRID_SCAN_VERSION,
     BATTERY_RATE_GRID_MAX_AGE_DAYS,
     BATTERY_RATE_GRID_RETRY_MINUTES,
     BATTERY_RATE_GRID_SCAN_MINUTES,
@@ -79,6 +80,8 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import ast
 import copy
+import hashlib
+import json
 import math
 import re
 
@@ -4452,11 +4455,27 @@ class Fetch:
         What a rate grid sample's rate is measured against for one direction, as a JSON-safe list: the rated rate (W), the
         battery size, battery_loss and battery_rate_max_scaling (or _discharge). find_rate_grid_samples() divides the battery
         power by these, so samples stored under a different key are scaled differently and the stored days need re-reading.
-        battery_rate_grid_history_days is included too, so raising it reads the deeper window once.
+        battery_rate_grid_history_days is included too, so raising it reads the deeper window once. So are
+        BATTERY_RATE_GRID_SCAN_VERSION and a hash of the apps.yaml settings the scan reads (rate_grid_scan_settings()), so
+        a release that changes the scan, or a fix to one of those settings, re-measures the stored days the history still
+        holds; an upgrade that changes neither keeps the short scan.
         """
         rated = self.rate_grid_inputs(discharge)[2]
         scaling = self.battery_rate_max_scaling_discharge if discharge else self.battery_rate_max_scaling
-        return [round(rated * MINUTE_WATT, 1), round(self.soc_max, 3), round(self.battery_loss, 4), round(scaling, 4), self.battery_rate_grid_history_days]
+        settings = hashlib.sha1(json.dumps(self.rate_grid_scan_settings(discharge), sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+        return [round(rated * MINUTE_WATT, 1), round(self.soc_max, 3), round(self.battery_loss, 4), round(scaling, 4), self.battery_rate_grid_history_days, BATTERY_RATE_GRID_SCAN_VERSION, settings]
+
+    def rate_grid_scan_settings(self, discharge):
+        """
+        The apps.yaml settings find_rate_grid_samples() reads for one direction, as configured (entity names, not their
+        states): per inverter its SoC sensor, written rate, battery_power and battery_power_invert, plus grid_power, its
+        invert, the battery temperature sensors and, for discharge, export_limit.
+        """
+        soc_name = "soc_percent" if "soc_percent" in self.args else "soc_kw"
+        rate_name = "discharge_rate" if discharge else "charge_rate"
+        names = [soc_name, rate_name, "battery_power", "battery_power_invert", "grid_power", "grid_power_invert"] + (["export_limit"] if discharge else [])
+        inverters = [{name: self.get_arg(name, None, indirect=False, index=index) for name in names} for index in range(max(int(self.get_arg("num_inverters", 1)), 1))]
+        return {"inverters": inverters, "battery_temperature_history": self.get_arg("battery_temperature_history", None, indirect=False)}
 
     @staticmethod
     def rate_grid_scan_key_matches(stored, current):
