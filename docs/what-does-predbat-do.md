@@ -80,6 +80,19 @@ You will find a full description of [Predbat Modes](customisation.md#predbat-mod
 
 Once you are ready for Predbat to take control move this setting to one of the active control modes.
 
+What Predbat writes to the inverter in each mode:
+
+- **Monitor** - Predbat does not plan or control any charging or discharging, and does not change the inverter's charge or export windows.
+It also does not change the inverter's pause mode, with one exception: [Freeze Export during Demand](customisation.md#freeze-export-during-demand), if turned on, which can pause charging.
+[Inverter balancing](customisation.md#balance-inverters), if enabled, can still take an inverter's charge or discharge rate to 0 in this mode, but it does not write the pause mode.
+- **Control SoC only** - Predbat only sets the battery's target SoC (the % the battery charges up to).
+It does not program charge or export windows, does not set the charge or discharge rate (so there is no low power charging in this mode), and does not switch charging or discharging on or off.
+The inverter charges up to the target using its own schedule and settings.
+The inverter's pause mode is not changed either, unless a pause is needed by [Freeze Export during Demand](customisation.md#freeze-export-during-demand).
+[Inverter balancing](customisation.md#balance-inverters) can still take a rate to 0 in this mode, but it does not write the pause mode.
+- **Control charge** and **Control charge & discharge** - Predbat also programs the charge windows (and the export windows in Control charge & discharge),
+and sets the charge and discharge rates, and the pause mode on inverters that have one, including when [inverter balancing](customisation.md#balance-inverters) holds a rate at 0.
+
 ### Predbat status
 
 The current Predbat status is reported in the Home Assistant entity **predbat.status**:
