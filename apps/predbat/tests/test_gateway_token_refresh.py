@@ -95,6 +95,18 @@ class TestApplyRefreshResponse:
         assert ok is False
         assert gw.mqtt_token == "old.jwt.token"
 
+    def test_same_token_after_auth_rejection_is_a_failure(self):
+        """A forced refresh that hands back the token the broker refused is not a refresh (GH#6284)."""
+        gw = _bare_gateway()
+        gw.mqtt_token = "dead.jwt.token"
+        gw.mqtt_token_expires_at = 1.0
+
+        ok = gw._apply_refresh_response({"success": True, "access_token": "dead.jwt.token", "expires_at": 1781700000}, rejected_token="dead.jwt.token")
+
+        assert ok is False
+        assert not any("MQTT token refreshed" in str(call) for call in gw.log.call_args_list)
+        assert any("same token" in str(call) for call in gw.log.call_args_list)
+
 
 class TestMaybeRefreshOnAuthError:
     """_maybe_refresh_on_auth_error() forces a refresh only for auth failures."""
@@ -105,7 +117,7 @@ class TestMaybeRefreshOnAuthError:
 
         result = asyncio.run(gw._maybe_refresh_on_auth_error("[code:134] Bad user name or password"))
 
-        gw._do_token_refresh.assert_awaited_once()
+        gw._do_token_refresh.assert_awaited_once_with(reason="mqtt_auth_rejected")
         assert result is True
 
     def test_non_auth_failure_does_not_refresh(self):
@@ -157,6 +169,35 @@ class TestTokenRefreshProvider:
         assert gw.mqtt_token == "new.jwt.token"
         assert gw.mqtt_token_expires_at == 1781700000.0
         assert gw._refresh_in_progress is False
+
+    def test_forced_refresh_tells_provider_and_detects_same_token(self):
+        """An auth-rejection refresh passes force/reason to a hook that takes them, and a same-token reply fails (GH#6284)."""
+        calls = []
+
+        async def provider(instance_id, provider_name, token_hash, force=False, reason=None):
+            calls.append((force, reason))
+            return {"success": True, "access_token": "old.jwt.token", "expires_at": 1781700000}
+
+        gw = self._gateway(provider)
+        with patch.dict("os.environ", {}, clear=True):
+            ok = asyncio.run(gw._do_token_refresh(reason="mqtt_auth_rejected"))
+
+        assert ok is False
+        assert calls == [(True, "mqtt_auth_rejected")]
+
+    def test_forced_refresh_edge_function_payload_is_marked(self):
+        """The edge-function request for an auth-rejection refresh carries force/reason (GH#6284)."""
+        from tests.test_infra import create_aiohttp_mock_response, create_aiohttp_mock_session
+
+        gw = self._gateway(None)
+        gw.http_session = MagicMock(side_effect=lambda **kwargs: mock_session)
+        mock_session = create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data={"success": True, "access_token": "new.jwt.token", "expires_at": 1781700000}))
+        with patch.dict("os.environ", {"SUPABASE_URL": "https://test.supabase.co", "SUPABASE_KEY": "test-key"}):
+            ok = asyncio.run(gw._do_token_refresh(reason="mqtt_auth_rejected"))
+
+        assert ok is True
+        payload = mock_session.post.call_args.kwargs["json"]
+        assert payload["force"] is True and payload["reason"] == "mqtt_auth_rejected"
 
     def test_provider_no_answer_keeps_token(self):
         provider = AsyncMock(return_value=None)
