@@ -2512,6 +2512,7 @@ def _test_split_status_warning(my_predbat, failed):
     qualified = [
         const.RUN_STATE_DEMAND + " (Holiday)",
         const.RUN_STATE_READ_ONLY + " (Axle)",
+        const.RUN_STATE_READ_ONLY + " (Grid outage)",
         const.RUN_STATE_DEMAND + " [" + const.RUN_STATE_FREEZE_EXPORTING + "]",
         const.RUN_STATE_FREEZE_EXPORTING + ", " + const.RUN_STATE_HOLD_FOR_CAR,
         const.RUN_STATE_CHARGING + ", " + const.RUN_STATE_HOLD_FOR_IBOOST,

@@ -2074,6 +2074,10 @@ Predbat sets **input_number.discharge_rate** to 0 and the house is supplied from
 The SoC is only checked every 5 minutes, so with a large house load the battery can still go a little below the reserve before the hold starts.
 Predbat only does this while it controls the charge or export windows, not in Monitor or Control SOC only mode. It relies on the discharge rate automation above. Without it the plant's own self-consumption carries on running the house from the battery down to **number.sigen_plant_ess_discharge_cut_off_state_of_charge** (see [batpred#5358](https://github.com/springfall2008/batpred/issues/5358)).
 
+*Note:* If you have a Sigen Gateway for backup power, add `grid_status: sensor.sigen_plant_on_off_grid_status` to `apps.yaml` so Predbat knows when there is a power cut.
+Without it a reserve hold (a discharge rate of 0) or a charge window that is running when the grid fails stops the battery from supplying the house.
+See [Grid outage (power cut) handling](apps-yaml.md#grid-outage-power-cut-handling).
+
 *Important:* Depending upon your electricity supply, you may need to change where **number.sigen_plant_grid_import_limitation** is set to 100 in the first automation to any lower import limit that your electricity supplier may have imposed,
 e.g. 18kW roughly corresponds to an 80A supply.
 

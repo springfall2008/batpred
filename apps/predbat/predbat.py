@@ -108,6 +108,7 @@ from components import Components, COMPONENT_LIST
 from execute import Execute
 from marginal import Marginal
 from plan import Plan
+from grid_status import grid_status_poll
 from fetch import Fetch, LoadSourceMissing
 from output import Output
 from userinterface import UserInterface
@@ -368,6 +369,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.control_monitor = ControlMonitor()
         self.inverter_needs_reset = False
         self.inverter_needs_reset_force = ""
+        # Grid outage (power cut) state, see grid_status.py - kept across updates, not across restarts
+        self.grid_outage_active = False
+        self.grid_restore_seen = None
         self.inverters = []
         self.manual_charge_times = []
         self.manual_export_times = []
@@ -679,6 +683,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.holiday_load_scaling = 0.7
         self.set_read_only = True
         self.set_read_only_axle = False
+        self.set_read_only_grid = False
         self.set_reserve_enable = False
         self.set_charge_freeze_only = False
         self.metric_cloud_coverage = 0.0
@@ -2685,6 +2690,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.dynamic_load_car_poll()
             # A car starting or stopping charging - apply or release "Hold for car" now, not in 5 minutes
             self.car_charging_now_poll()
+            # A power cut - free the battery to carry the house now, not in 5 minutes
+            grid_status_poll(self)
         if self.update_pending and not self.prediction_started:
             # Full update required
             self.update_pending = False

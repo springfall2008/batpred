@@ -202,6 +202,8 @@ def run_execute_test(
     car_energy_reported_load=True,
     read_only=False,
     set_read_only_axle=False,
+    set_read_only_grid=False,
+    inverter_needs_reset_force=None,
     set_soc_enable=True,
     set_charge_window=False,
     set_export_window=False,
@@ -286,6 +288,7 @@ def run_execute_test(
     failed = False
     my_predbat.set_read_only = read_only
     my_predbat.set_read_only_axle = set_read_only_axle
+    my_predbat.set_read_only_grid = set_read_only_grid
     my_predbat.car_charging_slots = [car_slot]
     my_predbat.car_charging_now = [car_charging_now]
     my_predbat.car_cancelled_for_export = car_cancelled_for_export or {}
@@ -419,6 +422,11 @@ def run_execute_test(
         my_predbat.plan_last_updated = my_predbat.now_utc
         my_predbat.args["threads"] = 0
         my_predbat.calculate_plan(recompute=False)
+
+    # A reset requested before this cycle, as update_grid_outage() or a Read-Only toggle asks for one
+    if inverter_needs_reset_force is not None:
+        my_predbat.inverter_needs_reset = True
+        my_predbat.inverter_needs_reset_force = inverter_needs_reset_force
 
     status, status_extra = my_predbat.execute_plan()
 

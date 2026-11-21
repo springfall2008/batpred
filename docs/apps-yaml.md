@@ -2627,6 +2627,45 @@ but for `apps.yaml` configuration items that can be a list such as **car_chargin
 
 **car_charging_soc** is best left out of the watch list too: Predbat reads it to plan the car's charge on every update, and a car SoC from a cloud integration changes while the car is out driving, so watching it re-plans for changes that do not matter.
 
+## Grid outage (power cut) handling
+
+If your battery can run the house during a power cut (for example a Sigenergy SigenStor with a Sigen Gateway, or any system with a backup gateway or EPS output),
+Predbat needs to know when the grid is down. Otherwise it carries on with its plan, and a charge window, a freeze or a reserve hold can stop the battery
+from supplying the house for as long as the power cut lasts.
+
+Give Predbat an entity that reports whether the grid is connected:
+
+```yaml
+  grid_status: sensor.sigen_plant_on_off_grid_status
+  # Optional: the states that mean the grid is connected (default shown)
+  grid_status_on_grid:
+    - on_grid
+    - on grid
+    - ongrid
+    - "on"
+    - "true"
+    - connected
+    - "1"
+  # Optional: minutes the grid must be back before Predbat takes control again (default 5)
+  grid_restore_delay: 5
+```
+
+- **grid_status** - Optional, an entity whose state shows whether the grid is connected. Any state that is not in **grid_status_on_grid** is treated as a power cut,
+except `unknown` and `unavailable`, which are ignored so a sensor dropping out never starts or ends a power cut.
+- **grid_status_on_grid** - Optional, a state or list of states that mean the grid is connected (not case sensitive). Setting it replaces the default list.
+For example, a binary sensor that is `on` during a power cut would use `grid_status_on_grid: "off"`.
+- **grid_restore_delay** - Optional, how many minutes the grid must be back before Predbat takes control again (default 5), so a flickering supply does not hand control back and forth.
+
+When the grid goes down Predbat resets the inverter to safe mode once, the same reset that turning on [Read-Only mode](customisation.md#manual-control) performs:
+the charge and discharge rates go back to maximum, the reserve goes to 0, and any charge or export window is turned off. This frees the battery to carry the house.
+Predbat then stays in read-only mode, and its status shows **Read-Only (Grid outage)**.
+When the grid has been back for **grid_restore_delay** minutes Predbat resets the inverter again and goes back to following its plan.
+
+Predbat checks the entity every 15 seconds, so it reacts to a power cut straight away rather than at the next 5 minute run.
+Nothing is done while you have Read-Only mode turned on yourself.
+
+*Note:* Predbat runs inside Home Assistant, so this only works if Home Assistant, your network and the connection to your inverter are powered from the backup side during a power cut.
+
 ## Load Forecast
 
 In addition to the historical house load data that Predbat uses by default, you can optionally provide a forecast of future load

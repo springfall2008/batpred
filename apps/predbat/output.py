@@ -1385,7 +1385,9 @@ class Output:
         plan_debug = self.plan_debug
         mode = self.predbat_mode
         if self.set_read_only:
-            if self.set_read_only_axle:
+            if self.set_read_only_grid:
+                mode += " (read only - grid outage)"
+            elif self.set_read_only_axle:
                 mode += " (read only - Axle)"
             else:
                 mode += " (read only)"

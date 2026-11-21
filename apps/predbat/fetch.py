@@ -75,6 +75,7 @@ from const import (
 from predbat_metrics import metrics
 from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
+from grid_status import update_grid_outage
 
 import ast
 import copy
@@ -5108,13 +5109,22 @@ class Fetch:
         self.calculate_best = True
         self.set_read_only = self.get_arg("set_read_only")
         self.set_read_only_axle = False
+        self.set_read_only_grid = False
+        read_only_manual = self.set_read_only
 
         # Check if Axle control is enabled and an event is active
-        if self.get_arg("axle_control", False) and not self.set_read_only:
+        if self.get_arg("axle_control", False) and not read_only_manual:
             if fetch_axle_active(self):
                 self.log("Axle VPP event is active - enabling read-only mode")
                 self.set_read_only = True
                 self.set_read_only_axle = True
+
+        # A power cut: free the battery to carry the house and hold off until the grid is back (grid_status.py).
+        # Skipped while the user has Read-Only on, as Predbat must not touch the inverter then.
+        if not read_only_manual and update_grid_outage(self, self.now_utc):
+            self.log("Grid outage - enabling read-only mode")
+            self.set_read_only = True
+            self.set_read_only_grid = True
 
         # hard wired options, can be configured per inverter later on
         self.set_soc_enable = True

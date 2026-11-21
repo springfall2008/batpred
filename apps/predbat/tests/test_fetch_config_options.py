@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+from datetime import timedelta
 from tests.test_infra import MockConfigProvider
 
 
@@ -57,12 +58,16 @@ def test_fetch_config_options(my_predbat):
     # Mock get_state_wrapper to control Axle sensor state and previous status
     # Axle sensor state: "off" = no active event, "on" = active event
     axle_sensor_state = {"state": "off"}  # Mutable dict to allow updates in tests
+    # Grid status sensor state, as the Sigenergy integration reports it: "on_grid" / "off_grid_auto"
+    grid_sensor_state = {"state": "on_grid"}
 
     def mock_get_state_wrapper(entity_id, default=None, attribute=None):
         if entity_id == "predbat.status":
             return "Demand"
         elif entity_id == "binary_sensor.predbat_axle_event":
             return axle_sensor_state["state"]
+        elif entity_id == "sensor.sigen_plant_on_off_grid_status":
+            return grid_sensor_state["state"]
         return default
 
     # Mock update_save_restore_list
@@ -201,6 +206,78 @@ def test_fetch_config_options(my_predbat):
     assert my_predbat.set_read_only_axle is False, "set_read_only_axle should be False when manual read-only is set"
 
     print("✓ Manual read-only mode test passed")
+
+    # Test 4b: Grid outage (power cut) handling
+    print("\n*** Test 4b: Grid outage handling ***")
+
+    original_now_utc = my_predbat.now_utc
+    mock_config.config["set_read_only"] = False
+    mock_config.config["axle_control"] = False
+    axle_sensor_state["state"] = "off"
+    mock_config.config["grid_status"] = "sensor.sigen_plant_on_off_grid_status"
+    my_predbat.grid_outage_active = False
+    my_predbat.grid_restore_seen = None
+    my_predbat.inverter_needs_reset = False
+    my_predbat.inverter_needs_reset_force = ""
+    try:
+        # On grid: nothing changes
+        grid_sensor_state["state"] = "on_grid"
+        my_predbat.fetch_config_options()
+        assert my_predbat.set_read_only is False, "set_read_only should be False while on grid"
+        assert my_predbat.set_read_only_grid is False, "set_read_only_grid should be False while on grid"
+        assert my_predbat.inverter_needs_reset is False, "No reset should be requested while on grid"
+
+        # Grid fails: read-only, plus a forced reset so the battery is freed to carry the house
+        grid_sensor_state["state"] = "off_grid_auto"
+        my_predbat.fetch_config_options()
+        assert my_predbat.set_read_only is True, "set_read_only should be True during a grid outage"
+        assert my_predbat.set_read_only_grid is True, "set_read_only_grid should be True during a grid outage"
+        assert my_predbat.set_read_only_axle is False, "set_read_only_axle should be False during a grid outage"
+        assert my_predbat.inverter_needs_reset is True, "A reset should be requested when the grid fails"
+        assert my_predbat.inverter_needs_reset_force == "set_read_only", "The outage reset must be forced so it runs in read-only mode"
+
+        # Still out on the next update: still read-only, and the reset is not asked for again
+        my_predbat.inverter_needs_reset = False
+        my_predbat.inverter_needs_reset_force = ""
+        my_predbat.fetch_config_options()
+        assert my_predbat.set_read_only is True, "set_read_only should stay True while the outage lasts"
+        assert my_predbat.inverter_needs_reset is False, "The reset should only be requested once per outage"
+
+        # Sensor drops out mid-outage: no evidence, so the outage holds
+        grid_sensor_state["state"] = "unavailable"
+        my_predbat.fetch_config_options()
+        assert my_predbat.set_read_only_grid is True, "An unavailable grid sensor should not end an outage"
+
+        # Grid back: read-only holds for grid_restore_delay (default 5 minutes)
+        grid_sensor_state["state"] = "on_grid"
+        my_predbat.fetch_config_options()
+        assert my_predbat.set_read_only is True, "set_read_only should hold until the grid has been back for the restore delay"
+        assert my_predbat.set_read_only_grid is True, "set_read_only_grid should hold until the grid has been back for the restore delay"
+        my_predbat.now_utc = original_now_utc + timedelta(minutes=6)
+        my_predbat.fetch_config_options()
+        assert my_predbat.set_read_only is False, "set_read_only should be False once the grid has been back for the restore delay"
+        assert my_predbat.set_read_only_grid is False, "set_read_only_grid should be False once the grid is restored"
+        assert my_predbat.inverter_needs_reset is True, "A reset should be requested when Predbat takes control back"
+
+        # Manual read-only wins: Predbat must not touch the inverter, so an outage is not acted on
+        my_predbat.inverter_needs_reset = False
+        my_predbat.inverter_needs_reset_force = ""
+        mock_config.config["set_read_only"] = True
+        grid_sensor_state["state"] = "off_grid_manual"
+        my_predbat.fetch_config_options()
+        assert my_predbat.set_read_only is True, "set_read_only should be True from the manual setting"
+        assert my_predbat.set_read_only_grid is False, "set_read_only_grid should be False when manual read-only is set"
+        assert my_predbat.inverter_needs_reset is False, "No reset should be requested in manual read-only mode"
+    finally:
+        my_predbat.now_utc = original_now_utc
+        del mock_config.config["grid_status"]
+        mock_config.config["set_read_only"] = False
+        my_predbat.grid_outage_active = False
+        my_predbat.grid_restore_seen = None
+        my_predbat.inverter_needs_reset = False
+        my_predbat.inverter_needs_reset_force = ""
+
+    print("✓ Grid outage handling test passed")
 
     # Test 5: Monitor mode configuration
     print("\n*** Test 5: Monitor mode configuration ***")
