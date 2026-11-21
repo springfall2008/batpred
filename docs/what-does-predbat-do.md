@@ -123,6 +123,8 @@ but is set to prevent discharging into the car (requires **switch.predbat_car_ch
 
 - **Read-Only (Axle)** - Predbat is in [read-only mode for the duration of an Axle VPP export event](energy-rates.md#axle-vpp), and will automatically return to a normal execution mode at the end of the Axle event.
 
+- **Read-Only (Grid outage)** - The [grid_status](apps-yaml.md#grid-outage-power-cut-handling) entity reports a power cut. Predbat has reset the inverter so the battery can carry the house, and will return to normal execution once the grid has been back for **grid_restore_delay** minutes.
+
 - **[Alert]** will be appended to the Predbat status if an [Alert is active](apps-yaml.md#weather-alert-system).
 
 - **Calibration** - The inverter is calibrating the batteries.

@@ -779,7 +779,9 @@ class Execute:
         for inverter in [] if calibrating else self.inverters:
             # Read-only mode
             if self.set_read_only:
-                if self.set_read_only_axle:
+                if self.set_read_only_grid:
+                    status = RUN_STATE_READ_ONLY + " (Grid outage)"
+                elif self.set_read_only_axle:
                     status = RUN_STATE_READ_ONLY + " (Axle)"
                 else:
                     status = RUN_STATE_READ_ONLY

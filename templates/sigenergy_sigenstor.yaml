@@ -108,6 +108,10 @@ pred_bat:
   battery_rate_max:
     - sensor.sigen_plant_ess_rated_discharging_power
 
+  # With a Sigen Gateway for backup power, uncomment so Predbat frees the battery during a power cut
+  # See https://springfall2008.github.io/batpred/apps-yaml/#grid-outage-power-cut-handling
+  # grid_status: sensor.sigen_plant_on_off_grid_status
+
   # Export limit is a software limit set on your inverter that prevents exporting above a given level
   # When enabled Predbat will model this limit
   #export_limit:

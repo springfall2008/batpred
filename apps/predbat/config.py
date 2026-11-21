@@ -2925,6 +2925,12 @@ APPS_SCHEMA = {
     "axle_pence_per_kwh": {"type": "float"},
     "axle_automatic": {"type": "boolean"},
     "axle_control": {"type": "boolean"},
+    # Grid outage (power cut) handling, see grid_status.py: the entity reporting whether the grid is
+    # connected, the states that mean connected, and how long the grid must be back before Predbat
+    # takes control again. unknown/unavailable is no evidence, so it is tolerated.
+    "grid_status": {"type": "sensor", "sensor_type": "string", "transient_ok": True},
+    "grid_status_on_grid": {"type": "string|string_list", "empty": False},
+    "grid_restore_delay": {"type": "integer", "min": 0, "max": 240},
     "sigenergy_app_key": {"type": "string", "empty": False},
     "sigenergy_app_secret": {"type": "string", "empty": False},
     "sigenergy_base_url": {"type": "string", "empty": False},

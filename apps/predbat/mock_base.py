@@ -69,6 +69,7 @@ class MockBase:
         self.car_force_holdable = {}
         # As reset() leaves it: no Axle VPP event is forcing read only
         self.set_read_only_axle = False
+        self.set_read_only_grid = False
         self.currency_symbols = "£p"
         self.arg_errors = {}
         self.args = {key: value for key, value in kwargs.items() if value is not None}

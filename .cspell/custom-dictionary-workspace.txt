@@ -529,6 +529,7 @@ onchange
 oncharge
 oneline
 onfocus
+ongrid
 oninput
 onmouseout
 onmouseover
