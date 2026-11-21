@@ -1986,6 +1986,7 @@ class Fetch:
             self.log_replay_cars()
         # Publish the car plan
         self.publish_car_plan()
+        self.publish_octopus_cap()
 
         # Work out iBoost plan
         if self.iboost_enable and (((not self.iboost_solar) and (not self.iboost_charging)) or self.iboost_smart):

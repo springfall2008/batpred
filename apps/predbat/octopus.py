@@ -4518,13 +4518,14 @@ class Octopus:
 
         return sorted(slots_decoded, key=lambda x: x[0])
 
-    def octopus_cap_segments(self, car_n, octopus_slots):
+    def octopus_cap_segments(self, car_n, octopus_slots, period_minutes=None):
         """
         Count every car's dispatches on the account against the midday-to-midday cap, earliest first.
 
         Returns car_n's own slots from octopus_slot_segments() as (slot, capped) pairs, capped when the slot is
         eligible for the off-peak rate and so counted against the cap, and the set of minutes, of any car's
-        dispatch, that fitted the budget. Shared by load_octopus_slots() and octopus_over_cap_minutes().
+        dispatch, that fitted the budget. Shared by load_octopus_slots() and octopus_over_cap_minutes(). With
+        period_minutes, a dict, the minutes that fitted are also listed in it by period (see octopus_cap_usage()).
         """
         octopus_slot_low_rate = self.get_arg("octopus_slot_low_rate", True)
         cap_minutes = self.get_octopus_cap_minutes()
@@ -4557,10 +4558,53 @@ class Octopus:
             if capped:
                 day_offset = (dispatch_start - 720) // (24 * 60)
                 wanted_minutes = [minute for minute in range(start_minutes, end_minutes) if minute not in budget_minutes]
-                budget_minutes.update(self.take_cap_dispatch_minutes(minutes_per_day, day_offset, wanted_minutes, cap_minutes, idle_minutes))
+                granted = self.take_cap_dispatch_minutes(minutes_per_day, day_offset, wanted_minutes, cap_minutes, idle_minutes)
+                budget_minutes.update(granted)
+                if period_minutes is not None:
+                    period_minutes.setdefault(day_offset, []).extend(granted)
             if slot_car == car_n:
                 own_segments.append((slot, capped))
         return own_segments, budget_minutes
+
+    def octopus_cap_usage(self):
+        """
+        How much of the current midday-to-midday period's daily cap the account's dispatches use, as a dict of minutes:
+        used (the dispatch minutes up to now that used it, leaving out those no car charged in, see octopus_cap_record()),
+        planned (the dispatch minutes from now that fit what is left) and cap. None when there is no cap to count.
+        """
+        cars = self.octopus_cap_cars() if self.num_cars and self.octopus_cap_counts() else []
+        if not cars:
+            return None
+        period_minutes = {}
+        self.octopus_cap_segments(cars[0], self.octopus_slots[cars[0]], period_minutes)
+        day_offset = (self.minutes_now - 720) // (24 * 60)
+        idle_minutes = self.octopus_cap_idle_minutes() or set()
+        minutes = period_minutes.get(day_offset, [])
+        used = len([minute for minute in minutes if minute < self.minutes_now and minute not in idle_minutes])
+        planned = len([minute for minute in minutes if minute >= self.minutes_now])
+        return {"used": used, "planned": planned, "cap": self.get_octopus_cap_minutes(), "period_start": 720 + day_offset * 24 * 60}
+
+    def publish_octopus_cap(self):
+        """
+        Publish how much of the Octopus Intelligent daily cap is used (see octopus_cap_usage()), when there is one.
+        """
+        usage = self.octopus_cap_usage()
+        if usage is None:
+            return
+        self.dashboard_item(
+            self.prefix + ".octopus_cap_used",
+            state=usage["used"],
+            attributes={
+                "friendly_name": "Predbat Octopus Intelligent daily cap used",
+                "planned_minutes": usage["planned"],
+                "cap_minutes": usage["cap"],
+                "remaining_minutes": max(0, usage["cap"] - usage["used"] - usage["planned"]),
+                "period_start": (self.midnight_utc + timedelta(minutes=usage["period_start"])).strftime(TIME_FORMAT),
+                "state_class": "measurement",
+                "unit_of_measurement": "min",
+                "icon": "mdi:timer-sand",
+            },
+        )
 
     def octopus_over_cap_minutes(self, car_n, octopus_slots):
         """

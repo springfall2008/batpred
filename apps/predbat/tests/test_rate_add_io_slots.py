@@ -925,6 +925,14 @@ def run_cap_actual_charging_tests(my_predbat, midnight_utc, time_format):
         load(spans((480, 490)))
         failed |= check_idle("cap_actual_ten_minutes", list(range(-720, 470)) + list(range(490, settled)), list(range(470, 490)) + list(range(settled, minutes_now + 30)))
         failed |= run_cap_minutes_case("cap_actual_ten_minutes", my_predbat, slots, 1, rates_for((480, 510, 4.0), (630, 660, 4.0), (660, 690, 10.0)), [(630, 650, 4), (660, 670, 10)])
+        # ...and the published sensor shows 10 minutes used and the 20 planned at 10:30, which leaves nothing
+        my_predbat.octopus_slots = [slots]
+        my_predbat.publish_octopus_cap()
+        used = my_predbat.get_state_wrapper(my_predbat.prefix + ".octopus_cap_used")
+        attributes = {name: my_predbat.get_state_wrapper(my_predbat.prefix + ".octopus_cap_used", attribute=name) for name in ("planned_minutes", "cap_minutes", "remaining_minutes")}
+        if used != 10 or attributes != {"planned_minutes": 20, "cap_minutes": 30, "remaining_minutes": 0}:
+            print("ERROR: cap_actual_sensor: expected 10 minutes used, 20 planned of 30 but got {} {}".format(used, attributes))
+            failed = True
 
         # Without a car_charging_now sensor every minute counts, as before
         print("\n**** Cap actual charging: no sensor ****")
