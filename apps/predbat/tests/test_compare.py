@@ -52,6 +52,8 @@ class _FakePredbat:
         self.prefix = "predbat"
         self.currency_symbols = ["£", "p"]
         self.comparisons = {}
+        # As PredBat.__init__ sets it - fetch_rates() reads it for the Axle sessions (#4042)
+        self.axle_sessions = []
 
     def log(self, msg):
         """Discard log messages."""
@@ -1238,6 +1240,85 @@ def test_compare(my_predbat):
         failed += 1
     else:
         print("PASS T33: future rates fill only a compared tariff that is the live one")
+
+    # ------------------------------------------------------------------
+    # T34: Axle VPP sessions apply to every compared tariff, not just the live one (#4042). Axle is
+    #      independent of the energy supplier, so a side a tariff supplies its own rates for gets the
+    #      live cycle's sessions stamped on, a side left on the live rates is not stamped twice, and
+    #      the user's own tariff is still recognised as existing during an event
+    # ------------------------------------------------------------------
+    from datetime import datetime, timezone
+
+    t34_errors = []
+    cmp, pb = _make_compare()
+    pb.minutes_now = 0
+    pb.forecast_minutes = 60
+    pb.rate_export_cost_threshold = 99
+    pb.rate_export_max = 15.0
+    pb.rate_scan = lambda rates, print=True: None
+    pb.rate_scan_export = lambda rates, print=True: None
+    pb.rate_min_forward_calc = lambda rates: {}
+    pb.rate_min_forward = {}
+    pb.rate_export_max_forward_calc = lambda rates: {}
+    pb.rate_export_max_forward = {}
+    pb.rate_minmax = lambda rates: (0, 0, 0, 0, 0)
+    pb.rate_export_min_base = None
+    pb.rate_replicate = lambda rates, io_adjusted=None, is_import=True, **kwargs: (dict(rates), {})
+    pb.set_rate_thresholds = lambda: None
+    pb.rate_scan_window = lambda rates, *args: ([], 0, 0)
+    pb.find_low_rate_windows = lambda: None
+    pb.basic_rates = lambda info, *args, **kwargs: {minute: info[0]["rate"] for minute in range(60)}
+    pb.midnight_utc = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
+    pb.time_abs_str = lambda minutes: "{:02d}:{:02d}".format(minutes // 60, minutes % 60)
+    pb.load_scaling_dynamic = {}
+    pb.load_scaling_saving = 1.0
+    pb.load_scaling_free = 1.0
+    axle_export_event = [{"start_time": "2024-01-01T00:30:00+00:00", "end_time": "2024-01-01T01:00:00+00:00", "import_export": "export", "pence_per_kwh": 100.0}]
+
+    # Live: 20p import / 5p export, with the Axle export event stamped +100p on both sides for the second half hour
+    import_clean = {minute: 20.0 for minute in range(60)}
+    export_clean = {minute: 5.0 for minute in range(60)}
+    import_live = {minute: (120.0 if minute >= 30 else 20.0) for minute in range(60)}
+    export_live = {minute: (105.0 if minute >= 30 else 5.0) for minute in range(60)}
+    event_minutes = set(range(30, 60))
+
+    # (label, tariff, sessions, expected existing, expected import at 10/45, expected export at 10/45, expected export saving minutes)
+    cases = [
+        ("the same export tariff during an event", {"id": "mine", "rates_export": [{"rate": 5.0}]}, axle_export_event, True, (20.0, 120.0), (5.0, 105.0), event_minutes),
+        ("a different export tariff", {"id": "flat15", "rates_export": [{"rate": 15.0}]}, axle_export_event, False, (20.0, 120.0), (15.0, 115.0), event_minutes),
+        ("the same import tariff during an event", {"id": "imp", "rates_import": [{"rate": 20.0}]}, axle_export_event, True, (20.0, 120.0), (5.0, 105.0), set()),
+        ("a different import tariff", {"id": "imp25", "rates_import": [{"rate": 25.0}]}, axle_export_event, False, (25.0, 125.0), (5.0, 105.0), set()),
+        ("a tariff reusing the live rates", {"id": "live"}, axle_export_event, True, (20.0, 120.0), (5.0, 105.0), set()),
+        ("a different export tariff with no Axle sessions", {"id": "flat15", "rates_export": [{"rate": 15.0}]}, [], False, (20.0, 20.0), (15.0, 15.0), set()),
+    ]
+    for label, tariff, sessions, expected_existing, expected_import, expected_export, expected_saving in cases:
+        pb.axle_sessions = sessions
+        live_import = import_live if sessions else import_clean
+        live_export = export_live if sessions else export_clean
+        try:
+            got = cmp.fetch_rates(tariff, dict(live_import), dict(live_export), {}, rate_import_match=dict(import_clean), rate_export_match=dict(export_clean))
+        except Exception as exc:  # noqa: BLE001 - reported as a test failure
+            t34_errors.append("{}: raised {!r}".format(label, exc))
+            continue
+        if got is not expected_existing:
+            t34_errors.append("{}: existing should be {}, got {}".format(label, expected_existing, got))
+        got_import = (pb.rate_import.get(10), pb.rate_import.get(45))
+        got_export = (pb.rate_export.get(10), pb.rate_export.get(45))
+        if got_import != expected_import:
+            t34_errors.append("{}: import at 00:10/00:45 should be {}, got {}".format(label, expected_import, got_import))
+        if got_export != expected_export:
+            t34_errors.append("{}: export at 00:10/00:45 should be {}, got {}".format(label, expected_export, got_export))
+        if tariff.get("rates_export") and pb.rate_export_saving_minutes != expected_saving:
+            t34_errors.append("{}: export saving minutes should be {} minutes, got {}".format(label, len(expected_saving), len(pb.rate_export_saving_minutes)))
+        if tariff.get("rates_export") and sessions and pb.rate_export_pre_saving.get(45) != expected_export[0]:
+            t34_errors.append("{}: export pre-saving snapshot at 00:45 should be the tariff's own {}, got {}".format(label, expected_export[0], pb.rate_export_pre_saving.get(45)))
+
+    if t34_errors:
+        for error in t34_errors:
+            print("ERROR T34: {}".format(error))
+        failed += 1
+    else:
+        print("PASS T34: Axle sessions apply to every compared tariff and the existing tariff is still recognised during an event")
 
     if failed:
         print("**** compare tests FAILED: {} errors ****\n".format(failed))
