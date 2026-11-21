@@ -2714,16 +2714,18 @@ class Inverter(BatteryCurve):
             missing = entity_id is None or entity_id == ""
             if missing:
                 if "inverter_mode" in self.base.args:
-                    # An empty entry in a configured inverter_mode is deliberate: GE Cloud leaves it empty for a
-                    # 3-phase inverter, which has no eco mode, and for one that exports at full power with eco left
-                    # on, whose eco ensure_full_power_eco() holds on. Neither has anything to write or warn about
+                    # An empty entry in a configured inverter_mode is deliberate: in a fleet with an eco switch, GE
+                    # Cloud leaves one for a 3-phase inverter, which has no eco mode, and for one that exports at full
+                    # power with eco left on, whose eco ensure_full_power_eco() holds on. Neither has anything to
+                    # write or warn about
                     self.eco_toggle_warned = None
                     return
-                problem = "No entity_id for ECO Toggle, inverter_mode should be set to xxx_enable_eco_mode"
+                # Not configured at all - including a site whose inverters are all 3-phase, as GE Cloud then sets none
+                problem = "No entity_id for ECO Toggle, inverter_mode should be set to xxx_enable_eco_mode (not needed on a GivEnergy 3-phase inverter, which has no eco mode)"
             elif not is_entity_id(entity_id):
-                problem = "ECO Toggle inverter_mode is the fixed value {} rather than a switch, so eco mode cannot be changed - set it to xxx_enable_eco_mode, or to an empty value ('') if the inverter has no eco mode".format(entity_id)
+                problem = "ECO Toggle inverter_mode is the fixed value {} rather than a switch, so eco mode cannot be changed - set it to xxx_enable_eco_mode, or leave its list entry blank if there is no eco mode".format(entity_id)
             elif entity_id.split(".")[0] not in ["switch", "input_boolean"]:
-                problem = "ECO Toggle inverter_mode {} is not a switch so cannot be turned on or off - set it to xxx_enable_eco_mode, or to an empty value ('') if the inverter has no eco mode (GivEnergy 3-phase)".format(entity_id)
+                problem = "ECO Toggle inverter_mode {} is not a switch so cannot be turned on or off - set it to xxx_enable_eco_mode, or leave its list entry blank if there is no eco mode (GivEnergy 3-phase)".format(entity_id)
             if problem:
                 if problem != self.eco_toggle_warned:
                     self.log("Warn: Inverter {} adjust_inverter_mode: {}".format(self.id, problem))
