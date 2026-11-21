@@ -264,21 +264,24 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     segments = _segments(samples)
     failed |= _check("t7", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
 
-    print("Test 7b: an export held back by the export limit is not evidence (moved from the old discharge curve tests)")
+    print("Test 7b: an export held back by the export limit is evidence of no battery limit (the limit, not SoC or temperature, held it)")
 
     my_predbat, inv = _make()
     inv.export_limit = 2000 / 60000
     _install(my_predbat, _export(25, grid=2000))
-    failed |= _check("t7b limited", _segments(inv.find_rate_grid_samples(True)) == [], "export at the limit learned")
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t7b limited", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
     my_predbat, inv = _make()
     inv.export_limit = 2000 / 60000
     _install(my_predbat, _export(25, grid=1000))
-    failed |= _check("t7b below the limit", len(_segments(inv.find_rate_grid_samples(True))) == 3)
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t7b below the limit is a battery limit", len(segments) == 3 and all(abs(s[2] - 0.6) < 1e-6 for s in segments), segments)
     my_predbat, inv = _make()
     inv.export_limit = 2000 / 60000
     my_predbat.args["grid_power_invert"] = [True]
     _install(my_predbat, _export(25, grid=-2000))
-    failed |= _check("t7b inverted grid sensor", _segments(inv.find_rate_grid_samples(True)) == [], "inverted export at the limit learned")
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t7b inverted grid sensor", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
 
     print("Test 7c: without grid_power history an ignored export cannot be told apart, so no discharge evidence is gathered")
 

@@ -255,7 +255,8 @@ class BatteryCurve:
         While exporting, the battery supplies the house load plus the grid export, so once the export reaches
         export_limit the inverter turns the battery down and the discharge rate drops for a reason that has nothing to
         do with the SoC. A minute counts as limited when grid_power (positive for export) was at or above
-        BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN of export_limit.
+        BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN of export_limit. Such a minute is still evidence: it shows the battery was
+        not held back by its SoC or temperature, so find_rate_grid_samples() records it as no battery limit seen.
 
         Args:
             min_len: minutes of history being searched
@@ -287,7 +288,7 @@ class BatteryCurve:
             if power >= threshold:
                 limited.add(minute)
         if limited:
-            self.log("Inverter {} Leaving {} export-limited minutes out of the battery discharge curve".format(self.id, len(limited)))
+            self.log("Inverter {} Recording {} export-limited minutes as no battery limit in the battery discharge curve".format(self.id, len(limited)))
         return limited
 
     def load_grid_power_minutes(self, days=None):
@@ -436,7 +437,7 @@ class BatteryCurve:
         def minute_value(minute):
             """(soc %, temperature or None, rate) for a qualifying minute, else None."""
             status = str(history["status"].get(minute, ""))
-            if discharge and (not status.startswith("Exporting") or minute in limited):
+            if discharge and not status.startswith("Exporting"):
                 return None
             if not discharge and status != "Charging":
                 return None
@@ -460,8 +461,9 @@ class BatteryCurve:
                 if temp is None or temp == 0:
                     return None
             delivered = abs(power) / battery_loss / scaling
-            if capped and grid_power.get(minute, 0) >= max_power * BATTERY_RATE_GRID_FULL_RATE:
-                # The grid export reached the cap: the battery covered the house load on top and the cap, not the battery, held it
+            if minute in limited or (capped and grid_power.get(minute, 0) >= max_power * BATTERY_RATE_GRID_FULL_RATE):
+                # The grid export reached export_limit, or the export cap: the battery covered the house load on top and the limit,
+                # not the battery's SoC or temperature, held it back
                 return (soc / soc_max * 100.0, temp, 1.0)
             return (soc / soc_max * 100.0, temp, delivered / reference_power)
 
