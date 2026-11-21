@@ -314,6 +314,10 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         day = sorted(saved["samples"])[0]
         days, _ = restart(1, samples_only_in_memory, payload=dict(saved, samples={day: "not a sample list"}))
         failed |= _check("t4b a store that lost samples to cleaning reads the full window", days == [28], days)
+        damaged_rows = {stored_day: list(entries) for stored_day, entries in saved["samples"].items()}
+        damaged_rows[day] = damaged_rows[day] + [["bad"]]
+        days, _ = restart(1, payload=dict(saved, samples=damaged_rows))
+        failed |= _check("t4b a store that lost rows within a day to cleaning reads the full window", days == [28], days)
 
         # Each direction's key follows its own scaling
         key_charge, key_discharge = my_predbat.rate_grid_scan_key(False), my_predbat.rate_grid_scan_key(True)
@@ -369,7 +373,8 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
             restarted.battery_rate_grid_update(scanner, True)
             return scanner.days.get(True)
 
-        failed |= _check("t4c a restart reads 2 days", restart_empty() == [2], restart_empty())
+        days = restart_empty()
+        failed |= _check("t4c a restart reads 2 days", days == [2], days)
         failed |= _check("t4c a battery_loss change reads the full window", restart_empty(lossier_battery) == [28])
         future = (my_predbat.now_utc + timedelta(days=2)).strftime(TIME_FORMAT)
         failed |= _check("t4c a record ahead of the clock reads the full window", restart_empty(record_payload=dict(record, last_success=future)) == [28])
@@ -377,6 +382,30 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         failed |= _check("t4c evidence without a last success reads the full window", restart_empty(evidence={"samples": _samples(my_predbat)}) == [28])
         # The two evidence store reads and then the record read all fail
         failed |= _check("t4c a failed record read reads the full window", restart_empty(fails=3) == [28])
+        # An evidence store that read back but whose samples were all dropped by cleaning reads the full window: the record
+        # does not stand in for it
+        damaged = {"samples": {sorted(_samples(my_predbat))[0]: "not a sample list"}, "last_success": record["last_success"], "scan_key": record["scan_key"]}
+        failed |= _check("t4c a fully damaged evidence store reads the full window", restart_empty(evidence=damaged) == [28])
+
+        # A store that has read back, with no evidence in it, keeps the last success itself: no record is written alongside
+        restarts[0] += 1
+        store = make_test_storage(my_predbat, tmpdir + "/t4c_{}".format(restarts[0]))
+        run_async(store.save("predbat", "battery_rate_grid_discharge", {"samples": {}, "last_success": record["last_success"], "scan_key": record["scan_key"]}, format="json"))
+        loaded = _make()
+        loaded.now_utc = my_predbat.now_utc + timedelta(days=2)
+        loaded.components = MockStorageComponents(store)
+        loaded.battery_rate_grid_update(FakeInverter(), True)
+        failed |= _check("t4c a loaded empty store writes no record", run_async(store.load("predbat", "battery_rate_grid_discharge_empty_scan")) is None)
+        failed |= _check("t4c and saves its own last success", (run_async(store.load("predbat", "battery_rate_grid_discharge")) or {}).get("last_success") != record["last_success"])
+
+        # Once evidence is found and saved the record is retired, so a restart whose evidence reads fail does not use it
+        inv.scan[True] = _samples(my_predbat)
+        my_predbat.now_utc += timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES)
+        _settle(my_predbat, inv, cycles=4)
+        failed |= _check("t4c evidence saved", bool((run_async(storage.load("predbat", "battery_rate_grid_discharge")) or {}).get("samples")))
+        retired = run_async(storage.load("predbat", "battery_rate_grid_discharge_empty_scan"))
+        failed |= _check("t4c record retired", retired == {"retired": True}, retired)
+        failed |= _check("t4c a retired record reads the full window", restart_empty(record_payload=retired, fails=2) == [28])
 
         print("Test 5: auto off - the manual curve is used, the evidence is still gathered and stored")
         my_predbat = _make({"battery_charge_power_curve": {100: 0.5}, "battery_rate_grid_auto": False})
