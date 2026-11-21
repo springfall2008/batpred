@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from utils import calc_percent_limit, is_entity_id
 from tests.test_infra import TestHAInterface, run_async
 from predbat import PredBat
-from inverter import Inverter, within_fuzzy, SOLIS_MISSING_SWITCH_CHARGE, SOLIS_MISSING_SWITCH_HOLD
+from inverter import Inverter, within_fuzzy, SOLIS_MISSING_SWITCH_CHARGE, SOLIS_MISSING_SWITCH_DISCHARGE, SOLIS_MISSING_SWITCH_HOLD
 from givtcp_rest import GivTCPRest
 from config import INVERTER_DEF
 from const import INVERTER_MAX_RETRY, MINUTE_WATT, TIME_FORMAT_SECONDS
@@ -241,7 +241,7 @@ def test_solis_energy_control_missing_warnings(my_predbat, ha):
     """
     With no energy_control_switch on GS_fb00, a freeze or hold warns that it cannot be enforced, as a charge warns
     that grid charging cannot be made sure of; each is a warning at most hourly and Info in between, and idle says
-    nothing. On GS the charge enable warns the same way (#5857).
+    nothing. On GS the charge and discharge enables warn the same way, and eco says nothing (#5857).
     """
     failed = False
     print("Test: solis_fb00_missing_switch_warnings")
@@ -262,7 +262,7 @@ def test_solis_energy_control_missing_warnings(my_predbat, ha):
                 ("Warn", SOLIS_MISSING_SWITCH_HOLD),
             ],
         ),
-        ("GS", ("enable_charge", "enable_charge", "enable_discharge"), [("Warn", SOLIS_MISSING_SWITCH_CHARGE), ("Info", SOLIS_MISSING_SWITCH_CHARGE)]),
+        ("GS", ("enable_charge", "enable_charge", "enable_discharge", "enable_eco"), [("Warn", SOLIS_MISSING_SWITCH_CHARGE), ("Info", SOLIS_MISSING_SWITCH_CHARGE), ("Warn", SOLIS_MISSING_SWITCH_DISCHARGE)]),
     ):
         log_messages = []
         orig_log = my_predbat.log

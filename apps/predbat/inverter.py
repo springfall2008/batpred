@@ -55,6 +55,7 @@ TIME_FORMAT_HMS = "%H:%M:%S"
 # What a missing energy_control_switch stops Predbat enforcing on a Solis, for write_solis_energy_control() to warn about (#5857)
 SOLIS_MISSING_SWITCH_WARN_MINUTES = 60
 SOLIS_MISSING_SWITCH_CHARGE = "Predbat cannot make sure the inverter allows grid charging"
+SOLIS_MISSING_SWITCH_DISCHARGE = "Predbat cannot enable timed discharge, so a forced export cannot happen"
 SOLIS_MISSING_SWITCH_HOLD = "a freeze or hold cannot be enforced: outside a Battery Reserve mode the battery keeps discharging, and where Predbat raises the reserve with grid charging allowed the inverter imports from the grid to reach it"
 
 # Sentinel for "this side has committed nothing yet", distinct from any real commit key a caller
@@ -3216,7 +3217,7 @@ class Inverter(BatteryCurve):
             # adjust_charge_immediate / adjust_export_immediate instead.
             solax_modes = SOLAX_SOLIS_MODES_NEW if self.base.get_arg("solax_modbus_new", True) else SOLAX_SOLIS_MODES
             new_switch = 35 if (enable or direction == "eco") else 33
-            self.write_solis_energy_control(new_switch, solax_modes, f"{direction} {enable}", missing_warning=SOLIS_MISSING_SWITCH_CHARGE if (direction == "charge" and enable) else None)
+            self.write_solis_energy_control(new_switch, solax_modes, f"{direction} {enable}", missing_warning={"charge": SOLIS_MISSING_SWITCH_CHARGE, "discharge": SOLIS_MISSING_SWITCH_DISCHARGE}.get(direction) if enable else None)
 
         # MQTT
         if direction == "charge" and enable:
