@@ -30,7 +30,7 @@ import time
 from utils import str2time, strptime_aware
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
-from http_sync import http_get, http_post, HttpJSONDecodeError, HttpTimeout, HttpConnectionError, run_async, RunThread  # noqa: F401 (run_async and RunThread are imported from here by other modules)
+from http_sync import http_get, http_post, http_request, HttpJSONDecodeError, HttpTimeout, HttpConnectionError, run_async, RunThread  # noqa: F401 (run_async and RunThread are imported from here by other modules)
 
 # Maximum days of history fetched per request. Long windows are split so only one chunk's
 # response body, decoded string and parsed objects are resident at a time.
@@ -1293,13 +1293,29 @@ class HAInterface(ComponentBase):
             data_frame = {"domain": domain, "service": service, "service_data": data}
             return run_async(self.base.trigger_callback(data_frame))
 
-    def api_call(self, endpoint, data_in=None, post=False, core=True, silent=False):
+    def delete_state(self, entity_id):
+        """
+        Delete a state from Home Assistant.
+        """
+        entity_id_lower = entity_id.lower()
+        success = True
+        if self.db_enable:
+            success = self.db_manager is not None and self.db_manager.delete_state_db(entity_id_lower) is not None
+        self.db_mirror_list.pop(entity_id, None)
+        self.db_mirror_list.pop(entity_id_lower, None)
+        self.state_data.pop(entity_id_lower, None)
+        if self.ha_key:
+            success = self.api_call("/api/states/{}".format(entity_id_lower), delete=True) is not None and success
+        return success
+
+    def api_call(self, endpoint, data_in=None, post=False, delete=False, core=True, silent=False):
         """
         Make an API call to Home Assistant.
 
         :param endpoint: The API endpoint to call.
         :param data_in: The data to send in the body of the request.
         :param post: True if this is a POST request, False for GET.
+        :param delete: True if this is a DELETE request
         :param core: True is this is a call to HA Core, False if it is a Supervisor call
         :param silent: True if warning message from the API call is to be suppressed
         :return: The response from the API.
@@ -1322,7 +1338,9 @@ class HAInterface(ComponentBase):
         }
         self.last_api_status = None
         try:
-            if post:
+            if delete:
+                response = http_request("DELETE", url, headers=headers, timeout=TIMEOUT)
+            elif post:
                 if data_in:
                     response = http_post(url, headers=headers, json=data_in, timeout=TIMEOUT)
                 else:
@@ -1333,8 +1351,13 @@ class HAInterface(ComponentBase):
                 else:
                     response = http_get(url, headers=headers, timeout=TIMEOUT)
             self.last_api_status = response.status_code
-            data = response.json()
-            self.api_errors = 0
+            if delete and not 200 <= response.status_code < 300:
+                self.log("Warn: HTTP status {} deleting state from {}".format(response.status_code, url))
+                self.api_errors += 1
+                data = None
+            else:
+                data = {} if delete and not response.text else response.json()
+                self.api_errors = 0
         except HttpJSONDecodeError:
             if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
                 self.log("Warn: Failed to decode response {} from {}".format(response, url))

@@ -160,6 +160,7 @@ deadbeefdeadbeef
 dedup
 dedupe
 deepseek
+delayedstart
 dend
 denorm
 derate
@@ -180,6 +181,7 @@ dischargefreeze
 Dischg
 Dise
 Disf
+dishcare
 diverter
 dlimit
 dlopen
