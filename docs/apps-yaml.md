@@ -1601,8 +1601,8 @@ When set in Watts, caps the maximum discharge rate used specifically during forc
 This is useful when you want to limit how fast the battery discharges to the grid during forced export periods (e.g. to reduce battery wear or meet grid export limits)
 while still allowing the battery to discharge at full rate during ECO mode to cover house load.
 
-The discharge [rate grid](#battery-rate-grids) is learned from forced exports, so Predbat measures them against this cap. An export that reached the cap records no battery limit.
-An export where the battery fell below the cap is recorded as a battery limit: it also caps the ECO mode discharge Predbat plans at that SoC, and it shows on the Curves page.
+The discharge [rate grid](#battery-rate-grids) is learned from forced exports, so Predbat measures them against this cap. During an export the battery can supply the house load on top of the cap, so a minute where the grid export (from **grid_power**) reached the cap records no battery limit.
+A minute where the export stayed below the cap is recorded as a battery limit: it also caps the ECO mode discharge Predbat plans at that SoC, and it shows on the Curves page. If this is set to 0 there are no forced exports, so no discharge evidence is gathered.
 
 If not set, the value defaults to `inverter_limit_discharge` (or the inverter maximum if that is also not set).
 Predbat will also use this rate when modelling the plan so the prediction accurately reflects the capped export rate.
