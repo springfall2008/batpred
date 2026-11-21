@@ -94,6 +94,7 @@ class MockBase:
         self.args = {}
         self.CONFIG_ITEMS = []
         self.SERVICE_REGISTER_LIST = []
+        self.dashboard_index_app = {}
         self.update_pending = False
         self.callback_calls = []
         self.watch_list_calls = []

@@ -2576,6 +2576,8 @@ Everything else the agent takes sits alongside **providers** in the same block, 
 
 An entry missing what it needs - a hosted endpoint with no key - still appears in the Chat tab's Settings dialog, marked as needing a key before it can answer, rather than silently vanishing.
 
+The Settings dialog never shows a saved key, and keeps it when you edit an entry's other fields. If you change an entry's URL, type the key in again: Predbat only sends a saved key to the URL it was saved with, so listing models or saving with a new URL and a blank key is refused.
+
 There is no separate enable switch: configuring an endpoint is what enables the feature, and the model is chosen in the Chat tab rather than here.
 
 Before enabling this, read the [chat component's security note](components.md#security-note-chat): the web interface has no login of its own, tool results (including log lines and configuration) are sent to whichever provider you have configured and on to whoever serves the model you choose, and a deleted conversation's stored copy is not removed immediately - it stays on disk until it expires.

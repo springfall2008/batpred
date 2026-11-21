@@ -25,7 +25,8 @@ from datetime import datetime, timezone, timedelta
 from aiohttp import web
 import hmac
 import secrets
-from urllib.parse import urlencode
+import ipaddress
+from urllib.parse import urlencode, urlsplit
 import jwt_hs256
 from component_base import ComponentBase
 from const import MCP_DEFAULT_SECRET
@@ -73,6 +74,61 @@ MCP_WRITE_SCOPES = {"mcp:write", "mcp:control"}
 MCP_STORAGE_MODULE = "mcp"
 MCP_SIGNING_KEY_FILE = "jwt_signing_key"
 MCP_SIGNING_KEY_BYTES = 32
+
+# Schemes an OAuth redirect_uri may never use: the browser would run or open something itself rather than
+# hand the authorisation code to a client
+MCP_REFUSED_REDIRECT_SCHEMES = ("javascript", "data", "file", "vbscript", "blob", "about", "filesystem", "view-source")
+
+
+def is_loopback_host(host):
+    """Return True when a redirect host is this computer: localhost or a loopback address (RFC 8252 section 7.3)."""
+    if not host:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def redirect_uri_problem(uri):
+    """
+    Return why an OAuth redirect_uri cannot be used, or None when it can.
+
+    Registration is open to anyone who can reach the port, so any host can be registered: what this
+    refuses is the addresses no genuine client needs. Plain http is accepted only for a desktop
+    client listening on this computer (RFC 8252); an app's own scheme, such as cursor://, is accepted.
+    """
+    if not isinstance(uri, str) or not uri.strip():
+        return "redirect_uri is required"
+    try:
+        parts = urlsplit(uri)
+        host = parts.hostname
+    except ValueError:
+        return "redirect_uri is not a valid URI"
+    scheme = parts.scheme.lower()
+    if not re.fullmatch(r"[a-z][a-z0-9+.\-]*", scheme):
+        return "redirect_uri must be an absolute URI"
+    if scheme in MCP_REFUSED_REDIRECT_SCHEMES:
+        return "redirect_uri may not use the {}: scheme".format(scheme)
+    if "#" in uri:
+        return "redirect_uri may not contain a fragment"
+    if "@" in parts.netloc:
+        return "redirect_uri may not contain a user name or password"
+    if scheme in ("http", "https") and not host:
+        return "redirect_uri must name a host"
+    if scheme == "http" and not is_loopback_host(host):
+        return "redirect_uri must use https unless it points at this computer (localhost)"
+    return None
+
+
+def redirect_destination(uri):
+    """Return where a checked redirect_uri sends the browser, for the sign-in page and the log: its host and port, or its app scheme."""
+    parts = urlsplit(uri)
+    if parts.scheme.lower() in ("http", "https"):
+        return parts.netloc.lower()
+    return "the {}: app".format(parts.scheme.lower())
 
 
 class PredbatMCPServer(ComponentBase):
@@ -573,6 +629,11 @@ class PredbatMCPServer(ComponentBase):
 
                 self.log(f"MCP OAuth: POST authorization request from client_id: {client_id}")
 
+                # Checked again here, not only when the page was shown: the form can be posted without it
+                problem = redirect_uri_problem(redirect_uri)
+                if problem:
+                    return self.authorize_error_page(problem)
+
                 # Validate required parameters
                 if not client_id or not redirect_uri or response_type != "code":
                     error_message = "Missing required OAuth parameters"
@@ -594,15 +655,13 @@ class PredbatMCPServer(ComponentBase):
                             "used": False,
                         }
 
-                        self.log(f"MCP OAuth: Authorization code generated for {client_id} with state={state}")
-
-                        # Redirect back with code and state
+                        # Redirect back with code and state. Neither goes in the log, which the web UI shows
                         params = {"code": auth_code}
                         if state:
                             params["state"] = state
                         redirect_url = self.redirect_with(redirect_uri, params)
 
-                        self.log(f"MCP OAuth: Redirecting to {redirect_url}")
+                        self.log(f"MCP OAuth: Authorization code generated for {client_id}, returning to {redirect_destination(redirect_uri)}")
                         return web.HTTPFound(redirect_url)
                     else:
                         # Invalid secret - show login page with error
@@ -621,28 +680,38 @@ class PredbatMCPServer(ComponentBase):
 
                 self.log(f"MCP OAuth: GET authorization request from client_id: {client_id}")
 
+                # An unusable redirect_uri, or no client_id, is shown here rather than redirected to: sending the
+                # browser to an address that has not been checked would make this page an open redirect (RFC 6749 4.1.2.1)
+                problem = redirect_uri_problem(redirect_uri)
+                if problem:
+                    return self.authorize_error_page(problem)
+                if not client_id:
+                    return self.authorize_error_page("client_id is required")
+
                 # Validate required parameters
-                if not client_id or not redirect_uri or response_type != "code":
-                    error_uri = redirect_uri if redirect_uri else "about:blank"
-                    return web.HTTPFound(self.redirect_with(error_uri, {"error": "invalid_request", "state": state}))
+                if response_type != "code":
+                    return web.HTTPFound(self.redirect_with(redirect_uri, {"error": "invalid_request", "state": state}))
 
                 # PKCE is REQUIRED per OAuth 2.1 and MCP spec
                 if not code_challenge or not code_challenge_method:
-                    error_uri = redirect_uri if redirect_uri else "about:blank"
                     error_desc = "PKCE required: code_challenge and code_challenge_method are required"
                     self.log(f"MCP OAuth: {error_desc}")
-                    return web.HTTPFound(self.redirect_with(error_uri, {"error": "invalid_request", "error_description": error_desc, "state": state}))
+                    return web.HTTPFound(self.redirect_with(redirect_uri, {"error": "invalid_request", "error_description": error_desc, "state": state}))
 
                 # Only S256 method is supported (plain is deprecated in OAuth 2.1)
                 if code_challenge_method != "S256":
-                    error_uri = redirect_uri if redirect_uri else "about:blank"
                     error_desc = "code_challenge_method must be S256"
                     self.log(f"MCP OAuth: {error_desc}")
-                    return web.HTTPFound(self.redirect_with(error_uri, {"error": "invalid_request", "error_description": error_desc, "state": state}))
+                    return web.HTTPFound(self.redirect_with(redirect_uri, {"error": "invalid_request", "error_description": error_desc, "state": state}))
 
             # Show login page (GET request or failed POST)
+            # Where an approval would go, named on the page: registration is open, so a link anyone sends can name
+            # any client, and the owner checking this is what stops one that sends the approval somewhere else
+            destination = redirect_destination(redirect_uri)
             # Every value here comes from the request, so escape it, or a crafted link could run a script on this page and read the secret the user types
-            client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method, scope = (html.escape(str(value or "")) for value in (client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method, scope))
+            client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method, scope, destination = (
+                html.escape(str(value or "")) for value in (client_id, redirect_uri, response_type, state, code_challenge, code_challenge_method, scope, destination)
+            )
             login_html = f"""
 <!DOCTYPE html>
 <html>
@@ -742,6 +811,15 @@ class PredbatMCPServer(ComponentBase):
         button:active {{
             transform: translateY(0);
         }}
+        .destination {{
+            background: #fff8e1;
+            border: 1px solid #f0c36d;
+            color: #5d4400;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }}
         .help-text {{
             margin-top: 20px;
             text-align: center;
@@ -761,6 +839,11 @@ class PredbatMCPServer(ComponentBase):
             <p><strong>Application:</strong> {client_id}</p>
             <p><strong>Requesting access to:</strong> Battery prediction data</p>
             <p><strong>You will be returned to:</strong> {redirect_uri}</p>
+        </div>
+
+        <div class="destination">
+            Signing in gives <strong>{destination}</strong> access to Predbat. Only continue if you started
+            connecting this application yourself.
         </div>
 
         {'<div class="error">' + error_message + '</div>' if error_message else ''}
@@ -794,6 +877,24 @@ class PredbatMCPServer(ComponentBase):
             self.log(f"MCP OAuth: Error in authorize endpoint: {e}")
             return web.Response(text=f"Authorization error: {str(e)}", status=500)
 
+    def authorize_error_page(self, reason):
+        """Show why an authorisation request was refused, as a page of its own: it never redirects anywhere."""
+        self.log(f"MCP OAuth: Refused an authorization request: {reason}")
+        page = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Predbat MCP - Sign-in refused</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+</head>
+<body style="font-family: sans-serif; max-width: 480px; margin: 40px auto; padding: 0 16px;">
+    <h1>Predbat MCP</h1>
+    <p>This sign-in link cannot be used: {}.</p>
+    <p>Nothing has been sent anywhere. If you were connecting an application, check its settings and start again.</p>
+</body>
+</html>
+""".format(html.escape(reason))
+        return web.Response(text=page, content_type="text/html", status=400)
+
     async def oauth_register(self, request):
         """
         OAuth 2.0 Dynamic Client Registration endpoint (RFC 7591)
@@ -821,6 +922,15 @@ class PredbatMCPServer(ComponentBase):
             client_name = data.get("client_name", "Unnamed MCP Client")
             redirect_uris = data.get("redirect_uris", [])
             response_types = data.get("response_types", ["code"])
+
+            # The same check authorise makes, so a client learns now that it could never sign in (RFC 7591 3.2.2)
+            if not isinstance(redirect_uris, list):
+                return web.json_response({"error": "invalid_redirect_uri", "error_description": "redirect_uris must be a list"}, status=400)
+            for uri in redirect_uris:
+                problem = redirect_uri_problem(uri)
+                if problem:
+                    self.log(f"MCP OAuth: Refused to register {client_name}: {problem}")
+                    return web.json_response({"error": "invalid_redirect_uri", "error_description": problem}, status=400)
             scope = data.get("scope", " ".join(MCP_ALL_SCOPES))
 
             # Anyone who can reach the port can register, so a registered client is a public one (#5847): no
