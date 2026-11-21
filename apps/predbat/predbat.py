@@ -709,7 +709,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_rate_grid_empty_scan_read = {}  # "charge"/"discharge" -> True once the no-evidence scan record has been tried this run
         self.battery_rate_grid_empty_scan_live = {}  # "charge"/"discharge" -> True while a no-evidence scan record read or written this run is not yet retired
         self.battery_rate_grid_previous_basis = {}  # "charge"/"discharge" -> rate_grid_scan_key() on the previous cycle
-        self.battery_rate_grid_basis_cycles = {}  # "charge"/"discharge" -> consecutive plan cycles that agreed on the current rate_grid_scan_key()
+        self.battery_rate_grid_basis_since = {}  # "charge"/"discharge" -> when a plan-cycle read first saw the current rate_grid_scan_key()
+        self.battery_rate_grid_basis_unconfirmed = {}  # "charge"/"discharge" -> True when the last full read ran under a key that had not settled
         self.battery_rate_grid_basis_wait_since = {}  # "charge"/"discharge" -> when a due scan started waiting for a changed key to settle
         self.battery_rate_grid_last_save = {}  # "charge"/"discharge" -> time of the last successful save of the evidence
         self.battery_rate_grid_history_days = 28  # battery_rate_grid_history_days: days a scan reads until one has succeeded

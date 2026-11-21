@@ -311,6 +311,56 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         days, _ = restart(1, deeper_history)
         failed |= _check("t4b history days change reads the full window", days == [60], days)
 
+        def shallower_history(restarted):
+            """battery_rate_grid_history_days lowered: the stored samples already cover the shallower window."""
+            restarted.battery_rate_grid_history_days = 14
+
+        days, _ = restart(1, shallower_history)
+        failed |= _check("t4b a lowered history days keeps the short read", days == [2], days)
+
+        # A plan cycle fetches twice, a minute or so apart: both reads under a passing value just after a restart are not
+        # enough to scan against it
+        def fallback_twice(restarted):
+            """The fallback size on both of a plan cycle's fetches."""
+            restarted.soc_max = 8.0
+
+        restarts[0] += 1
+        store = make_test_storage(my_predbat, tmpdir + "/t4b_{}".format(restarts[0]))
+        run_async(store.save("predbat", "battery_rate_grid_charge", saved, format="json"))
+        restarted = _make({"battery_charge_power_curve": {100: 0.5}})
+        restarted.now_utc = my_predbat.now_utc + timedelta(hours=1)
+        restarted.soc_max = 8.0
+        restarted.components = MockStorageComponents(store)
+        scanner = FakeInverter()
+        scanner.scan[False] = {}
+        restarted.battery_rate_grid_update(scanner, False)
+        restarted.now_utc += timedelta(seconds=40)
+        restarted.battery_rate_grid_update(scanner, False)
+        failed |= _check("t4b a plan cycle's two fetches do not settle a passing value", scanner.days.get(False) is None, scanner.days.get(False))
+        restarted.soc_max = 10.0
+        restarted.now_utc += timedelta(minutes=5)
+        restarted.battery_rate_grid_update(scanner, False)
+        failed |= _check("t4b and the real value then reads 2 days", scanner.days.get(False) == [2], scanner.days.get(False))
+
+        # A store written before keys were saved: the first scan waits for the key to settle, then reads the full window once
+        restarts[0] += 1
+        store = make_test_storage(my_predbat, tmpdir + "/t4b_{}".format(restarts[0]))
+        run_async(store.save("predbat", "battery_rate_grid_charge", {"samples": saved["samples"], "updated": saved.get("updated")}, format="json"))
+        pre_key = _make({"battery_charge_power_curve": {100: 0.5}})
+        pre_key.now_utc = my_predbat.now_utc + timedelta(hours=1)
+        pre_key.components = MockStorageComponents(store)
+        scanner = FakeInverter()
+        scanner.scan[False] = {}
+        pre_key.battery_rate_grid_update(scanner, False)
+        failed |= _check("t4b a store without a key waits on the first cycle", scanner.days.get(False) is None, scanner.days.get(False))
+        pre_key.now_utc += timedelta(minutes=5)
+        pre_key.battery_rate_grid_update(scanner, False)
+        failed |= _check("t4b then reads the full window", scanner.days.get(False) == [28], scanner.days.get(False))
+        for _ in range(BATTERY_RATE_GRID_RETRY_MINUTES // 5 + 2):
+            pre_key.now_utc += timedelta(minutes=5)
+            pre_key.battery_rate_grid_update(FakeInverter(), False)
+        failed |= _check("t4b and no second full read follows within the hour", pre_key.battery_rate_grid_last_scan["charge"] < pre_key.now_utc - timedelta(minutes=BATTERY_RATE_GRID_RETRY_MINUTES), pre_key.battery_rate_grid_last_scan)
+
         # A store written before last_success was saved (or with a time ahead of the clock) gets the full window, as before
         days, _ = restart(1, payload={"samples": saved["samples"], "updated": saved["updated"]})
         failed |= _check("t4b store without last_success reads the full window", days == [28], days)
@@ -392,6 +442,10 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         saved_live = run_async(storage.load("predbat", "battery_rate_grid_charge"))
         failed |= _check("t4b a save after a live change keeps the measured key", saved_live.get("scan_key") == saved.get("scan_key"), saved_live.get("scan_key"))
         days_before = list(inv.days[False])
+        for _ in range(2 * BATTERY_RATE_GRID_RETRY_MINUTES // 5):
+            my_predbat.now_utc += timedelta(minutes=5)
+            _update(my_predbat, inv)
+        failed |= _check("t4b a settled live change waits for the daily scan, not the hour", inv.days[False] == days_before, inv.days[False])
         my_predbat.now_utc += timedelta(minutes=BATTERY_RATE_GRID_SCAN_MINUTES + 1)
         _update(my_predbat, inv)
         failed |= _check("t4b the next scan after a live change reads the full window", inv.days[False][len(days_before) :] == [28], inv.days[False])
@@ -549,12 +603,26 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         failed |= _check("t4c a record ahead of the clock reads the full window", restart_empty(record_payload=dict(record, last_success=future)) == [28])
         # A store written before this change holds evidence but no last success: the record does not stand in for it
         failed |= _check("t4c evidence without a last success reads the full window", restart_empty(evidence={"samples": _samples(my_predbat)}) == [28])
-        # The evidence store read, the record read and the second evidence store read all fail
+        # The evidence store read, the second evidence store read just before the scan and the record read all fail
         failed |= _check("t4c a failed record read reads the full window", restart_empty(fails=3) == [28])
         # An evidence store that read back but whose samples were all dropped by cleaning reads the full window: the record
         # does not stand in for it
         damaged = {"samples": {sorted(_samples(my_predbat))[0]: "not a sample list"}, "last_success": record["last_success"], "scan_key": record["scan_key"]}
         failed |= _check("t4c a fully damaged evidence store reads the full window", restart_empty(evidence=damaged) == [28])
+        # Damaged evidence that reads back only after the record restored the last success: the next scan reads the full window
+        restarts[0] += 1
+        store = make_test_storage(my_predbat, tmpdir + "/t4c_{}".format(restarts[0]))
+        run_async(store.save("predbat", "battery_rate_grid_discharge_empty_scan", record, format="json"))
+        run_async(store.save("predbat", "battery_rate_grid_discharge", damaged, format="json"))
+        late = _make()
+        late.now_utc = my_predbat.now_utc + timedelta(hours=1)
+        late.components = MockStorageComponents(FlakyStorage(store, 2))
+        scanner = FakeInverter()
+        late.battery_rate_grid_update(scanner, True)
+        for _ in range(BATTERY_RATE_GRID_RETRY_MINUTES // 5 + 2):
+            late.now_utc += timedelta(minutes=5)
+            late.battery_rate_grid_update(scanner, True)
+        failed |= _check("t4c damaged evidence read back late reads the full window", scanner.days.get(True) == [2, 28], scanner.days.get(True))
 
         # A store that has read back, with no evidence in it, keeps the last success itself: no record is written alongside
         restarts[0] += 1
@@ -605,7 +673,7 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         storage = make_test_storage(my_predbat, tmpdir + "/t6b")
         old_day = charge_day(my_predbat.now_utc, 200 * 24 * 60, my_predbat.local_tz)
         run_async(storage.save("predbat", "battery_rate_grid_charge", {"samples": {old_day: [[50.0, 12.0, 0.4]]}, "updated": None}, format="json"))
-        # The first cycle reads the store, the no-evidence record and the store again
+        # The first cycle reads the store, the store again just before the scan, and the no-evidence record
         my_predbat.components = MockStorageComponents(FlakyStorage(storage, 3))
         inv = FakeInverter()
         inv.scan[False] = _samples(my_predbat)
@@ -708,6 +776,9 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         inv = FakeInverter()
         inv.scan[True] = {day: [[60.0, 15.0, 1.0]] for day in covered}
         inv.curve_scan_coverage = {"grid_discharge": partial_day}  # the history reached part way into this day
+        # A store from before scan keys were saved waits for the key to settle (#6287), then reads the full window
+        my_predbat.battery_rate_grid_update(inv, True)
+        my_predbat.now_utc += timedelta(minutes=5)
         my_predbat.battery_rate_grid_update(inv, True)
         failed |= _check("t12 the first scan after a restart reads the full window", inv.days.get(True) == [28], inv.days)
         saved = run_async(storage.load("predbat", "battery_rate_grid_discharge"))

@@ -69,7 +69,7 @@ from const import (
     BATTERY_RATE_GRID_RESAVE_MINUTES,
     BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE,
     BATTERY_RATE_GRID_SCAN_VERSION,
-    BATTERY_RATE_GRID_KEY_SETTLE_CYCLES,
+    BATTERY_RATE_GRID_KEY_SETTLE_MINUTES,
     BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES,
     BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE,
     BATTERY_RATE_GRID_MAX_AGE_DAYS,
@@ -4279,6 +4279,10 @@ class Fetch:
             restored = self.rate_grid_stored_time(data.get("last_success"))
             if stored_intact and restored is not None and self.battery_rate_grid_last_success.get(kind) is None:
                 self.battery_rate_grid_last_success[kind] = restored
+            elif raw_samples and not stored_intact:
+                # Damaged samples read back after a last success came from elsewhere (the no-evidence record, or a scan while
+                # the store could not be read): the next scan reads the full window to re-measure what the history still holds
+                self.battery_rate_grid_last_success[kind] = None
             return True
 
         def load_empty_scan():
@@ -4346,31 +4350,35 @@ class Fetch:
             self.battery_rate_grid_empty_scan_read[kind] = True
             load_empty_scan()
         last_success = self.battery_rate_grid_last_success.get(kind)
-        # A key that differs from the one the stored samples were measured under may be a passing value (a rated rate or
-        # battery size read as its default while an entity is unavailable, most likely just after a restart): it only counts
-        # once BATTERY_RATE_GRID_KEY_SETTLE_CYCLES consecutive plan cycles agree on it. Only those refresh the inverter
-        # values: a quick update reuses the last cycle's, so it neither confirms a key nor starts a scan under an unconfirmed
-        # one. A due scan waits for that, so one bad reading cannot re-measure every stored day against it, for at most
-        # BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES, so a key that never settles still gets scanned
+        # A key that differs from the one the stored samples were measured under may be a passing value: a
+        # rated rate or battery size read as its default while an entity is unavailable, most likely just after a restart. It
+        # only counts once plan-cycle reads at least BATTERY_RATE_GRID_KEY_SETTLE_MINUTES apart agree on it - in time, as a
+        # plan cycle fetches twice a minute or so apart, and only on those fetches, as a quick update reuses the last cycle's
+        # values. A due scan waits for that, so one bad reading cannot re-measure every stored day against it, for at most
+        # BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES so a key that never settles is still scanned; a quick update never starts
+        # a scan under a changed key
         if not quick:
-            previous_key = self.battery_rate_grid_previous_basis.get(kind)
-            agreeing = self.battery_rate_grid_basis_cycles.get(kind, 0) + 1 if self.rate_grid_scan_key_matches(previous_key, scan_key) else 1
-            self.battery_rate_grid_basis_cycles[kind] = agreeing
+            if not self.rate_grid_scan_key_matches(self.battery_rate_grid_previous_basis.get(kind), scan_key):
+                self.battery_rate_grid_basis_since[kind] = self.now_utc
             self.battery_rate_grid_previous_basis[kind] = scan_key
         measured_key = self.battery_rate_grid_scan_basis.get(kind)
-        changed = measured_key is not None and not self.rate_grid_scan_key_matches(measured_key, scan_key)
-        settled = self.battery_rate_grid_basis_cycles.get(kind, 0) >= BATTERY_RATE_GRID_KEY_SETTLE_CYCLES and self.rate_grid_scan_key_matches(self.battery_rate_grid_previous_basis.get(kind), scan_key)
-        if changed and settled and not due and (self.now_utc - last_scan) >= timedelta(minutes=BATTERY_RATE_GRID_RETRY_MINUTES):
-            # A settled change re-measures within the hour rather than at the next daily scan, so a full read made under a
-            # passing value (the wait below ran out) is not left in the plan for a day
+        # No key known counts as a change only when there are samples it would re-measure (a store written before keys were saved)
+        changed = (measured_key is not None or bool(self.battery_rate_grid_samples.get(kind))) and not self.rate_grid_scan_key_matches(measured_key, scan_key)
+        since = self.battery_rate_grid_basis_since.get(kind)
+        settled = since is not None and self.rate_grid_scan_key_matches(self.battery_rate_grid_previous_basis.get(kind), scan_key) and (self.now_utc - since) >= timedelta(minutes=BATTERY_RATE_GRID_KEY_SETTLE_MINUTES)
+        if changed and settled and self.battery_rate_grid_basis_unconfirmed.get(kind) and not due and (self.now_utc - last_scan) >= timedelta(minutes=BATTERY_RATE_GRID_RETRY_MINUTES):
+            # The last full read ran under a key that never settled (the wait ran out): once the current one has, re-measure
+            # within the hour rather than at the next daily scan
             due = True
         if due and changed and not settled:
             wait_since = self.battery_rate_grid_basis_wait_since.get(kind)
             if wait_since is None:
                 wait_since = self.battery_rate_grid_basis_wait_since[kind] = self.now_utc
                 self.log("Info: battery {} rate grid scan waits for what it is measured against to settle".format(kind))
-            if quick or (self.now_utc - wait_since) < timedelta(minutes=BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES):
+            if (self.now_utc - wait_since) < timedelta(minutes=BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES):
                 due = False
+        if quick and changed:
+            due = False
         if due:
             self.battery_rate_grid_basis_wait_since.pop(kind, None)
             self.battery_rate_grid_last_scan[kind] = self.now_utc
@@ -4394,6 +4402,7 @@ class Fetch:
                 self.battery_rate_grid_last_success[kind] = self.now_utc
                 if full_read:
                     self.battery_rate_grid_scan_basis[kind] = scan_key
+                    self.battery_rate_grid_basis_unconfirmed[kind] = changed and not settled
                 merged = merge_rate_grid_samples(stored, scanned, today, BATTERY_RATE_GRID_MAX_AGE_DAYS, getattr(inverter, "curve_scan_coverage", {}).get("grid_" + kind))
                 save = save or merged != stored or bool(self.battery_rate_grid_loaded.get(kind))
                 self.battery_rate_grid_samples[kind] = merged
@@ -4533,7 +4542,10 @@ class Fetch:
                 continue
             if not isinstance(stored_value, (int, float)) or abs(stored_value - current_value) > abs(current_value) * tolerance:
                 return False
-        return stored[2:] == current[2:]
+        if not isinstance(stored[4], int) or not isinstance(current[4], int) or stored[4] < current[4]:
+            return False
+        # battery_rate_grid_history_days: only a deeper window than the last full read needs reading again
+        return stored[2:4] + stored[5:] == current[2:4] + current[5:]
 
     def rate_grid_stored_time(self, text):
         """A stored rate grid scan time, or None when it is missing, malformed or ahead of the clock."""
