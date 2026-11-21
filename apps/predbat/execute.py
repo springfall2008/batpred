@@ -840,9 +840,11 @@ class Execute:
 
                 # Moving the start on does not shorten a window that runs a day or more past it (merged charge and freeze
                 # slots reaching this time tomorrow). Written as clock times, its start and end would then be equal, which
-                # an inverter reads as no window at all, so end it a minute short of a day; the plan rewrites it every cycle
-                if (minutes_end - minutes_start) >= 24 * 60:
-                    minutes_end = minutes_start + 24 * 60 - 1
+                # an inverter reads as no window at all, so end it a minute short of a day; the plan rewrites it every cycle.
+                # The clock skew is added to the written times later, so an end skew past the start skew shortens it further
+                charge_window_max = 24 * 60 - 1 - max(0, self.inverter_clock_skew_end - self.inverter_clock_skew_start)
+                if (minutes_end - minutes_start) > charge_window_max:
+                    minutes_end = minutes_start + charge_window_max
                     self.log("Charge window still a day or longer, end moved to {}".format(self.time_abs_str(minutes_end)))
 
                 # Span midnight allowed?
@@ -1131,9 +1133,10 @@ class Execute:
                     self.log("Move on export window start time to avoid wrap - new start {}".format(self.time_abs_str(minutes_start)))
 
                 # As for the charge window: a window still a day or longer would be written with equal start and end clock
-                # times, so end it short of a day, leaving room for the 1 minute export_adjust adds below
-                if (minutes_end - minutes_start) >= 24 * 60 - 1:
-                    minutes_end = minutes_start + 24 * 60 - 2
+                # times, so end it short of a day, leaving room for the 1 minute export_adjust adds below and for the clock skew
+                export_window_max = 24 * 60 - 2 - max(0, self.inverter_clock_skew_discharge_end - self.inverter_clock_skew_discharge_start)
+                if (minutes_end - minutes_start) > export_window_max:
+                    minutes_end = minutes_start + export_window_max
                     self.log("Export window still a day or longer, end moved to {}".format(self.time_abs_str(minutes_end)))
 
                 export_adjust = 1
