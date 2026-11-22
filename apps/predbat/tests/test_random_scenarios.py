@@ -1651,3 +1651,51 @@ def run_random_scenario_metric_tests(my_predbat):
     if not failed:
         print("Scenario {} metric {} matches the planner's own score".format(scenario["id"], result["metric"]))
     return failed
+
+
+def run_random_scenario_dawn_surplus_tests(my_predbat):
+    """A battery still holding energy at dawn before an export-limited solar day exports it at the night rate.
+
+    Scenario 8 is a dual-band export tariff (5.6p 00:30-05:30) with a 0.78 kW export limit and a big
+    solar day. With iBoost off and the battery enlarged to 10 kWh at 95%, the house cannot use the
+    stored energy before the sun comes up, so the battery fills early and the solar beyond the export
+    limit is clipped. Exporting the surplus overnight at the cheapest rate earns 5.6p a kWh; keeping it
+    earns nothing. That export is only possible if the automatic export threshold offers the cheapest
+    rate, so this fails if the night band is dropped from the candidates again.
+
+    my_predbat is deliberately unused - each run gets a fresh instance, as for run_random_scenario_tests.
+    """
+    print("**** Running random scenario dawn-surplus export ****")
+
+    from unit_test import create_predbat
+    from utils import export_mode_of
+    from const import EXPORT_MODE_IDLE
+
+    scenario_predbat = create_predbat()
+    reset_inverter(scenario_predbat)
+    scenario_predbat.read_debug_yaml(RANDOM_TEMPLATE)
+    scenario_predbat.config_root = "./"
+    scenario_predbat.save_restore_dir = "./"
+    scenario_predbat.load_user_config()
+
+    scenario = [s for s in load_scenarios(RANDOM_SCENARIOS) if s["id"] == 8][0]
+    apply_scenario_to_predbat(scenario_predbat, scenario)
+    scenario_predbat.iboost_enable = False
+    scenario_predbat.soc_max = 10.0
+    scenario_predbat.soc_kw = 9.5
+    scenario_predbat.args["threads"] = 0
+    scenario_predbat.plan_valid = False
+    scenario_predbat.debug_enable = False
+    scenario_predbat.calculate_plan(recompute=True)
+
+    night_rate = min(scenario_predbat.rate_export.values())
+    night_exports = [
+        (window["start"], window["end"])
+        for window_n, window in enumerate(scenario_predbat.export_window_best)
+        if export_mode_of(scenario_predbat.export_limits_best[window_n]) != EXPORT_MODE_IDLE and scenario_predbat.rate_export.get(window["start"]) == night_rate
+    ]
+    if not night_exports:
+        print("ERROR: expected an export at the {}p night rate to clear the battery before the clipped solar day, plan exports {}".format(night_rate, [(w["start"], w["end"], scenario_predbat.export_limits_best[n]) for n, w in enumerate(scenario_predbat.export_window_best)]))
+        return True
+    print("Night-rate exports planned: {}".format(night_exports))
+    return False

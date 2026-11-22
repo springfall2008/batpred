@@ -3962,11 +3962,11 @@ class Fetch:
         if self.rate_high_threshold > 0:
             self.rate_export_cost_threshold = dp2(rate_export_average * self.rate_high_threshold)
         else:
-            # In automatic mode select the only rate or everything but the most cheapest
-            if (rate_export_max == rate_export_min) or (rate_export_min > rate_min) or have_alerts:
-                self.rate_export_cost_threshold = rate_export_min - 0.1
-            else:
-                self.rate_export_cost_threshold = rate_export_min + 0.5
+            # In automatic mode every export rate is a candidate, the cheapest included. Leaving the cheapest out
+            # hid the one export a dual-rate tariff needs when the solar will clip: a battery still holding energy
+            # at dawn before an export-limited solar day earns the night rate by exporting it, or nothing once the
+            # solar that displaces it is clipped. Whether an export is worth making is the optimiser's decision.
+            self.rate_export_cost_threshold = rate_export_min - 0.1
 
         self.log(
             "Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(
