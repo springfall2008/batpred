@@ -26,7 +26,10 @@ import os
 from datetime import datetime, timezone, timedelta
 
 # Architecture constants (not user-configurable)
-MODEL_VERSION = 10  # Bumped to V10 for day-of-year seasonality features and network layer changes
+# V10 added day-of-year seasonality features and network layer changes. V11 bounds the normalised features
+# (FEATURE_Z_LIMIT): a model saved before it was often trained into dead ReLU units by unbounded rate spikes, which
+# bounding the inputs doesn't revive, so it is discarded and retrained from the saved history (#6147)
+MODEL_VERSION = 11
 STEP_MINUTES = 5  # Base data resolution in minutes (raw sensor granularity)
 CHUNK_MINUTES = 5  # Prediction resolution: must be a multiple of STEP_MINUTES
 CHUNK_STEPS = CHUNK_MINUTES // STEP_MINUTES  # 5-min steps aggregated per chunk (3)
@@ -46,6 +49,23 @@ NUM_TEMP_FEATURES = LOOKBACK_STEPS  # Historical temperature values
 NUM_IMPORT_RATE_FEATURES = LOOKBACK_STEPS  # Historical import rates
 NUM_EXPORT_RATE_FEATURES = LOOKBACK_STEPS  # Historical export rates
 TOTAL_FEATURES = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_IMPORT_RATE_FEATURES + NUM_EXPORT_RATE_FEATURES + NUM_TIME_FEATURES
+
+# Normalised features are held within this many standard deviations of their training mean, in training and prediction
+# alike. A rate far outside anything training saw (a saving session or an Axle event against a near-flat tariff reached
+# 21-100 sigma) otherwise drove the ReLU layers to a state where the network returns a constant (#6147, #6208, #6259).
+# Replayed on those cases' saved histories, a +100p rate spike moved single forecast steps by up to 16x without the limit
+# and by under 4x with it. Two training runs per case could not tell the accuracy apart either way: runs of the same setup
+# differed by up to 3.6x. Raising the rate blocks' minimum std (1p) as well was tried and rejected: it added little on top
+# of this and made one case's forecast far too flat. The limit is part of the input transform a model is trained under, so
+# save() records it and load() discards a model saved under a different one
+FEATURE_Z_LIMIT = 5.0
+
+
+def bound_normalised(features):
+    """Clip normalised features in place to +/- FEATURE_Z_LIMIT, returning them."""
+    if FEATURE_Z_LIMIT:
+        np.clip(features, -FEATURE_Z_LIMIT, FEATURE_Z_LIMIT, out=features)
+    return features
 
 
 class WindowedFeatures:
@@ -107,7 +127,10 @@ class WindowedFeatures:
         if self.mean is not None and self.std is not None:
             out -= self.mean
             out /= self.std
-        np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            bound_normalised(out)
+        else:
+            np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         return out.astype(dtype) if dtype is not None and dtype != np.float32 else out
 
     def _assemble(self, target_chunks, out):
@@ -143,7 +166,10 @@ class WindowedFeatures:
         if self.mean is not None and self.std is not None:
             batch -= self.mean
             batch /= self.std
-        np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            bound_normalised(batch)
+        else:
+            np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         return batch[0] if scalar else batch
 
 
@@ -1094,10 +1120,10 @@ class LoadPredictor:
             X -= self.feature_mean
             X /= self.feature_std
             np.nan_to_num(X, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-            return X
+            return bound_normalised(X)
 
         out = (X - self.feature_mean) / self.feature_std
-        return np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        return bound_normalised(np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0))
 
     def _normalize_targets(self, y, fit=False):
         """
@@ -1886,6 +1912,7 @@ class LoadPredictor:
             # Prepare metadata
             metadata = {
                 "model_version": MODEL_VERSION,
+                "feature_z_limit": FEATURE_Z_LIMIT,
                 "lookback_steps": LOOKBACK_STEPS,
                 "output_steps": OUTPUT_STEPS,
                 "predict_horizon": PREDICT_HORIZON,
@@ -1957,6 +1984,13 @@ class LoadPredictor:
             saved_version = metadata.get("model_version", 0)
             if saved_version != MODEL_VERSION:
                 self.log("Warn: ML Predictor: Model version mismatch (saved={}, current={}), retraining from scratch".format(saved_version, MODEL_VERSION))
+                return False
+
+            # The weights were trained against inputs bounded at the saved limit; predicting under another would feed them a
+            # transform they never saw, so a changed FEATURE_Z_LIMIT retrains too, whether or not MODEL_VERSION was bumped with it
+            saved_limit = metadata.get("feature_z_limit")
+            if saved_limit != FEATURE_Z_LIMIT:
+                self.log("Warn: ML Predictor: Model input limit mismatch (saved={}, current={}), retraining from scratch".format(saved_limit, FEATURE_Z_LIMIT))
                 return False
 
             # Check architecture compatibility

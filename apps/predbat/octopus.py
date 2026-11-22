@@ -23,6 +23,7 @@ from const import (
     TIME_FORMAT,
     TIME_FORMAT_OCTOPUS,
     DISPATCH_SOURCE_CHARGER_SCHEDULE,
+    OCTOPUS_MANUAL_DISPATCH_SOURCES,
     DISPATCH_SOURCE_CHARGING_UNLISTED,
     REPEAT_FULL_LOG_SECONDS,
     OCTOPUS_DISPATCH_HOLD_MINUTES,
@@ -34,6 +35,8 @@ from const import (
     OCTOPUS_PLANNED_EMPTY_HOLD_MINUTES,
     PREDICT_STEP,
     DYNAMIC_LOAD_CAR_START_MINUTES,
+    OCTOPUS_API_URL,
+    OCTOPUS_BACKEND_API_URL,
 )
 from utils import (
     RepeatLogGate,
@@ -54,6 +57,7 @@ from utils import (
     GRAPHQL_RATE_LIMIT_BACKOFF_BASE_SECONDS,
     GRAPHQL_RATE_LIMIT_BACKOFF_MAX_SECONDS,
     strptime_aware,
+    migrate_octopus_url,
 )
 from component_base import ComponentBase, new_http_session
 from billing import BillingReader, billing_slot_key, saving_session_rate
@@ -107,6 +111,7 @@ OCTOPUS_SLOT_MAX_DEFAULT = 48  # 24 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_CAPPED = 12  # 6 hours with 30-minute slots
 OCTOPUS_SLOT_MAX_MINUTES = 30  # octopus_slot_max is set in 30-minute slots, the cap itself is counted in dispatch minutes (#5510)
 IO_RATE_TOLERANCE = 0.01  # A dispatch lowers a rate by pence; anything closer is rate_min_base's dp2 rounding against the unrounded tariff feed (#5392)
+SMART_CONTROL_PENDING_SECONDS = 300  # How long a Smart Control change Octopus accepted is held against its polls - over two 2-minute device polls, not just the one straight after it
 OCTOPUS_SLOT_MIN_MINUTES = 5  # Shorter dispatches are only low rate where the car was seen charging (dispatch_too_short())
 OCTOPUS_CAP_LAG_MINUTES = 2 * PREDICT_STEP  # The minutes before a car charging reading (or no reading) count towards the daily cap too, and so do the latest ones (#6252)
 OCTOPUS_CAP_BRIDGE_MINUTES = PREDICT_STEP  # Two "not charging" readings this close are one stretch of the record of the time no car charged in, across a plan cycle
@@ -122,6 +127,7 @@ INTELLIGENT_DEVICE_SETTING_KEYS = ["suspended", "weekday_target_time", "weekday_
 # rather than the catalogue drifting out of step with what apps.yaml actually points at.
 OCTOPUS_CAR_ENTITY_SPEC = {
     "octopus_intelligent_slot": ("binary_sensor", "intelligent_dispatch", "r"),
+    "octopus_intelligent_smart_control": ("switch", "intelligent_smart_charge", "rw"),
     "octopus_ready_time": ("select", "intelligent_target_time", "rw"),
     "octopus_charge_limit": ("number", "intelligent_target_soc", "rw"),
 }
@@ -451,6 +457,15 @@ intelligent_settings_mutation = """mutation {{
   }}
 }}"""
 
+intelligent_smart_control_mutation = """mutation {{
+  updateDeviceSmartControl(input: {{
+    deviceId: "{device_id}"
+    action: {action}
+  }}) {{
+    id
+  }}
+}}"""
+
 intelligent_settings_mutation_schedule = """{{
     dayOfWeek: {day_of_week}
     time: "{target_time}"
@@ -540,8 +555,8 @@ class OctopusEnergyApiClient:
         self.log = log
         # Called for every HTTP session; the owning component passes its http_session
         self._session_factory = session_factory or new_http_session
-        self.base_url = "https://api.octopus.energy"
-        self.backend_url = "https://api.backend.octopus.energy"
+        self.base_url = OCTOPUS_API_URL
+        self.backend_url = OCTOPUS_BACKEND_API_URL
 
         self.default_headers = {"user-agent": f"{user_agent_value}/1.0"}
         self.timeout = aiohttp.ClientTimeout(total=None, sock_connect=timeout_in_seconds, sock_read=timeout_in_seconds)
@@ -806,6 +821,7 @@ class OctopusAPI(ComponentBase):
         # The tariff keys automatic_config() last ran with; None until it has run (GH#5994)
         self.automatic_config_tariff_keys = None
         self.commands = []
+        self.smart_control_pending = {}  # device_id -> (suspended, expiry) for a Smart Control change Octopus accepted but may not yet report
         self.mpan = None
         self.tou_samples = None
         self.tou_windows_day = None
@@ -856,7 +872,66 @@ class OctopusAPI(ComponentBase):
             self.commands.append({"command": "set_intelligent_target_percentage", "value": value, "device_id": device_id})
 
     async def switch_event(self, entity_id, service):
-        pass
+        """
+        Handle a turn on/off/toggle of an Intelligent Smart Control switch by queueing the command that sends it to
+        Octopus. The switch shows the change once Octopus has accepted it, as the target time and SoC do, so it
+        never shows a state Octopus does not have. Only the latest change per device is kept in the queue.
+        """
+        suffix = self.get_entity_suffix(entity_id)
+        device_id = self.suffix_to_device_id(suffix)
+        if not device_id or self.device_id_to_index_suffix(device_id) != suffix or entity_id != self.get_entity_name("switch", "intelligent_smart_charge", index=suffix):
+            return
+        device = self.intelligent_devices.get(device_id)
+        if not device:
+            return
+        queued = [command for command in self.commands if self.is_smart_control_command(command, device_id)]
+        if service == "turn_on":
+            enabled = True
+        elif service == "turn_off":
+            enabled = False
+        elif service == "toggle":
+            # Toggle from the change already asked for, if there is one, so two toggles cancel out
+            enabled = not queued[-1]["value"] if queued else bool(device.get("suspended"))
+        else:
+            return
+        self.commands = [command for command in self.commands if not self.is_smart_control_command(command, device_id)]
+        self.commands.append({"command": "set_intelligent_smart_control", "value": enabled, "device_id": device_id})
+
+    @staticmethod
+    def is_smart_control_command(command, device_id):
+        """
+        Whether a queued command sets Smart Control for device_id.
+        """
+        return command.get("command") == "set_intelligent_smart_control" and command.get("device_id") == device_id
+
+    def apply_smart_control_pending(self, device_id, device):
+        """
+        Hold a Smart Control change Octopus has just accepted against its polls for SMART_CONTROL_PENDING_SECONDS,
+        as Octopus can go on reporting the old state for a while, and the switch would otherwise flip back.
+
+        The hold runs its full time even once a poll agrees: a poll whose settings query failed reuses the state
+        already on show, so agreeing is no sign Octopus has caught up.
+        """
+        pending = self.smart_control_pending.get(device_id)
+        if not pending:
+            return
+        suspended, expiry = pending
+        if datetime.now() >= expiry:
+            self.smart_control_pending.pop(device_id, None)
+        else:
+            device["suspended"] = suspended
+
+    def publish_smart_control_switch(self, device_id, device):
+        """
+        Publish the Smart Control switch of an Intelligent device, on while the device is not suspended. It is
+        published for suspended devices too, so that Smart Control can be turned back on.
+        """
+        self.dashboard_item(
+            self.get_entity_name("switch", "intelligent_smart_charge", index=self.device_id_to_index_suffix(device_id)),
+            "off" if device.get("suspended") else "on",
+            attributes={"friendly_name": "Octopus Intelligent Smart Control ({})".format(device.get("model") or self.device_id_to_index_suffix(device_id)), "icon": "mdi:ev-station"},
+            app="octopus",
+        )
 
     def is_alive(self):
         """Report unhealthy once the token mint has been refused for a while, however much cached or public data is still arriving."""
@@ -1060,6 +1135,11 @@ class OctopusAPI(ComponentBase):
                 value = command.get("value", None)
                 device_id = command.get("device_id", None)
                 await self.async_set_intelligent_target_schedule(account_id, target_time=value, device_id=device_id)
+                done_command = True
+            elif command_name == "set_intelligent_smart_control":
+                # A newer change for the same device, made while this batch was being sent, replaces this one
+                if not any(self.is_smart_control_command(queued, command.get("device_id", None)) for queued in self.commands):
+                    await self.async_set_intelligent_smart_control(command.get("device_id", None), command.get("value", True))
                 done_command = True
             elif command_name == "join_saving_session_event":
                 event_code = command.get("event_code", None)
@@ -1279,6 +1359,7 @@ class OctopusAPI(ComponentBase):
                 # Always call fetch_previous_dispatch when completed dispatches are available to merge historical data.
                 for device_id in intelligent_devices:
                     device = intelligent_devices[device_id]
+                    self.apply_smart_control_pending(device_id, device)
                     if "completed_dispatches" in device:
                         self.intelligent_devices[device_id] = device
                         await self.fetch_previous_dispatch(device_id)
@@ -1397,6 +1478,34 @@ class OctopusAPI(ComponentBase):
             device["weekday_target_soc"] = target_percentage
         else:
             self.log("Warn: OctopusAPI: Try to set target schedule, but no intelligent device ID {} found".format(device_id))
+
+    async def async_set_intelligent_smart_control(self, device_id, enabled):
+        """
+        Turn Octopus Smart Control on (UNSUSPEND) or off (SUSPEND) for an intelligent device, and show it on the switch
+        once Octopus accepts it. If Octopus rejects it the switch is left as it was.
+
+        It is sent even when the device already shows the asked-for state: that state can be up to a poll old, so
+        skipping it could drop a change the user really asked for.
+        """
+        device = self.intelligent_devices.get(device_id)
+        if not device:
+            self.log("Warn: OctopusAPI: Try to set Smart Control, but no intelligent device ID {} found".format(device_id))
+            return False
+        action = "UNSUSPEND" if enabled else "SUSPEND"
+        self.log("OctopusAPI: Setting Smart Control {} for intelligent device {}".format(action, device_id))
+        try:
+            result = await self.async_graphql_query(intelligent_smart_control_mutation.format(device_id=device_id, action=action), "set-intelligent-smart-control", returns_data=False)
+        except Exception as error:  # pylint: disable=broad-exception-caught
+            self.log("Warn: OctopusAPI: Smart Control {} for intelligent device {} raised {}".format(action, device_id, error))
+            result = None
+        if not result or result.get("updateDeviceSmartControl") is None:
+            self.log("Warn: OctopusAPI: Failed to {} Smart Control for intelligent device {}, the switch stays as it was".format(action, device_id))
+            self.publish_smart_control_switch(device_id, device)
+            return False
+        device["suspended"] = not enabled
+        self.smart_control_pending[device_id] = (not enabled, datetime.now() + timedelta(seconds=SMART_CONTROL_PENDING_SECONDS))
+        self.publish_smart_control_switch(device_id, device)
+        return True
 
     async def async_join_saving_session_events(self, account_id, event_code):
         """
@@ -1738,6 +1847,7 @@ class OctopusAPI(ComponentBase):
             # num_cars past what Predbat actually supports (see fetch_config_options' clamp).
             active_devices = {device_id: device for device_id, device in devices.items() if not device.get("suspended")}
             slot_list = []
+            smart_control_list = []
             ready_list = []
             limit_list = []
             # Sort so a given device always lands in the same car slot. The slot index is what
@@ -1748,6 +1858,7 @@ class OctopusAPI(ComponentBase):
             for device_id in sorted(active_devices):
                 index_suffix = self.device_id_to_index_suffix(device_id)
                 slot_list.append(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=index_suffix))
+                smart_control_list.append(self.get_entity_name("switch", "intelligent_smart_charge", index=index_suffix))
                 ready_list.append(self.get_entity_name("select", "intelligent_target_time", index=index_suffix))
                 limit_list.append(self.get_entity_name("number", "intelligent_target_soc", index=index_suffix))
             # With no active device left the wiring is cleared - but only wiring that is still what
@@ -1759,6 +1870,7 @@ class OctopusAPI(ComponentBase):
                 self.log("OctopusAPI: No active intelligent devices, and the car slot wiring is not from here - leaving it alone")
             else:
                 self.set_arg("octopus_intelligent_slot", slot_list)
+                self.set_arg("octopus_intelligent_smart_control", smart_control_list)
                 if other_owner:
                     self.log("OctopusAPI: Car ready time and charge limit are wired by the {} component, leaving them alone".format(slot_owner))
                 else:
@@ -1820,9 +1932,9 @@ class OctopusAPI(ComponentBase):
 
         One `cars` record per ACTIVE (non-suspended) intelligent device: get_active_intelligent_device_ids()
         is the exact filter automatic_config() itself applies when wiring the car slots into
-        apps.yaml, so the catalogue never lists a slot that is no longer being wired. Its three
-        entities (octopus_intelligent_slot, octopus_ready_time, octopus_charge_limit - see
-        OCTOPUS_CAR_ENTITY_SPEC) are included only when they actually exist in the state store:
+        apps.yaml, so the catalogue never lists a slot that is no longer being wired. Its four
+        entities (octopus_intelligent_slot, octopus_intelligent_smart_control, octopus_ready_time,
+        octopus_charge_limit - see OCTOPUS_CAR_ENTITY_SPEC) are included only when they actually exist in the state store:
         async_intelligent_update_sensor() publishes them per device, never as a fixed set, so the
         catalogue must not claim one exists that Home Assistant has never seen. Vehicle battery
         size and charge-point power are reported in ratings where Octopus's own vehicle/charger
@@ -2077,7 +2189,7 @@ class OctopusAPI(ComponentBase):
         or None if the product info could not be fetched or tariff_code was not found (caller should fall back).
         """
         if product_code not in self._product_info_cache:
-            url = f"https://api.octopus.energy/v1/products/{product_code}/"
+            url = f"{OCTOPUS_API_URL}/v1/products/{product_code}/"
             product_info = await self.fetch_url_cached(url, json_only=True)
             if not product_info or not isinstance(product_info, dict):
                 self.log("Warn: OctopusAPI: Could not fetch product info for {}".format(product_code))
@@ -2353,7 +2465,8 @@ class OctopusAPI(ComponentBase):
                             self.failures_total += 1
                             self.log("Warn: OctopusAPI: Error downloading Octopus data from URL {} (No Results) - {}".format(url, detail))
                             return {}
-                        url = data.get("next", None)
+                        # The new host still links further pages on the old one (GH#5786)
+                        url = migrate_octopus_url(data.get("next", None))
                         pages += 1
             except (aiohttp.ClientError, asyncio.TimeoutError) as e:
                 self.failures_total += 1
@@ -2402,7 +2515,7 @@ class OctopusAPI(ComponentBase):
                 tariff_type = "gas"
             else:
                 tariff_type = "electricity"
-            standard_url = f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/"
+            standard_url = f"{OCTOPUS_API_URL}/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standard-unit-rates/"
             if tariff_type == "electricity":
                 # Always check product links first to determine the correct rate endpoint type,
                 # avoiding the 400 round-trip for tariffs that only expose day/night rate endpoints.
@@ -2422,7 +2535,7 @@ class OctopusAPI(ComponentBase):
                 # is not on the public REST API — fetch the equivalent INTELLI-FLUX-IMPORT tariff instead
                 flux_import_product = product_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
                 flux_import_tariff_code = tariff_code.replace("FLUX-EXPORT", "FLUX-IMPORT")
-                flux_import_url = f"https://api.octopus.energy/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff_code}/standard-unit-rates/"
+                flux_import_url = f"{OCTOPUS_API_URL}/v1/products/{flux_import_product}/electricity-tariffs/{flux_import_tariff_code}/standard-unit-rates/"
                 import_data = await self.fetch_url_cached(flux_import_url)
                 if import_data:
                     tariffs[tariff]["data"] = import_data
@@ -2434,7 +2547,7 @@ class OctopusAPI(ComponentBase):
                         self.log("OctopusAPI: Using current import rates as fallback for {} export tariff (FLUX-IMPORT also unavailable)".format(product_code))
                     else:
                         self.log("Warn: OctopusAPI: No import data available for INTELLI-FLUX-EXPORT fallback, export rates will be zero")
-            tariffs[tariff]["standing"] = await self.fetch_url_cached(f"https://api.octopus.energy/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
+            tariffs[tariff]["standing"] = await self.fetch_url_cached(f"{OCTOPUS_API_URL}/v1/products/{product_code}/{tariff_type}-tariffs/{tariff_code}/standing-charges/")
 
             rates = self.get_octopus_rates_direct(tariff)
             standing = self.get_octopus_rates_direct(tariff, standingCharge=True)
@@ -2687,7 +2800,7 @@ class OctopusAPI(ComponentBase):
     async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False, _retry_count=0, use_backend=False):
         """
         Execute a graphql query with automatic token refresh on auth errors.
-        If use_backend=True, uses api.backend.octopus.energy with no JWT prefix
+        If use_backend=True, uses the backend host (OCTOPUS_BACKEND_API_URL) with no JWT prefix
         (required for saving sessions since Feb 2026 API migration).
 
         While a rate limit pause is running (see start_graphql_rate_limit_backoff) a query is not sent
@@ -3226,6 +3339,7 @@ class OctopusAPI(ComponentBase):
                         active_event = True
             dispatch_attributes = {"friendly_name": "Octopus Intelligent Dispatches", "icon": "mdi:flash", **device}
             self.dashboard_item(self.get_entity_name("binary_sensor", "intelligent_dispatch", index=device_index), "on" if active_event else "off", attributes=dispatch_attributes, app="octopus")
+            self.publish_smart_control_switch(device_id, device)
             dispatch_slots.append(planned + completed)
 
             weekday_target_time = device.get("weekday_target_time", None)
@@ -3560,12 +3674,21 @@ class Octopus:
         Download octopus rates directly from a URL or return from cache if recent
         Retry 3 times and then throw error
         """
+        legacy_url = url
+        url = migrate_octopus_url(url)
+        if url != legacy_url and legacy_url not in self.octopus_url_migrated:
+            self.octopus_url_migrated.add(legacy_url)
+            self.log("Warn: Octopus: URL {} uses the old Octopus API address, using {} instead - please update apps.yaml".format(legacy_url, url))
 
         self.log("Octopus: Download Octopus rates from {}".format(url))
 
         # Pre-warm the entire cache from storage once per process lifetime (shared with free sessions).
         # Done before any in-memory population so the one-shot storage load cannot clobber freshly cached entries.
         self._load_octopus_url_cache_from_storage()
+
+        # Rates cached under the old address before the upgrade stay the fallback for a failed download
+        if url != legacy_url and url not in self.octopus_url_cache and legacy_url in self.octopus_url_cache:
+            self.octopus_url_cache[url] = self.octopus_url_cache.pop(legacy_url)
 
         # Check the cache first
         now = datetime.now()
@@ -3653,7 +3776,8 @@ class Octopus:
                 self.log("Warn: Octopus: Error downloading Octopus data from URL {} (No Results)".format(url))
                 self.record_status("Warn: Octopus: Error downloading Octopus data from cloud", debug=url, had_errors=True)
                 return {}
-            url = data.get("next", None)
+            # The new host still links further pages on the old one (GH#5786)
+            url = migrate_octopus_url(data.get("next", None))
             pages += 1
 
         mdata = filter_payment_method(mdata)
@@ -3867,7 +3991,7 @@ class Octopus:
         :return: True if the dispatch is eligible for the off-peak rate
         """
         # Ignore bump-charge slots as their cost won't change
-        if source == "bump-charge" or source == "BOOST":
+        if source in OCTOPUS_MANUAL_DISPATCH_SOURCES:
             return False
         # A charger's own schedule on a tariff with no dispatch rate: car load only, never a cheap slot
         if source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
@@ -4470,7 +4594,6 @@ class Octopus:
         (start, end, kwh, source, location, dispatch_start, dispatch_end, held).
         """
         slots_decoded = []
-
         # Decode the slots
         for slot in octopus_slots:
             start_minutes, end_minutes, kwh, source, location = self.decode_octopus_slot(car_n, slot)
@@ -4506,7 +4629,13 @@ class Octopus:
                 original_span = end_minutes - start_minutes
                 segments = [(start_minutes, end_minutes)]
                 for current_slot in slots_decoded:
-                    current_start, current_end = current_slot[0], current_slot[1]
+                    current_start, current_end, _, _, _, _, _, current_held = current_slot
+                    if current_held and source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
+                        # A held half hour has already run and only keeps its rate: it does not trim a charger's own
+                        # schedule (#5339), so a running one is still counted from now rather than keeping all of its
+                        # energy for what is left of it. Anything else is trimmed as before, so should an Octopus
+                        # dispatch ever overlap a held half hour it is neither counted twice nor charged twice to the cap
+                        continue
                     remaining = []
                     for seg_start, seg_end in segments:
                         if seg_start < current_end and seg_end > current_start:
@@ -4559,7 +4688,9 @@ class Octopus:
         # octopus_slot_segments() has cut each car's slots clear of that car's other slots, and budget_minutes
         # counts a minute two cars' dispatches share once, as the allowance is in clock time. Every car's slots take
         # their share first, so a minute of this car's that a later dispatch of another car is granted is
-        # cheap here too, and a slot can come out as any number of cheap and over-the-cap runs.
+        # cheap here too, and a slot can come out as any number of cheap and over-the-cap runs. A held half hour is
+        # left overlapping only a charger's own schedule (#5339), which never takes cap minutes; octopus_slot_segments()
+        # still trims anything else clear of it.
         own_segments = []
         for slot, slot_car in account_segments:
             start_minutes, end_minutes, kwh, source, location, dispatch_start, dispatch_end, held = slot
@@ -4886,7 +5017,9 @@ class Octopus:
                                     self.time_abs_str(start_minutes), self.time_abs_str(end_minutes), dp2(assumed_price), dp2(kwh), location, source, octopus_slot_low_rate
                                 )
                             )
-                elif slot_car == car_n and not held and dispatch_start > -24 * 60 and self.dispatch_too_short(car_n, dispatch_start, dispatch_end):
+                elif slot_car == car_n and source not in OCTOPUS_MANUAL_DISPATCH_SOURCES and source != DISPATCH_SOURCE_CHARGER_SCHEDULE and not held and dispatch_start > -24 * 60 and self.dispatch_too_short(car_n, dispatch_start, dispatch_end):
+                    # Only a dispatch Octopus bills off-peak can be turned down for being short; a charger's own
+                    # schedule or a bump charge never was low rate, so this reason would mislead
                     slot_lines.append(
                         "Octopus: Intelligent slot at {}-{} is under {} minutes and car {} has not been seen charging in it, not treated as low rate".format(
                             self.time_abs_str(dispatch_start), self.time_abs_str(dispatch_end), OCTOPUS_SLOT_MIN_MINUTES, car_n
@@ -5312,8 +5445,11 @@ class Octopus:
         A half hour is covered from when it was seen running (octopus_held_update()) until a completed
         dispatch overlaps it - which is then the record, including one of no energy, which is treated as
         never having happened - or the hold runs out. It is left out while a planned dispatch still reaches
-        it, so it is not counted twice against the daily slot cap. The one in progress ends at now: it has
-        finished, so load_octopus_slots() plans no car charging in it, and rate_add_io_slots() prices the
+        it, so it is not counted twice against the daily slot cap. A slot of a charger's own schedule does
+        not end a hold: it is not Octopus's record of a dispatch, and is never priced off-peak or counted
+        against the cap. While Smart Control is off a charger's own slots are re-tagged as one (#5339),
+        though Octopus did dispatch the half hour they ran in before then. The one in progress ends at now: it
+        has finished, so load_octopus_slots() plans no car charging in it, and rate_add_io_slots() prices the
         rest of the half hour as Octopus bills it once a dispatch has started in it (GH#5316).
 
         Under the window rule (dispatch_billing_window()) the half hour was billed off-peak whether the car
@@ -5331,13 +5467,13 @@ class Octopus:
         covering = [slot for slot in completed if not window or self.decode_octopus_slot(car_n, slot, raw=True)[2] > 0]
         covered = []
         for slot in covering:
-            start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
-            if start_minutes != end_minutes:
+            start_minutes, end_minutes, _, source, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+            if start_minutes != end_minutes and source != DISPATCH_SOURCE_CHARGER_SCHEDULE:
                 covered.append(round_out_to_period(start_minutes, end_minutes))
         planned_spans = []
         for slot in planned:
-            start_minutes, end_minutes, _, _, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
-            if start_minutes != end_minutes:
+            start_minutes, end_minutes, _, source, _ = self.decode_octopus_slot(car_n, slot, raw=True, boundaries_only=True)
+            if start_minutes != end_minutes and source != DISPATCH_SOURCE_CHARGER_SCHEDULE:
                 planned_spans.append((start_minutes, end_minutes))
 
         dispatches = []

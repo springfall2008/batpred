@@ -235,6 +235,7 @@ pred_bat:
   #  - True
   # ─── Octopus Energy ───────────────────────────────────────────────────────
   octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_intelligent_smart_control: 're:(switch.octopus_energy([0-9a-z_]+|)_intelligent_smart_charge)'
   octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
   octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
   #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
@@ -261,8 +262,8 @@ pred_bat:
   #     rate: 40.0
   #rates_export:
   #  -  rate: 4.2
-  # rates_import_octopus_url : "https://api.octopus.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{octopus_region}/standard-unit-rates"
-  # rates_export_octopus_url: "https://api.octopus.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+  # rates_import_octopus_url : "https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{octopus_region}/standard-unit-rates"
+  # rates_export_octopus_url: "https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
   #rates_import_override:
   # -  date: '2023-09-10'
   #    start: '14:00:00'

@@ -90,7 +90,7 @@ async def test_octopus_day_night_rates(my_predbat):
     print("\n**** Running async_get_day_night_rates tests ****")
     failed = False
 
-    base_url = "https://api.octopus.energy/v1/products/PROD/electricity-tariffs/TARIFF/standard-unit-rates/"
+    base_url = "https://api.oegb-kraken.energy/v1/products/PROD/electricity-tariffs/TARIFF/standard-unit-rates/"
 
     # ------------------------------------------------------------------
     # Test 1: IOG TOU — night window must be 23:30–05:30, cross-midnight

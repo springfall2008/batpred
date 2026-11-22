@@ -89,6 +89,9 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.oauth_failed = False
         self._refresh_in_progress = False
         self.token_hash = ""
+        self.oauth_failed_reason = ""
+        self._same_token_count = 0
+        self._forced_refresh_after = 0
         # automatic_config drives Predbat's own config switches (e.g. inverter_hybrid) through
         # ComponentBase.set_state_external, which is the only path that updates the matching
         # CONFIG_ITEMS value. Capture those writes rather than plain entity states so tests can
@@ -564,6 +567,31 @@ def test_teslemetry_request_auth_failure():
         assert api.api_auth_failed is True
         assert mock_session.request.call_count == 1  # No retries on auth failure
         assert any("auth failed" in msg for msg in api.log_messages)
+
+    run_async(test())
+
+
+def test_teslemetry_request_auth_failure_message_by_mode():
+    """The 401 warning names the Tesla Fleet API in oauth mode and keeps the Teslemetry wording for api_key mode (GH#6284)."""
+
+    async def test():
+        """Drive the real _request against a 401 in each auth mode and compare the warning."""
+        messages = {}
+        for mode in ("oauth", "api_key"):
+            api = _make_real_request_api()
+            api.auth_method = mode
+            api.access_token = "DEAD"
+            api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+            api.handle_oauth_401 = AsyncMock(return_value=False)  # the refresh brought no new token
+            mock_session = create_aiohttp_mock_session(create_aiohttp_mock_response(status=401, json_data={}))
+            mock_session.request = mock_session.get
+            with patch("aiohttp.ClientSession") as mock_session_class:
+                mock_session_class.return_value = mock_session
+                assert await api._request("GET", "/api/1/energy_sites/123456/live_status") is None
+            messages[mode] = [msg for msg in api.log_messages if "(401)" in msg]
+        assert any("Tesla Fleet API rejected the OAuth token" in msg for msg in messages["oauth"]), messages
+        assert not any("subscription lapsed" in msg for msg in messages["oauth"]), messages
+        assert any("Teslemetry auth failed" in msg and "subscription lapsed" in msg for msg in messages["api_key"]), messages
 
     run_async(test())
 
@@ -3882,6 +3910,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_init_oauth_sets_state()
     test_teslemetry_request_skips_when_oauth_refresh_fails()
     test_teslemetry_request_401_refreshes_and_retries_once()
+    test_teslemetry_request_auth_failure_message_by_mode()
     test_teslemetry_request_api_key_mode_does_not_refresh()
     test_teslemetry_catalogue_none_before_site_info()
     test_teslemetry_record_ac_powerwall()

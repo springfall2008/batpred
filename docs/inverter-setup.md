@@ -195,7 +195,7 @@ This is being worked on by the author of GivTCP, e.g. see [GivTCP issue: unable 
 - Predbat will auto-configure itself to use the appropriate GE Cloud controls for the EMS and if you add extra inverter and battery controls to `apps.yaml`, these will be ignored
 - As Predbat will only use slot 1, turn off charge, export and discharge slots 2, 3 and 4  - set the start and end times for these to 00:00
 - On each battery inverter, leave its own charge slot 1 and DC discharge slot 1 set to 00:00-23:59 so that they never override a command from the EMS. Predbat re-reads the inverter settings hourly and will warn in the log, and in the Predbat status, if it finds a slot 1 window set to anything else.
-- If your EMS does not return accurate **load_today** energy information, you can [override the GE Cloud load data](apps-yaml.md) by creating a custom template sensor and setting **ge_cloud_load_today_ignore** to `true` in `apps.yaml`.
+- Predbat works out **load_today** for an EMS from its grid, solar and battery counters by energy balance, rather than from the EMS's own consumption counter, which counts battery charging from the grid as house load - see [EMS house load](components.md#ems-house-load-gecloud). If you would still rather use your own sensor, you can [override the GE Cloud load data](apps-yaml.md) by creating a custom template sensor and setting **ge_cloud_load_today_ignore** to `true` in `apps.yaml`.
 
 ## GivEnergy Octopus Cloud Direct - No Home Assistant
 
@@ -724,10 +724,10 @@ Before enabling control for a first tester:
 5. Let that charge reach its target inside the window. The log shows `holding the charge slot at 0% power`; confirm the battery then neither charges nor discharges (the house runs from the grid) for the rest of the window. If the battery discharges instead, a 0% slot does not hold on that model: report it
 6. Within 10 minutes `sensor.predbat_growatt_<serial>_dispatch_slots` should show the same table, read back from the device. A `slot table read-back was not understood` warning means the read answer has a shape Predbat does not know yet: report the logged answer
 7. Let the charge slot end and confirm the empty table Predbat then writes actually clears it in the Growatt app and in the read-back sensor
-8. Test a discharge window above the inverter's own minimum SoC. Confirm forced discharge works on that model and stops when Predbat removes the slot at its software floor
+8. Test an export window above the inverter's own minimum SoC. The log shows `export command sent: discharge at N%`; confirm the battery exports at that power, that the command is renewed every few minutes, and that it stops (`export command stopped`) at Predbat's software floor or the window's end
 9. Turn on `switch.predbat_set_read_only` and confirm the log shows `OpenAPI control released` and the inverter returns to the mode set in the Growatt app
 
-The important limitation is that Growatt's public dispatch has no writable SoC target or reserve. Predbat watches telemetry, which Growatt updates about every five minutes: at the charge target it keeps the charge slot at 0% power so the battery holds, and at the greater of the planned export floor and the inverter's reported `dischargeCutOffSOC` it removes the discharge slot. This can react up to one upload (about five minutes) late, and ordinary self-consumption after a slot is removed may still use the battery down to its local inverter minimum. For that reason Predbat's reserve functions are off for this inverter. Treat the first live run as a hardware test, not as confirmation that every Growatt model behaves identically.
+The important limitation is that Growatt's public dispatch has no writable SoC target or reserve. Predbat watches telemetry, which Growatt updates about every five minutes: at the charge target it keeps the charge slot at 0% power so the battery holds, and at the greater of the planned export floor and the inverter's reported `dischargeCutOffSOC` it stops the export command. This can react up to one upload (about five minutes) late, and ordinary self-consumption after a slot is removed may still use the battery down to its local inverter minimum. For that reason Predbat's reserve functions are off for this inverter. Treat the first live run as a hardware test, not as confirmation that every Growatt model behaves identically.
 
 If the customer cannot use the OpenAPI route, the existing Solar Assistant setup below remains available.
 
@@ -4013,7 +4013,7 @@ The default options passed in are:
 
 - device_id - as defined in `apps.yaml` by **device_id**
 - target_soc - The SoC to charge to
-- power - The charge power to use
+- power - The charge power Predbat has set for this cycle, in watts, including a low power charge: read back from **charge_rate_percent** or a **charge_rate** entity. With `output_charge_control: "power"` and neither set (a plain number in **charge_rate** does not count), it is the rate Predbat last set, provided **charge_start_service** or **charge_freeze_service** sends `{power}` (the maximum, after any inverter limit, until Predbat sets one after a restart)
 - charge_start_time - Start time for the charge
 - charge_end_time - End time for the charge
 
@@ -4037,7 +4037,7 @@ The default options passed in are:
 
 - device_id - as defined in `apps.yaml` by **device_id**
 - target_soc - The SoC to discharge to
-- power - The discharge power to use
+- power - The discharge power Predbat has set for this cycle, in watts: read back from **discharge_rate_percent** or a **discharge_rate** entity. With `output_charge_control: "power"` and neither set (a plain number in **discharge_rate** does not count), it is the rate Predbat last set, provided **discharge_start_service** or **discharge_freeze_service** sends `{power}` (the maximum, after any inverter limit, until Predbat sets one after a restart)
 
 #### discharge_freeze_service
 

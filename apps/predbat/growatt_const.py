@@ -100,15 +100,43 @@ GROWATT_LOOP_HANDOVER_TIMEOUT = 120
 
 GROWATT_SET_TIME_SLOTS = "time_slot_charge_discharge"
 GROWATT_SET_ENABLE_CONTROL = "enable_control"
-# The OpenAPI export limit: a live SPH answered {"percentage": 0, "exportLimitEnabled": 1} and its
-# export slots then only ever covered the house load, while the inverter's own schedule exported.
-# Growatt documents percentage from -100 to 100, positive for export limiting and negative for
-# "forward-flow control". Predbat writes GROWATT_EXPORT_LIMIT_OPEN before an export when the
-# limit does not already read as open, and leaves it there.
+# The OpenAPI export limit: a live SPH answered {"percentage": 0, "exportLimitEnabled": 1}, and
+# while it was enabled - at 0% and again at 100% - no OpenAPI command exported the battery, which
+# only covered the house load. Once Growatt support disabled it (exportLimitEnabled 0) the same
+# timed discharge command exported at full power. Growatt documents percentage from -100 to 100,
+# positive for export limiting and negative for "forward-flow control". So "open" means disabled:
+# Predbat writes GROWATT_EXPORT_LIMIT_OPEN before an export when the limit reads as enabled, at any
+# percentage, and leaves it there.
 GROWATT_SET_EXPORT_LIMIT = "export_limit"
-GROWATT_EXPORT_LIMIT_OPEN = {"exportLimitEnabled": 1, "percentage": 100}
+GROWATT_EXPORT_LIMIT_OPEN = {"exportLimitEnabled": 0, "percentage": 100}
+# Published as the export limit sensor when there is no limit to plan within, as Sigenergy does
+GROWATT_EXPORT_LIMIT_NONE_W = 99999
+# The timed charge/discharge command. A negative-percentage time slot does not export the battery:
+# a live SPH in an export slot only let surplus out, the battery holding near the house load,
+# even with the export limit disabled. Growatt support: "To force battery export, you also need to
+# specify the battery discharge power in the dispatch request". This command does: a live SPH sent
+# {"duration": 10, "percentage": 100, "type": "dischargeCommand"} discharged at its full 3.68 kW
+# and exported 3.4 kW for the ten minutes. It reads back as {"duration": 10, "percentage": -100,
+# "acChargingEnabled": 0, "remotePowerControlEnable": 1}: the duration as sent, not the time left,
+# and the discharge as a negative percentage. It is relative ("for N minutes from now"), so it is
+# sent when an export window starts and renewed until the window ends; a run that never comes back
+# leaves the inverter to stop on its own when the minutes run out. It also outlives enable_control
+# 0 (a live SPH kept exporting after it), so it is ended with GROWATT_STOP_COMMAND, which reads back
+# with remotePowerControlEnable 0.
+GROWATT_SET_TIMED_COMMAND = "duration_and_power_charge_discharge"
+GROWATT_DISCHARGE_COMMAND = "dischargeCommand"
+GROWATT_STOP_COMMAND = {"duration": 1, "percentage": 0, "type": "selfConsumptionCommand"}
+# Minutes each export command runs for, and how many minutes before it ends it is renewed. The run
+# loop ticks every minute, so a renewal is tried several times before the command runs out.
+GROWATT_EXPORT_COMMAND_MINUTES = 10
+GROWATT_EXPORT_COMMAND_RENEW = 4
 # Minutes before retrying an export limit change that could not be confirmed
 GROWATT_EXPORT_OPEN_RETRY = 10
+# Consecutive attempts to disable the export limit that the device reads back as still enabled
+# before Predbat takes it as locked (by the installer, say): it then stops trying and plans within
+# it, until a later read finds the setting changed. A failed read-back is not counted, so a device
+# that is only unreachable for a while is never taken as locked.
+GROWATT_EXPORT_OPEN_ATTEMPTS = 3
 # Refresh clocks saved across a restart (by tier prefix), so a restart neither re-reads the export
 # limit early nor cuts short a release or export-limit retry. The telemetry, static and read-back
 # tiers are not: a fresh process should read those straight away.
@@ -223,6 +251,27 @@ def local_window_to_utc_slots(start, end, percentage, now_local):
     return slots
 
 
+def local_window_minutes_left(start, end, now_local):
+    """Return the whole minutes left of a repeating local window at now_local, or 0 outside it.
+
+    start and end are HH:MM[:SS] local times; a window whose end is not after its start runs over
+    midnight, and a zero-length or invalid window is never active. A window with less than a
+    minute left counts as one minute, so its last part is not dropped.
+    """
+    start_hm = _parse_hhmm(start)
+    end_hm = _parse_hhmm(end)
+    if start_hm is None or end_hm is None or start_hm == end_hm:
+        return 0
+    start_min = start_hm[0] * 60 + start_hm[1]
+    end_min = end_hm[0] * 60 + end_hm[1]
+    now_min = now_local.hour * 60 + now_local.minute + now_local.second / 60.0
+    length = (end_min - start_min) % 1440 or 1440
+    into = (now_min - start_min) % 1440
+    if into >= length:
+        return 0
+    return max(1, int(length - into))
+
+
 def normalize_slots(value):
     """Canonicalise a read/write slot list for equality checks.
 
@@ -319,6 +368,42 @@ def parse_export_limit(data, _depth=0):
     except (TypeError, ValueError):
         return None
     return enabled, percent
+
+
+def export_command_payload(minutes, percentage):
+    """Return the timed dischargeCommand for an export of the given minutes at a power percentage (1-100)."""
+    return {"duration": int(minutes), "percentage": max(1, min(100, int(percentage))), "type": GROWATT_DISCHARGE_COMMAND}
+
+
+def parse_timed_command(data, _depth=0):
+    """Read readDeviceDispatch's timed-command answer as (active, duration, percentage), or None when it is not understood.
+
+    A live SPH answered {"duration": 10, "percentage": -100, "acChargingEnabled": 0,
+    "remotePowerControlEnable": 1} while a discharge command ran, and remotePowerControlEnable 0
+    once it was stopped. The percentage is returned as it reads, negative for a discharge. The
+    envelope is accepted as for the other reads: bare, a JSON string, or nested in a dict.
+    """
+    if _depth > 3:
+        return None
+    if isinstance(data, str):
+        try:
+            data = json.loads(data)
+        except ValueError:
+            return None
+    if not isinstance(data, dict):
+        return None
+    if "remotePowerControlEnable" not in data or "percentage" not in data or "duration" not in data:
+        keys = ["value"] + [key for key in data if key != "value"]
+        for key in keys:
+            if key in data:
+                found = parse_timed_command(data[key], _depth + 1)
+                if found is not None:
+                    return found
+        return None
+    try:
+        return int(data["remotePowerControlEnable"]) == 1, int(float(data["duration"])), int(float(data["percentage"]))
+    except (TypeError, ValueError):
+        return None
 
 
 def export_limit_watts(enabled, percent, nominal_w):
