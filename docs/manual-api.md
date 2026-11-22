@@ -182,11 +182,148 @@ The **energy** value is the total kWh across the full duration. Predbat divides 
 
 Forecasts created through **select.predbat_load_forecast_delta_api** are one-shot dynamic loads. Predbat publishes a delete button for each of these forecasts, for example **button.predbat_load_forecast_delta_dishwasher_delete**, and automatically removes the forecast after its finish time. If you want the same forecast again, send the select command again.
 
-While a one-shot forecast is active, Predbat preserves its request and expiry timestamps in the stored selector option so the fixed window survives Home Assistant or Predbat restarts.
-An omitted **start_time** means the current Predbat plan slot when the API request is received. Sending an active command again preserves that frozen request time; delete the forecast first if you need a fresh window.
+While a one-shot forecast is active, Predbat preserves hidden request and selected-window metadata in the stored selector option so the schedule survives Home Assistant or Predbat restarts. Sending the same command again while it is still active does not reset the frozen request time or move a locked/running forecast. To force a fresh schedule, press the forecast delete button first and then send the request again.
 
-Predbat publishes each named load as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**, with **target_times**, **total_energy**, **requested_start**, **requested_end**, and **expires_at** attributes.
-These forecasts describe fixed future demand. They do not choose an appliance start time or start the appliance.
+If the appliance can run at any time before a deadline, send `mode=flexible`. For flexible loads, `start_time` is the earliest allowed start and `end_time` means done by. Predbat chooses the best block using the full prediction metric, so the selection considers solar, battery state, import/export rates, losses, and the current plan rather than just the import rate:
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher?enabled=true&mode=flexible&start_time=22:00&end_time=07:00&duration=2.0&energy=1.2"
+```
+
+To allow the dishwasher to start any time from now but be done by 07:00, omit `start_time`:
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=2.0&energy=1.2"
+```
+
+For one-shot forecasts created through **select.predbat_load_forecast_delta_api**, an omitted `start_time` is frozen to the current Predbat plan slot when the command is received. This prevents the published `requested_start` moving forward on later replans. If the forecast is still active, sending the same command again preserves that frozen request time and any selected or locked window. Delete the active forecast first if you need a fresh request time. Static YAML forecasts are different: if a YAML flexible load omits `start_time`, it continues to mean the current plan slot each time Predbat refreshes the forecast.
+
+Predbat publishes the result as a binary sensor, for example **binary_sensor.predbat_load_forecast_delta_dishwasher**. For flexible loads, the most useful attributes are **requested_start**, **requested_end**, **suggested_start**, **suggested_end**, **target_times**, and **expires_at**.
+
+A typical dishwasher automation can therefore send a one-shot flexible request when the dishwasher is ready:
+
+```yaml
+action: select.select_option
+target:
+  entity_id: select.predbat_load_forecast_delta_api
+data:
+  option: "dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=5&energy=0.7"
+```
+
+Use **suggested_start** from **binary_sensor.predbat_load_forecast_delta_dishwasher** to trigger the appliance start automation. Use **button.predbat_load_forecast_delta_dishwasher_delete** if you need to cancel the one-shot request before it expires.
+
+### Example dishwasher scheduling automations
+
+The following example uses two Home Assistant automations:
+
+- Request a Predbat flexible load schedule when the dishwasher is ready.
+- Start the dishwasher when Predbat reaches the published **suggested_start**.
+
+Replace the switch, sensor, device ID, program, and option names with the entities and values for your dishwasher.
+
+```yaml
+alias: Dishwasher - Request Predbat Schedule
+description: Request cheapest dishwasher run window from Predbat
+triggers:
+  - trigger: state
+    entity_id: switch.dishwasher_power
+    to: "on"
+conditions: []
+actions:
+  - delay:
+      seconds: 300
+  - condition: state
+    entity_id: sensor.dishwasher_operation_state
+    state: ready
+  - wait_template: |
+      {{ is_state('sensor.dishwasher_door', 'closed') }}
+    timeout: "00:01:00"
+    continue_on_timeout: false
+  - action: select.select_option
+    target:
+      entity_id: select.predbat_load_forecast_delta_api
+    data:
+      option: >-
+        dishwasher?enabled=true&mode=flexible&end_time=07:00&duration=5&energy=0.7
+mode: single
+```
+
+The next automation checks every 5 minutes and starts the dishwasher once the current time reaches Predbat's **suggested_start**.
+
+```yaml
+alias: Dishwasher - Start On Predbat Schedule
+description: Start dishwasher at Predbat suggested start time
+triggers:
+  - trigger: time_pattern
+    minutes: /5
+conditions:
+  - condition: template
+    value_template: |
+      {{
+        state_attr(
+          'binary_sensor.predbat_load_forecast_delta_dishwasher',
+          'suggested_start'
+        ) is not none
+      }}
+  - condition: template
+    value_template: |
+      {% set start = state_attr(
+        'binary_sensor.predbat_load_forecast_delta_dishwasher',
+        'suggested_start'
+      ) %}
+      {% if start %}
+        {{ now().timestamp() >= as_timestamp(start) }}
+      {% else %}
+        false
+      {% endif %}
+actions:
+  - if:
+      - condition: state
+        entity_id: switch.dishwasher_power
+        state: "off"
+    then:
+      - action: switch.turn_on
+        target:
+          entity_id: switch.dishwasher_power
+        data: {}
+      - delay:
+          seconds: 20
+  - condition: state
+    entity_id: sensor.dishwasher_operation_state
+    state: ready
+  - condition: state
+    entity_id: sensor.dishwasher_door
+    state: closed
+  - choose:
+      - conditions:
+          - condition: time
+            after: "22:00:00"
+            before: "06:00:00"
+        sequence:
+          - action: home_connect.set_program_and_options
+            data:
+              device_id: YOUR_DISHWASHER_DEVICE_ID
+              affects_to: active_program
+              program: dishcare_dishwasher_program_eco_50
+              dishcare_dishwasher_option_silence_on_demand: true
+    default:
+      - action: home_connect.set_program_and_options
+        data:
+          device_id: YOUR_DISHWASHER_DEVICE_ID
+          affects_to: active_program
+          program: dishcare_dishwasher_program_eco_50
+mode: single
+```
+
+You can add appliance-specific options, such as quiet or night mode, inside the Home Connect action if your appliance supports them.
 
 Use `enabled=false` in `apps.yaml` to keep static load injection profiles visible but inactive until an automation sends an API forecast with the same name.
 

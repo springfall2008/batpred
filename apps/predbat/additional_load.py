@@ -13,8 +13,9 @@
 """Named additional house load forecasts.
 
 Handles static apps.yaml and dynamic Home Assistant API load forecast deltas:
-parsing and windowing of named fixed loads, slot energy distribution, one-shot
-expiry, and HA publishing.
+parsing and windowing of named loads, fixed/flexible slot energy distribution,
+flexible start-time selection via the full prediction metric, one-shot lifecycle
+(suggest/lock/expire), and HA publishing.
 """
 
 import copy
@@ -22,6 +23,7 @@ import re
 from datetime import datetime, timedelta
 from const import PREDICT_STEP
 from utils import dp2, dp4, time_string_to_stamp, minutes_to_time
+from prediction import Prediction
 
 
 class AdditionalLoad:
@@ -178,7 +180,7 @@ class AdditionalLoad:
         """
         Return metadata keys small enough to persist safely in the selector state.
         """
-        return ["_requested_start", "_expires_at"]
+        return ["_requested_start", "_selected_start", "_expires_at"]
 
     def additional_load_command_args(self, value):
         """
@@ -255,6 +257,13 @@ class AdditionalLoad:
         expires_minutes,
         target_times=None,
         total_energy=0.0,
+        suggested_start_minutes=None,
+        suggested_end_minutes=None,
+        selection_reason=None,
+        candidate_count=0,
+        selected_metric=None,
+        baseline_metric=None,
+        selection_locked=False,
         state=None,
     ):
         """
@@ -280,6 +289,13 @@ class AdditionalLoad:
             "total_energy": dp4(total_energy),
             "requested_start": self.additional_load_minutes_to_iso(requested_start_minutes),
             "requested_end": self.additional_load_minutes_to_iso(requested_end_minutes),
+            "suggested_start": self.additional_load_minutes_to_iso(suggested_start_minutes),
+            "suggested_end": self.additional_load_minutes_to_iso(suggested_end_minutes),
+            "selection_reason": selection_reason,
+            "candidate_count": candidate_count,
+            "selected_metric": selected_metric,
+            "baseline_metric": baseline_metric,
+            "selection_locked": selection_locked,
             "source": source,
             "auto_expire": auto_expire,
             "expires_at": self.additional_load_minutes_to_iso(expires_minutes),
@@ -444,14 +460,46 @@ class AdditionalLoad:
         adjustment_energy = dp4(target_energy * plan_interval / float(slot_minutes)) if slot_minutes else 0.0
         return target_energy, adjustment_energy
 
-    def get_additional_load_window(self, load_item, duration, minutes_now_slot):
+    def get_additional_load_window(self, load_item, mode, duration, plan_interval, minutes_now_slot):
         """
-        Return start/end minutes for a fixed additional load.
+        Return start/end minutes for fixed or flexible additional load scheduling.
         """
         explicit_start = "start_time" in load_item
         start_minutes = self.get_additional_load_time_minutes(load_item, "start_time") if explicit_start else load_item.get("_requested_start_minutes", None)
         end_minutes = self.get_additional_load_time_minutes(load_item, "end_time") if "end_time" in load_item else None
         duration_minutes = self.additional_load_duration_minutes(duration)
+
+        if mode == "flexible":
+            if start_minutes is None and end_minutes is None:
+                return minutes_now_slot, minutes_now_slot + self.forecast_minutes
+            if start_minutes is None:
+                start_minutes = minutes_now_slot
+            if end_minutes is None:
+                end_minutes = start_minutes + self.forecast_minutes
+
+            if not explicit_start:
+                usable_start = max(start_minutes, minutes_now_slot)
+                while end_minutes <= start_minutes or usable_start + duration_minutes > end_minutes:
+                    end_minutes += 24 * 60
+                if usable_start < minutes_now_slot + self.forecast_minutes:
+                    return usable_start, end_minutes
+                return None, None
+
+            windows = []
+            for day_offset in [-24 * 60, 0, 24 * 60, 2 * 24 * 60]:
+                window_start = start_minutes + day_offset
+                window_end = end_minutes + day_offset
+                if window_end <= window_start:
+                    window_end += 24 * 60
+                windows.append((window_start, window_end))
+
+            for window_start, window_end in sorted(windows):
+                if window_end <= minutes_now_slot:
+                    continue
+                usable_start = max(window_start, minutes_now_slot)
+                if usable_start + duration_minutes <= window_end and usable_start < minutes_now_slot + self.forecast_minutes:
+                    return usable_start, window_end
+            return None, None
 
         if start_minutes is None:
             return None, end_minutes
@@ -481,11 +529,26 @@ class AdditionalLoad:
         override = {"name": name, "_source": "api", "_auto_expire": True}
         override.update(command_args)
         requested_start_minutes = self.additional_load_stamp_to_minutes(override.get("_requested_start", None)) if "_requested_start" in override else None
+        selected_start_minutes = self.additional_load_stamp_to_minutes(override.get("_selected_start", None)) if "_selected_start" in override else None
         expires_minutes = self.additional_load_stamp_to_minutes(override.get("_expires_at", None)) if "_expires_at" in override else None
         if requested_start_minutes is not None:
             override["_requested_start_minutes"] = requested_start_minutes
+        if selected_start_minutes is not None:
+            override["_selected_start_minutes"] = selected_start_minutes
         if expires_minutes is not None:
             override["_expires_minutes"] = expires_minutes
+        for key in ["_candidate_count"]:
+            if key in override:
+                try:
+                    override[key] = int(override[key])
+                except (ValueError, TypeError):
+                    override.pop(key, None)
+        for key in ["_selected_metric", "_baseline_metric"]:
+            if key in override:
+                try:
+                    override[key] = float(override[key])
+                except (ValueError, TypeError):
+                    override.pop(key, None)
         if "start_time" not in override:
             existing_override = self.house_load_additional_forecast_overrides.get(str(name), {})
             requested_start_minutes = override.get("_requested_start_minutes", existing_override.get("_requested_start_minutes", None))
@@ -594,10 +657,12 @@ class AdditionalLoad:
                 safe_names[safe_name] = name
         return forecast_items
 
-    def fetch_additional_load_forecast(self):
+    def fetch_additional_load_forecast(self, selected_flexible=None):
         """
         Build per-minute additional load adjustments from named forecast config.
         """
+        if selected_flexible is None:
+            selected_flexible = {}
         load_adjust = {}
         forecasts = {}
         plan_interval = self.get_arg("plan_interval_minutes", 30)
@@ -611,9 +676,11 @@ class AdditionalLoad:
             name = str(name)
             entity_id = self.additional_load_entity_name(name)
             mode = str(self.resolve_arg("mode", load_item.get("mode", "fixed"), "fixed")).lower()
-            if mode != "fixed":
-                self.log("Warn: Unsupported mode {} provided in house_load_additional_forecast {}, only fixed loads are supported".format(mode, name))
-                continue
+            if mode not in ["fixed", "flexible"]:
+                self.log("Warn: Bad mode {} provided in house_load_additional_forecast {}, using fixed".format(mode, name))
+                mode = "fixed"
+            if mode == "flexible" and name in selected_flexible:
+                load_item.update(selected_flexible[name])
             enabled = self.get_additional_load_bool(load_item, "enabled", True)
             duration_configured = "duration" in load_item
             duration = self.get_additional_load_float(load_item, "duration", 0.0)
@@ -626,16 +693,28 @@ class AdditionalLoad:
             target_times = []
             load_mode = "total_energy" if energy_total is not None else "slot_energy"
             total_energy = 0.0
-            start_minutes, end_minutes = self.get_additional_load_window(load_item, duration, minutes_now_slot)
+            start_minutes, end_minutes = self.get_additional_load_window(load_item, mode, duration, plan_interval, minutes_now_slot)
             requested_start_minutes = load_item.get("_requested_start_minutes", start_minutes) if "start_time" not in load_item else start_minutes
             requested_end_minutes = end_minutes
-            if duration <= 0 and not duration_configured and start_minutes is not None and end_minutes is not None:
+            if mode == "fixed" and duration <= 0 and not duration_configured and start_minutes is not None and end_minutes is not None:
                 duration = (end_minutes - start_minutes) / 60.0
             duration_minutes = self.additional_load_duration_minutes(duration)
             periods = (duration_minutes + plan_interval - 1) // plan_interval if duration_minutes > 0 else 0
             weights = self.parse_additional_load_weighting(weighting, periods)
             weight_total = sum(weights)
 
+            selected_start_minutes = load_item.get("_selected_start_minutes", None)
+            selection_locked = False
+            if selected_start_minutes is not None:
+                start_minutes = int(selected_start_minutes)
+                if requested_start_minutes is not None and start_minutes < requested_start_minutes:
+                    start_minutes = requested_start_minutes
+                end_minutes = start_minutes + duration_minutes
+                selection_locked = mode == "flexible" and minutes_now_slot >= start_minutes and minutes_now_slot < end_minutes
+                if auto_expire:
+                    expires_minutes = end_minutes
+                if selection_locked and source != "yaml":
+                    self.house_load_additional_forecast_overrides.setdefault(name, {"name": name})["_selection_locked"] = True
             if auto_expire and expires_minutes is None and end_minutes is not None:
                 expires_minutes = end_minutes
             if auto_expire and source != "yaml" and expires_minutes is not None:
@@ -665,8 +744,27 @@ class AdditionalLoad:
                 auto_expire,
                 expires_minutes,
             )
+            combined_selection_locked = load_item.get("_selection_locked", False) or selection_locked
+
             if not enabled or start_minutes is None or (energy_total is None and slot_energy == 0) or (energy_total == 0) or duration == 0 or end_minutes is None:
-                forecasts[name] = self.additional_load_forecast_record(*record_args, state="off")
+                forecasts[name] = self.additional_load_forecast_record(*record_args, selection_locked=combined_selection_locked, state="off")
+                continue
+
+            if mode == "flexible" and selected_start_minutes is None:
+                forecasts[name] = self.additional_load_forecast_record(*record_args, selection_reason="pending_prediction_metric", selection_locked=combined_selection_locked, state="off")
+                continue
+
+            if mode == "flexible" and selected_start_minutes is not None and not selection_locked:
+                forecasts[name] = self.additional_load_forecast_record(
+                    *record_args,
+                    suggested_start_minutes=start_minutes,
+                    suggested_end_minutes=end_minutes,
+                    selection_reason=load_item.get("_selection_reason", "prediction_metric"),
+                    candidate_count=load_item.get("_candidate_count", 0),
+                    selected_metric=load_item.get("_selected_metric", None),
+                    baseline_metric=load_item.get("_baseline_metric", None),
+                    state="off",
+                )
                 continue
 
             for period in range(periods):
@@ -693,6 +791,13 @@ class AdditionalLoad:
                 *record_args,
                 target_times=target_times,
                 total_energy=total_energy,
+                suggested_start_minutes=start_minutes if mode == "flexible" and target_times else None,
+                suggested_end_minutes=end_minutes if mode == "flexible" and target_times else None,
+                selection_reason=load_item.get("_selection_reason", "prediction_metric" if mode == "flexible" and target_times else None),
+                candidate_count=load_item.get("_candidate_count", 0),
+                selected_metric=load_item.get("_selected_metric", None),
+                baseline_metric=load_item.get("_baseline_metric", None),
+                selection_locked=combined_selection_locked,
             )
 
         return load_adjust, forecasts
@@ -721,6 +826,13 @@ class AdditionalLoad:
                 "total_energy": forecast.get("total_energy", 0.0),
                 "requested_start": forecast.get("requested_start", None),
                 "requested_end": forecast.get("requested_end", None),
+                "suggested_start": forecast.get("suggested_start", None),
+                "suggested_end": forecast.get("suggested_end", None),
+                "selection_reason": forecast.get("selection_reason", None),
+                "candidate_count": forecast.get("candidate_count", 0),
+                "selected_metric": forecast.get("selected_metric", None),
+                "baseline_metric": forecast.get("baseline_metric", None),
+                "selection_locked": forecast.get("selection_locked", False),
                 "source": forecast.get("source", "yaml"),
                 "auto_expire": forecast.get("auto_expire", False),
                 "expires_at": forecast.get("expires_at", None),
@@ -755,6 +867,38 @@ class AdditionalLoad:
         if entity_id in self.dashboard_index:
             self.dashboard_index.remove(entity_id)
 
+    def additional_load_candidate_profile(self, forecast, start_minutes):
+        """
+        Build absolute-minute adjustment and target metadata for one flexible load candidate.
+        """
+        plan_interval = forecast.get("plan_interval_minutes", self.plan_interval_minutes)
+        duration_minutes = self.additional_load_duration_minutes(forecast.get("duration", 0.0))
+        end_minutes = start_minutes + duration_minutes
+        periods = forecast.get("_periods", 0)
+        weights = forecast.get("_weights", [])
+        weight_total = forecast.get("_weight_total", sum(weights))
+        energy_total = forecast.get("energy", None)
+        slot_energy = forecast.get("slot_energy", 0.0)
+        load_adjust = {}
+        target_times = []
+        total_energy = 0.0
+
+        for period in range(periods):
+            slot_start = start_minutes + period * plan_interval
+            slot_end = min(slot_start + plan_interval, end_minutes)
+            slot_minutes = slot_end - slot_start
+            if slot_end <= self.minutes_now:
+                continue
+            if (slot_start - self.minutes_now) >= self.forecast_minutes:
+                continue
+            energy, adjustment_energy = self.additional_load_slot_energies(energy_total, slot_energy, weights, weight_total, period, slot_minutes, plan_interval)
+            total_energy += energy
+            for minute in range(slot_start, slot_end):
+                load_adjust[minute] = dp4(load_adjust.get(minute, 0.0) + adjustment_energy)
+            target_times.append({"start": (self.midnight_utc + timedelta(minutes=slot_start)).isoformat(), "end": (self.midnight_utc + timedelta(minutes=slot_end)).isoformat(), "energy": energy})
+
+        return load_adjust, target_times, dp4(total_energy)
+
     def add_additional_load_to_step_data(self, load_minutes_step, load_adjust):
         """
         Add absolute-minute additional load adjustment into prediction step data.
@@ -772,6 +916,149 @@ class AdditionalLoad:
             modified_load[minute_relative] = dp4(modified_load.get(minute_relative, 0.0) + bucket_energy)
         return modified_load
 
+    def select_flexible_additional_loads(self, load_minutes_step, load_minutes_step10, pv_forecast_minute_step, pv_forecast_minute10_step):
+        """
+        Select flexible additional load start times using full prediction metric impact.
+        """
+        self.house_load_additional_flexible_selection_changed = False
+        self.house_load_additional_selected_forecast_adjust = {}
+        flexible_forecasts = {name: forecast for name, forecast in self.house_load_additional_forecasts.items() if forecast.get("enabled") and forecast.get("mode") == "flexible" and not forecast.get("selection_locked", False)}
+        if not flexible_forecasts:
+            return False, load_minutes_step, load_minutes_step10
+
+        selected_flexible = {}
+        selected_load_adjust = {}
+        working_load_step = load_minutes_step
+        working_load_step10 = load_minutes_step10
+        kernel_static_cache = {}
+
+        # Cap how far ahead a flexible load may be searched/placed, defaults to the forecast horizon (typically 48 hours).
+        # Lowering this in apps.yaml bounds the number of prediction passes for deadline-less flexible loads.
+        flexible_max_hours = self.get_arg("house_load_additional_flexible_max_hours", int(self.forecast_minutes / 60))
+        flexible_max_minutes = min(max(int(flexible_max_hours * 60), self.plan_interval_minutes), self.forecast_minutes)
+
+        for name, forecast in flexible_forecasts.items():
+            start_minutes = forecast.get("_requested_start_minutes", None)
+            end_minutes = forecast.get("_requested_end_minutes", None)
+            duration_minutes = self.additional_load_duration_minutes(forecast.get("duration", 0.0))
+            plan_interval = forecast.get("plan_interval_minutes", self.plan_interval_minutes)
+            if start_minutes is None or end_minutes is None or duration_minutes <= 0:
+                continue
+
+            candidate = max(start_minutes, self.minutes_now)
+            candidate = int((candidate + plan_interval - 1) / plan_interval) * plan_interval
+            latest_start = min(end_minutes - duration_minutes, self.minutes_now + flexible_max_minutes - duration_minutes)
+            if latest_start < candidate:
+                continue
+
+            baseline_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, working_load_step, working_load_step10, kernel_static_cache=kernel_static_cache)
+            baseline_metric = self.score_flexible_additional_load_prediction(baseline_prediction)
+            best_start = None
+            best_metric = None
+            candidate_count = 0
+
+            while candidate <= latest_start:
+                candidate_adjust, _, _ = self.additional_load_candidate_profile(forecast, candidate)
+                candidate_load_step = self.add_additional_load_to_step_data(working_load_step, candidate_adjust)
+                candidate_load_step10 = self.add_additional_load_to_step_data(working_load_step10, candidate_adjust)
+                candidate_prediction = Prediction(self, pv_forecast_minute_step, pv_forecast_minute10_step, candidate_load_step, candidate_load_step10, kernel_static_cache=kernel_static_cache)
+                candidate_metric = self.score_flexible_additional_load_prediction(candidate_prediction)
+                candidate_count += 1
+                if best_metric is None or candidate_metric < best_metric:
+                    best_metric = candidate_metric
+                    best_start = candidate
+                candidate += plan_interval
+
+            if best_start is not None:
+                existing_start = forecast.get("_selected_start_minutes", None)
+                if existing_start is None and forecast.get("suggested_start"):
+                    existing_start = self.additional_load_stamp_to_minutes(forecast.get("suggested_start"))
+                if existing_start != best_start:
+                    self.house_load_additional_flexible_selection_changed = True
+                best_adjust, _, _ = self.additional_load_candidate_profile(forecast, best_start)
+                for minute, adjustment in best_adjust.items():
+                    selected_load_adjust[minute] = dp4(selected_load_adjust.get(minute, 0.0) + adjustment)
+                working_load_step = self.add_additional_load_to_step_data(working_load_step, best_adjust)
+                working_load_step10 = self.add_additional_load_to_step_data(working_load_step10, best_adjust)
+                selected_flexible[name] = {
+                    "_requested_start_minutes": start_minutes,
+                    "_requested_end_minutes": end_minutes,
+                    "_selected_start_minutes": best_start,
+                    "_selection_reason": "prediction_metric",
+                    "_candidate_count": candidate_count,
+                    "_selected_metric": dp2(best_metric) if best_metric is not None else None,
+                    "_baseline_metric": dp2(baseline_metric),
+                    "_expires_minutes": best_start + duration_minutes if forecast.get("auto_expire", False) else None,
+                }
+                if forecast.get("auto_expire", False):
+                    self.house_load_additional_forecast_overrides[name] = {"name": name, **selected_flexible[name]}
+                    self.update_additional_load_api_command_metadata(
+                        name,
+                        {
+                            "_requested_start": self.additional_load_minutes_to_stamp(start_minutes),
+                            "_selected_start": self.additional_load_minutes_to_stamp(best_start),
+                            "_expires_at": self.additional_load_minutes_to_stamp(best_start + duration_minutes),
+                        },
+                    )
+                self.log("Flexible additional load {} selected {}-{} using prediction metric {} from {} candidates".format(name, self.time_abs_str(best_start), self.time_abs_str(best_start + duration_minutes), dp2(best_metric), candidate_count))
+
+        if not selected_flexible:
+            return False, load_minutes_step, load_minutes_step10
+
+        self.house_load_additional_forecast_adjust, self.house_load_additional_forecasts = self.fetch_additional_load_forecast(selected_flexible=selected_flexible)
+        self.house_load_additional_selected_forecast_adjust = selected_load_adjust
+        self.publish_additional_load_forecasts()
+        return True, working_load_step, working_load_step10
+
+    def score_flexible_additional_load_prediction(self, prediction):
+        """
+        Score a flexible additional load candidate using the same full metric as the optimiser.
+        """
+        (
+            cost10,
+            _import_kwh_battery10,
+            _import_kwh_house10,
+            _export_kwh10,
+            _soc_min10,
+            soc10,
+            _soc_min_minute10,
+            _battery_cycle10,
+            _metric_keep10,
+            final_iboost10,
+            _final_carbon_g10,
+            *_prediction_detail10,
+        ) = prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, True, self.end_record)
+        (
+            cost,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+            _soc_min,
+            soc,
+            _soc_min_minute,
+            battery_cycle,
+            metric_keep,
+            final_iboost,
+            final_carbon_g,
+            *_prediction_detail,
+        ) = prediction.run_prediction(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, False, self.end_record)
+        metric, _battery_value = self.compute_metric(
+            self.end_record,
+            soc,
+            soc10,
+            cost,
+            cost10,
+            final_iboost,
+            final_iboost10,
+            battery_cycle,
+            metric_keep,
+            final_carbon_g,
+            import_kwh_battery,
+            import_kwh_house,
+            export_kwh,
+        )
+        return metric
+
     def additional_load_plan_time(self, timestamp):
         """
         Return a compact local time string for an additional load timestamp.
@@ -780,7 +1067,7 @@ class AdditionalLoad:
 
     def get_additional_load_text(self):
         """
-        Return a textual summary of fixed additional load forecasts.
+        Return a textual summary of planned and suggested additional load forecasts.
         """
         planned_loads = []
         for name, forecast in sorted(getattr(self, "house_load_additional_forecasts", {}).items()):
@@ -788,19 +1075,39 @@ class AdditionalLoad:
                 continue
             target_times = forecast.get("target_times", [])
             total_energy = forecast.get("total_energy", 0.0)
-            if not target_times or total_energy <= 0:
-                continue
-            start = target_times[0].get("start")
-            end = target_times[-1].get("end")
+            if target_times and total_energy > 0:
+                running = forecast.get("selection_locked", False)
+                start = forecast.get("suggested_start") if running and forecast.get("suggested_start") else target_times[0].get("start")
+                end = forecast.get("suggested_end") if running and forecast.get("suggested_end") else target_times[-1].get("end")
+                if running:
+                    total_energy = forecast.get("energy", total_energy) or total_energy
+                    status = "running"
+                    text = "{} is running from {} to {} using {:.2f} kWh".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end else None
+                else:
+                    status = "planned"
+                    text = "{} from {} to {} using {:.2f} kWh is planned".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end else None
+            else:
+                start = forecast.get("suggested_start")
+                end = forecast.get("suggested_end")
+                total_energy = forecast.get("energy", 0.0)
+                if not total_energy:
+                    plan_interval = forecast.get("plan_interval_minutes", self.plan_interval_minutes)
+                    duration_minutes = self.additional_load_duration_minutes(forecast.get("duration", 0.0))
+                    periods = (duration_minutes + plan_interval - 1) // plan_interval if plan_interval > 0 else 0
+                    total_energy = forecast.get("slot_energy", 0.0) * periods
+                status = "suggested"
+                text = "{} is suggested from {} to {} using {:.2f} kWh".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy)) if start and end and total_energy > 0 else None
+
             if not start or not end:
                 continue
-            text = "{} from {} to {} using {:.2f} kWh is planned".format(name, self.additional_load_plan_time(start), self.additional_load_plan_time(end), dp2(total_energy))
+            if not text:
+                continue
             planned_loads.append(
                 {
                     "name": name,
                     "start": start,
                     "end": end,
-                    "status": "planned",
+                    "status": status,
                     "text": text,
                 }
             )
@@ -811,4 +1118,4 @@ class AdditionalLoad:
         planned_loads = sorted(planned_loads, key=lambda load: load["start"])
         if len(planned_loads) == 1:
             return "- Additional load {}.\n".format(planned_loads[0]["text"])
-        return "- Additional loads are planned: {}.\n".format("; ".join(load["text"] for load in planned_loads))
+        return "- Additional loads are planned/suggested: {}.\n".format("; ".join(load["text"] for load in planned_loads))
