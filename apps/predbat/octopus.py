@@ -4416,10 +4416,11 @@ class Octopus:
                 segments = [(start_minutes, end_minutes)]
                 for current_slot in slots_decoded:
                     current_start, current_end, _, _, _, _, _, current_held = current_slot
-                    if current_held:
-                        # A held half hour has already run and only keeps its rate: it does not trim a slot it
-                        # overlaps, which only a charger's own schedule can (#5339), so a running one is still
-                        # counted from now rather than keeping all of its energy for what is left of it
+                    if current_held and source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
+                        # A held half hour has already run and only keeps its rate: it does not trim a charger's own
+                        # schedule (#5339), so a running one is still counted from now rather than keeping all of its
+                        # energy for what is left of it. Anything else is trimmed as before, so should an Octopus
+                        # dispatch ever overlap a held half hour it is neither counted twice nor charged twice to the cap
                         continue
                     remaining = []
                     for seg_start, seg_end in segments:
@@ -4472,8 +4473,8 @@ class Octopus:
         # counts a minute two cars' dispatches share once, as the allowance is in clock time. Every car's slots take
         # their share first, so a minute of this car's that a later dispatch of another car is granted is
         # cheap here too, and a slot can come out as any number of cheap and over-the-cap runs. A held half hour is
-        # left overlapping what follows it; that is safe while the only slots it overlaps are a charger's own
-        # schedule (#5339), which never take cap minutes.
+        # left overlapping only a charger's own schedule (#5339), which never takes cap minutes; octopus_slot_segments()
+        # still trims anything else clear of it.
         own_segments = []
         for slot, slot_car in account_segments:
             start_minutes, end_minutes, kwh, source, location, dispatch_start, dispatch_end, held = slot

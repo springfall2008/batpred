@@ -20,7 +20,7 @@ until a completed dispatch covers it or OCTOPUS_DISPATCH_HOLD_MINUTES have passe
 import copy
 from datetime import timedelta
 
-from const import DYNAMIC_LOAD_CAR_START_MINUTES, OCTOPUS_DISPATCH_HOLD_MINUTES, OCTOPUS_DISPATCH_TAIL_MINUTES
+from const import DISPATCH_SOURCE_CHARGER_SCHEDULE, DYNAMIC_LOAD_CAR_START_MINUTES, OCTOPUS_DISPATCH_HOLD_MINUTES, OCTOPUS_DISPATCH_TAIL_MINUTES
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 RATE_LOW = 6.57
@@ -345,6 +345,19 @@ def _run(my_predbat):
     car_slots = my_predbat.load_octopus_slots(0, my_predbat.octopus_slots[0], True)
     future_kwh = sum(car_slot["kwh"] for car_slot in car_slots if car_slot["end"] > my_predbat.minutes_now)
     failed |= _check("t12c only the 65 minutes left of the slot are car load", abs(future_kwh - 6.5) < 0.01, "kWh {} slots {}".format(future_kwh, car_slots))
+
+    print("Test 12d: a held half hour still trims an overlapping slot that is not a charger's own schedule (#5339)")
+    # octopus_held_dispatches() leaves a held half hour out wherever an Octopus dispatch reaches it, so only a charger's
+    # own schedule should ever overlap one. Should anything else, it is trimmed as before, so its energy is not counted
+    # twice against the held half hour and its minutes are not taken twice from the daily cap
+    _reset(my_predbat)
+    my_predbat.minutes_now = 1105
+    held = dict(_dispatch(my_predbat, 1080, 1105), held=True)
+    held.pop("charge_in_kwh")
+    for source, expect_start in (("smart-charge", 1105), (DISPATCH_SOURCE_CHARGER_SCHEDULE, 1080)):
+        segments = my_predbat.octopus_slot_segments(0, [held, _dispatch(my_predbat, 1080, 1170, kwh=9.0, source=source)])
+        starts = [segment[0] for segment in segments if not segment[7]]
+        failed |= _check("t12d {} slot starts at {}".format(source, expect_start), starts == [expect_start], "segments {}".format(segments))
 
     print("Test 13: a held half hour only minutes in is not taken for a short dispatch (OCTOPUS_SLOT_MIN_MINUTES)")
     _reset(my_predbat)
