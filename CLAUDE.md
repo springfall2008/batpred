@@ -26,13 +26,13 @@ source setup.csh
 # Skip slow tests (used by CI):
 ./run_all --quick
 
-# Run a specific test by name:
+# Run a specific test by name (its --list name or its function name):
 ./run_all --test basic_rates
 
 # Run multiple specific tests:
 ./run_all --test basic_rates --test units
 
-# Run tests matching a keyword:
+# Run tests matching a keyword (registry or function name; a leading test_ is ignored):
 ./run_all -k octopus_
 
 # List all available test names:
@@ -81,6 +81,9 @@ All checks are enforced via pre-commit and must pass before merging:
 
 ```bash
 ./run_pre_commit
+
+# Documentation-only change: run the checks and skip the test suite
+./run_pre_commit --checks-only
 ```
 
 Key constraints:
