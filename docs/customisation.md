@@ -473,8 +473,10 @@ If you increase this value (e.g. you only want to freeze export if very profitab
 The value is in currency minor unit (pence, cents, etc) per slot of export time.
 
 **input_number.predbat_metric_min_improvement_plan** (_expert mode_) sets the minimum cost improvement in currency minor unit (pence, cents, etc) that a newly computed Predbat plan has to have over the current plan for that new plan to be adopted.
-Every 10 minutes (by default) Predbat will re-calculate and optimise the full plan and calculate the cost of that new plan. The new plan cost will be compared to the current plan cost (`predbat.metric`) and the new plan adopted only if it is better by the metric_min_improvement_plan amount.
-The default value is 2.0p which means that a new plan has to be worth 2p more than the current Predbat plan for Predbat to adopt it.
+Every 10 minutes (by default) Predbat will re-calculate and optimise the full plan and calculate the cost of that new plan. The new plan cost will be compared to the current plan cost (`predbat.metric`) and the new plan adopted if it is better by the metric_min_improvement_plan amount.
+The default value is 2.0p which means that a new plan normally has to be worth 2p more than the current Predbat plan for Predbat to adopt it.
+Within that 2p, a new plan that costs no more than the current one is still adopted if it splits its charge and export into fewer separate slots, so this setting limits how often the plan changes rather than stopping small changes altogether.
+Also, on the first plan after a car starts charging in an Octopus Intelligent dispatch, a new plan that scores better and costs no more is adopted even if it is less than 2p better.
 Set to 0p to disable this feature (so Predbat adopts the newly evaluated plan unless it is worse), or increase the value if you want Predbat to have more stability in the adopted plan. However, be careful of setting this to too high a value as Predbat can retain an older plan that is no longer optimal for your battery SoC, house load prediction, etc.
 
 **input_number.predbat_metric_min_improvement_swap** (_expert mode_) Sets the minimum improvement in cost to swap an export slot to a later time in the day.
