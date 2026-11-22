@@ -468,7 +468,7 @@ which a slow or freeze export can lower without saving anything.
 So an export that only pays if solar turns out much better (PV90) or worse (PV10) than forecast is not planned.
 
 **input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum currency minor unit (pence, cents, etc) cost improvement it's worth doing an export freeze for.
-A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 pence for a slot duration (less for shorter slots).
+A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 of your minor currency unit (pence, cents, etc) for a slot duration (less for shorter slots).
 If you increase this value (e.g. you only want to freeze export if very profitable), then freeze exports will become less common.
 The value is in currency minor unit (pence, cents, etc) per slot of export time.
 
