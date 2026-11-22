@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 from tests.test_infra import run_async, create_aiohttp_mock_response, create_aiohttp_mock_session
 
 # Import the real mixin (will exist in SaaS builds)
-from oauth_mixin import OAuthMixin, OAUTH_REFRESH_RETRIES
+from oauth_mixin import OAuthMixin, OAUTH_REFRESH_RETRIES, OAUTH_SAME_TOKEN_LIMIT
 from component_base import ComponentBase
 
 
@@ -786,6 +786,132 @@ def test_handle_oauth_401_forces_refresh():
     return failed
 
 
+def test_handle_oauth_401_sends_force_reason():
+    """A 401-forced refresh tells the service why, in the edge-function payload and to a hook that accepts it (GH#6284)."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "old-token", None, "tesla")
+    comp.token_expires_at = time.time() + 3 * 3600
+    mock_response = create_aiohttp_mock_response(status=200, json_data={"success": True, "access_token": "new-token", "expires_at": "2026-03-07T12:00:00Z"})
+    mock_session = create_aiohttp_mock_session(mock_response)
+    with patch.dict("os.environ", {"SUPABASE_URL": "https://test.supabase.co", "SUPABASE_KEY": "test-key"}):
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            result = run_async(comp.handle_oauth_401())
+    payload = mock_session.post.call_args.kwargs.get("json", {})
+    if not result or payload.get("force") is not True or payload.get("reason") != "401":
+        print(f"ERROR: forced refresh payload should carry force/reason, got {payload} (result {result})")
+        failed = True
+
+    # A proactive refresh is not forced and says nothing extra
+    comp.token_expires_at = 0
+    mock_session = create_aiohttp_mock_session(create_aiohttp_mock_response(status=200, json_data={"success": True, "access_token": "newer-token", "expires_at": "2026-03-07T12:00:00Z"}))
+    with patch.dict("os.environ", {"SUPABASE_URL": "https://test.supabase.co", "SUPABASE_KEY": "test-key"}):
+        with patch("aiohttp.ClientSession", return_value=mock_session):
+            run_async(comp.check_and_refresh_oauth_token())
+    payload = mock_session.post.call_args.kwargs.get("json", {})
+    if "force" in payload or "reason" in payload:
+        print(f"ERROR: a proactive refresh should not be marked forced, got {payload}")
+        failed = True
+
+    # A host hook that accepts force/reason is told; a three-argument hook still works unchanged
+    calls = []
+
+    async def new_hook(instance_id, provider_name, token_hash, force=False, reason=None):
+        calls.append((force, reason))
+        return {"success": True, "access_token": "hook-token-1", "expires_at": "2026-03-07T12:00:00Z"}
+
+    comp.base.oauth_refresh_provider = new_hook
+    run_async(comp.handle_oauth_401())
+    if calls != [(True, "401")]:
+        print(f"ERROR: a hook accepting force/reason should be told, got {calls}")
+        failed = True
+    provider, legacy_calls = _provider_returning({"success": True, "access_token": "hook-token-2", "expires_at": "2026-03-07T12:00:00Z"})
+    comp.base.oauth_refresh_provider = provider
+    if not run_async(comp.handle_oauth_401()) or len(legacy_calls) != 1 or comp.access_token != "hook-token-2":
+        print(f"ERROR: a three-argument hook should still refresh after a 401, got {legacy_calls} {comp.access_token}")
+        failed = True
+
+    if not failed:
+        print("PASS: handle_oauth_401 marks the refresh as forced")
+    return failed
+
+
+def test_handle_oauth_401_same_token_does_not_retry():
+    """A forced refresh that hands back the rejected token is not reported as a refresh and is not retried (GH#6284)."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "dead-token", None, "tesla")
+    comp.token_expires_at = time.time() + 3 * 3600
+    provider, calls = _provider_returning({"success": True, "access_token": "dead-token", "expires_at": "2026-03-07T12:00:00Z"})
+    comp.base.oauth_refresh_provider = provider
+
+    result = run_async(comp.handle_oauth_401())
+    if result is not False:
+        print("ERROR: a same-token answer must not tell the caller to retry")
+        failed = True
+    if any("OAuth token refreshed" in msg for msg in comp.log_messages):
+        print(f"ERROR: a same-token answer was logged as a refresh: {comp.log_messages}")
+        failed = True
+    if not any("did not produce a new token" in msg for msg in comp.log_messages):
+        print(f"ERROR: expected a same-token warning: {comp.log_messages}")
+        failed = True
+    if comp.oauth_failed:
+        print("ERROR: one same-token answer should back off, not latch oauth_failed")
+        failed = True
+
+    # A second 401 inside the backoff does not ask the service again
+    result = run_async(comp.handle_oauth_401())
+    if result is not False or len(calls) != 1:
+        print(f"ERROR: a 401 inside the backoff should not force another refresh, got {len(calls)} calls")
+        failed = True
+
+    if not failed:
+        print("PASS: handle_oauth_401 detects a same-token answer")
+    return failed
+
+
+def test_handle_oauth_401_repeated_same_token_latches_then_heals():
+    """Repeated same-token answers latch oauth_failed; a new token once the old one expires clears it (GH#6284)."""
+    failed = False
+    comp = MockOAuthComponent()
+    comp._init_oauth("oauth", "dead-token", None, "tesla")
+    provider, calls = _provider_returning({"success": True, "access_token": "dead-token", "expires_at": time.time() + 3 * 3600})
+    comp.base.oauth_refresh_provider = provider
+
+    for _ in range(OAUTH_SAME_TOKEN_LIMIT):
+        comp._forced_refresh_after = 0  # the backoff has elapsed
+        run_async(comp.handle_oauth_401())
+    if not comp.oauth_failed or comp.oauth_failed_reason != "same_token" or len(calls) != OAUTH_SAME_TOKEN_LIMIT:
+        print(f"ERROR: {OAUTH_SAME_TOKEN_LIMIT} same-token answers should latch oauth_failed, got {comp.oauth_failed} {comp.oauth_failed_reason} after {len(calls)} calls")
+        failed = True
+    if run_async(comp.check_and_refresh_oauth_token()) is not False or len(calls) != OAUTH_SAME_TOKEN_LIMIT:
+        print("ERROR: a latched component should stop while the rejected token has not expired")
+        failed = True
+    if run_async(comp.handle_oauth_401()) is not False or len(calls) != OAUTH_SAME_TOKEN_LIMIT:
+        print("ERROR: a latched component should not force more refreshes on a 401")
+        failed = True
+
+    # The rejected token reaches its own expiry: an ordinary refresh is allowed, and a new token heals it
+    comp.token_expires_at = time.time() - 1
+    healed, heal_calls = _provider_returning({"success": True, "access_token": "fresh-token", "expires_at": time.time() + 8 * 3600})
+    comp.base.oauth_refresh_provider = healed
+    if run_async(comp.check_and_refresh_oauth_token()) is not True or comp.oauth_failed or comp.access_token != "fresh-token" or len(heal_calls) != 1:
+        print(f"ERROR: a new token should clear the same-token latch, got {comp.oauth_failed} {comp.access_token}")
+        failed = True
+
+    # needs_reauth is the provider refusing the refresh token and never heals by itself
+    comp.oauth_failed = True
+    comp.oauth_failed_reason = "needs_reauth"
+    comp.token_expires_at = time.time() - 1
+    if run_async(comp.check_and_refresh_oauth_token()) is not False or len(heal_calls) != 1:
+        print("ERROR: a needs_reauth latch must not attempt a refresh")
+        failed = True
+
+    if not failed:
+        print("PASS: repeated same-token answers latch oauth_failed and a new token heals it")
+    return failed
+
+
 def test_refresh_dedup():
     """Concurrent refresh calls should not double-fire."""
     failed = False
@@ -839,6 +965,9 @@ def run_oauth_mixin_tests(my_predbat):
         ("refresh_provider_error", test_do_refresh_provider_error),
         ("401_apikey", test_handle_oauth_401_api_key),
         ("401_forces_refresh", test_handle_oauth_401_forces_refresh),
+        ("401_sends_force_reason", test_handle_oauth_401_sends_force_reason),
+        ("401_same_token_no_retry", test_handle_oauth_401_same_token_does_not_retry),
+        ("401_same_token_latches_heals", test_handle_oauth_401_repeated_same_token_latches_then_heals),
         ("refresh_dedup", test_refresh_dedup),
     ]
 

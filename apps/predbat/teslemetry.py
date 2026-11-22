@@ -292,7 +292,11 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                                 return await self._request(method, path, json_body=json_body, _retry_after_refresh=True)
                         if resp.status in (401, 403):
                             self.api_auth_failed = True
-                            self.log("Warn: Teslemetry auth failed ({}) on {} - token revoked or subscription lapsed".format(resp.status, path))
+                            if self.auth_method == "oauth":
+                                # OAuth mode calls the Tesla Fleet API directly; Teslemetry is not involved
+                                self.log("Warn: Tesla Fleet API rejected the OAuth token ({}) on {} - reconnect Tesla if this persists".format(resp.status, path))
+                            else:
+                                self.log("Warn: Teslemetry auth failed ({}) on {} - token revoked or subscription lapsed".format(resp.status, path))
                             return None
                         if resp.status == 429:
                             self.log("Warn: Teslemetry rate limited on {} attempt {}".format(path, attempt + 1))

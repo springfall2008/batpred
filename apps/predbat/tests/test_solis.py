@@ -59,6 +59,9 @@ class MockSolisAPI(SolisAPI):
         self.auth_method = "api_key"
         self.access_token = None
         self.oauth_failed = False
+        self.oauth_failed_reason = ""
+        self._same_token_count = 0
+        self._forced_refresh_after = 0
         self.base_url = "https://api.soliscloud.com"
         self.automatic = False
         self.session = None
