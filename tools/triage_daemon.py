@@ -990,6 +990,80 @@ def mark_triage_failed(issue_number, attempts, exc=None):
     )
 
 
+# Shared-memory claims. /issue-pr claims the issue's memory and /pr-cleanup the PR's before
+# working; when another member already holds the claim, the skill writes this file to the
+# scratch directory and stops without changing anything, and the daemon reports the claim
+# and swaps the trigger label for a *_CLAIMED one so the run isn't retried every poll.
+# BOT_FORCE is a maintainer-applied label: it makes the next run take the claim over (the
+# skill passes force), and the daemon removes it after that run so it forces only once.
+# Issue text cannot add a label, which is why forcing hangs off one and not off anything a
+# run reads.
+FORCE_LABEL = "BOT_FORCE"
+CLAIM_BLOCKED_FILENAME = "claim-blocked.json"
+
+
+def has_force_label(labels):
+    """Return True if a gh --json labels list carries BOT_FORCE."""
+    return any(label["name"] == FORCE_LABEL for label in labels or [])
+
+
+def remove_force_label(kind, number):
+    """Remove BOT_FORCE from an issue or PR ("issue" or "pr") once a run has used it.
+
+    Best effort: the run has already happened, so a failure here must not mark it failed.
+    """
+    subprocess.run(["gh", kind, "edit", str(number), "--repo", REPO, "--remove-label", FORCE_LABEL], check=False)
+
+
+def read_claim_blocked():
+    """Return the stop file a skill wrote when another member holds the claim, or None.
+
+    A file that cannot be parsed still means the skill decided to stop, so it is reported
+    as a claim by an unknown member rather than treated as a PR attempt or a failure.
+    """
+    path = SCRATCH_DIR / CLAIM_BLOCKED_FILENAME
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError):
+        data = None
+    if not isinstance(data, dict):
+        return {"holder": "another member", "until": None, "description": ""}
+    return data
+
+
+def claim_blocked_note(blocked, retry_label):
+    """The public comment explaining that the run did not start because the work is claimed."""
+    holder = " ".join(str(blocked.get("holder") or "another member").split())[:100]
+    until = blocked.get("until")
+    when = f"until {until}" if until else "indefinitely"
+    reason = " ".join(str(blocked.get("description") or "").split())[:200]
+    note = f"Automated run not started: **{holder}** has claimed this work in the shared team memory {when}."
+    if reason:
+        note += f" Reason: {reason}."
+    note += f" To take over, a maintainer can add `{FORCE_LABEL}` and re-add `{retry_label}`."
+    return note
+
+
+def mark_pr_claimed(issue_number, blocked):
+    """Explain the claim on the issue and swap BOT_PR for BOT_PR_CLAIMED."""
+    subprocess.run(["gh", "issue", "comment", str(issue_number), "--repo", REPO, "--body", claim_blocked_note(blocked, "BOT_PR")], check=True)
+    subprocess.run(
+        ["gh", "issue", "edit", str(issue_number), "--repo", REPO, "--remove-label", "BOT_PR", "--add-label", "BOT_PR_CLAIMED"],
+        check=True,
+    )
+
+
+def mark_pr_cleanup_claimed(pr_number, blocked):
+    """Explain the claim on the PR and swap BOT_CLEANUP for BOT_CLEANUP_CLAIMED."""
+    subprocess.run(["gh", "pr", "comment", str(pr_number), "--repo", REPO, "--body", claim_blocked_note(blocked, "BOT_CLEANUP")], check=True)
+    subprocess.run(
+        ["gh", "pr", "edit", str(pr_number), "--repo", REPO, "--remove-label", "BOT_CLEANUP", "--add-label", "BOT_CLEANUP_CLAIMED"],
+        check=True,
+    )
+
+
 def mark_pr_failed(issue_number):
     """Swap BOT_PR for BOT_PR_FAILED so a failed run isn't retried every poll cycle."""
     subprocess.run(
@@ -1611,7 +1685,7 @@ def triage_followup(issue_number):
     print(f"[review] issue #{issue_number}: follow-up exited {result.returncode}", flush=True)
 
 
-def create_pr(issue_number):
+def create_pr(issue_number, force=False):
     """Run the /issue-pr skill for one issue under the push/PR-create-capable permission set.
 
     Whether it succeeded is judged by the caller re-checking has_existing_pr()
@@ -1623,7 +1697,7 @@ def create_pr(issue_number):
         [
             "claude",
             "-p",
-            f"/issue-pr {issue_number} scratch={SCRATCH_DIR}",
+            f"/issue-pr {issue_number} scratch={SCRATCH_DIR}" + (" force=true" if force else ""),
         ]
         + append_system_prompt(JOURNAL_CAPTURE_PROMPT)
         + [
@@ -1674,7 +1748,17 @@ def process_bot_pr_issue(issue):
         print(f"[pr] issue #{issue_number}: not actionable (closed, or not classified bug/enhancement), skipping", flush=True)
         mark_pr_not_actionable(issue_number)
         return
-    create_pr(issue_number)
+    force = has_force_label(labels)
+    if force:
+        create_pr(issue_number, force=True)
+        remove_force_label("issue", issue_number)
+    else:
+        create_pr(issue_number)
+    blocked = read_claim_blocked()
+    if blocked:
+        print(f"[pr] issue #{issue_number}: claimed by {blocked.get('holder')}, not started", flush=True)
+        mark_pr_claimed(issue_number, blocked)
+        return
     if has_existing_pr(issue_number):
         mark_pr_opened(issue_number, cleanup=True, opened_by_bot=True)
     else:
@@ -2195,7 +2279,7 @@ def process_bot_review_pr(pr):
     remove_pr_review_label(pr_number)
 
 
-def cleanup_pr(pr_number):
+def cleanup_pr(pr_number, force=False):
     """Run the /pr-cleanup skill against a PR: address review feedback and CI
     failures, then commit and push - under the write-capable cleanup permission set.
 
@@ -2208,7 +2292,7 @@ def cleanup_pr(pr_number):
         [
             "claude",
             "-p",
-            f"/pr-cleanup {pr_number} scratch={SCRATCH_DIR}",
+            f"/pr-cleanup {pr_number} scratch={SCRATCH_DIR}" + (" force=true" if force else ""),
         ]
         + append_system_prompt(GH_API_ENDPOINT_FIRST_PROMPT, JOURNAL_CAPTURE_PROMPT)
         + [
@@ -2325,11 +2409,23 @@ def process_bot_cleanup_pr(pr):
         return
     sync_repo()
     reset_scratch()
+    force = has_force_label(pr.get("labels"))
     try:
-        cleanup_pr(pr_number)
+        if force:
+            cleanup_pr(pr_number, force=True)
+        else:
+            cleanup_pr(pr_number)
     except subprocess.CalledProcessError as exc:
         print(f"[cleanup-pr] PR #{pr_number}: cleanup failed: {exc}", flush=True)
         mark_pr_cleanup_failed(pr_number, exc=exc)
+        return
+    finally:
+        if force:
+            remove_force_label("pr", pr_number)
+    blocked = read_claim_blocked()
+    if blocked:
+        print(f"[cleanup-pr] PR #{pr_number}: claimed by {blocked.get('holder')}, not started", flush=True)
+        mark_pr_cleanup_claimed(pr_number, blocked)
         return
     reason = unfinished_cleanup_reason()
     if reason:
