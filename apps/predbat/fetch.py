@@ -18,7 +18,7 @@ battery temperature, and other sensor inputs. Converts all data to per-minute
 dictionaries for use by the prediction engine.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from utils import (
     average_temperature_minutes,
     battery_temperature_entities,
@@ -1987,6 +1987,7 @@ class Fetch:
             self.log_replay_cars()
         # Publish the car plan
         self.publish_car_plan()
+        self.publish_octopus_cap()
 
         # Work out iBoost plan
         if self.iboost_enable and (((not self.iboost_solar) and (not self.iboost_charging)) or self.iboost_smart):
@@ -2579,6 +2580,10 @@ class Fetch:
         iog_slot_cars = []
         # The planned dispatches each car's plan used this cycle, for octopus_held_update()
         self.octopus_slots_planned = {}
+        if save:
+            # Read below once the dispatches are in; none without Octopus Intelligent slots. A compare.py run (save False)
+            # keeps this cycle's, as the record is the same whatever the tariff
+            self.octopus_cap_idle = None
 
         if entity_id_list:
             # Process each car's intelligent slot configuration
@@ -2759,6 +2764,14 @@ class Fetch:
             # Get rate for import to compute charging costs
             if self.rate_import:
                 self.rate_scan(self.rate_import, print=False)
+
+            # The past minutes no car charged in, which use none of the Octopus Intelligent daily cap (#6252): read once
+            # every car's dispatches are in, before the car plans below and the rates count the cap with them
+            if save:
+                # Stamped when read, not with the cycle's clock, which was taken before the fetch and the poll's last reading
+                self.octopus_cap_record(datetime.now(timezone.utc), save="cycle")
+                self.octopus_cap_idle = self.octopus_cap_idle_load()
+                self.octopus_cap_idle_midnight = self.midnight_utc
 
             # Use octopus slots for charging - process for each car
             if self.octopus_intelligent_charging:
