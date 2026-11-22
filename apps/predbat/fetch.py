@@ -4545,7 +4545,9 @@ class Fetch:
         (battery_scaling_auto and SoH move the size a little most days, and some inverters report their maximum rate live),
         or every restart would read the full window again; the rest must be equal.
         """
-        if not isinstance(stored, list) or not isinstance(current, list) or len(stored) != len(current):
+        # A key read back from storage may be malformed (an older layout, or a damaged file): anything short or of another
+        # length is no match rather than an error
+        if not isinstance(stored, list) or not isinstance(current, list) or len(stored) != len(current) or len(current) < 8:
             return False
         # Key positions compared with a tolerance; battery_rate_grid_history_days (4) is compared one way below; every other
         # position must be equal
@@ -4556,11 +4558,11 @@ class Fetch:
                 if stored_value is not current_value:
                     return False
                 continue
-            if not isinstance(stored_value, (int, float)) or abs(stored_value - current_value) > abs(current_value) * tolerance:
+            if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (stored_value, current_value)) or abs(stored_value - current_value) > abs(current_value) * tolerance:
                 return False
+        # battery_rate_grid_history_days: only a deeper window than the last full read needs reading again
         if not isinstance(stored[4], int) or not isinstance(current[4], int) or stored[4] < current[4]:
             return False
-        # battery_rate_grid_history_days: only a deeper window than the last full read needs reading again
         return all(stored[index] == current[index] for index in range(len(current)) if index not in tolerances and index != 4)
 
     def rate_grid_stored_time(self, text):

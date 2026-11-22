@@ -405,18 +405,25 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
             failed |= _check("t4b a change to {} reads the full window".format(name), days == [28], days)
         # Only the first inverter's grid_power is read by the scan, so only it is part of the key
         saved_inverters, saved_grid = my_predbat.args.get("num_inverters"), my_predbat.args.get("grid_power")
-        my_predbat.args["num_inverters"] = 2
-        my_predbat.args["grid_power"] = ["sensor.grid_power", "sensor.second_grid_power"]
-        key_two = my_predbat.rate_grid_scan_key(False)
-        my_predbat.args["grid_power"] = ["sensor.grid_power", "sensor.another_second_grid_power"]
-        failed |= _check("t4b a second inverter's grid_power is not in the key", my_predbat.rate_grid_scan_key(False) == key_two)
-        my_predbat.args["grid_power"] = ["sensor.another_grid_power", "sensor.another_second_grid_power"]
-        failed |= _check("t4b the first inverter's grid_power is", my_predbat.rate_grid_scan_key(False) != key_two)
-        for name, value in (("num_inverters", saved_inverters), ("grid_power", saved_grid)):
-            if value is None:
-                my_predbat.args.pop(name, None)
-            else:
-                my_predbat.args[name] = value
+        try:
+            my_predbat.args["num_inverters"] = 2
+            my_predbat.args["grid_power"] = ["sensor.grid_power", "sensor.second_grid_power"]
+            key_two = my_predbat.rate_grid_scan_key(False)
+            my_predbat.args["grid_power"] = ["sensor.grid_power", "sensor.another_second_grid_power"]
+            failed |= _check("t4b a second inverter's grid_power is not in the key", my_predbat.rate_grid_scan_key(False) == key_two)
+            my_predbat.args["grid_power"] = ["sensor.another_grid_power", "sensor.another_second_grid_power"]
+            failed |= _check("t4b the first inverter's grid_power is", my_predbat.rate_grid_scan_key(False) != key_two)
+        finally:
+            for name, value in (("num_inverters", saved_inverters), ("grid_power", saved_grid)):
+                if value is None:
+                    my_predbat.args.pop(name, None)
+                else:
+                    my_predbat.args[name] = value
+        # A key field added later is compared too, and a malformed or short stored key is no match rather than an error
+        key = my_predbat.rate_grid_scan_key(True)
+        failed |= _check("t4b an appended key field is compared", not my_predbat.rate_grid_scan_key_matches(key + ["a"], key + ["b"]))
+        failed |= _check("t4b a malformed stored key is no match", not my_predbat.rate_grid_scan_key_matches(key, ["x"] + key[1:]))
+        failed |= _check("t4b a short stored key is no match", not my_predbat.rate_grid_scan_key_matches(key[:7], key[:7]))
         days, _ = restart(1, set_arg("export_limit", 3000))
         failed |= _check("t4b export_limit is not part of the charge key", days == [2], days)
         days, _ = restart(1, set_arg("car_charging_battery_size", 77))
