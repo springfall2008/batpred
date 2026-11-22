@@ -2039,7 +2039,24 @@ def run_model_tests(my_predbat, prediction_kernel=False):
         assert_iboost_running=True,
         assert_iboost_running_full=True,
     )
-    # Plain solar diversion keeps both limits: the export ones block it too
+    # Plain solar diversion keeps both limits: the import threshold blocks it, and the export limits do too
+    failed |= simple_scenario(
+        "iboost_pv_any_import_threshold_still_blocks",
+        my_predbat,
+        0,
+        1,
+        assert_final_metric=-export_rate * 24,
+        assert_final_soc=100,
+        battery_soc=100,
+        battery_size=100,
+        with_battery=True,
+        iboost_enable=True,
+        iboost_solar=True,
+        iboost_rate_threshold=import_rate - 1,
+        assert_final_iboost=0,
+        assert_iboost_running=False,
+        assert_iboost_running_solar=False,
+    )
     failed |= simple_scenario(
         "iboost_pv_any_export_gas_still_blocks",
         my_predbat,

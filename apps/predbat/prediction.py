@@ -1431,7 +1431,8 @@ class Prediction(PredictionBatch):
 
             # Iboost finally count
             if self.iboost_enable:
-                # iBoost Solar diversion model: only solar that would otherwise be exported, so only the export limits apply
+                # iBoost Solar diversion model: only energy that would otherwise be exported (solar, and with iboost_on_export
+                # battery energy in a forced export), so only the export limits apply
                 if self.iboost_solar and self.iboost_solar_excess:
                     excess = 0
                     if diff < 0:
