@@ -1244,9 +1244,15 @@ class Plan:
         enable_coarse_fine=True,
         best_max_charge_slots=1,
         best_max_export_slots=1,
+        block_replay=True,
+        replay_stats=None,
     ):
         """
         Pick an import price threshold which gives the best results
+
+        block_replay=False rebuilds every threshold block instead of replaying a repeated one from
+        tried_list - the result is the same, it only exists so tests can compare the two. When
+        replay_stats is a dict, its 'replayed_blocks' is set to how many blocks this call replayed.
         """
         loop_price = price_set[-1]
         best_price = loop_price
@@ -1377,6 +1383,9 @@ class Plan:
         # for 221 distinct answers. Only the collision itself is cached - the limit that follows from it
         # depends on charge_mods/best_limits_reset and changes from trial to trial.
         hit_charge_cache = {}
+        block_cache = {}  # trial block signature -> hashes of the trials it built
+        replayed_blocks = 0
+        prunable_hit_cache = {}  # window_n -> charge window it may be pruned against, or -1
         hit_car_cache = {}  # (start, end) -> does this window hit a car charging slot
         export_allowed_cache = {}  # window_n -> is this export window usable at all
 
@@ -1423,6 +1432,7 @@ class Plan:
             export_candidates = {}
             charge_selection_cache = {}
             export_selection_cache = {}
+            prune_cache = {}
 
             def charge_candidates_for(allow_freeze, loop_price=loop_price):
                 """Every charge window this price threshold makes available, uncapped"""
@@ -1447,7 +1457,9 @@ class Plan:
                 entry = charge_selection_cache.get((count, allow_freeze))
                 if entry is None:
                     taken = candidates[:count]
-                    entry = ([window_n for window_n, _ in taken], dict(taken))
+                    # The third element is this selection's summed hash delta: the scenario hash is a sum
+                    # of integers, so it can be accumulated per side once rather than per trial
+                    entry = ([window_n for window_n, _ in taken], dict(taken), sum(charge_hash_delta[window_n][freeze] for window_n, freeze in taken))
                     charge_selection_cache[(count, allow_freeze)] = entry
                 return entry
 
@@ -1458,7 +1470,7 @@ class Plan:
                 entry = export_selection_cache.get((count, allow_freeze))
                 if entry is None:
                     taken = candidates[:count]
-                    entry = ([window_n for window_n, _ in taken], dict(taken))
+                    entry = ([window_n for window_n, _ in taken], dict(taken), sum(export_hash_delta[window_n][freeze] for window_n, freeze in taken))
                     export_selection_cache[(count, allow_freeze)] = entry
                 return entry
 
@@ -1492,49 +1504,86 @@ class Plan:
                 charge_trials = distinct_slot_trials(charge_slot_choices, {freeze: len(charge_candidates_for(freeze)) for freeze in charge_freeze_options})
                 export_trials = distinct_slot_trials(export_slot_choices, {freeze: len(export_candidates_for(freeze)) for freeze in export_freeze_options})
 
-                for max_charge_slots, charge_freeze_trials in charge_trials:
-                    for max_export_slots, export_freeze_trials in export_trials:
-                        for try_charge_freeze in charge_freeze_trials:
-                            for try_export_freeze in export_freeze_trials:
-                                # all_n is copied into pred_item below and charge_mods is only ever read,
-                                # so both cached objects can be shared between trials as they stand. The
-                                # export pair can be pruned just below, so it is copied on write.
-                                all_n, charge_mods = charge_selection_for(max_charge_slots, try_charge_freeze)
-                                all_d, export_mods = export_selection_for(max_export_slots, try_export_freeze)
+                # A threshold whose candidate windows (and slot ladders) match an earlier threshold's in this
+                # call builds exactly the same trials, every one of them already in tried_list. All the sweep
+                # would do for it is fold those trials' metrics into levels_score for this threshold, so do
+                # just that from the hashes recorded for the first occurrence. This is common in the region
+                # passes, where windows outside the region still contribute thresholds but no candidates.
+                block_hashes = []
+                if block_replay:
+                    block_key = (
+                        coarse,
+                        tuple(charge_slot_choices),
+                        tuple(export_slot_choices),
+                        tuple(tuple(charge_candidates_for(freeze)) for freeze in charge_freeze_options),
+                        tuple(tuple(export_candidates_for(freeze)) for freeze in export_freeze_options),
+                    )
+                    replay_hashes = block_cache.get(block_key)
+                    if replay_hashes is not None:
+                        replayed_blocks += 1
+                        # Every hash was resolved when its block's pred_table was drained, so none should
+                        # still be a pending True; skip one anyway, as the rebuild path does
+                        replay_metrics = [tried_list[block_hash] for block_hash in replay_hashes if tried_list[block_hash] is not True]
+                        if replay_metrics:
+                            levels_score[loop_price] = min(levels_score.get(loop_price, 9999999), min(replay_metrics))
+                        continue
+                    block_cache[block_key] = block_hashes
+
+                # Every selection is looked up once per side up front instead of once per trial, and the
+                # export-on-charge pruning, which depends only on the pair of selections, is memoised per pair
+                charge_entries = [(max_charge_slots, [(try_charge_freeze, charge_selection_for(max_charge_slots, try_charge_freeze)) for try_charge_freeze in charge_freeze_trials]) for max_charge_slots, charge_freeze_trials in charge_trials]
+                export_entries = [(max_export_slots, [export_selection_for(max_export_slots, try_export_freeze) for try_export_freeze in export_freeze_trials]) for max_export_slots, export_freeze_trials in export_trials]
+                prune_export = not self.calculate_export_oncharge
+                for max_charge_slots, charge_side in charge_entries:
+                    for max_export_slots, export_side in export_entries:
+                        for try_charge_freeze, charge_entry in charge_side:
+                            all_n, charge_mods, charge_hash = charge_entry
+                            for export_entry in export_side:
+                                all_d, export_mods, export_hash = export_entry
 
                                 # Remove export hitting charge windows if this is disabled
-                                if not self.calculate_export_oncharge:
-                                    pruned_all_d = None
-                                    pruned_export_mods = None
-                                    for window_n in all_d:
-                                        hit_charge = hit_charge_cache.get(window_n)
-                                        if hit_charge is None:
-                                            hit_charge = self.hit_charge_window(self.charge_window_best, export_window[window_n]["start"], export_window[window_n]["end"])
-                                            hit_charge_cache[window_n] = hit_charge
-                                        if hit_charge >= 0:
-                                            if hit_charge in charge_mods:
-                                                hit_charge_limit = self.reserve if charge_mods[hit_charge] else self.soc_max
-                                            else:
-                                                hit_charge_limit = best_limits_reset[hit_charge]
-                                            if hit_charge_limit > 0.0:
+                                if prune_export:
+                                    # Both entries live in this threshold's selection caches, as long as prune_cache
+                                    # does, so their ids identify the pair
+                                    pair_key = (id(charge_entry), id(export_entry))
+                                    pruned = prune_cache.get(pair_key)
+                                    if pruned is None:
+                                        pruned_export_mods = None
+                                        pruned_hash = export_hash
+                                        # Which export windows can be pruned at all, and against which charge window, is
+                                        # geometric and so fixed per window; only the hit charge window's limit varies per pair
+                                        for window_n in all_d:
+                                            hit_charge = prunable_hit_cache.get(window_n)
+                                            if hit_charge is None:
+                                                hit_charge = hit_charge_cache.get(window_n)
+                                                if hit_charge is None:
+                                                    hit_charge = self.hit_charge_window(self.charge_window_best, export_window[window_n]["start"], export_window[window_n]["end"])
+                                                    hit_charge_cache[window_n] = hit_charge
                                                 # Only remove if it doesn't remove the charge window entirely
-                                                if not (export_window[window_n]["start"] <= self.charge_window_best[hit_charge]["start"] and export_window[window_n]["end"] >= self.charge_window_best[hit_charge]["end"]):
+                                                if hit_charge >= 0 and export_window[window_n]["start"] <= self.charge_window_best[hit_charge]["start"] and export_window[window_n]["end"] >= self.charge_window_best[hit_charge]["end"]:
+                                                    hit_charge = -1
+                                                prunable_hit_cache[window_n] = hit_charge
+                                            if hit_charge >= 0:
+                                                if hit_charge in charge_mods:
+                                                    hit_charge_limit = self.reserve if charge_mods[hit_charge] else self.soc_max
+                                                else:
+                                                    hit_charge_limit = best_limits_reset[hit_charge]
+                                                if hit_charge_limit > 0.0:
                                                     # Dropping the modification restores the reset value (100.0) for this window
-                                                    if pruned_all_d is None:
-                                                        pruned_all_d = all_d[:]
+                                                    if pruned_export_mods is None:
                                                         pruned_export_mods = dict(export_mods)
-                                                    pruned_export_mods.pop(window_n, None)
-                                                    pruned_all_d.remove(window_n)
-                                    if pruned_all_d is not None:
-                                        all_d = pruned_all_d
-                                        export_mods = pruned_export_mods
+                                                    if window_n in pruned_export_mods:
+                                                        pruned_hash -= export_hash_delta[window_n][pruned_export_mods.pop(window_n)]
+                                        if pruned_export_mods is None:
+                                            pruned = (export_mods, export_hash)
+                                        else:
+                                            pruned = (pruned_export_mods, pruned_hash)
+                                        prune_cache[pair_key] = pruned
+                                    export_mods, export_hash = pruned
 
                                 # Skip this one as it's the same as selected already
-                                try_hash = reset_sum
-                                for window_n, freeze in charge_mods.items():
-                                    try_hash += charge_hash_delta[window_n][freeze]
-                                for window_n, freeze in export_mods.items():
-                                    try_hash += export_hash_delta[window_n][freeze]
+                                try_hash = reset_sum + charge_hash + export_hash
+                                block_hashes.append(try_hash)
                                 if try_hash in tried_list:
                                     try_value = tried_list[try_hash]
                                     if try_value is not True:
@@ -1664,6 +1713,9 @@ class Plan:
                     best_export_limits,
                 )
             )
+
+        if replay_stats is not None:
+            replay_stats["replayed_blocks"] = replayed_blocks
 
         # Perform charge limit levelling on best_all_n
         if best_all_n:
