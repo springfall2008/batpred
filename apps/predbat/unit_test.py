@@ -355,6 +355,7 @@ from tests.test_currency_icon import (
     test_apply_currency_icon_real_config,
     test_currency_icon_reaches_ha,
     test_predbat_currency_icon_attribute,
+    test_currency_icon_end_to_end,
 )
 from tests.test_predbat_metrics_data_age import test_data_age_metrics_round_trip
 from tests.test_metrics_dashboard_control_conflicts import test_control_conflicts_metrics_round_trip, test_control_conflicts_dashboard_renders_section
@@ -912,6 +913,7 @@ def main():
         ("currency_icon_config", test_apply_currency_icon_real_config, "Currency icon real CONFIG_ITEMS tests", False),
         ("currency_icon_ha", test_currency_icon_reaches_ha, "Currency icon reaches HA entity tests", False),
         ("currency_icon_attr", test_predbat_currency_icon_attribute, "Currency icon attribute tests", False),
+        ("currency_icon_e2e", test_currency_icon_end_to_end, "Currency icon set from apps.yaml currency_symbols reaches HA and output entities", False),
         ("validate_config", test_validate_config, "APPS_SCHEMA validator tests (string types, sensor boolean states)", False),
         ("get_arg_missing_index", test_get_arg_missing_index_uses_default_quietly, "get_arg missing (out-of-range index) vs malformed numeric coercion tests", False),
         ("get_arg_combine_units", test_get_arg_combine_units, "get_arg combine=True converts each entry to required_unit", False),

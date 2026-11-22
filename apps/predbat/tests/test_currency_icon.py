@@ -14,6 +14,7 @@ currency symbol (currency_symbols[0] in apps.yaml).
 """
 
 import copy
+from datetime import timedelta
 
 from config import (
     CONFIG_ITEMS,
@@ -173,4 +174,84 @@ def test_predbat_currency_icon_attribute(my_predbat):
     print("✓ my_predbat.currency_icon matches the primary currency symbol ({})".format(expected))
 
     print("✓ Test passed: currency_icon attribute is set from currency_symbols")
+    return False
+
+
+def _make_predbat_with_currency(symbols):
+    """Build a PredBat the way create_predbat() does, but with currency_symbols set in apps.yaml before reset()."""
+    from predbat import PredBat
+    from tests.test_infra import TestHAInterface
+
+    predbat = PredBat()
+    predbat.states = {}
+    predbat.args["currency_symbols"] = symbols
+    predbat.reset()
+    predbat.update_time()
+    # Pin the clock as create_predbat() does, so the cost loops below always cover part of a day
+    predbat.minutes_now = 12 * 60
+    predbat.now_utc = predbat.midnight_utc + timedelta(minutes=predbat.minutes_now)
+    predbat.ha_interface = TestHAInterface()
+    predbat.ha_interface.base = predbat
+    predbat.ha_interface.history_enable = False
+    predbat.auto_config()
+    predbat.load_user_config()
+    predbat.fetch_config_options()
+    predbat.ha_interface.history_enable = True
+    return predbat
+
+
+def test_currency_icon_end_to_end(my_predbat):
+    """
+    With currency_symbols set to euro in apps.yaml, the icon reaches HA through Predbat's own start-up and
+    output code, with nothing in the test applying it: the money input_numbers get mdi:currency-eur when
+    reset() and load_user_config() publish them, and an output money sensor (predbat.cost_today) and
+    Predheat's cost_today use the same icon. Reverting the wiring in reset(), or any of those output
+    icons back to mdi:currency-usd, fails this test.
+    """
+    print("**** test_currency_icon_end_to_end ****")
+
+    predbat = _make_predbat_with_currency(["€", "c"])
+    assert predbat.currency_icon == "mdi:currency-eur", "currency_icon should be mdi:currency-eur, got {}".format(predbat.currency_icon)
+
+    # A money input_number, as published by load_user_config() at start-up
+    name = "manual_import_value"
+    item = predbat.config_index.get(name)
+    assert item is not None, "{} config item not found".format(name)
+    assert item.get("icon") == "mdi:currency-eur", "{} config item icon should be mdi:currency-eur, got {}".format(name, item.get("icon"))
+    entity = item.get("entity") or "input_number.predbat_" + name
+    state = predbat.ha_interface.dummy_items.get(entity)
+    assert isinstance(state, dict), "Expected a dict for {} in dummy_items, got {!r}".format(entity, state)
+    assert state.get("icon") == "mdi:currency-eur", "{} HA icon should be mdi:currency-eur, got {!r}".format(entity, state.get("icon"))
+    print("✓ Money input_number published at start-up with the euro icon")
+
+    # A non-money input_number keeps its own icon
+    assert predbat.config_index.get("manual_load_value", {}).get("icon") != "mdi:currency-eur", "manual_load_value (kWh) must not get the currency icon"
+    print("✓ Non-money input_number left alone")
+
+    # An output money sensor
+    energy = {minute: 0.01 * (predbat.minutes_now - minute) for minute in range(0, predbat.minutes_now + 1)}
+    predbat.today_cost(energy, {}, None, energy, save=True)
+    cost_today = predbat.dashboard_values.get(predbat.prefix + ".cost_today", {})
+    icon = cost_today.get("attributes", {}).get("icon")
+    assert icon == "mdi:currency-eur", "predbat.cost_today icon should be mdi:currency-eur, got {!r}".format(icon)
+    assert cost_today["attributes"].get("unit_of_measurement") == "c", "predbat.cost_today unit should be c, got {!r}".format(cost_today["attributes"].get("unit_of_measurement"))
+    print("✓ predbat.cost_today published with the euro icon and minor unit")
+
+    # Predheat's cost today
+    from predheat import PredHeat
+
+    published = {}
+    predheat = PredHeat(predbat)
+    predheat.prefix = predbat.prefix
+    predheat.midnight_utc = predbat.midnight_utc
+    predheat.minutes_now = predbat.minutes_now
+    predheat.set_state = lambda entity_id, state=None, attributes=None: published.update({entity_id: attributes or {}})
+    predheat.rate_import = {minute: 10.0 for minute in range(-24 * 60, 2 * 24 * 60)}
+    predheat.today_cost(energy)
+    attributes = published.get(predbat.prefix + ".cost_today", {})
+    assert attributes.get("icon") == "mdi:currency-eur", "Predheat cost_today icon should be mdi:currency-eur, got {!r}".format(attributes.get("icon"))
+    assert attributes.get("unit_of_measurement") == "c", "Predheat cost_today unit should be c, got {!r}".format(attributes.get("unit_of_measurement"))
+    print("✓ Predheat cost_today published with the euro icon and minor unit")
+
+    print("✓ Test passed: currency icon wired end to end")
     return False
