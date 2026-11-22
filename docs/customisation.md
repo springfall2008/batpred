@@ -409,10 +409,10 @@ This alternative plan is only kept if it does not increase the overall plan metr
 
 ## Battery margins and metrics options
 
-_Warning_: All the **input_number.predbat_metric_xxx** configuration options are expressed in currency minor unit (pence, cents, etc), and have default values scaled to be roughly suitable to a UK/European/American market.
+_Warning_: The money settings among the **input_number.predbat_metric_xxx** options (the **metric_min_improvement** family, **metric_battery_cycle**, **metric_self_sufficiency** and the **metric_future_rate_offset** pair) are expressed in currency minor unit (pence, cents, etc), and have default values scaled to be roughly suitable to a UK/European/American market. The scaling settings (**metric_battery_value_scaling**, **metric_battery_value_export_scaling** and **metric_inday_adjust_damping**) are plain multipliers, not money, and should be left alone.
 
 If your minor unit is worth much less than a penny then these defaults will not be suitable, set [currency_scale](apps-yaml.md#currency_scale) in `apps.yaml` to widen their ranges and you will need to adjust the default values accordingly.
-For example, there are roughly 9 Danish Crowns to the pound, so the metric_min_improvement's will need to be increased by a factor of 9 to give equivalent results for a Danish Predbat user.
+For example, there are roughly 9 Danish øre to the penny (as there are roughly 9 Danish Crowns to the pound), so the metric_min_improvements will need to be increased by a factor of 9 to give equivalent results for a Danish Predbat user.
 
 **input_number.predbat_best_soc_keep** is the battery level in kWh that Predbat will try to keep the battery above in the plan.
 This is a soft constraint: for each hour the planned SoC spends below it, the plan is charged the shortfall in kWh times the import rate at that time, scaled by **input_number.predbat_best_soc_keep_weight**. The plan only goes below it when doing so saves more than that.
@@ -455,7 +455,7 @@ You could even go to something like -0.1 to say you would charge less even if it
 While a charge is running, Predbat keeps its current target unless changing it is worth at least 0.5p (or this setting, if higher), so a near-tie does not move the target part way through a charge.
 This also applies in Control SOC only mode, where the inverter runs its own charge window and Predbat only sets the target.
 
-**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets how much a forced export has to earn, in minimum currency minor unit (pence, cents, etc) per slot (30 minutes) of export time, scaled down for exports at lower power.
+**input_number.predbat_metric_min_improvement_export** (_expert mode_) Sets how much a forced export has to earn, in currency minor unit (pence, cents, etc) per slot (30 minutes) of export time, scaled down for exports at lower power.
 Every 5 minutes of a planned export has to earn its share of this, so an export is shortened, or dropped, where its later minutes would earn less than that.
 For example at 0.5p each extra 5 minutes of export must earn about 0.08p, and at 3p about 0.5p.
 A value of 0.1p is the default, which only removes export that earns almost nothing.
@@ -467,7 +467,7 @@ That is measured on the plan metric - cost, less the value of what is left in th
 which a slow or freeze export can lower without saving anything.
 So an export that only pays if solar turns out much better (PV90) or worse (PV10) than forecast is not planned.
 
-**input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum currency minor unit (pence, cents, etc) cost improvement it's worth doing an export freeze for.
+**input_number.predbat_metric_min_improvement_export_freeze** (_expert mode_) Sets the minimum improvement, in currency minor unit (pence, cents, etc), in the central forecast that it's worth doing an export freeze for.
 A value of 0.1p is the default which prevents any marginal freezes as they must be worth at least 0.1 of your minor currency unit (pence, cents, etc) for a slot duration (less for shorter slots).
 If you increase this value (e.g. you only want to freeze export if very profitable), then freeze exports will become less common.
 The value is in currency minor unit (pence, cents, etc) per slot of export time.
