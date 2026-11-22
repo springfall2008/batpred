@@ -165,6 +165,9 @@ pred_bat:
     - sensor.solax_battery_temperature
     #- sensor.solax_2_battery_temperature
 
+  battery_temperature_history:
+    - sensor.solax_battery_temperature
+
   # ─── SolaX Gen2 battery and inverter limits ───────────────────────────────
   # Gen2's battery current register tops out at 50 A, which is about 2400 W on
   # a 48 V battery - more than that would ask the inverter for more than 50 A
