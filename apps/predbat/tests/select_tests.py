@@ -29,8 +29,7 @@ def keyword_matches(keyword, name, func):
     Matches when the keyword appears in the registry name or the function name, or appears in the
     registry name once a leading "test_" is taken off the keyword.
     """
-    func_name = getattr(func, "__name__", "")
-    return keyword in name or keyword in func_name or _strip_test_prefix(keyword) in name
+    return keyword in name or keyword in func.__name__ or _strip_test_prefix(keyword) in name
 
 
 def name_matches(test_name, name, func):
@@ -39,7 +38,7 @@ def name_matches(test_name, name, func):
     Matches the registry name exactly, the function name exactly, or the registry name once a leading
     "test_" is taken off test_name.
     """
-    return test_name == name or test_name == getattr(func, "__name__", "") or _strip_test_prefix(test_name) == name
+    return test_name == name or test_name == func.__name__ or _strip_test_prefix(test_name) == name
 
 
 def select_by_keyword(registry, keyword):
@@ -53,3 +52,25 @@ def select_by_name(registry, test_name):
         if name_matches(test_name, entry[0], entry[1]):
             return entry
     return None
+
+
+def choose_tests(registry, keyword=None, test_names=None):
+    """Return (tests to run, error message) for unit_test.py's -k and --test options.
+
+    -k takes priority over --test, as it always has. With neither, every test in the registry runs.
+    The error message is None unless -k matched nothing or a --test name wasn't found.
+    """
+    if keyword:
+        entries = select_by_keyword(registry, keyword)
+        if not entries:
+            return [], "ERROR: No tests found matching keyword '{}'".format(keyword)
+        return entries, None
+    if test_names:
+        entries = []
+        for test_name in test_names:
+            entry = select_by_name(registry, test_name)
+            if not entry:
+                return [], "ERROR: Test '{}' not found. Use --list to see available tests.".format(test_name)
+            entries.append(entry)
+        return entries, None
+    return list(registry), None

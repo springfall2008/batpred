@@ -12,7 +12,7 @@ Tests for how unit_test.py picks tests from --test and -k: the registry name, th
 registry name typed with "test_" in front all work.
 """
 
-from tests.select_tests import keyword_matches, name_matches, select_by_keyword, select_by_name
+from tests.select_tests import choose_tests, keyword_matches, name_matches, select_by_keyword, select_by_name
 
 
 class _StandIn:
@@ -64,6 +64,21 @@ def test_select_tests(my_predbat):
     check("--test test_octopus_url by registry name with test_ prefix", (select_by_name(REGISTRY, "test_octopus_url") or ("",))[0], "octopus_url")
     check("--test currency_icon is not a whole name, so matches nothing", select_by_name(REGISTRY, "currency_icon"), None)
     check("name_matches needs a whole name", name_matches("currency_icon", "currency_icon_lookup", REGISTRY[1][1]), False)
+
+    # choose_tests, the single call unit_test.py's main() makes for -k / --test
+    entries, error = choose_tests(REGISTRY, keyword="end_to_end")
+    check("choose_tests -k by function name", (_names(entries), error), (["currency_icon_e2e"], None))
+    entries, error = choose_tests(REGISTRY, test_names=["test_currency_icon_end_to_end", "test_octopus_url"])
+    check("choose_tests --test by function name and test_ prefix, in the order given", (_names(entries), error), (["currency_icon_e2e", "octopus_url"], None))
+    entries, error = choose_tests(REGISTRY, keyword="octopus", test_names=["currency_icon_e2e"])
+    check("choose_tests -k takes priority over --test", (_names(entries), error), (["octopus_url"], None))
+    entries, error = choose_tests(REGISTRY)
+    check("choose_tests with neither option runs everything", (_names(entries), error), (_names(REGISTRY), None))
+    check("choose_tests returns a copy, so shuffling it leaves the registry alone", entries is REGISTRY, False)
+    entries, error = choose_tests(REGISTRY, keyword="nothing_like_this")
+    check("choose_tests -k with no match is an error", (entries, error), ([], "ERROR: No tests found matching keyword 'nothing_like_this'"))
+    entries, error = choose_tests(REGISTRY, test_names=["currency_icon_e2e", "no_such_test"])
+    check("choose_tests --test with an unknown name is an error", (entries, error), ([], "ERROR: Test 'no_such_test' not found. Use --list to see available tests."))
 
     if failed:
         print("ERROR: test_select_tests FAILED")

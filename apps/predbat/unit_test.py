@@ -463,7 +463,7 @@ from tests.test_annual_export_sweep import (
     test_annual_export_sweep_tariff_threading,
 )
 from tests.test_debug_history import test_debug_history
-from tests.select_tests import select_by_keyword, select_by_name
+from tests.select_tests import choose_tests
 from tests.test_select_tests import test_select_tests
 from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment, test_debug_history_count_range
 
@@ -1231,30 +1231,12 @@ def main():
         run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo, overrides=overrides)
         sys.exit(0)
 
-    # Collect tests to run based on arguments
-    tests_to_run = []
-
-    if args.keyword:
-        # Run tests matching keyword pattern
-        keyword = args.keyword
-        # Matches the registry name or the test function name, and a registry name typed with "test_" in front
-        tests_to_run = select_by_keyword(TEST_REGISTRY, keyword)
-        if not tests_to_run:
-            print(f"ERROR: No tests found matching keyword '{keyword}'")
-            sys.exit(1)
-    elif args.test:
-        # Run specific tests by name
-        for test_name in args.test:
-            # The registry name, the test function name, or a registry name typed with "test_" in front
-            entry = select_by_name(TEST_REGISTRY, test_name)
-            if entry:
-                tests_to_run.append(entry)
-            else:
-                print(f"ERROR: Test '{test_name}' not found. Use --list to see available tests.")
-                sys.exit(1)
-    else:
-        # Run all tests from the registry
-        tests_to_run = TEST_REGISTRY
+    # Collect tests to run based on arguments: -k, then --test, else everything. Both accept the registry name, the test function name, or a
+    # registry name typed with "test_" in front
+    tests_to_run, error = choose_tests(TEST_REGISTRY, keyword=args.keyword, test_names=args.test)
+    if error:
+        print(error)
+        sys.exit(1)
 
     if args.shuffle:
         shuffle_seed = args.shuffle_seed if args.shuffle_seed is not None else random.randrange(2**32)
