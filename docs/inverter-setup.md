@@ -738,45 +738,58 @@ Predbat has no built-in GoodWe inverter type, so it uses a custom inverter defin
 
 There are two ways to control a GoodWe, depending on what your inverter exposes:
 
-- **EMS control** (recommended): if your inverter has `select.goodwe_ems_mode` and `number.goodwe_ems_power_limit`, Predbat can charge, force export and hold the battery at a set power. EMS control may need a firmware update through the SolarGo app before these appear
+- **EMS control** (recommended): if your inverter has `select.goodwe_ems_mode` and `number.goodwe_ems_power_limit`, Predbat can charge, force export, freeze charge and freeze export. EMS control may need a firmware update through the SolarGo app before these appear
 - **Operation mode control**: older inverters without EMS (e.g. the GW10KL-ET) only have the operation mode select (`general`, `eco_charge`, `eco_discharge`, ...). Predbat can charge the battery from the grid but can't force an export
 
 Thanks @dmacwalter for the EMS configuration and @bpinto for the operation mode configuration.
 
 ### GoodWe EMS control
 
-Predbat writes the charge and export power it wants into two `input_number` helpers, and calls scripts that write the EMS power limit and then the EMS mode. Using helpers and scripts means only the scripts write to the EMS, so Predbat and the scripts can't race each other.
+GoodWe's EMS has no target SoC: you give it a mode and a power setpoint (the EMS power limit, called "Xset"), and it keeps going until told otherwise. The right mode also depends on the time of day and how much solar there is.
+So Predbat drives the inverter through Home Assistant scripts that pick the EMS mode and setpoint each time they run, plus a follow-through automation that re-checks every minute between Predbat's cycles.
+Predbat writes the charge and export power it wants into two `input_number` helpers, which the scripts read.
 
-- Install the GoodWe Inverter integration from the [Marketplace](install.md#hacs-and-the-marketplace) (or from HACS on Home Assistant 2026.10 or older), and check that `select.goodwe_ems_mode` and `number.goodwe_ems_power_limit` exist
+The setup below is a simplified starting point. dmacwalter's full configuration, which has run since September 2026 on a GW9.99K-EH (10 kW, 5.4 kW export limit, 22.4 kWh battery), is attached to the [GoodWe issue](https://github.com/springfall2008/batpred/issues/1000) as a working reference.
+It adds solar-forecast-aware charging, `sell_power` export when the surplus is above the export limit, an export limit watchdog and a battery taper guard. Read it alongside the notes below if you want to go further.
+
+- Install the GoodWe Inverter integration from the [Marketplace](install.md#hacs-and-the-marketplace) (or from HACS on Home Assistant 2026.10 or older), and check that `select.goodwe_ems_mode` and `number.goodwe_ems_power_limit` exist.
+  Set the inverter's operation mode (`select.goodwe_inverter_operation_mode`) to `general`
 - Copy the template [goodwe.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/goodwe.yaml) over your `apps.yaml`
 - Create two helpers (Settings / Devices & services / Helpers / Create helper / Number), `input_number.predbat_charge_rate` and `input_number.predbat_discharge_rate`, from 0 to at least your **battery_rate_max** in W, step 100, display mode Input field.
   If the maximum is lower than **battery_rate_max**, Predbat's writes to them fail without an error
-- Create the four scripts below in Settings / Automations & scenes / Scripts (edit in YAML). The export script keeps battery + PV - house load under your grid export limit: set `cap` to a little below your export limit and `rate_max` to your **battery_rate_max**
-- In `apps.yaml` set **soc_max** to your battery size in kWh, **battery_rate_max** to the battery's maximum charge/discharge power in W, **inverter_limit** to the inverter's AC rating, and **export_limit** if you have one
+- Create the four scripts and the follow-through automation below. In the export script, set `cap` to a little below your grid export limit and `rate_max` to your **battery_rate_max**.
+  The scripts use Solcast's `sensor.solcast_pv_forecast_power_now` to tell day from night, because the inverter occasionally stops its AC output in full sun and live PV alone would then look like night
+- In `apps.yaml` set **soc_max** to your battery size in kWh, **battery_rate_max** to the battery's maximum charge/discharge power in W, **inverter_limit** to the inverter's AC rating, **inverter_limit_charge** to its grid charge limit, and **export_limit** to your network's export limit
+- Turn on **switch.predbat_set_export_freeze** if you want Predbat to use freeze export
 - Delete the `template: True` line and restart Predbat
 
-Charge script:
+Scripts (Settings / Automations & scenes / Scripts, edit in YAML, or paste into `scripts.yaml`). They all write the setpoint before the mode, skip writing when the inverter is already in the right state, and are `mode: queued` because Predbat sends the charge stop and export stop together:
 
 ```yaml
 predbat_charge:
   alias: Predbat - force charge
-  mode: single
+  description: "Daylight: buy_power holds grid import at Predbat's rate and leaves solar free. Night: charge_battery at Predbat's rate."
+  mode: queued
+  max: 5
   variables:
+    day: "{{ states('sensor.solcast_pv_forecast_power_now') | float(0) >= 500 }}"
+    target_mode: "{{ 'buy_power' if day else 'charge_battery' }}"
     setpoint: >-
       {% set rate_max = 9600 %}
       {% set req = states('input_number.predbat_charge_rate') | float(0) %}
       {% set target = rate_max if req <= 0 else [req, rate_max] | min %}
-      {{ (((([target, 0] | max) / 100) | round(0) | int) * 100) }}
+      {{ ((([target, 500] | max) / 100) | round(0) | int) * 100 }}
   sequence:
-    - alias: Clear stale mode state, unless already in auto or charging
+    - alias: Already in the right mode at about this setpoint - nothing to write
       if:
-        - condition: not
-          conditions:
-            - condition: state
-              entity_id: select.goodwe_ems_mode
-              state:
-                - auto
-                - charge_battery
+        - condition: template
+          value_template: "{{ is_state('select.goodwe_ems_mode', target_mode) and (states('number.goodwe_ems_power_limit') | float(0) - setpoint | float(0)) | abs < 200 }}"
+      then:
+        - stop: Already charging
+    - alias: Clear stale mode state, unless already in auto or the target mode
+      if:
+        - condition: template
+          value_template: "{{ states('select.goodwe_ems_mode') not in ['auto', target_mode] }}"
       then:
         - action: select.select_option
           target:
@@ -785,7 +798,7 @@ predbat_charge:
             option: auto
         - delay:
             seconds: 2
-    - alias: Power limit first - this is what makes the setpoint stick
+    - alias: Setpoint first - this is what makes it stick
       action: number.set_value
       target:
         entity_id: number.goodwe_ems_power_limit
@@ -795,61 +808,113 @@ predbat_charge:
       target:
         entity_id: select.goodwe_ems_mode
       data:
-        option: charge_battery
-```
+        option: "{{ target_mode }}"
 
-Export script:
+predbat_freeze:
+  alias: Predbat - freeze battery
+  description: "Used for both freeze charge and freeze export. Freeze/hold charge: auto with a solar surplus, otherwise battery_standby at 0 W (hard hold). Freeze exporting: discharge_pv at 0 W with a surplus, otherwise auto."
+  mode: queued
+  max: 5
+  variables:
+    pv: "{{ states('sensor.pv_power') | float(0) }}"
+    surplus: "{{ ([pv - states('sensor.house_consumption') | float(0), 0] | max) if pv >= 300 else 0 }}"
+    cur: "{{ states('select.goodwe_ems_mode') }}"
+    target_mode: >-
+      {% if states('predbat.status').startswith('Freeze exporting') %}
+        {{ 'discharge_pv' if surplus > (200 if cur == 'discharge_pv' else 500) and states('sensor.battery_state_of_charge') | float(0) < 95 else 'auto' }}
+      {% else %}
+        {{ 'auto' if surplus > (200 if cur == 'auto' else 500) else 'battery_standby' }}
+      {% endif %}
+    target_xset: "{{ 10000 if target_mode == 'auto' else 0 }}"
+  sequence:
+    - alias: Already in the right state - nothing to write
+      if:
+        - condition: template
+          value_template: "{{ is_state('select.goodwe_ems_mode', target_mode) and states('number.goodwe_ems_power_limit') | float(-1) == target_xset | float }}"
+      then:
+        - stop: Already holding
+    - alias: Setpoint first - 0 makes battery_standby a hold rather than a charge
+      action: number.set_value
+      target:
+        entity_id: number.goodwe_ems_power_limit
+      data:
+        value: "{{ target_xset | int }}"
+    - action: select.select_option
+      target:
+        entity_id: select.goodwe_ems_mode
+      data:
+        option: "{{ target_mode }}"
 
-```yaml
 predbat_export:
   alias: Predbat - force export
-  mode: single
+  description: "Night: discharge_battery at Predbat's rate. Daylight: discharge_pv, which never charges the battery and respects the export limit, at least 1000 W."
+  mode: queued
+  max: 5
   variables:
+    pv: "{{ states('sensor.pv_power') | float(0) }}"
+    load: "{{ states('sensor.house_consumption') | float(0) }}"
+    night: "{{ pv < 1000 and states('sensor.solcast_pv_forecast_power_now') | float(0) < 1000 }}"
+    target_mode: "{{ 'discharge_battery' if night else 'discharge_pv' }}"
     setpoint: >-
       {% set cap = 5200 %}
       {% set rate_max = 9600 %}
-      {% set pv = states('sensor.pv_power') | float(0) %}
-      {% set load = states('sensor.house_consumption') | float(0) %}
       {% set req = states('input_number.predbat_discharge_rate') | float(0) %}
       {% set headroom = cap - pv + load %}
       {% set target = headroom if req <= 0 else [req, headroom] | min %}
+      {% set target = [target, 1000] | max if target_mode == 'discharge_pv' else target %}
       {{ ((([[target, 0] | max, rate_max] | min) / 100) | round(0) | int) * 100 }}
   sequence:
-    - alias: Clear stale mode state, unless already in auto or a mode we set
-      if:
-        - condition: not
-          conditions:
-            - condition: state
-              entity_id: select.goodwe_ems_mode
-              state:
-                - auto
-                - discharge_battery
-                - battery_standby
-      then:
-        - action: select.select_option
-          target:
-            entity_id: select.goodwe_ems_mode
-          data:
-            option: auto
-        - delay:
-            seconds: 2
-    - alias: PV alone already fills the export cap - hold the battery instead
+    - alias: Inverter readings unavailable - release to auto rather than guess
       if:
         - condition: template
-          value_template: "{{ setpoint | float(0) < 200 }}"
+          value_template: "{{ not (states('sensor.battery_state_of_charge') | is_number and states('sensor.pv_power') | is_number and states('sensor.house_consumption') | is_number) }}"
       then:
         - action: number.set_value
           target:
             entity_id: number.goodwe_ems_power_limit
           data:
-            value: 0
+            value: 10000
         - action: select.select_option
           target:
             entity_id: select.goodwe_ems_mode
           data:
-            option: battery_standby
-        - stop: PV is filling the export cap - battery held, not discharged
-    - alias: Power limit first - this is what makes the setpoint stick
+            option: auto
+        - stop: Readings unavailable - inverter left in auto
+    - alias: No export headroom at night - release to auto
+      if:
+        - condition: template
+          value_template: "{{ target_mode == 'discharge_battery' and setpoint | int < 200 }}"
+      then:
+        - action: number.set_value
+          target:
+            entity_id: number.goodwe_ems_power_limit
+          data:
+            value: 10000
+        - action: select.select_option
+          target:
+            entity_id: select.goodwe_ems_mode
+          data:
+            option: auto
+        - stop: No export headroom - inverter left in auto
+    - alias: Already in the right mode at about this setpoint - nothing to write
+      if:
+        - condition: template
+          value_template: "{{ is_state('select.goodwe_ems_mode', target_mode) and (states('number.goodwe_ems_power_limit') | float(0) - setpoint | float(0)) | abs < 200 }}"
+      then:
+        - stop: Already exporting
+    - alias: Clear stale mode state, unless already in the target mode
+      if:
+        - condition: template
+          value_template: "{{ states('select.goodwe_ems_mode') not in ['auto', target_mode] }}"
+      then:
+        - action: select.select_option
+          target:
+            entity_id: select.goodwe_ems_mode
+          data:
+            option: auto
+        - delay:
+            seconds: 2
+    - alias: Setpoint first - this is what makes it stick
       action: number.set_value
       target:
         entity_id: number.goodwe_ems_power_limit
@@ -859,35 +924,13 @@ predbat_export:
       target:
         entity_id: select.goodwe_ems_mode
       data:
-        option: discharge_battery
-```
+        option: "{{ target_mode }}"
 
-Freeze (hold) script:
-
-```yaml
-predbat_freeze:
-  alias: Predbat - freeze battery
-  mode: single
-  sequence:
-    - alias: Limit 0 before the mode - this makes battery_standby a hold, not a charge request
-      action: number.set_value
-      target:
-        entity_id: number.goodwe_ems_power_limit
-      data:
-        value: 0
-    - action: select.select_option
-      target:
-        entity_id: select.goodwe_ems_mode
-      data:
-        option: battery_standby
-```
-
-Stop script, used for both charge and export stop:
-
-```yaml
 predbat_stop:
   alias: Predbat - release to auto
-  mode: single
+  description: Used for both charge stop and export stop
+  mode: queued
+  max: 5
   sequence:
     - action: number.set_value
       target:
@@ -901,18 +944,96 @@ predbat_stop:
         option: auto
 ```
 
-Notes on GoodWe EMS behaviour:
+The follow-through automation is needed because Predbat sends one command when a charge, export or freeze starts and expects the inverter to stop at the target SoC by itself, which GoodWe can't do.
+Every minute while Predbat is in control, it holds the battery once a charge reaches Predbat's target SoC, releases to auto once an export reaches it, re-runs the scripts so the mode follows the solar, and keeps freeze export applied.
+It reads the target SoC from the `detail` attribute of `predbat.status` (e.g. "target 90%"):
 
-- **Write order matters.** Always write the EMS power limit before the EMS mode. If the mode is written first, the setpoint doesn't stick
-- The power limit is a magnitude with no direction, and the same mode means different things depending on it: `battery_standby` with a 0 W limit is a true hold (no charge or discharge, house load from the grid), but with a 10000 W limit it behaves as a charge request
-- `discharge_battery` is accurate to its setpoint but throttles PV, so the simple export script above works best when PV is low (evening and night).
-  In strong sun, `sell_power` exports to the setpoint and sends the rest of the surplus to the battery but does **not** respect the grid export limit, while `discharge_pv` respects the limit but curtails PV.
-  The [GoodWe issue](https://github.com/springfall2008/batpred/issues/1000) has a more advanced export script that picks the EMS mode each cycle from PV, house load and battery SoC, with a watchdog for `sell_power` overshooting the export limit
-- Freeze export isn't supported: no EMS mode means "don't charge but cover house load from the battery", and GoodWe isn't a feed-in-first inverter, so holding the battery clips surplus PV
-- Predbat doesn't set the battery reserve. The inverter's own on-grid and backup depth of discharge settings are the only floor on discharge
+```yaml
+alias: Predbat GoodWe follow-through
+description: Makes the GoodWe follow Predbat's plan between Predbat's 5-minute cycles
+mode: single
+max_exceeded: silent
+triggers:
+  - trigger: time_pattern
+    minutes: /1
+conditions:
+  - condition: state
+    entity_id: select.predbat_mode
+    state: Control charge & discharge
+  - condition: state
+    entity_id: switch.predbat_set_read_only
+    state: "off"
+  - alias: Predbat isn't in the middle of a cycle
+    condition: state
+    entity_id: switch.predbat_active
+    state: "off"
+    for:
+      seconds: 20
+  - condition: template
+    value_template: "{{ states('sensor.battery_state_of_charge') | is_number }}"
+actions:
+  - variables:
+      status: "{{ states('predbat.status') }}"
+      soc: "{{ states('sensor.battery_state_of_charge') | float(0) }}"
+      ems: "{{ states('select.goodwe_ems_mode') }}"
+      tgt: >-
+        {% set m = (state_attr('predbat.status', 'detail') or '') | regex_findall('([0-9]+(?:\\.[0-9]+)?)%') %}
+        {{ (m | last | float) if m | count > 0 else -1 }}
+  - choose:
+      - alias: Charge reached Predbat's target - hold until the next cycle
+        conditions:
+          - condition: template
+            value_template: "{{ status.startswith('Charging') and tgt > 0 and soc >= tgt and ems in ['charge_battery', 'buy_power'] }}"
+        sequence:
+          - action: script.predbat_freeze
+      - alias: Still charging - keep the mode following day/night
+        conditions:
+          - condition: template
+            value_template: "{{ status.startswith('Charging') and tgt > 0 and soc < tgt - 1 and ems != 'battery_standby' }}"
+        sequence:
+          - action: script.predbat_charge
+      - alias: Export reached Predbat's target - release to auto
+        conditions:
+          - condition: template
+            value_template: "{{ status.startswith('Exporting') and tgt >= 0 and soc < tgt and ems in ['discharge_pv', 'discharge_battery'] }}"
+        sequence:
+          - action: script.predbat_stop
+      - alias: Still exporting - keep the mode following day/night
+        conditions:
+          - condition: template
+            value_template: "{{ status.startswith('Exporting') and tgt >= 0 and soc > tgt + 1 }}"
+        sequence:
+          - action: script.predbat_export
+      - alias: Freeze or hold - keep the mode following the solar surplus
+        conditions:
+          - condition: template
+            value_template: "{{ status.startswith('Freeze') or status.startswith('Hold') }}"
+        sequence:
+          - action: script.predbat_freeze
+```
+
+Notes on GoodWe EMS behaviour (tested by dmacwalter day and night, and retested after the 27 Oct 2026 firmware update):
+
+| EMS mode | What the setpoint means | Use |
+| :--- | :--- | :--- |
+| `auto` | ignored | Normal running, and the release state (setpoint 10000) |
+| `buy_power` | grid import target; solar stays free and the battery gets the surplus plus the setpoint | Daytime grid top-up. Since the firmware update a 0 W setpoint still imports about 0.5 kW in daylight, so don't use it below about 500 W |
+| `charge_battery` / `battery_standby` | battery charge power (the two modes behave the same) | Night grid charge. A 0 W setpoint is a hard hold; 10000 W is a charge request |
+| `discharge_pv` / `discharge_battery` | battery discharge power (the same at night) | Export and freeze export. `discharge_pv` never charges the battery and respects the export limit; at 0 W it holds the battery and exports the surplus |
+| `sell_power` | grid export target | Export when the surplus is above the export limit. It does **not** respect the inverter's export limit (8.5 kW seen with a full battery), so cap the setpoint yourself and watch it |
+| `export_ac`, `conserve`, `charge_pv`, `import_ac` | | Avoid: they curtail PV, or run the house from the grid in daylight |
+
+- **Write order matters.** Always write the EMS power limit before the EMS mode, or the setpoint doesn't stick. Go via `auto` (and wait about 2 seconds) when leaving another forced mode
+- Charging with `charge_battery` in daylight lets the grid fill every cloud dip, which is why the charge script uses `buy_power` in daylight
+- Asking for more AC output than the inverter's ceiling (about 10 kW) minus the house load pins the output at the ceiling, curtails PV and drains the battery, so cap export setpoints at the AC ceiling minus house load minus about 300 W
+- On the tested unit the grid-only charge limit is about 7 kW (set **inverter_limit_charge** to match), PV charging reaches about 10 kW, and battery discharge about 5 kW
+- Near full, once the battery limits its charge current to 15 A or less, `auto` hunts and curtails PV for 20-50 minutes; holding `discharge_pv` near 0 W exports the surplus cleanly instead (dmacwalter's taper guard automation does this)
+- GoodWe isn't a feed-in-first inverter: in freeze export, PV above the house load plus the export limit is clipped rather than charged into the battery
+- Predbat doesn't set the battery reserve, and setting the depth of discharge above the current SoC doesn't make the inverter charge from the grid
+- The tested inverter cut out on heat at about 66 °C radiator temperature. Lowering `number.goodwe_grid_export_limit` as it heats up, plus a fan, stopped that
 - Put service keys at the top level of each Predbat service entry, not under a nested `data:` block: Predbat passes a nested block to Home Assistant as a key called `data`, which it rejects with "not a valid option at 'data'"
 - Quote every `HH:MM:SS` time in `apps.yaml` (e.g. `"11:00:00"`). Unquoted, YAML reads it as a number of seconds and Predbat fails with `'int' object has no attribute 'count'`
-- The scripts' thresholds are specific to each site. Multiple GoodWe inverters in parallel haven't been tested with EMS control
+- Multiple GoodWe inverters in parallel haven't been tested with EMS control
 
 ### GoodWe operation mode control
 

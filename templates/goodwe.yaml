@@ -4,7 +4,8 @@
 # Predbat has no built-in GoodWe inverter type, so this is a custom inverter
 # type controlled through Predbat's Service API. Predbat writes the charge and
 # export power it wants into two input_number helpers and calls Home Assistant
-# scripts that set the inverter's EMS power limit and EMS mode.
+# scripts that pick the EMS mode and power limit. GoodWe EMS has no target SoC,
+# so a follow-through automation also re-checks every minute between cycles.
 # Your inverter must expose select.goodwe_ems_mode and number.goodwe_ems_power_limit
 # (EMS control may need a firmware update through the SolarGo app). If it only
 # has the operation modes (general, eco_charge, ...), see the docs for the
@@ -14,8 +15,9 @@
 # Copy this over your apps.yaml and:
 #   1. Install the GoodWe Inverter integration from the Marketplace (not the
 #      built-in GoodWe integration, which has no EMS controls).
-#   2. Create the two input_number helpers and the four scripts described in
-#      the docs, adjusting the export limits in the scripts for your site.
+#   2. Create the two input_number helpers, the four scripts and the
+#      follow-through automation described in the docs, adjusting the export
+#      limits in the scripts for your site. The scripts need Solcast.
 #   3. Set soc_max, battery_rate_max and inverter_limit for your system.
 #   4. Delete the template: True line below once you have configured this file.
 ---
@@ -66,9 +68,11 @@ pred_bat:
     has_reserve_soc: false
     has_timed_pause: false
     time_button_press: false
-    # Freeze charge holds the battery (EMS battery_standby with a 0 W limit)
+    # Freeze charge: auto with a solar surplus, otherwise battery_standby at 0 W.
+    # Freeze export: discharge_pv at 0 W with a solar surplus, otherwise auto
+    # (needs the 27 Oct 2026 or later firmware)
     support_charge_freeze: true
-    support_discharge_freeze: false
+    support_discharge_freeze: true
     support_feedin_first: false
     has_ge_inverter_mode: false
     has_ge_eco_toggle: false
@@ -93,7 +97,8 @@ pred_bat:
 
   # Service keys go at the top level of each entry, not under a data: block.
   # repeat: true makes Predbat call the start scripts every cycle, so the
-  # export setpoint follows changing PV and house load
+  # mode and setpoint follow changing PV and house load. Both freeze services
+  # use one script, which checks predbat.status for "Freeze exporting"
   charge_start_service:
     service: script.turn_on
     entity_id: script.predbat_charge
@@ -111,6 +116,9 @@ pred_bat:
     entity_id: script.predbat_stop
     repeat: false
   charge_freeze_service:
+    service: script.turn_on
+    entity_id: script.predbat_freeze
+  discharge_freeze_service:
     service: script.turn_on
     entity_id: script.predbat_freeze
 
@@ -142,9 +150,13 @@ pred_bat:
   # Inverter AC limit in W, e.g. 10000 for a 10 kW inverter
   inverter_limit:
     - 10000
-  # Grid export limit in W, if your DNO has set one
-  #export_limit:
-  #  - 5400
+  # Grid-only charge limit in W (about 7000 on a 10 kW ET after the 27 Oct 2026
+  # firmware, about 4800 before it)
+  inverter_limit_charge:
+    - 7000
+  # Grid export limit in W - set this to your network's export limit
+  export_limit:
+    - 5400
   inverter_clock_skew_start: 0
   inverter_clock_skew_end: 0
   inverter_clock_skew_discharge_start: 0

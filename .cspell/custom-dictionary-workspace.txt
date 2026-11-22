@@ -263,6 +263,7 @@ feedin
 fentry
 figsize
 finaliser
+findall
 Fingerbot
 firstparty
 flextras
@@ -648,6 +649,7 @@ repr
 resetmidnight
 resultid
 resultmid
+retested
 retryable
 reweight
 reweighted
@@ -868,6 +870,7 @@ xlabel
 xlim
 xload
 xrtkq
+Xset
 xtest
 xticks
 xxabcdefyy
