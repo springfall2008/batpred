@@ -1,0 +1,291 @@
+# Predbat config for a GivEnergy EMS controlling two AC-coupled (or hybrid)
+# inverters, read and controlled locally through the GE Local integration
+# (https://github.com/dewet22/givenergy-hass, version 1.3.34 or later).
+#
+# GE Local talks Modbus TCP straight to the EMS and the inverters, with no
+# GivTCP, MQTT broker or GivEnergy cloud involved. Predbat controls the plant
+# through the EMS charge and export slot 1; the per-inverter entities are used
+# for battery SoC, size, reserve and charge/discharge rate.
+# See the GivEnergy EMS with GE Local section of the inverter setup docs.
+#
+# Copy this over your apps.yaml and:
+#   1. Set ems_serial, inv1_serial and inv2_serial to your serial numbers, in
+#      lower case, as they appear in the GE Local entity names.
+#   2. Set area to the Home Assistant area your GivEnergy devices are in (Home
+#      Assistant puts the area at the start of the entity names). If your
+#      devices have no area, remove "{area}_" from every entity name below.
+#   3. Check every entity name exists in Developer Tools / States. GE Local's
+#      "Generate Predbat Config" action lists the right names for your install.
+#   4. Set inverter_limit for each inverter.
+#   5. For a single inverter set num_inverters to 1 and delete the second
+#      entry of every list below.
+#   6. Delete the template: True line below once you have configured this file.
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  timezone: Europe/London
+  currency_symbols:
+    - '£'
+    - 'p'
+  threads: auto
+  # XXX: This is a configuration template, delete this line once you edit your configuration
+  template: True
+
+  # ─── Your system ──────────────────────────────────────────────────────────
+  # Serial numbers in lower case, and the Home Assistant area of the devices
+  ems_serial: "em1234g567"
+  inv1_serial: "ce1234g567"
+  inv2_serial: "ce7654g321"
+  area: "garage"
+
+  load_filter_threshold: 30
+
+  # ─── EMS energy sensors ───────────────────────────────────────────────────
+  # The EMS calculates the whole house load from its power readings, so no
+  # integral or utility meter helpers are needed. List each sensor once, as
+  # the EMS covers the whole plant.
+  load_today:
+    - sensor.{area}_givenergy_{ems_serial}_ems_calculated_load_energy_today
+  import_today:
+    - sensor.{area}_givenergy_{ems_serial}_grid_import_today
+  export_today:
+    - sensor.{area}_givenergy_{ems_serial}_grid_export_today
+  pv_today:
+    - sensor.{area}_givenergy_{ems_serial}_pv_energy_today
+
+  # ─── Inverters ────────────────────────────────────────────────────────────
+  # GEE is Predbat's built-in GivEnergy EMS inverter type
+  num_inverters: 2
+  inverter_type:
+    - 'GEE'
+    - 'GEE'
+  # The EMS balances the inverters itself, so keep Predbat's balancing off
+  balance_inverters_seconds: 0
+
+  # ─── Power sensors (read) ─────────────────────────────────────────────────
+  # The EMS reports for the whole plant, so the second inverter gets 0
+  # (otherwise Predbat counts everything twice)
+  battery_power:
+    - sensor.{area}_givenergy_{ems_serial}_battery_power
+    - 0
+  pv_power:
+    - sensor.{area}_givenergy_{ems_serial}_pv_power
+    - 0
+  load_power:
+    - sensor.{area}_givenergy_{ems_serial}_ems_calculated_load_power
+    - 0
+  grid_power:
+    - sensor.{area}_givenergy_{ems_serial}_ems_grid_meter_power
+    - 0
+
+  # ─── Battery per inverter (read) ──────────────────────────────────────────
+  soc_kw:
+    - sensor.{area}_givenergy_{inv1_serial}_battery_soc_kwh
+    - sensor.{area}_givenergy_{inv2_serial}_battery_soc_kwh
+  soc_percent:
+    - sensor.{area}_givenergy_{inv1_serial}_battery_soc
+    - sensor.{area}_givenergy_{inv2_serial}_battery_soc
+  soc_max:
+    - sensor.{area}_givenergy_{inv1_serial}_battery_nominal_capacity
+    - sensor.{area}_givenergy_{inv2_serial}_battery_nominal_capacity
+  # If a battery reports more capacity than it can use (e.g. an older 80%
+  # depth of discharge battery), scale it down, e.g. 0.8
+  battery_scaling:
+    - 1.0
+    - 1.0
+
+  # ─── EMS control surface (write) ──────────────────────────────────────────
+  # Predbat uses EMS charge slot 1 and export slot 1 only: turn slots 2-4 off
+  charge_start_time:
+    - time.{area}_givenergy_{ems_serial}_ems_charge_slot_1_start
+    - time.{area}_givenergy_{ems_serial}_ems_charge_slot_1_start
+  charge_end_time:
+    - time.{area}_givenergy_{ems_serial}_ems_charge_slot_1_end
+    - time.{area}_givenergy_{ems_serial}_ems_charge_slot_1_end
+  charge_limit:
+    - number.{area}_givenergy_{ems_serial}_ems_charge_slot_1_target_soc
+    - number.{area}_givenergy_{ems_serial}_ems_charge_slot_1_target_soc
+  discharge_start_time:
+    - time.{area}_givenergy_{ems_serial}_ems_export_slot_1_start
+    - time.{area}_givenergy_{ems_serial}_ems_export_slot_1_start
+  discharge_end_time:
+    - time.{area}_givenergy_{ems_serial}_ems_export_slot_1_end
+    - time.{area}_givenergy_{ems_serial}_ems_export_slot_1_end
+  # The GEE type also sets an EMS discharge (idle) slot for Eco mode. If the
+  # log warns "unable to read idle start/end time", point these at the EMS
+  # discharge slot 1 start and end entities
+  #idle_start_time:
+  #  - time.{area}_givenergy_{ems_serial}_ems_discharge_slot_1_start
+  #  - time.{area}_givenergy_{ems_serial}_ems_discharge_slot_1_start
+  #idle_end_time:
+  #  - time.{area}_givenergy_{ems_serial}_ems_discharge_slot_1_end
+  #  - time.{area}_givenergy_{ems_serial}_ems_discharge_slot_1_end
+
+  # ─── Per-inverter controls (write) ────────────────────────────────────────
+  # Set each inverter's own charge and discharge rates to their maximum in the
+  # GivEnergy app first, so these percentages work as expected
+  reserve:
+    - number.{area}_givenergy_{inv1_serial}_battery_soc_reserve
+    - number.{area}_givenergy_{inv2_serial}_battery_soc_reserve
+  charge_rate_percent:
+    - number.{area}_givenergy_{inv1_serial}_battery_ac_charge_limit
+    - number.{area}_givenergy_{inv2_serial}_battery_ac_charge_limit
+  discharge_rate_percent:
+    - number.{area}_givenergy_{inv1_serial}_battery_ac_discharge_limit
+    - number.{area}_givenergy_{inv2_serial}_battery_ac_discharge_limit
+  inverter_time:
+    - datetime.{area}_givenergy_{inv1_serial}_system_time
+    - datetime.{area}_givenergy_{inv2_serial}_system_time
+
+  # ─── Inverter limits ──────────────────────────────────────────────────────
+  # Inverter AC limit in W, one per inverter, e.g. 3000 for a 3 kW AC-coupled
+  inverter_limit:
+    - 3000
+    - 3000
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
+  clock_skew: 0
+
+  # ─── Solcast solar forecast ───────────────────────────────────────────────
+  # Solcast cloud interface, set this or the local interface below
+  #solcast_host: 'https://api.solcast.com.au/'
+  #solcast_api_key: 'xxxx'
+  #solcast_poll_hours: 8
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+  # ─── Car charging ─────────────────────────────────────────────────────────
+  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+
+  # car_charging_power is the live charging power of your car charger, in Watts
+  # It is display only - it drives the car shown on the web interface power flow diagram
+  # and the predbat.car_charging_power sensor. The plan itself is unaffected by it.
+  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
+  car_charging_power: 're:(sensor.myenergi_zappi_[0-9a-z]+_internal_load_ct1|sensor.wallbox_portal_charging_power)'
+  num_cars: 1
+  car_charging_planned:
+    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  car_charging_planned_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'connected'
+    - 'ev connected'
+    - 'ev ready to charge'
+    - 'charging'
+    - 'paused'
+    - 'waiting for car demand'
+    - 'waiting for ev'
+    - 'scheduled'
+    - 'enabled'
+    - 'latched'
+    - 'locked'
+    - 'plugged in'
+    - 'waiting'
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
+  #car_charging_now:
+  #  - sensor.wallbox_portal_charging_power
+  car_charging_now_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'charging'
+  #car_charging_battery_size:
+  #  - 75
+  #car_charging_limit:
+  #  - 're:number.tsunami_charge_limit'
+  #car_charging_soc:
+  #  - 're:sensor.tsunami_battery'
+  #car_charging_exclusive:
+  #  - True
+  # ─── Octopus Energy ───────────────────────────────────────────────────────
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
+  #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  #octopus_ready_time: 'time.ohme_target_time'
+  #octopus_charge_limit: 'number.ohme_target_percent'
+  #octopus_slot_low_rate: False
+  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_saving_session_event(s|))'
+  octopus_saving_session_octopoints_per_penny: 8
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
+  # octopus_free_url: 'http://octopus.energy/free-electricity'
+  # axle_api_key: "xxxxxxx"
+  # ─── Energy rates ─────────────────────────────────────────────────────────
+  metric_octopus_import: 're:(event.octopus_energy_electricity_[0-9a-z_]+(?<!export)_current_day_rates)'
+  #metric_octopus_export: 're:(event.octopus_energy_electricity_[0-9a-z_]+_export_current_day_rates)'
+  metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+  #metric_energidataservice_import: 'sensor.energi_data_service_import'
+  #metric_energidataservice_export: 'sensor.energi_data_service_export'
+  #rates_import:
+  #  -  start: "00:30:00"
+  #     end: "04:30:00"
+  #     rate: 7.5
+  #  -  start: "04:30:00"
+  #     end: "00:30:00"
+  #     rate: 40.0
+  #rates_export:
+  #  -  rate: 4.2
+  # rates_import_octopus_url : "https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{octopus_region}/standard-unit-rates"
+  # rates_export_octopus_url: "https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+  #rates_import_override:
+  # -  date: '2023-09-10'
+  #    start: '14:00:00'
+  #    end: '14:30:00'
+  #    rate: 112
+  #    load_scaling: 0.8
+  # ─── Forecast and history ─────────────────────────────────────────────────
+  days_previous:
+    - 7
+  forecast_hours: 48
+  load_ml_enable: true
+  # load_ml_source: true
+  temperature_enable: true
+  # ─── Notifications ────────────────────────────────────────────────────────
+  #notify_devices:
+  #  - mobile_app_my_phone
+  # ─── Scaling ──────────────────────────────────────────────────────────────
+  battery_scaling:
+    - 1.0
+  import_export_scaling: 1.0
+  # ─── Export triggers ──────────────────────────────────────────────────────
+  export_triggers:
+    - name: 'large'
+      minutes: 60
+      energy: 1.0
+    - name: 'small'
+      minutes: 15
+      energy: 0.25
+  #iboost_energy_today: 'sensor.xxxxx'
+  #iboost_energy_scaling: 1.0
+  #metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  #futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
+  #futurerate_adjust_import: True
+  #futurerate_adjust_export: False
+  #futurerate_peak_start: "16:00:00"
+  #futurerate_peak_end: "19:00:00"
+  #futurerate_peak_premium_import: 14
+  #futurerate_peak_premium_export: 6.5
+  #octopus_region: "A"
+  #compare_list:
+  #  - id: 'current'
+  #    name: 'Current Tariff'
+  #alerts:
+  #  url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
+  #  event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)"
+  #  severity: "Moderate|Severe|Extreme"
+  #  certainty: "Possible|Likely|Expected"
+  #  keep: 40
+  #watch_list:
+  #  - '{octopus_intelligent_slot}'
+  #  - '{octopus_ready_time}'
+  #  - '{octopus_charge_limit}'
+  #  - '+[car_charging_planned]'
