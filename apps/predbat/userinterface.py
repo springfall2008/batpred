@@ -19,7 +19,8 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate, MinuteArray
+import array
 import functools
 import io
 import itertools
@@ -39,17 +40,111 @@ from const import (
     REPEAT_FULL_LOG_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE, CURRENCY_UNITS
+from control_ledger import ControlLedger
+from control_monitor import ControlMonitor
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
 
 # A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
-# most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
-# with the very same (unsafe) Constructor that yaml.unsafe_load uses, so the Python-object tags
-# these dumps carry still load, roughly 6x faster. PyYAML is not always built with libyaml, so
-# fall back to the pure-Python loader when the C one is absent. The one difference from
-# yaml.unsafe_load is the RepeatLogGate constructor added below.
-class DebugYamlLoader(getattr(yaml, "CLoader", yaml.UnsafeLoader)):
-    """The loader read_debug_yaml() replays a debug dump with; see construct_empty_log_gate()."""
+# most of a replay's wall-clock on it - about 5s for a 5MB dump. CSafeLoader pairs libyaml's C parser
+# with PyYAML's safe Constructor and parses the same dump in under a second, exactly as fast as the
+# unsafe CLoader (0.91s each, measured on a 5MB dump). PyYAML is not always built with libyaml, so
+# fall back to the pure-Python SafeLoader when the C one is absent.
+#
+# The loader must be safe because the dumps it reads are untrusted: users attach them to public bug
+# reports, and maintainers and the triage bot replay them. An unsafe loader runs any Python a
+# !!python/object/apply or !!python/name tag names, so a crafted dump was code execution on whoever
+# replayed it. The safe Constructor builds no Python object from a tag unless one is registered
+# below, and each one registered here builds only the type it names:
+# - the Predbat classes a dump really carries (DEBUG_YAML_OBJECT_CLASSES), with no __init__ or
+#   __setstate__ run, as yaml.unsafe_load built them;
+# - numeric array.array values, which MinuteArray keeps its data in;
+# - an empty RepeatLogGate, numpy dtypes and scalars of numeric kinds only, and tuples, for older dumps;
+# - any other !!python/object: as a plain dict of its attributes, named in a warning when replaying.
+# Every other Python tag (apply, new, name, module) is refused with "could not determine a constructor".
+class DebugYamlLoader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
+    """The safe loader read_debug_yaml() replays a debug dump with; see the constructors registered below."""
+
+    def __init__(self, stream):
+        """Start with no unknown object tags seen; construct_unknown_object() records each one it flattens."""
+        super().__init__(stream)
+        self.unknown_object_tags = set()
+
+
+# The Predbat-owned classes a debug dump can carry as !!python/object: tags. A replay restores them as
+# real instances, as the unsafe loader did. MinuteArray is in every dump taken after a plan cycle;
+# ControlLedger and ControlMonitor only in dumps written before they joined DEBUG_EXCLUDE_LIST. Add a
+# class here when a new one starts appearing in dumps; until then it loads as a plain dict and
+# read_debug_yaml() names it in a warning.
+DEBUG_YAML_OBJECT_CLASSES = {
+    "control_ledger.ControlLedger": ControlLedger,
+    "control_monitor.ControlMonitor": ControlMonitor,
+    "utils.MinuteArray": MinuteArray,
+}
+
+# array.array typecodes a dump may carry: the integer and floating-point ones, not the wide-character ones
+DEBUG_YAML_ARRAY_TYPECODES = ("b", "B", "h", "H", "i", "I", "l", "L", "q", "Q", "f", "d")
+
+# numpy kinds a dumped scalar may have: booleans, signed and unsigned integers, floats and complex numbers.
+# An object ("O") or void dtype is refused, as it could stand for something other than a number.
+DEBUG_YAML_NUMPY_KINDS = ("b", "i", "u", "f", "c")
+
+
+def construct_known_object(loader, tag_suffix, node):
+    """
+    Build one of DEBUG_YAML_OBJECT_CLASSES from its dumped attributes, without running __init__ or __setstate__.
+
+    This is how yaml.unsafe_load built them (cls.__new__, then the attribute dict). The instance is yielded
+    before its attributes are filled in so a dump that refers back to it through an alias still loads.
+    """
+    instance = DEBUG_YAML_OBJECT_CLASSES[tag_suffix].__new__(DEBUG_YAML_OBJECT_CLASSES[tag_suffix])
+    yield instance
+    if isinstance(node, yaml.MappingNode):
+        instance.__dict__.update(loader.construct_mapping(node, deep=True))
+
+
+def construct_unknown_object(loader, tag_suffix, node):
+    """
+    Load any other !!python/object: tag as a plain dict of its attributes, recording the tag on the loader.
+
+    Nothing is imported or constructed, so this is safe whatever the dump names. A replay still gets the
+    values, and read_debug_yaml() warns that the object came back as a dict, which is the cue to add its
+    class to DEBUG_YAML_OBJECT_CLASSES.
+    """
+    if tag_suffix in DEBUG_YAML_OBJECT_CLASSES:
+        return (yield from construct_known_object(loader, tag_suffix, node))
+    loader.unknown_object_tags.add(tag_suffix)
+    data = {}
+    yield data
+    if isinstance(node, yaml.MappingNode):
+        data.update(loader.construct_mapping(node, deep=True))
+
+
+DebugYamlLoader.add_multi_constructor("tag:yaml.org,2002:python/object:", construct_unknown_object)
+
+
+def construct_tuple(loader, node):
+    """Load a !!python/tuple, which a plain yaml.Dumper writes for every tuple, as a tuple."""
+    return tuple(loader.construct_sequence(node, deep=True))
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/tuple", construct_tuple)
+
+
+def construct_array(loader, node):
+    """
+    Build an array.array from a debug dump: a numeric typecode and a list of numbers.
+
+    A dump taken after a plan cycle holds MinuteArray series, whose _data yaml.dump() writes as
+    array.array(typecode, values). The array is built here rather than by calling what the tag names.
+    """
+    args = loader.construct_sequence(node, deep=True) if isinstance(node, yaml.SequenceNode) else loader.construct_mapping(node, deep=True).get("args") or []
+    if len(args) != 2 or args[0] not in DEBUG_YAML_ARRAY_TYPECODES or not isinstance(args[1], list) or not all(isinstance(value, (int, float)) for value in args[1]):
+        raise yaml.constructor.ConstructorError(None, None, "an array in a debug dump must be a numeric typecode and a list of numbers", node.start_mark)
+    return array.array(args[0], args[1])
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:array.array", construct_array)
 
 
 def construct_empty_log_gate(loader, node):
@@ -76,17 +171,43 @@ def construct_numpy_dtype(loader, node):
     dump, and DebugYamlDumper writes a tuple as a list, so each scalar's dtype state was written as one.
     A fresh dtype refuses a list ("SystemError: bad argument to internal function"), which stopped those
     dumps loading anywhere.
+
+    Only a numeric dtype is accepted (DEBUG_YAML_NUMPY_KINDS), named by a string such as "f8".
     """
+    import numpy
+
     value = loader.construct_mapping(node, deep=True)
-    dtype = loader.find_python_name("numpy.dtype", node.start_mark)
-    instance = dtype(*value.get("args", []))
+    args = value.get("args") or []
+    if not args or not isinstance(args[0], str):
+        raise yaml.constructor.ConstructorError(None, None, "a numpy dtype in a debug dump must be named by a string, got {!r}".format(args[:1]), node.start_mark)
+    instance = numpy.dtype(*args)
+    if instance.kind not in DEBUG_YAML_NUMPY_KINDS:
+        raise yaml.constructor.ConstructorError(None, None, "a numpy dtype in a debug dump must be numeric, got {}".format(instance), node.start_mark)
     state = value.get("state")
     if state is not None:
         instance.__setstate__(tuple(state))
     return instance
 
 
+def construct_numpy_scalar(loader, node):
+    """
+    Build a numpy scalar from a debug dump: a numeric dtype (construct_numpy_dtype) and its raw bytes.
+
+    Older dumps wrote each Load ML value as numpy._core.multiarray.scalar(dtype, bytes) - numpy.core before
+    numpy 2. The bytes are read with numpy.frombuffer rather than by calling the function the tag names, and
+    must be exactly one value of that dtype.
+    """
+    import numpy
+
+    args = loader.construct_sequence(node, deep=True) if isinstance(node, yaml.SequenceNode) else loader.construct_mapping(node, deep=True).get("args") or []
+    if len(args) != 2 or not isinstance(args[0], numpy.dtype) or args[0].kind not in DEBUG_YAML_NUMPY_KINDS or not isinstance(args[1], bytes) or len(args[1]) != args[0].itemsize:
+        raise yaml.constructor.ConstructorError(None, None, "a numpy scalar in a debug dump must be a numeric dtype and one value's bytes", node.start_mark)
+    return numpy.frombuffer(args[1], dtype=args[0])[0]
+
+
 DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy.dtype", construct_numpy_dtype)
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy._core.multiarray.scalar", construct_numpy_scalar)
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy.core.multiarray.scalar", construct_numpy_scalar)
 DEBUG_YAML_LOADER = DebugYamlLoader
 
 # Parsed debug dumps keyed by (path, mtime, size). None, the default, turns the cache off: Predbat replays
@@ -96,18 +217,35 @@ DEBUG_YAML_LOADER = DebugYamlLoader
 DEBUG_YAML_PARSE_CACHE = None
 
 
-def load_debug_yaml_file(filename):
-    """Parse a debug dump with DEBUG_YAML_LOADER, through DEBUG_YAML_PARSE_CACHE when that is switched on."""
+def parse_debug_yaml_file(filename):
+    """Parse a debug dump with DEBUG_YAML_LOADER, returning (data, the !!python/object: tags it loaded as plain dicts)."""
+    with open(filename, "r") as file:
+        loader = DEBUG_YAML_LOADER(file)
+        try:
+            return loader.get_single_data(), frozenset(loader.unknown_object_tags)
+        finally:
+            loader.dispose()
+
+
+def load_debug_yaml_file(filename, unknown_object_tags=None):
+    """
+    Parse a debug dump with DEBUG_YAML_LOADER, through DEBUG_YAML_PARSE_CACHE when that is switched on.
+
+    If unknown_object_tags is a set, the !!python/object: tags the dump carried that are not in
+    DEBUG_YAML_OBJECT_CLASSES, and so loaded as plain dicts, are added to it.
+    """
     cache = DEBUG_YAML_PARSE_CACHE
     if cache is None:
-        with open(filename, "r") as file:
-            return yaml.load(file, Loader=DEBUG_YAML_LOADER)
-    stat = os.stat(filename)
-    key = (os.path.abspath(filename), stat.st_mtime_ns, stat.st_size)
-    if key not in cache:
-        with open(filename, "r") as file:
-            cache[key] = yaml.load(file, Loader=DEBUG_YAML_LOADER)
-    return cache[key]
+        data, unknown = parse_debug_yaml_file(filename)
+    else:
+        stat = os.stat(filename)
+        key = (os.path.abspath(filename), stat.st_mtime_ns, stat.st_size)
+        if key not in cache:
+            cache[key] = parse_debug_yaml_file(filename)
+        data, unknown = cache[key]
+    if unknown_object_tags is not None:
+        unknown_object_tags.update(unknown)
+    return data
 
 
 class DebugYamlDumper(yaml.Dumper):
@@ -946,7 +1084,10 @@ class UserInterface:
         """
         debug = {}
         if os.path.exists(filename):
-            debug = load_debug_yaml_file(filename)
+            unknown_object_tags = set()
+            debug = load_debug_yaml_file(filename, unknown_object_tags)
+            if unknown_object_tags:
+                self.log("Warn: Debug file {} holds objects this replay does not rebuild, so they load as plain dicts: {}".format(filename, ", ".join(sorted(unknown_object_tags))))
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return

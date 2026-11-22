@@ -165,6 +165,7 @@ from tests.test_hainterface_api import run_hainterface_api_tests
 from tests.test_hainterface_service import run_hainterface_service_tests
 from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
+from tests.test_hainterface_owned_controls import run_hainterface_owned_controls_tests
 from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
@@ -324,6 +325,7 @@ from tests.test_annual_profiles import test_annual_profiles
 from tests.test_annual_load import test_annual_load, test_annual_load_octopus
 from tests.test_annual_weather import test_annual_weather, test_annual_weather_orientation_cache, test_annual_weather_window
 from tests.test_annual_tariff import test_annual_tariff
+from tests.test_octopus_domain import test_octopus_domain
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_iog_car_need_gate import run_iog_car_need_gate_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
@@ -367,6 +369,7 @@ from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_
 from tests import network_guard
 from tests.test_network_guard import test_network_guard
 from tests.test_debug_yaml_cache import test_debug_yaml_cache
+from tests.test_debug_yaml_safe_load import run_debug_yaml_safe_load_tests
 from tests.test_gecloud_budget import run_gecloud_budget_harness_tests, run_gecloud_api_budget
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
@@ -870,6 +873,7 @@ def main():
         ("annual_weather_orientation_cache", test_annual_weather_orientation_cache, "Annual weather cache keys separate roof orientations", False),
         ("annual_weather_window", test_annual_weather_window, "Annual weather month-window fetch tests", False),
         ("annual_tariff", test_annual_tariff, "Annual prediction tariff tests", False),
+        ("octopus_domain", test_octopus_domain, "Octopus API domain move to api.oegb-kraken.energy (GH#5786)", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
@@ -939,6 +943,8 @@ def main():
         ("hainterface_lifecycle", run_hainterface_lifecycle_tests, "HAInterface lifecycle tests", False),
         # HAInterface websocket tests
         ("hainterface_websocket", run_hainterface_websocket_tests, "HAInterface websocket tests", False),
+        # HAInterface routing of Predbat-published controls (#6223)
+        ("hainterface_owned_controls", run_hainterface_owned_controls_tests, "HAInterface Predbat-published control routing tests", False),
         # History chunking (long windows fetched in pieces) tests
         ("history_chunking", run_history_chunking_tests, "History chunking tests", False),
         # Carbon Intensity API unit tests
@@ -1037,6 +1043,7 @@ def main():
         ("optimise_swap_export", run_optimise_swap_export_tests, "Optimise pairwise export-window swap tests", False),
         ("network_guard", test_network_guard, "Unit tests may not reach the network: non-local lookups and connects fail the test", False),
         ("debug_yaml_cache", test_debug_yaml_cache, "Debug dump parse cache used by the test runner", False),
+        ("debug_yaml_safe_load", run_debug_yaml_safe_load_tests, "Replaying a debug dump never runs code the dump names", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", False),
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
