@@ -6605,9 +6605,10 @@ class Plan:
                     for start in range(slot_start, slot_end, self.plan_interval_minutes):
                         end = min(start + self.plan_interval_minutes, slot_end)
 
-                        # Avoid duplicate slots
-                        if minute in used_slots:
-                            rate_okay = False
+                        # Skip a slot an overlapping window has already booked (#6309). The windows start every plan
+                        # interval and are iboost_smart_min_length long, so a slot can fall in several of them
+                        if start in used_slots:
+                            continue
 
                         # Boost on import/export rate
                         if price > self.iboost_rate_threshold:
