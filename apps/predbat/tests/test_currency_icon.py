@@ -205,7 +205,8 @@ def test_currency_icon_end_to_end(my_predbat):
     With currency_symbols set to euro in apps.yaml, the icon reaches HA through Predbat's own start-up and
     output code, with nothing in the test applying it: the money input_numbers get mdi:currency-eur when
     reset() and load_user_config() publish them, and an output money sensor (predbat.cost_today),
-    Predheat's cost_today and its predicted cost sensors use the same icon. Reverting the wiring in reset(), or any of those output
+    Predheat's cost_today and its predicted cost sensors use the same icon, and Compare's tariff sensors
+    use the minor unit. Reverting the wiring in reset(), or any of those output
     icons back to mdi:currency-usd, fails this test.
     """
     print("**** test_currency_icon_end_to_end ****")
@@ -263,6 +264,18 @@ def test_currency_icon_end_to_end(my_predbat):
         assert attributes.get("icon") == "mdi:currency-eur", "Predheat {} icon should be mdi:currency-eur, got {!r}".format(suffix, attributes.get("icon"))
         assert attributes.get("unit_of_measurement") == "c", "Predheat {} unit should be c, got {!r}".format(suffix, attributes.get("unit_of_measurement"))
     print("✓ Predheat cost, cost_h1, cost_h2 and cost_h8 published with the euro icon and minor unit")
+
+    # Compare's per-tariff sensors are in the minor unit too
+    from compare import Compare
+
+    comparison = Compare(predbat)
+    comparison.comparisons = {"current": {"name": "Current Tariff", "cost": 123.4}}
+    comparison.publish_data()
+    compare_item = predbat.dashboard_values.get(predbat.prefix + ".compare_tariff_current", {})
+    compare_attributes = compare_item.get("attributes", {})
+    assert compare_attributes.get("unit_of_measurement") == "c", "compare_tariff_current unit should be c, got {!r}".format(compare_attributes.get("unit_of_measurement"))
+    assert compare_attributes.get("icon") == "mdi:compare-horizontal", "compare_tariff_current icon should be mdi:compare-horizontal, got {!r}".format(compare_attributes.get("icon"))
+    print("✓ compare_tariff_current published in the minor unit with a valid icon")
 
     print("✓ Test passed: currency icon wired end to end")
     return False
