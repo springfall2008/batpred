@@ -862,10 +862,9 @@ class Components:
             if component:
                 if component_info.get("phase", 0) != phase:
                     continue
-                # A component whose dependency never constructed cannot start, so waiting out its
-                # wait_api_started() timeout only delays the failure. After a Home Assistant restart
-                # HAInterface fails while core is still coming up, and HAHistory then held startup for
-                # the full 10 minute timeout before Predbat could restart and retry (GH#5134).
+                # A component whose dependency never constructed cannot start, so waiting out its wait_api_started() timeout only delays the failure. 
+                # HAInterface raising after its startup retry limit (or at once on a rejected ha_key) leaves HAHistory holding startup for the full 10 minute 
+                # timeout before Predbat could restart and retry (GH#5134).
                 missing = [dependency for dependency in component_info.get("depends", []) if not self.components.get(dependency)]
                 if missing:
                     self.log(f"Error: {component_info['name']} interface not started, it needs {', '.join(missing)} which is not available")
