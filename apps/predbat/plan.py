@@ -5985,7 +5985,7 @@ class Plan:
                         "friendly_name": "Predicted metric (cost)",
                         "state_class": "measurement",
                         "unit_of_measurement": self.currency_symbols[1],
-                        "icon": "mdi:currency-usd",
+                        "icon": self.currency_icon,
                     },
                 )
                 self.dashboard_item(
@@ -6241,7 +6241,7 @@ class Plan:
                         "friendly_name": "Predicted best metric (cost)",
                         "state_class": "measurement",
                         "unit_of_measurement": self.currency_symbols[1],
-                        "icon": "mdi:currency-usd",
+                        "icon": self.currency_icon,
                     },
                 )
                 self.dashboard_item(self.prefix + ".record", state=0.0, attributes={"results": self.filtered_times(record_time), "friendly_name": "Prediction window", "state_class": "measurement"})
@@ -6362,7 +6362,7 @@ class Plan:
                         "friendly_name": "Predicted best 10% metric (cost)",
                         "state_class": "measurement",
                         "unit_of_measurement": self.currency_symbols[1],
-                        "icon": "mdi:currency-usd",
+                        "icon": self.currency_icon,
                     },
                 )
                 self.dashboard_item(
@@ -6430,7 +6430,7 @@ class Plan:
                         "friendly_name": "Predicted base 10% metric (cost)",
                         "state_class": "measurement",
                         "unit_of_measurement": self.currency_symbols[1],
-                        "icon": "mdi:currency-usd",
+                        "icon": self.currency_icon,
                     },
                 )
                 self.dashboard_item(

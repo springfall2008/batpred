@@ -218,7 +218,7 @@ current_joined_event_duration_in_minutes: null
 next_joined_event_start: null
 next_joined_event_end: null
 next_joined_event_duration_in_minutes: null
-icon: mdi:currency-usd
+icon: mdi:currency-gbp
 friendly_name: Octopus Intelligent Saving Sessions
 """
 
