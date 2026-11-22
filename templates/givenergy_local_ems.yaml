@@ -253,8 +253,7 @@ pred_bat:
   #notify_devices:
   #  - mobile_app_my_phone
   # ─── Scaling ──────────────────────────────────────────────────────────────
-  battery_scaling:
-    - 1.0
+  # battery_scaling is set per inverter in the battery section above
   import_export_scaling: 1.0
   # ─── Export triggers ──────────────────────────────────────────────────────
   export_triggers:
