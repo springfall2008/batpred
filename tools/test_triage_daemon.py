@@ -1452,13 +1452,17 @@ class McpPermissionTests(unittest.TestCase):
                 self.assertIn("mcp__gitnexus__*", getattr(triage_daemon, name).split(","))
 
     def test_every_flow_may_use_shared_memory_but_never_delete_from_it(self):
-        """Recall and store, yes; delete and prune are denied, and deny wins over allow."""
+        """Recall, store, link and claim, yes; delete, prune and unlinking are denied, and deny wins over allow."""
         for name in self.FLOWS:
             with self.subTest(flow=name):
                 self.assertIn("mcp__shared-memory__*", getattr(triage_daemon, name).split(","))
                 denied = getattr(triage_daemon, "DIS" + name).split(",")
                 self.assertIn("mcp__shared-memory__delete", denied)
                 self.assertIn("mcp__shared-memory__prune", denied)
+                self.assertIn("mcp__shared-memory__unrelate_memories", denied)
+                # Claiming and releasing stay allowed: the bot claims a ticket while it works and releases it when done.
+                self.assertNotIn("mcp__shared-memory__claim_memory", denied)
+                self.assertNotIn("mcp__shared-memory__release_claim", denied)
 
     def test_no_flow_gets_a_blanket_mcp_grant(self):
         """A blanket grant would reach the operator's Slack and Drive servers."""
