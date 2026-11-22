@@ -975,6 +975,14 @@ CONFIG_ITEMS = [
         "enable_condition": "num_cars > 0",
     },
     {
+        "name": "car_charging_cancel_for_export",
+        "friendly_name": "Allow export to cancel a car charging slot",
+        "type": "switch",
+        "default": False,
+        "enable": "num_cars",
+        "enable_condition": "num_cars > 0",
+    },
+    {
         "name": "calculate_export_oncharge",
         "oldname": "calculate_discharge_oncharge",
         "friendly_name": "Calculate Export within charge slots",
@@ -3051,6 +3059,7 @@ APPS_SCHEMA = {
     "enphase_automatic": {"type": "boolean"},
     "enphase_automatic_ignore_pv": {"type": "boolean"},
     "octopus_intelligent_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean|action", "entries": "num_cars", "optional_entries": True},
+    "octopus_intelligent_smart_control": {"type": "sensor|sensor_list", "sensor_type": "boolean", "entries": "num_cars", "optional_entries": True},
     "octopus_intelligent_planned_slot": {"type": "sensor|sensor_list", "sensor_type": "boolean", "entries": "num_cars", "optional_entries": True},
     "octopus_ready_time": {"type": "sensor|sensor_list", "sensor_type": "string", "entries": "num_cars", "optional_entries": True},
     "octopus_charge_limit": {"type": "sensor|sensor_list", "sensor_type": "float", "entries": "num_cars", "optional_entries": True},

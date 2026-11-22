@@ -135,8 +135,8 @@ note the list items appear on separate lines beneath the configuration item name
   compare_list:
     - id: 'igo_fixed'
       name: 'Intelligent GO import/Fixed export'
-      rates_import_octopus_url: 'https://api.octopus.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
-      rates_export_octopus_url: 'https://api.octopus.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
+      rates_import_octopus_url: 'https://api.oegb-kraken.energy/v1/products/INTELLI-VAR-24-10-29/electricity-tariffs/E-1R-INTELLI-VAR-24-10-29-{dno_region}/standard-unit-rates/'
+      rates_export_octopus_url: 'https://api.oegb-kraken.energy/v1/products/OUTGOING-VAR-24-10-26/electricity-tariffs/E-1R-OUTGOING-VAR-24-10-26-{dno_region}/standard-unit-rates/'
 ```
 
 the configuration item **dno_region** is firstly set to `A` and then that region name is expanded in the configuration of the Octopus URL's.
@@ -642,6 +642,7 @@ The default is 0.
 
 When set above 0 it also spreads out the Octopus/Kraken billing reads shown in the History view: the first read after Predbat starts waits a random 0-30 minutes,
 and each day's billing query waits a further random 0-60 seconds, so many installations restarted together don't all query the supplier at once.
+Each wait between billing reads is also three hours give or take a random amount of up to 27 minutes, so installations whose reads once lined up drift apart again.
 
 ```yaml
   plan_random_delay: 30
@@ -1235,17 +1236,19 @@ Configuration keys:
 - `growatt_api_delay`: delay between different-device calls, default `0.2` seconds
 - `growatt_min_write_interval`: dispatch pacing, default and minimum `6` seconds (Growatt's five-second limit plus a second of margin)
 
-Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from telemetry, which Growatt updates about every five minutes. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export slot is removed. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval (about five minutes) of overshoot and confirm the behaviour on the target model before relying on it.
+Growatt's public time-slot dispatch has no SoC field. Predbat still exposes its usual charge target and export floor entities, but enforces them from telemetry, which Growatt updates about every five minutes. When the charge target is reached the charge slot stays in place at 0% power, so the battery holds until the window ends (full power resumes if the charge level falls more than 1% below the target); when the export floor is reached the export command is stopped. The local inverter `dischargeCutOffSOC` is also included in the discharge floor. Expect up to one telemetry interval (about five minutes) of overshoot and confirm the behaviour on the target model before relying on it.
 
 Growatt has no reserve Predbat can hold the battery with, so the reserve functions (`switch.predbat_set_reserve_enable` and the reserve-based holds) are turned off for this inverter. Outside a slot the inverter runs its own self-consumption down to its local minimum.
 
-The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat clears the slot table it wrote, handing control back to the inverter's own settings. Before writing a table that exports, Predbat raises the inverter's OpenAPI export limit to 100% if it reads as anything lower (see below).
+The slot table Predbat last wrote is saved across restarts, and the table the device actually holds is read back every 10 minutes into `sensor.predbat_growatt_<serial>_dispatch_slots` (UTC times, in its `slots` attribute). When **switch.predbat_set_read_only** is turned on, or `growatt_control_enable` is false, Predbat clears the slot table it wrote, handing control back to the inverter's own settings. The slot table only carries the charge window. An export is sent as Growatt's timed discharge command (`duration_and_power_charge_discharge`, `dischargeCommand` at the planned power), because an export time slot on a live SPH only let surplus out, while the timed command exported the battery at full power. The command runs for 10 minutes at a time and is renewed while the export window lasts, so if Predbat stops running the inverter stops exporting by itself within 10 minutes. It is stopped (`selfConsumptionCommand`) when the window ends early, and on read-only or `growatt_control_enable: false`, as it keeps running even after `enable_control` is turned off. Before the first export command, Predbat disables the inverter's OpenAPI export limit if it reads as enabled (see below).
 
 The API times are UTC. Predbat converts the local planned windows on every apply, including the current daylight-saving offset, and splits a window that crosses UTC midnight.
 
-Predbat reads the inverter's OpenAPI export limit (`readDeviceDispatch` `export_limit`) every eight hours and publishes it as `sensor.predbat_growatt_<serial>_export_limit` in W. Growatt gives it as a percentage; Predbat takes that as a percentage of the inverter's rated output (`nominalPower`). On a live SPH the limit read 0% and Predbat's export slots only covered the house load, while the inverter's own schedule still exported to the grid. So, while it is in control, Predbat raises the limit to 100% before an export unless it is already at 100% or disabled (reading it first if it has not been read yet), and leaves it there - it is not set back on release. Predbat does not change it while it is read-only. The sensor is not bound to Predbat's `export_limit`: if your grid connection is capped below the inverter's rating, set `export_limit` in `apps.yaml`.
+Predbat reads the inverter's OpenAPI export limit (`readDeviceDispatch` `export_limit`) every eight hours. Growatt gives it as a percentage; Predbat takes that as a percentage of the inverter's rated output (`nominalPower`). On a live SPH, while the limit was enabled - at 0%, and again at 100% - no OpenAPI command exported the battery; once it was disabled the timed discharge command exported at full power. So, while it is in control, Predbat disables the limit before an export unless it already reads as disabled (reading it first if it has not been read yet), and leaves it disabled - it is not set back on release. Predbat does not change it while it is read-only. If the limit still reads as enabled after three attempts to disable it, Predbat takes it as locked (by your installer, say): it stops trying, logs a warning, and plans exports within it. A limit that only could not be read back is never taken as locked. The lock is saved across restarts and cleared when a later read finds the setting changed, so changing it in the Growatt app makes Predbat try again.
 
-The inverter's own SoC floors from the device information are published as `sensor.predbat_growatt_<serial>_discharge_cutoff_soc` (`dischargeCutOffSOC`) and `sensor.predbat_growatt_<serial>_backup_cutoff_soc` (`backupCutOffSOC`, the off-grid minimum). The discharge cut-off acts as the floor for forced export, not as a reserve. On a live SPH reading 100%, an export slot at 100% SoC exported nothing, while the battery still discharged to cover the house. Predbat's export slots stop at it, so at 100% Predbat's exports do nothing. Neither value is used as Predbat's minimum reserve, and the OpenAPI cannot change either, so set them in the Growatt app.
+`export_limit` is bound to `sensor.predbat_growatt_<serial>_export_limit`, the limit Predbat plans with, in W: 99999 (no limit) while the inverter's limit is disabled, unknown, or about to be disabled before an export; the inverter's own limit once it is locked, or while Predbat is read-only or not in control, as nothing will change it then. The inverter's own setting is in the sensor's `enabled`, `percentage`, `device_limit_w` and `locked` attributes. If your grid connection is capped below the inverter's rating, set `export_limit` in `apps.yaml`: your value is kept rather than replaced.
+
+The inverter's own SoC floors from the device information are published as `sensor.predbat_growatt_<serial>_discharge_cutoff_soc` (`dischargeCutOffSOC`) and `sensor.predbat_growatt_<serial>_backup_cutoff_soc` (`backupCutOffSOC`, the off-grid minimum). The discharge cut-off acts as the floor for forced export, not as a reserve. Predbat's export commands stop at it, so at 100% Predbat's exports do nothing. Neither value is used as Predbat's minimum reserve, and the OpenAPI cannot change either, so set them in the Growatt app.
 
 See [Components - Growatt OpenAPI](components.md#growatt-openapi-growatt) and [Growatt Cloud setup](inverter-setup.md#growatt-cloud-openapi).
 
@@ -1600,6 +1603,9 @@ When set in Watts, caps the maximum discharge rate used specifically during forc
 This is useful when you want to limit how fast the battery discharges to the grid during forced export periods (e.g. to reduce battery wear or meet grid export limits)
 while still allowing the battery to discharge at full rate during ECO mode to cover house load.
 
+The discharge [rate grid](#battery-rate-grids) is learned from forced exports, so Predbat measures them against this cap. A minute where the battery reached the cap records no battery limit, as the cap rather than the battery held it back.
+A minute where the battery stayed below the cap is recorded as a battery limit: it also caps the ECO mode discharge Predbat plans at that SoC, and it shows on the Curves page. If this is set to 0 there are no forced exports, so no discharge evidence is gathered.
+
 If not set, the value defaults to `inverter_limit_discharge` (or the inverter maximum if that is also not set).
 Predbat will also use this rate when modelling the plan so the prediction accurately reflects the capped export rate.
 
@@ -1699,7 +1705,7 @@ or
 
 - **battery_voltage** - Nominal maximum battery voltage (not current battery voltage) - only needed for inverters controlled via Amps and used internally by Predbat to convert Watts to Amps to control the inverter.
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
-Predbat also uses **battery_rate_max** when learning the [rate grids](#battery-rate-grids), looking for charging or discharging at 95% of the max rate.
+Predbat also uses **battery_rate_max** when learning the [rate grids](#battery-rate-grids), looking for charging at 95% of the max charge rate (**inverter_limit_charge** when that is lower) and forced exports at 95% of the max export rate (**inverter_limit_export**, else **inverter_limit_discharge**, when lower).
 Be careful of setting the rate at a value higher than your inverter can handle for grid charging in order for Predbat to be able to find the historical 'full rate' charging/discharging needed to learn them.
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh.
 If not set or set to 0, Predbat will attempt to automatically determine the battery size by analyzing historical charging data from `soc_percent` and `battery_power` sensors.
@@ -2392,12 +2398,13 @@ Details of configuring `apps.yaml` for EV charging are described in [Configure a
 - **car_charging_power** - Live power drawn by your EV charger, used for display only
 - **octopus_intelligent_slot** - Octopus Energy integration 'intelligent dispatching' sensor that indicates
 whether you are within an Octopus Energy "smart charge" slot
+- **octopus_intelligent_smart_control** - Octopus Energy integration 'intelligent smart charge' switch, planned Octopus slots are ignored while it is off (see [car charging](car-charging.md#planned-car-charging))
 - **octopus_intelligent_planned_slot** - Optional second sensor to take the planned charging slots from, leaving **octopus_intelligent_slot** to supply the completed ones
 (see [car charging documentation](car-charging.md#taking-planned-slots-from-another-sensor))
 - **octopus_ready_time** - Octopus Energy integration sensor for when the car charging will be completed by
 - **octopus_charge_limit** - Octopus Energy integration sensor for car charging limit
 - **octopus_slot_low_rate** - Whether Octopus Intelligent Slots reported will be at the lowest rate if at home
-- **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it. It is per Octopus account, so with more than one car it is shared between all the cars with an `octopus_intelligent_slot` entry, in clock time (see [Multiple cars with Octopus Intelligent Go](car-charging.md#multiple-cars-with-octopus-intelligent-go-iog))
+- **octopus_slot_max** - Maximum cheap rate dispatch time per 24-hour period, set in 30-minute slots (12 is 6 hours). It is counted in the minutes of each dispatch, so a 10-minute dispatch uses 10 minutes of it, and a minute that has passed in which Predbat saw no car charging (from `car_charging_now`) uses none of it. It is per Octopus account, so with more than one car it is shared between all the cars with an `octopus_intelligent_slot` entry, in clock time (see [Multiple cars with Octopus Intelligent Go](car-charging.md#multiple-cars-with-octopus-intelligent-go-iog))
 - **intelligent_dispatch_billing** - `auto` (default), `octopus` or `window`: whether a planned dispatch half hour is billed cheap only when the car charges in it (`octopus`) or whenever the dispatch was in force (`window`, E.ON Next Drive Smart). `auto` picks `window` for the Kraken component on `kraken_provider: eon`
 (see [car charging documentation](car-charging.md))
 - **car_charging_planned** - Indicates when your EV is plugged in and planned to charge during low-rate slots.
@@ -2574,6 +2581,8 @@ Everything else the agent takes sits alongside **providers** in the same block, 
 **type** is only needed when the name does not already say which kind of endpoint it is. Left out, Predbat uses the entry's name if that is a provider it knows (`openrouter`, `ollama`, `openai`), and otherwise works it out from the URL - a `localhost` or private-network address needs no key, anything else does. Set it explicitly if the guess is wrong for your setup; `local` is the generic keyless option for an OpenAI-compatible server that is not Ollama.
 
 An entry missing what it needs - a hosted endpoint with no key - still appears in the Chat tab's Settings dialog, marked as needing a key before it can answer, rather than silently vanishing.
+
+The Settings dialog never shows a saved key, and keeps it when you edit an entry's other fields. If you change an entry's URL, type the key in again: Predbat only sends a saved key to the URL it was saved with, so listing models or saving with a new URL and a blank key is refused.
 
 There is no separate enable switch: configuring an endpoint is what enables the feature, and the model is chosen in the Chat tab rather than here.
 
@@ -2913,10 +2922,10 @@ Predbat learns both grids from your battery's own history, automatically, and fa
 
 How the grids are learned:
 
-- When Predbat starts it scans up to **battery_rate_grid_history_days** (default 28) days of your history - as much as Home Assistant has kept, as its recorder keeps 10 days unless you change `purge_keep_days` - then once a day the last **battery_rate_grid_scan_days** (default 2) days, more if it has not scanned for longer. A scan whose history read fails is tried again an hour later. Each scan looks for runs of 15 minutes or more where it was **Charging** (or, for the discharge grid, in a forced **Export**) with the rate set to its maximum.
+- When Predbat starts it scans up to **battery_rate_grid_history_days** (default 28) days of your history - as much as Home Assistant has kept, as its recorder keeps 10 days unless you change `purge_keep_days` - then once a day the last **battery_rate_grid_scan_days** (default 2) days, more if it has not scanned for longer. A scan whose history read fails is tried again an hour later. Each scan looks for runs of 15 minutes or more where it was **Charging** (or, for the discharge grid, in a forced **Export**) with the rate set to its maximum - for charging the max charge rate (**inverter_limit_charge** when set), for a forced export the max export rate (**inverter_limit_export** when set).
   The first and last 5 minutes of each run are dropped (ramping up and down) and the rest is cut into 5-minute segments, each giving one point: SoC, battery temperature and the rate the battery reached.
 - A minute where the battery did not actually charge (or discharge), or a forced export that did not reach the grid (from **grid_power**, when it has history), breaks the run: that is a control failure or the house using the power, not a battery limit.
-  Exports held back by **export_limit** are left out too. If your export limit is below your maximum discharge rate and **grid_power** has no history, no discharge evidence is gathered.
+  An export held back by **export_limit** (the grid export reached it) is still evidence: it shows the battery was not limited by its SoC or temperature, so it records no battery limit. The same goes for a forced export where the battery reached **inverter_limit_export**, which Predbat writes as its discharge rate. Discharge evidence needs **grid_power** history to tell these apart, so without it none is gathered.
 - A battery temperature reading of exactly 0 is treated as missing (several integrations report a missing reading as 0) and also breaks the run. If your temperature sensor only ever reads 0, or **battery_temperature_history** is not set, the grid has no temperature and is learned as a single SoC curve.
 - The points are kept in Predbat's cache for a year, so last winter's cold-weather evidence is still there when the next cold spell arrives. Recent evidence counts for more: a point's weight halves every 90 days.
 - The grid is fitted so the rate never rises as SoC rises (charge) or as SoC falls (discharge), and never rises as the temperature falls. A one-off reading that breaks that rule is averaged against its neighbours rather than followed.

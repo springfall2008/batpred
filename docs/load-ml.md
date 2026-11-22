@@ -161,6 +161,7 @@ Training directly on months of mixed data can make it hard for the network to sp
 - Same regularization techniques applied as initial training
 - Each fine-tune cycle blends the current data's feature statistics (mean/std) with the stored normalisation parameters via an exponential moving average (alpha=0.1).
 This lets the model slowly track long-term shifts in feature distributions (e.g. seasonal load changes, new tariff rates) without sudden jumps that could destabilise existing weights.
+- Every normalised input is held within 5 standard deviations of its training mean, in training and in prediction. A price far outside anything the model has seen, such as a saving session or an Axle VPP event on an otherwise flat tariff, therefore reaches the network as an unusually high price rather than a value tens of standard deviations out, which could turn the forecast into a flat line.
 
 **Why Full Dataset for Fine-tuning?**
 
@@ -550,6 +551,8 @@ This file contains:
 The model is automatically loaded on Predbat restart, allowing predictions to continue immediately without retraining. The EMA-updated normalisation parameters are saved and restored with the model, so drift tracking is preserved across restarts.
 
 **Note**: If you update Predbat and the model architecture or version changes, the old model will be rejected and a new model will be trained from scratch. If the model becomes unstable, you can manually delete `predbat_ml_model.npz` to force retraining.
+The training history in `predbat_ml_history.npz` is kept, so the new model trains on it straight away, and Predbat plans with its normal historical load forecast until training finishes.
+Model version 11 (the first Predbat release after v9.9.0) is one such change: models saved by earlier versions are retrained once after the update, because a model trained on unbounded rate spikes can be left predicting a flat line, and bounding the inputs does not repair it.
 
 ### `predbat_ml_history.npz` — the accumulated history database
 

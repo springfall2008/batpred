@@ -24,6 +24,13 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 
+# Octopus Energy API. Octopus moved its public API to api.oegb-kraken.energy (GH#5786), with api.octopus.energy kept
+# running in parallel for a few months; URLs still naming the old host (apps.yaml, compare and annual configs) are
+# rewritten to the new one. Saving sessions are only served by the backend host, which has no new-domain equivalent
+OCTOPUS_API_URL = "https://api.oegb-kraken.energy"
+OCTOPUS_LEGACY_API_HOST = "api.octopus.energy"
+OCTOPUS_BACKEND_API_URL = "https://api.backend.octopus.energy"
+
 # Octopus Intelligent slot confirmation (octopus_intelligent_dynamic): how long a car inside a dispatch must
 # show "not charging" before its slots, and their cheap rate, are cancelled. car_charging_now reports the
 # car directly, so two minutes (one charger/integration update) is enough once the start band has passed;
@@ -192,6 +199,8 @@ PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car
 # A car_charging_now sensor that reports a charging power (in W, after unit conversion) rather than
 # on/off counts as charging from this power: above a charger's standby draw, below the smallest charge
 CAR_CHARGING_NOW_POWER_W = 200
+# Planned Octopus dispatch sources the user asks for by hand - never cheap-rate slots, and, like every planned dispatch, dropped while Smart Control is off (#5339)
+OCTOPUS_MANUAL_DISPATCH_SOURCES = ("bump-charge", "BOOST")
 # A manually tracked car with no charge recorded keeps counting from up to this long ago, for energy its charger's history records late
 CAR_MANUAL_SOC_LATE_MINUTES = 60
 # A manually tracked car is only reset once its plugged-in sensor has read unplugged for this long - a charger reconnecting can read unplugged for a few minutes
@@ -220,6 +229,9 @@ MANUAL_RATE_MAX_MINUTES = 7 * 24 * 60
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
 MINUTE_WATT = 60 * 1000
+
+# The apps.yaml services that can be sent the charge/discharge rate as {power} - see utils.services_send_power()
+POWER_SERVICES = ("charge_start_service", "charge_freeze_service", "discharge_start_service", "discharge_freeze_service")
 
 INVERTER_TEST = False  # Run inverter control self test
 
