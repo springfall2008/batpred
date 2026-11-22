@@ -6602,12 +6602,16 @@ class Plan:
                 if slot_start < slot_end:
                     rate_okay = True
 
-                    for start in range(slot_start, slot_end, self.plan_interval_minutes):
-                        end = min(start + self.plan_interval_minutes, slot_end)
+                    # Step on the plan interval grid, clipping only the first slot to now: minutes_now need not be on
+                    # it, and a slot off the grid would overlap the next window's slots without sharing their start
+                    grid_start = slot_start - slot_start % self.plan_interval_minutes
+                    for slot_key in range(grid_start, slot_end, self.plan_interval_minutes):
+                        start = max(slot_key, slot_start)
+                        end = min(slot_key + self.plan_interval_minutes, slot_end)
 
                         # Skip a slot an overlapping window has already booked (#6309). The windows start every plan
                         # interval and are iboost_smart_min_length long, so a slot can fall in several of them
-                        if start in used_slots:
+                        if slot_key in used_slots:
                             continue
 
                         # Boost on import/export rate
@@ -6652,7 +6656,7 @@ class Plan:
                             new_slot["average"] = window["average"]
                             new_slot["cost"] = dp2(new_slot["average"] * kwh)
                             plan.append(new_slot)
-                            used_slots[start] = True
+                            used_slots[slot_key] = True
 
         # Return sorted back in time order
         plan = self.sort_window_by_time(plan)
