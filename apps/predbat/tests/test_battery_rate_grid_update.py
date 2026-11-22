@@ -403,6 +403,20 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         for name, value in (("battery_power_invert", True), ("grid_power", "sensor.another_grid_power"), ("battery_temperature_history", "sensor.battery_temperature"), ("charge_rate", "number.another_charge_rate")):
             days, _ = restart(1, set_arg(name, value))
             failed |= _check("t4b a change to {} reads the full window".format(name), days == [28], days)
+        # Only the first inverter's grid_power is read by the scan, so only it is part of the key
+        saved_inverters, saved_grid = my_predbat.args.get("num_inverters"), my_predbat.args.get("grid_power")
+        my_predbat.args["num_inverters"] = 2
+        my_predbat.args["grid_power"] = ["sensor.grid_power", "sensor.second_grid_power"]
+        key_two = my_predbat.rate_grid_scan_key(False)
+        my_predbat.args["grid_power"] = ["sensor.grid_power", "sensor.another_second_grid_power"]
+        failed |= _check("t4b a second inverter's grid_power is not in the key", my_predbat.rate_grid_scan_key(False) == key_two)
+        my_predbat.args["grid_power"] = ["sensor.another_grid_power", "sensor.another_second_grid_power"]
+        failed |= _check("t4b the first inverter's grid_power is", my_predbat.rate_grid_scan_key(False) != key_two)
+        for name, value in (("num_inverters", saved_inverters), ("grid_power", saved_grid)):
+            if value is None:
+                my_predbat.args.pop(name, None)
+            else:
+                my_predbat.args[name] = value
         days, _ = restart(1, set_arg("export_limit", 3000))
         failed |= _check("t4b export_limit is not part of the charge key", days == [2], days)
         days, _ = restart(1, set_arg("car_charging_battery_size", 77))
@@ -425,6 +439,8 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         drifted = list(my_predbat.rate_grid_scan_key(True))
         drifted[7] = drifted[7] * 1.01
         failed |= _check("t4b a 1% export cap drift matches", my_predbat.rate_grid_scan_key_matches(drifted, my_predbat.rate_grid_scan_key(True)))
+        drifted[7] = my_predbat.rate_grid_scan_key(True)[7] * 1.03
+        failed |= _check("t4b a 3% export cap change does not match", not my_predbat.rate_grid_scan_key_matches(drifted, my_predbat.rate_grid_scan_key(True)))
         drifted[7] = 0
         failed |= _check("t4b a 0 export cap does not match a live one", not my_predbat.rate_grid_scan_key_matches(drifted, my_predbat.rate_grid_scan_key(True)))
         my_predbat.battery_rate_max_export = export_cap

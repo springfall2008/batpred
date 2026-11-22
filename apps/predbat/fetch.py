@@ -4547,7 +4547,10 @@ class Fetch:
         """
         if not isinstance(stored, list) or not isinstance(current, list) or len(stored) != len(current):
             return False
-        for index, tolerance in ((0, BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE), (1, BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE), (7, BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE)):
+        # Key positions compared with a tolerance; battery_rate_grid_history_days (4) is compared one way below; every other
+        # position must be equal
+        tolerances = {0: BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE, 1: BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE, 7: BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE}
+        for index, tolerance in tolerances.items():
             stored_value, current_value = stored[index], current[index]
             if stored_value is None or current_value is None:
                 if stored_value is not current_value:
@@ -4558,7 +4561,7 @@ class Fetch:
         if not isinstance(stored[4], int) or not isinstance(current[4], int) or stored[4] < current[4]:
             return False
         # battery_rate_grid_history_days: only a deeper window than the last full read needs reading again
-        return stored[2:4] + stored[5:7] == current[2:4] + current[5:7]
+        return all(stored[index] == current[index] for index in range(len(current)) if index not in tolerances and index != 4)
 
     def rate_grid_stored_time(self, text):
         """A stored rate grid scan time, or None when it is missing, malformed or ahead of the clock."""
