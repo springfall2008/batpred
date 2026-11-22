@@ -45,9 +45,12 @@ CURRENCY_ICONS = {
     "₸": "mdi:currency-kzt",
     "R$": "mdi:currency-brl",
 }
-# Only items priced in the minor currency unit have their icons updated, so the few items that
-# borrow the currency icon for a non-currency value (kWh, minutes) are left alone
-CURRENCY_ITEM_UNITS = ("p", "p/kWh")
+# Units of the CONFIG_ITEMS input_numbers that hold an amount of money in the minor currency unit.
+# Only items with one of these units have the placeholder icon replaced by the currency icon, as a
+# guard against a future non-money item copying the placeholder. Their min/max are also multiplied by
+# apps.yaml currency_scale so a currency with a much smaller minor unit than the penny (e.g. CZK haléř,
+# ~29 to 1p) can still set a meaningful threshold (#6155, #3683).
+CURRENCY_UNITS = ("p", "p/kWh", "p/kg")
 
 
 def currency_icon(symbol):
@@ -59,7 +62,7 @@ def apply_currency_icon(config_items, symbol):
     """Point the currency-valued items in config_items at the icon for the given symbol."""
     icon = currency_icon(symbol)
     for item in config_items:
-        if item.get("icon") == CURRENCY_ICON_PLACEHOLDER and item.get("unit") in CURRENCY_ITEM_UNITS:
+        if item.get("icon") == CURRENCY_ICON_PLACEHOLDER and item.get("unit") in CURRENCY_UNITS:
             item["icon"] = icon
 
 
@@ -2783,11 +2786,6 @@ SOLAX_SOLIS_MODES_FB00 = {
     "Feed-in priority - No Grid Charging": 64,
     "Feed-in priority": 96,
 }
-
-# Units of the CONFIG_ITEMS input_numbers that hold an amount of money in the minor currency unit.
-# Their min/max are multiplied by apps.yaml currency_scale so a currency with a much smaller minor
-# unit than the penny (e.g. CZK haléř, ~29 to 1p) can still set a meaningful threshold (#6155, #3683).
-CURRENCY_UNITS = ("p", "p/kWh", "p/kg")
 
 # Apps.yaml validation schema
 APPS_SCHEMA = {

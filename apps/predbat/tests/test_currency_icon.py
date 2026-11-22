@@ -20,7 +20,7 @@ from config import (
     CURRENCY_ICON_DEFAULT,
     CURRENCY_ICON_PLACEHOLDER,
     CURRENCY_ICONS,
-    CURRENCY_ITEM_UNITS,
+    CURRENCY_UNITS,
     apply_currency_icon,
     currency_icon,
 )
@@ -62,6 +62,7 @@ def test_apply_currency_icon(my_predbat):
     items = [
         {"name": "minor", "unit": "p", "icon": CURRENCY_ICON_PLACEHOLDER},
         {"name": "minor_per_kwh", "unit": "p/kWh", "icon": CURRENCY_ICON_PLACEHOLDER},
+        {"name": "minor_per_kg", "unit": "p/kg", "icon": CURRENCY_ICON_PLACEHOLDER},
         {"name": "energy_kwh", "unit": "kWh", "icon": CURRENCY_ICON_PLACEHOLDER},
         {"name": "duration", "unit": "minutes", "icon": CURRENCY_ICON_PLACEHOLDER},
         {"name": "other_icon", "unit": "p", "icon": "mdi:flash"},
@@ -73,7 +74,8 @@ def test_apply_currency_icon(my_predbat):
 
     assert by_name["minor"]["icon"] == "mdi:currency-eur", "p item should have icon updated, got {}".format(by_name["minor"]["icon"])
     assert by_name["minor_per_kwh"]["icon"] == "mdi:currency-eur", "p/kWh item should have icon updated, got {}".format(by_name["minor_per_kwh"]["icon"])
-    print("✓ p and p/kWh items have had icons updated")
+    assert by_name["minor_per_kg"]["icon"] == "mdi:currency-eur", "p/kg item should have icon updated, got {}".format(by_name["minor_per_kg"]["icon"])
+    print("✓ p, p/kWh and p/kg items have had icons updated")
 
     assert by_name["energy_kwh"]["icon"] == CURRENCY_ICON_PLACEHOLDER, "kWh item must keep its icon, got {}".format(by_name["energy_kwh"]["icon"])
     assert by_name["duration"]["icon"] == CURRENCY_ICON_PLACEHOLDER, "minutes item must keep its icon, got {}".format(by_name["duration"]["icon"])
@@ -107,7 +109,7 @@ def test_apply_currency_icon_real_config(my_predbat):
 
     changed = 0
     for before_icon, after in zip(original_icons, items):
-        eligible = before_icon == CURRENCY_ICON_PLACEHOLDER and after.get("unit") in CURRENCY_ITEM_UNITS
+        eligible = before_icon == CURRENCY_ICON_PLACEHOLDER and after.get("unit") in CURRENCY_UNITS
         if eligible:
             assert after["icon"] == "mdi:currency-eur", "{} should have icon updated, got {}".format(after["name"], after["icon"])
             changed += 1
@@ -133,7 +135,7 @@ def test_currency_icon_reaches_ha(my_predbat):
     name = "manual_import_value"
     item = my_predbat.config_index.get(name)
     assert item is not None, "{} config item not found".format(name)
-    assert item.get("unit") in CURRENCY_ITEM_UNITS, "{} is no longer a currency item (unit {})".format(name, item.get("unit"))
+    assert item.get("unit") in CURRENCY_UNITS, "{} is no longer a currency item (unit {})".format(name, item.get("unit"))
     assert my_predbat.user_config_item_enabled(item), "{} must be enabled for this test".format(name)
     entity = item.get("entity") or "input_number.predbat_" + name
 
