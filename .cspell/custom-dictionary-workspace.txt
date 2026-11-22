@@ -20,6 +20,7 @@ Alertfeed
 allclose
 alphaess
 am2
+andrewmusty
 anker
 annualform
 Anson
@@ -76,6 +77,7 @@ Bitwarden
 BLAS
 boostable
 Bottlecap
+bpinto
 brickatius
 britkat1980
 bwignore
@@ -184,6 +186,7 @@ Disf
 diverter
 dlimit
 dlopen
+dmacwalter
 dnoregion
 docstrings
 dschg
@@ -308,6 +311,7 @@ gndean
 gnueabihf
 GOELEC
 goldens
+goodwe
 gridcharge
 gridcode
 gridcolor
@@ -433,6 +437,7 @@ luxpowertek
 luxpython
 malloc
 mallopt
+markbw
 markdownlint
 matplotlib
 maximise
@@ -470,6 +475,7 @@ mispairing
 Mixergy
 mkaiser
 mkdocs
+mletenay
 mlugg
 Modbus
 mogons
@@ -500,6 +506,7 @@ nearr
 nemotron
 NESO
 newtok
+njhcarroll
 njpwerner
 nobat
 nocharge

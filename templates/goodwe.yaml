@@ -1,0 +1,292 @@
+# Predbat config for GoodWe ET / EH / ESA hybrid inverters with EMS control,
+# via the GoodWe Inverter integration (https://github.com/mletenay/home-assistant-goodwe-inverter)
+#
+# Predbat has no built-in GoodWe inverter type, so this is a custom inverter
+# type controlled through Predbat's Service API. Predbat writes the charge and
+# export power it wants into two input_number helpers and calls Home Assistant
+# scripts that set the inverter's EMS power limit and EMS mode.
+# Your inverter must expose select.goodwe_ems_mode and number.goodwe_ems_power_limit
+# (EMS control may need a firmware update through the SolarGo app). If it only
+# has the operation modes (general, eco_charge, ...), see the docs for the
+# simpler setup instead.
+# See the GoodWe section of the inverter setup docs.
+#
+# Copy this over your apps.yaml and:
+#   1. Install the GoodWe Inverter integration from the Marketplace (not the
+#      built-in GoodWe integration, which has no EMS controls).
+#   2. Create the two input_number helpers and the four scripts described in
+#      the docs, adjusting the export limits in the scripts for your site.
+#   3. Set soc_max, battery_rate_max and inverter_limit for your system.
+#   4. Delete the template: True line below once you have configured this file.
+---
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  timezone: Europe/London
+  currency_symbols:
+    - '£'
+    - 'p'
+  threads: auto
+  # XXX: This is a configuration template, delete this line once you edit your configuration
+  template: True
+  load_filter_threshold: 30
+
+  # ─── GoodWe energy sensors ────────────────────────────────────────────────
+  load_today:
+    - sensor.today_load
+  import_today:
+    - sensor.today_energy_import
+  export_today:
+    - sensor.today_energy_export
+  pv_today:
+    - sensor.today_s_pv_generation
+
+  # ─── GoodWe inverter definition ───────────────────────────────────────────
+  # Every setting Predbat reads from an inverter definition is spelled out,
+  # because anything left out is copied from the GivEnergy one.
+  num_inverters: 1
+  inverter_type: "GW"
+  inverter:
+    name: "GoodWe EMS"
+    has_rest_api: false
+    has_mqtt_api: false
+    has_service_api: true
+    output_charge_control: "power"
+    charge_control_immediate: false
+    current_dp: 1
+    charge_discharge_with_rate: false
+    has_charge_enable_time: false
+    has_discharge_enable_time: false
+    # No target SoC in EMS mode: Predbat watches the SoC and stops the charge
+    # or export itself. The battery floor is the inverter's own depth of
+    # discharge setting, which Predbat doesn't change
+    has_target_soc: false
+    target_soc_used_for_discharge: false
+    has_reserve_soc: false
+    has_timed_pause: false
+    time_button_press: false
+    # Freeze charge holds the battery (EMS battery_standby with a 0 W limit)
+    support_charge_freeze: true
+    support_discharge_freeze: false
+    support_feedin_first: false
+    has_ge_inverter_mode: false
+    has_ge_eco_toggle: false
+    has_idle_time: false
+    has_time_window: false
+    charge_time_format: "S"
+    charge_time_entity_is_option: false
+    can_span_midnight: true
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    num_load_entities: 1
+    soc_units: "%"
+    write_and_poll_sleep: 2
+
+  # ─── GoodWe control surface (write) ───────────────────────────────────────
+  # Predbat writes the charge and export power it wants here; the scripts read
+  # them. Their maximum must be at least battery_rate_max, or Predbat's write
+  # fails without an error
+  charge_rate:
+    - input_number.predbat_charge_rate
+  discharge_rate:
+    - input_number.predbat_discharge_rate
+
+  # Service keys go at the top level of each entry, not under a data: block.
+  # repeat: true makes Predbat call the start scripts every cycle, so the
+  # export setpoint follows changing PV and house load
+  charge_start_service:
+    service: script.turn_on
+    entity_id: script.predbat_charge
+    repeat: true
+  charge_stop_service:
+    service: script.turn_on
+    entity_id: script.predbat_stop
+    repeat: false
+  discharge_start_service:
+    service: script.turn_on
+    entity_id: script.predbat_export
+    repeat: true
+  discharge_stop_service:
+    service: script.turn_on
+    entity_id: script.predbat_stop
+    repeat: false
+  charge_freeze_service:
+    service: script.turn_on
+    entity_id: script.predbat_freeze
+
+  # ─── GoodWe sensor entities (read) ────────────────────────────────────────
+  soc_percent:
+    - sensor.battery_state_of_charge
+  # Battery size in kWh
+  soc_max:
+    - 22.4
+  # Positive while discharging, as Predbat expects
+  battery_power:
+    - sensor.battery_power
+  battery_power_invert:
+    - false
+  pv_power:
+    - sensor.pv_power
+  load_power:
+    - sensor.house_consumption
+  # GoodWe's Active Power is positive while exporting, as Predbat expects
+  grid_power:
+    - sensor.active_power
+  grid_power_invert:
+    - false
+
+  # ─── GoodWe battery and inverter limits ───────────────────────────────────
+  # Maximum battery charge/discharge power in W
+  battery_rate_max:
+    - 9600
+  # Inverter AC limit in W, e.g. 10000 for a 10 kW inverter
+  inverter_limit:
+    - 10000
+  # Grid export limit in W, if your DNO has set one
+  #export_limit:
+  #  - 5400
+  inverter_clock_skew_start: 0
+  inverter_clock_skew_end: 0
+  inverter_clock_skew_discharge_start: 0
+  inverter_clock_skew_discharge_end: 0
+  clock_skew: 0
+
+  # ─── Solcast solar forecast ───────────────────────────────────────────────
+  # Solcast cloud interface, set this or the local interface below
+  #solcast_host: 'https://api.solcast.com.au/'
+  #solcast_api_key: 'xxxx'
+  #solcast_poll_hours: 8
+  pv_forecast_today: re:(sensor.(solcast_|)(pv_forecast_|)forecast_today)
+  pv_forecast_tomorrow: re:(sensor.(solcast_|)(pv_forecast_|)forecast_tomorrow)
+  pv_forecast_d3: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_3|d3))
+  pv_forecast_d4: re:(sensor.(solcast_|)(pv_forecast_|)forecast_(day_4|d4))
+  # ─── Car charging ─────────────────────────────────────────────────────────
+  car_charging_energy: 're:(sensor.myenergi_zappi_[0-9a-z]+_charge_added_session|sensor.wallbox_portal_added_energy)'
+
+  # car_charging_power is the live charging power of your car charger, in Watts
+  # It is display only - it drives the car shown on the web interface power flow diagram
+  # and the predbat.car_charging_power sensor. The plan itself is unaffected by it.
+  # Automatically set to detect Wallbox and Zappi, if it doesn't match manually enter your sensor name
+  car_charging_power: 're:(sensor.myenergi_zappi_[0-9a-z]+_internal_load_ct1|sensor.wallbox_portal_charging_power)'
+  num_cars: 1
+  car_charging_planned:
+    - 're:(sensor.wallbox_portal_status_description|sensor.myenergi_zappi_[0-9a-z]+_plug_status)'
+  car_charging_planned_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'connected'
+    - 'ev connected'
+    - 'ev ready to charge'
+    - 'charging'
+    - 'paused'
+    - 'waiting for car demand'
+    - 'waiting for ev'
+    - 'scheduled'
+    - 'enabled'
+    - 'latched'
+    - 'locked'
+    - 'plugged in'
+    - 'waiting'
+  # car_charging_now can be set to a sensor that shows the car is charging right now, so that
+  # Predbat holds the house battery for the car while it charges. It never adds a charging slot.
+  # Use an on/off sensor (matched against car_charging_now_response), or a charging power sensor
+  # in W or kW where 200W or more counts as charging - e.g. for a Wallbox charger:
+  #car_charging_now:
+  #  - sensor.wallbox_portal_charging_power
+  car_charging_now_response:
+    - 'yes'
+    - 'on'
+    - 'true'
+    - 'charging'
+  #car_charging_battery_size:
+  #  - 75
+  #car_charging_limit:
+  #  - 're:number.tsunami_charge_limit'
+  #car_charging_soc:
+  #  - 're:sensor.tsunami_battery'
+  #car_charging_exclusive:
+  #  - True
+  # ─── Octopus Energy ───────────────────────────────────────────────────────
+  octopus_intelligent_slot: 're:(binary_sensor.octopus_energy([0-9a-z_]+|)_intelligent_dispatching)'
+  octopus_ready_time: 're:((select|time).octopus_energy_([0-9a-z_]+|)_intelligent_target_time)'
+  octopus_charge_limit: 're:(number.octopus_energy([0-9a-z_]+|)_intelligent_charge_target)'
+  #octopus_intelligent_slot: 'binary_sensor.ohme_slot_active'
+  #octopus_ready_time: 'time.ohme_target_time'
+  #octopus_charge_limit: 'number.ohme_target_percent'
+  #octopus_slot_low_rate: False
+  octopus_saving_session: 're:(event.octopus_energy([0-9a-z_]+|)_saving_session_event(s|))'
+  octopus_saving_session_octopoints_per_penny: 8
+  octopus_free_session: 're:(event.octopus_energy_([0-9a-z_]+|)_octoplus_free_electricity_session_events)'
+  # octopus_free_url: 'http://octopus.energy/free-electricity'
+  # axle_api_key: "xxxxxxx"
+  # ─── Energy rates ─────────────────────────────────────────────────────────
+  metric_octopus_import: 're:(event.octopus_energy_electricity_[0-9a-z_]+(?<!export)_current_day_rates)'
+  #metric_octopus_export: 're:(event.octopus_energy_electricity_[0-9a-z_]+_export_current_day_rates)'
+  metric_standing_charge: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_standing_charge)'
+  #metric_energidataservice_import: 'sensor.energi_data_service_import'
+  #metric_energidataservice_export: 'sensor.energi_data_service_export'
+  #rates_import:
+  #  -  start: "00:30:00"
+  #     end: "04:30:00"
+  #     rate: 7.5
+  #  -  start: "04:30:00"
+  #     end: "00:30:00"
+  #     rate: 40.0
+  #rates_export:
+  #  -  rate: 4.2
+  # rates_import_octopus_url : "https://api.oegb-kraken.energy/v1/products/AGILE-24-10-01/electricity-tariffs/E-1R-AGILE-24-10-01-{octopus_region}/standard-unit-rates"
+  # rates_export_octopus_url: "https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-19-05-13/electricity-tariffs/E-1R-AGILE-OUTGOING-19-05-13-A/standard-unit-rates/"
+  #rates_import_override:
+  # -  date: '2023-09-10'
+  #    start: '14:00:00'
+  #    end: '14:30:00'
+  #    rate: 112
+  #    load_scaling: 0.8
+  # ─── Forecast and history ─────────────────────────────────────────────────
+  days_previous:
+    - 7
+  forecast_hours: 48
+  load_ml_enable: true
+  # load_ml_source: true
+  temperature_enable: true
+  # ─── Notifications ────────────────────────────────────────────────────────
+  #notify_devices:
+  #  - mobile_app_my_phone
+  # ─── Scaling ──────────────────────────────────────────────────────────────
+  battery_scaling:
+    - 1.0
+  import_export_scaling: 1.0
+  # ─── Export triggers ──────────────────────────────────────────────────────
+  export_triggers:
+    - name: 'large'
+      minutes: 60
+      energy: 1.0
+    - name: 'small'
+      minutes: 15
+      energy: 0.25
+  #iboost_energy_today: 'sensor.xxxxx'
+  #iboost_energy_scaling: 1.0
+  #metric_octopus_gas: 're:(sensor.(octopus_energy_|)gas_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  #futurerate_url: 'https://dataportal-api.nordpoolgroup.com/api/DayAheadPrices?date=DATE&market=N2EX_DayAhead&deliveryArea=UK&currency=GBP'
+  #futurerate_adjust_import: True
+  #futurerate_adjust_export: False
+  #futurerate_peak_start: "16:00:00"
+  #futurerate_peak_end: "19:00:00"
+  #futurerate_peak_premium_import: 14
+  #futurerate_peak_premium_export: 6.5
+  #octopus_region: "A"
+  #compare_list:
+  #  - id: 'current'
+  #    name: 'Current Tariff'
+  #alerts:
+  #  url: "https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom"
+  #  event: "(Amber|Yellow|Orange|Red).*(Wind|Snow|Fog|Rain|Thunderstorm|Avalanche|Frost|Heat|Coastal event|Flood|Forestfire|Ice|Low temperature|Storm|Tornado|Tsunami|Volcano|Wildfire)"
+  #  severity: "Moderate|Severe|Extreme"
+  #  certainty: "Possible|Likely|Expected"
+  #  keep: 40
+  #watch_list:
+  #  - '{octopus_intelligent_slot}'
+  #  - '{octopus_ready_time}'
+  #  - '{octopus_charge_limit}'
+  #  - '+[car_charging_planned]'

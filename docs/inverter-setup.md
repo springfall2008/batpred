@@ -48,6 +48,7 @@ Once you get everything working please share the configuration as a GitHub issue
    | [Fox](#fox) | [Foxess](https://github.com/nathanmarlor/foxess_modbus/) | [fox.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fox.yaml) |
    | [Fox Cloud](#fox-cloud) | Predbat | [fox_cloud.yaml](https://raw.githubusercontent.com/springfall2008/batpred/refs/heads/main/templates/fox_cloud.yaml) |
    | [Fronius GEN24](#fronius-gen24) | [Fronius](https://www.home-assistant.io/integrations/fronius/) + [fronius-modbus-control](https://github.com/knackerbrot/fronius-modbus-control) | [fronius.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/fronius.yaml) |
+   | [GoodWe](#goodwe) | [GoodWe Inverter](https://github.com/mletenay/home-assistant-goodwe-inverter) | [goodwe.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/goodwe.yaml) |
    | [Growatt Cloud OpenAPI](#growatt-cloud-openapi) | Predbat built-in | Configured by Predbat.com OAuth setup |
    | [Growatt with Solar Assistant](#growatt-with-solar-assistant) | [Solar Assistant](https://solar-assistant.io/help/home-assistant/setup) | [spa.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_spa.yaml) or [sph.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solar_assistant_growatt_sph.yaml) |
    | [Hanchu ESS Cloud](#hanchu-ess-cloud) | Predbat | [hanchu.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/hanchu.yaml) |
@@ -729,6 +730,249 @@ Edit `apps.yaml`:
 - The Fronius integration provides power sensors named `sensor.solarnet_power_battery`, `sensor.solarnet_power_photovoltaics`, `sensor.solarnet_power_load` and `sensor.solarnet_power_grid`. These entity names are standard for the HA Fronius integration and should not need changing.
 - The `grid_power_invert: true` and `load_power_invert: true` settings in the template are required because Fronius reports these values with the opposite sign convention to what Predbat expects.
 - If your inverter has a `RvrtTms` register that is stuck at a non-zero value from a previous session, battery control commands may revert unexpectedly. See the [fronius-modbus-control README](https://github.com/knackerbrot/fronius-modbus-control#the-rvrttms-gotcha) for how to resolve this.
+
+## GoodWe
+
+GoodWe hybrid inverters (ET, EH, ESA and similar) are read and controlled locally by the [GoodWe Inverter integration](https://github.com/mletenay/home-assistant-goodwe-inverter), the Marketplace version of Home Assistant's built-in GoodWe integration with more controls.
+Predbat has no built-in GoodWe inverter type, so it uses a custom inverter definition and controls the inverter through Home Assistant services and scripts.
+
+There are two ways to control a GoodWe, depending on what your inverter exposes:
+
+- **EMS control** (recommended): if your inverter has `select.goodwe_ems_mode` and `number.goodwe_ems_power_limit`, Predbat can charge, force export and hold the battery at a set power. EMS control may need a firmware update through the SolarGo app before these appear
+- **Operation mode control**: older inverters without EMS (e.g. the GW10KL-ET) only have the operation mode select (`general`, `eco_charge`, `eco_discharge`, ...). Predbat can charge the battery from the grid but can't force an export
+
+Thanks @dmacwalter for the EMS configuration and @bpinto for the operation mode configuration.
+
+### GoodWe EMS control
+
+Predbat writes the charge and export power it wants into two `input_number` helpers, and calls scripts that write the EMS power limit and then the EMS mode. Using helpers and scripts means only the scripts write to the EMS, so Predbat and the scripts can't race each other.
+
+- Install the GoodWe Inverter integration from the [Marketplace](install.md#hacs-and-the-marketplace) (or from HACS on Home Assistant 2026.10 or older), and check that `select.goodwe_ems_mode` and `number.goodwe_ems_power_limit` exist
+- Copy the template [goodwe.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/goodwe.yaml) over your `apps.yaml`
+- Create two helpers (Settings / Devices & services / Helpers / Create helper / Number), `input_number.predbat_charge_rate` and `input_number.predbat_discharge_rate`, from 0 to at least your **battery_rate_max** in W, step 100, display mode Input field.
+  If the maximum is lower than **battery_rate_max**, Predbat's writes to them fail without an error
+- Create the four scripts below in Settings / Automations & scenes / Scripts (edit in YAML). The export script keeps battery + PV - house load under your grid export limit: set `cap` to a little below your export limit and `rate_max` to your **battery_rate_max**
+- In `apps.yaml` set **soc_max** to your battery size in kWh, **battery_rate_max** to the battery's maximum charge/discharge power in W, **inverter_limit** to the inverter's AC rating, and **export_limit** if you have one
+- Delete the `template: True` line and restart Predbat
+
+Charge script:
+
+```yaml
+predbat_charge:
+  alias: Predbat - force charge
+  mode: single
+  variables:
+    setpoint: >-
+      {% set rate_max = 9600 %}
+      {% set req = states('input_number.predbat_charge_rate') | float(0) %}
+      {% set target = rate_max if req <= 0 else [req, rate_max] | min %}
+      {{ (((([target, 0] | max) / 100) | round(0) | int) * 100) }}
+  sequence:
+    - alias: Clear stale mode state, unless already in auto or charging
+      if:
+        - condition: not
+          conditions:
+            - condition: state
+              entity_id: select.goodwe_ems_mode
+              state:
+                - auto
+                - charge_battery
+      then:
+        - action: select.select_option
+          target:
+            entity_id: select.goodwe_ems_mode
+          data:
+            option: auto
+        - delay:
+            seconds: 2
+    - alias: Power limit first - this is what makes the setpoint stick
+      action: number.set_value
+      target:
+        entity_id: number.goodwe_ems_power_limit
+      data:
+        value: "{{ setpoint | int }}"
+    - action: select.select_option
+      target:
+        entity_id: select.goodwe_ems_mode
+      data:
+        option: charge_battery
+```
+
+Export script:
+
+```yaml
+predbat_export:
+  alias: Predbat - force export
+  mode: single
+  variables:
+    setpoint: >-
+      {% set cap = 5200 %}
+      {% set rate_max = 9600 %}
+      {% set pv = states('sensor.pv_power') | float(0) %}
+      {% set load = states('sensor.house_consumption') | float(0) %}
+      {% set req = states('input_number.predbat_discharge_rate') | float(0) %}
+      {% set headroom = cap - pv + load %}
+      {% set target = headroom if req <= 0 else [req, headroom] | min %}
+      {{ ((([[target, 0] | max, rate_max] | min) / 100) | round(0) | int) * 100 }}
+  sequence:
+    - alias: Clear stale mode state, unless already in auto or a mode we set
+      if:
+        - condition: not
+          conditions:
+            - condition: state
+              entity_id: select.goodwe_ems_mode
+              state:
+                - auto
+                - discharge_battery
+                - battery_standby
+      then:
+        - action: select.select_option
+          target:
+            entity_id: select.goodwe_ems_mode
+          data:
+            option: auto
+        - delay:
+            seconds: 2
+    - alias: PV alone already fills the export cap - hold the battery instead
+      if:
+        - condition: template
+          value_template: "{{ setpoint | float(0) < 200 }}"
+      then:
+        - action: number.set_value
+          target:
+            entity_id: number.goodwe_ems_power_limit
+          data:
+            value: 0
+        - action: select.select_option
+          target:
+            entity_id: select.goodwe_ems_mode
+          data:
+            option: battery_standby
+        - stop: PV is filling the export cap - battery held, not discharged
+    - alias: Power limit first - this is what makes the setpoint stick
+      action: number.set_value
+      target:
+        entity_id: number.goodwe_ems_power_limit
+      data:
+        value: "{{ setpoint | int }}"
+    - action: select.select_option
+      target:
+        entity_id: select.goodwe_ems_mode
+      data:
+        option: discharge_battery
+```
+
+Freeze (hold) script:
+
+```yaml
+predbat_freeze:
+  alias: Predbat - freeze battery
+  mode: single
+  sequence:
+    - alias: Limit 0 before the mode - this makes battery_standby a hold, not a charge request
+      action: number.set_value
+      target:
+        entity_id: number.goodwe_ems_power_limit
+      data:
+        value: 0
+    - action: select.select_option
+      target:
+        entity_id: select.goodwe_ems_mode
+      data:
+        option: battery_standby
+```
+
+Stop script, used for both charge and export stop:
+
+```yaml
+predbat_stop:
+  alias: Predbat - release to auto
+  mode: single
+  sequence:
+    - action: number.set_value
+      target:
+        entity_id: number.goodwe_ems_power_limit
+      data:
+        value: 10000
+    - action: select.select_option
+      target:
+        entity_id: select.goodwe_ems_mode
+      data:
+        option: auto
+```
+
+Notes on GoodWe EMS behaviour:
+
+- **Write order matters.** Always write the EMS power limit before the EMS mode. If the mode is written first, the setpoint doesn't stick
+- The power limit is a magnitude with no direction, and the same mode means different things depending on it: `battery_standby` with a 0 W limit is a true hold (no charge or discharge, house load from the grid), but with a 10000 W limit it behaves as a charge request
+- `discharge_battery` is accurate to its setpoint but throttles PV, so the simple export script above works best when PV is low (evening and night).
+  In strong sun, `sell_power` exports to the setpoint and sends the rest of the surplus to the battery but does **not** respect the grid export limit, while `discharge_pv` respects the limit but curtails PV.
+  The [GoodWe issue](https://github.com/springfall2008/batpred/issues/1000) has a more advanced export script that picks the EMS mode each cycle from PV, house load and battery SoC, with a watchdog for `sell_power` overshooting the export limit
+- Freeze export isn't supported: no EMS mode means "don't charge but cover house load from the battery", and GoodWe isn't a feed-in-first inverter, so holding the battery clips surplus PV
+- Predbat doesn't set the battery reserve. The inverter's own on-grid and backup depth of discharge settings are the only floor on discharge
+- Put service keys at the top level of each Predbat service entry, not under a nested `data:` block: Predbat passes a nested block to Home Assistant as a key called `data`, which it rejects with "not a valid option at 'data'"
+- Quote every `HH:MM:SS` time in `apps.yaml` (e.g. `"11:00:00"`). Unquoted, YAML reads it as a number of seconds and Predbat fails with `'int' object has no attribute 'count'`
+- The scripts' thresholds are specific to each site. Multiple GoodWe inverters in parallel haven't been tested with EMS control
+
+### GoodWe operation mode control
+
+Without EMS controls, Predbat can still charge the battery from the grid at a set rate and to a target SoC, by switching the inverter between `eco_charge` (charge) and `general` (self-use) operation modes:
+
+- Copy the template [goodwe.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/goodwe.yaml) over your `apps.yaml`, and replace its inverter definition and control section with the following.
+  Predbat writes the charge target SoC to the Eco mode SoC and the charge rate to the Eco mode power (both in %), so the services only have to change the operation mode:
+
+```yaml
+  inverter:
+    name: "GoodWe operation mode"
+    has_rest_api: false
+    has_mqtt_api: false
+    has_service_api: true
+    output_charge_control: "power"
+    charge_control_immediate: false
+    current_dp: 1
+    charge_discharge_with_rate: false
+    has_charge_enable_time: false
+    has_discharge_enable_time: false
+    has_target_soc: true
+    target_soc_used_for_discharge: false
+    has_reserve_soc: false
+    has_timed_pause: false
+    time_button_press: false
+    support_charge_freeze: false
+    support_discharge_freeze: false
+    support_feedin_first: false
+    has_ge_inverter_mode: false
+    has_ge_eco_toggle: false
+    has_idle_time: false
+    has_time_window: false
+    charge_time_format: "S"
+    charge_time_entity_is_option: false
+    can_span_midnight: true
+    clock_time_format: "%Y-%m-%d %H:%M:%S"
+    num_load_entities: 1
+    soc_units: "%"
+    write_and_poll_sleep: 2
+
+  charge_limit:
+    - number.goodwe_eco_mode_soc
+  charge_rate_percent:
+    - number.goodwe_eco_mode_power
+  discharge_rate_percent:
+    - number.goodwe_eco_mode_power
+
+  charge_start_service:
+    service: select.select_option
+    entity_id: select.goodwe_inverter_operation_mode
+    option: eco_charge
+  charge_stop_service:
+    service: select.select_option
+    entity_id: select.goodwe_inverter_operation_mode
+    option: general
+```
+
+- Run Predbat in "Control charge" mode, as there is no forced export
+- Predbat doesn't set the battery reserve here. `number.goodwe_depth_of_discharge_on_grid` is a depth of discharge rather than a minimum SoC, so pointing Predbat's **reserve** at it would set the opposite of what Predbat intends. Set it to suit your battery in the GoodWe app
+- In `eco_charge` the inverter doesn't discharge the battery, so during a hold charge (target SoC below the current SoC) the battery is held rather than used down to the target. Predbat replans around this each cycle
 
 ## Growatt Cloud OpenAPI
 
