@@ -4633,7 +4633,9 @@ class Fetch:
             },
             app="load_ml",
         )
-        if storage and guard.loaded and guard.dirty and (guard.last_save is None or now - guard.last_save >= 60 or previous != selected):
+        # Save changed snapshots and actuals promptly so a restart cannot lose
+        # newly recorded evidence while waiting for another hourly checkpoint.
+        if storage and guard.loaded and guard.dirty:
             try:
                 if run_async(storage.save("predbat", "load_forecast_accuracy", guard.serialise(), format="json", expiry=self.now_utc + timedelta(days=9))):
                     guard.dirty = False

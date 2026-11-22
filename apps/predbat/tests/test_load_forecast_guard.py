@@ -291,6 +291,82 @@ class LoadForecastGuardTests(unittest.TestCase):
                 fresh.update_load_forecast_guard(ml, classic)
             self.assertEqual(bool(fresh.components.storage.saves), delta >= 10)
 
+    def test_pending_snapshots_are_saved_promptly_and_survive_restart(self):
+        """A recent checkpoint cannot delay preserving a newly captured forecast across restart."""
+        base = GuardBase()
+        ml, classic = curve(0.02), curve(0.01)
+        base.update_load_forecast_guard(ml, classic)
+        guard = base.load_forecast_guard
+        storage = FakeStorage({**guard.serialise(), "records": []})
+        base.components = Components(storage)
+        guard.loaded = True
+        guard.last_save = int(base.now_utc.timestamp() // 60) - 5
+        original = copy.deepcopy(guard.records)
+        base.update_load_forecast_guard(ml, classic)
+        self.assertEqual(storage.value["records"], original)
+        self.assertEqual(len(storage.saves), 1)
+        self.assertFalse(guard.dirty)
+
+        restarted = GuardBase()
+        restarted.components = base.components
+        with patch.object(restarted, "guard_actual_load", side_effect=AssertionError("Read future actual")):
+            restarted.update_load_forecast_guard(curve(0.04), classic)
+        self.assertCountEqual(restarted.load_forecast_guard.records, original)
+        self.assertTrue(all(row["actual"] is None for row in original))
+        self.assertEqual(len(storage.saves), 1)
+
+    def test_completed_actual_is_saved_promptly_and_not_remeasured_on_restart(self):
+        """A newly completed window retains its frozen actual through an immediate reload."""
+        base = GuardBase()
+        ml, classic = curve(0.02), curve(0.01)
+        base.update_load_forecast_guard(ml, classic)
+        guard = base.load_forecast_guard
+        storage = FakeStorage(copy.deepcopy(guard.serialise()))
+        base.components = Components(storage)
+        guard.loaded, guard.dirty = True, False
+        base.now_utc += timedelta(hours=1)
+        base.minutes_now = 60
+        guard.last_save = int(base.now_utc.timestamp() // 60) - 5
+        base.update_load_forecast_guard(ml, classic)
+        completed = [row for row in storage.value["records"] if row["actual"] is not None]
+        self.assertEqual(len(completed), 1)
+        self.assertEqual(completed[0]["duration"], 60)
+        self.assertAlmostEqual(completed[0]["actual"], 0.6)
+        original = copy.deepcopy(guard.records)
+
+        restarted = GuardBase()
+        restarted.now_utc, restarted.minutes_now = base.now_utc, base.minutes_now
+        restarted.components = base.components
+        with patch.object(restarted, "guard_actual_load", side_effect=AssertionError("Remeasured saved actual")):
+            restarted.update_load_forecast_guard(curve(0.04), classic)
+        self.assertCountEqual(restarted.load_forecast_guard.records, original)
+        self.assertEqual(restarted.load_forecast_guard.scores()["1h"]["samples"], 1)
+        self.assertEqual(len(storage.saves), 1)
+
+    def test_failed_prompt_save_keeps_evidence_dirty_and_retries(self):
+        """A failed save retains the in-memory snapshots and retries without another hour's wait."""
+        for failure in (False, RuntimeError("temporary storage failure")):
+            base = GuardBase()
+            ml, classic = curve(0.02), curve(0.01)
+            base.update_load_forecast_guard(ml, classic)
+            guard = base.load_forecast_guard
+            storage = FakeStorage({**guard.serialise(), "records": []})
+            base.components = Components(storage)
+            guard.loaded = True
+            guard.last_save = int(base.now_utc.timestamp() // 60) - 5
+            original = copy.deepcopy(guard.records)
+            kwargs = {"side_effect": failure} if isinstance(failure, Exception) else {"return_value": failure}
+            with patch.object(storage, "save", **kwargs) as save:
+                base.update_load_forecast_guard(ml, classic)
+            save.assert_awaited_once()
+            self.assertTrue(guard.dirty)
+            self.assertEqual(storage.value["records"], [])
+            self.assertEqual(guard.records, original)
+            base.update_load_forecast_guard(ml, classic)
+            self.assertFalse(guard.dirty)
+            self.assertEqual(storage.value["records"], original)
+            self.assertEqual(len(storage.saves), 1)
+
     def test_veto_preserves_external_forecasts(self):
         """Fallback removes only ML, restores classic eligibility and forces a replan."""
         base = GuardBase()
