@@ -24,6 +24,13 @@ TIME_FORMAT_OCTOPUS = "%Y-%m-%d %H:%M:%S%z"
 TIME_FORMAT_SOLIS = "%Y-%m-%d %H:%M:%S"
 PREDICT_STEP = 5
 
+# Octopus Energy API. Octopus moved its public API to api.oegb-kraken.energy (GH#5786), with api.octopus.energy kept
+# running in parallel for a few months; URLs still naming the old host (apps.yaml, compare and annual configs) are
+# rewritten to the new one. Saving sessions are only served by the backend host, which has no new-domain equivalent
+OCTOPUS_API_URL = "https://api.oegb-kraken.energy"
+OCTOPUS_LEGACY_API_HOST = "api.octopus.energy"
+OCTOPUS_BACKEND_API_URL = "https://api.backend.octopus.energy"
+
 # Octopus Intelligent slot confirmation (octopus_intelligent_dynamic): how long a car inside a dispatch must
 # show "not charging" before its slots, and their cheap rate, are cancelled. car_charging_now reports the
 # car directly, so two minutes (one charger/integration update) is enough once the start band has passed;
@@ -133,6 +140,55 @@ INVERTER_CLOCK_SKEW_RESTART_MINUTES = 30
 INVERTER_CLOCK_SKEW_WARN_MINUTES = 5
 INVERTER_CLOCK_SKEW_WARN_REPEAT_MINUTES = 60  # Minimum gap between repeats of the moderate-skew warning, per inverter, so it doesn't fire every 5-minute cycle
 BATTERY_SIZE_RETRY_MINUTES = 60  # Gap between retries of a battery size estimate that found nothing today, so an overnight charge is used the same morning
+
+# battery_temperature_charge_curve / battery_temperature_discharge_curve - how a manual temperature curve is looked up
+BATTERY_TEMPERATURE_CURVE_TEMP_MAX = 30  # Warmest degree battery_temperature_*_curve is looked up (and learned) at; a warmer reading uses this degree. Fox fleet BMS limits still rise up to ~25-30 degrees
+BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK = 20  # A positive degree the curve does not set falls back to this entry (then to uncapped), as it did when 20 was the warmest degree looked up
+BATTERY_POWER_CURVE_EXPORT_LIMIT_MARGIN = 0.95  # A discharge minute whose grid export is at or above this fraction of export_limit was held back by the export limit, not the battery
+# Battery rate grids (battery_rate_grid.py): achievable charge/discharge rate as a fraction of the rated rate, by SoC % and battery temperature
+BATTERY_RATE_GRID_MAX = 1.2  # Highest grid value: some systems run a little above their rated rate, a reading above this is noise
+BATTERY_RATE_GRID_HALF_LIFE_DAYS = 90  # A segment counts half as much every this many days, so last winter still shapes the cold rows
+BATTERY_RATE_GRID_MAX_AGE_DAYS = 365  # Stored segments older than this are dropped
+BATTERY_RATE_GRID_STORE_EXPIRY_DAYS = BATTERY_RATE_GRID_MAX_AGE_DAYS + 30  # The evidence is saved with this expiry, past its retention, so a storage backend's default lifetime (72 h on KeyDB) cannot drop it (#6225)
+BATTERY_RATE_GRID_MIN_CELLS = 20  # A learned grid needs this many measured SoC x temperature cells ...
+BATTERY_RATE_GRID_MIN_DAYS = 3  # ... from at least this many different days, before it replaces the manual curves
+BATTERY_RATE_GRID_RUN_MINUTES = 15  # Evidence comes from runs of at least this many consecutive minutes at the full written rate
+BATTERY_RATE_GRID_EDGE_MINUTES = 5  # Minutes dropped at each end of a run (ramp up and down)
+BATTERY_RATE_GRID_SEGMENT_MINUTES = 5  # The rest of a run is cut into segments of this many minutes, each averaged into one sample
+BATTERY_RATE_GRID_FULL_RATE = 0.95  # A minute is at the full written rate when the rate written is at least this fraction of the maximum
+BATTERY_RATE_GRID_MIN_POWER = 0.02  # Below this fraction of the maximum the battery did not charge/discharge (or the export did not reach the grid): a failure, not a limit
+BATTERY_RATE_GRID_EMPTY_WEIGHT = 1e-3  # Weight of an empty cell's prior in the fit, small enough not to pull on measured cells
+BATTERY_RATE_GRID_MAX_ITER = 300  # Fit iteration cap (the same holdout error as running to convergence on the fleet data)
+BATTERY_RATE_GRID_TOLERANCE = 1e-4  # Fit stops once no cell moves by more than this
+BATTERY_RATE_GRID_TEMP_MIN = -20  # Coldest grid row
+BATTERY_RATE_GRID_TEMP_MAX = 40  # Warmest grid row
+BATTERY_RATE_GRID_UNKNOWN_TEMP = 20  # An exact 0 reading is treated as missing and uses this row of a learned grid
+BATTERY_RATE_GRID_SCAN_MINUTES = 24 * 60  # Gap between history scans for grid evidence
+BATTERY_RATE_GRID_RESAVE_MINUTES = 24 * 60  # The evidence is saved at least this often even when unchanged, so its expiry keeps moving (#6225)
+BATTERY_RATE_GRID_FIRST_SCAN_DAYS = 28  # battery_rate_grid_history_days default: until a scan has succeeded, read this many days of history (or as many as there are)
+BATTERY_RATE_GRID_DAILY_SCAN_DAYS = 2  # battery_rate_grid_scan_days default: later scans read this many - a day since the last plus a day's overlap - widened to cover a longer gap
+BATTERY_RATE_GRID_RETRY_MINUTES = 60  # A scan whose history read failed is tried again after this long, rather than a day later
+BATTERY_RATE_GRID_LOAD_ATTEMPTS = 3  # A store that never reads back is treated as empty (a new install) after this many cycles of failed reads ...
+BATTERY_RATE_GRID_LOAD_WAIT_MINUTES = 10  # ... spanning at least this long, so a storage outage cannot let one scan replace a year of evidence
+PV_CALIBRATION_LOWEST = 0.20  # Lowest calibration factor, day or half-hour slot
+PV_CALIBRATION_HIGHEST = 4.0  # Highest calibration factor, day or half-hour slot
+PV_CALIBRATION_HISTORY_DAYS = 28  # pv_calibration_history_days default: days of evidence kept, and how far the first scan reads back
+PV_CALIBRATION_SCAN_DAYS = 2  # pv_calibration_scan_days default: days a daily scan reads, widened to cover a longer gap
+PV_CALIBRATION_HALF_LIFE_DAYS = 3.5  # pv_calibration_half_life default: a day's evidence counts half as much every this many days
+PV_CALIBRATION_SHRINK = 0.20  # pv_calibration_shrink default: prior strength for the day factor - smaller leaves an already calibrated forecast alone more
+PV_CALIBRATION_SHRINK_SLOT = 0.20  # pv_calibration_shrink_slot default: the same for the half-hour shape
+PV_CALIBRATION_MIN_DAYS = 3  # Calibration needs this many valid (not down) days of evidence
+PV_CALIBRATION_BAND_DAYS = 7  # The P10/P90 band and the observed peak come from this many recent days, as before the evidence store
+PV_CALIBRATION_LOG_CLAMP = 1.5  # Per-day log ratios are held within +/- this before their spread is measured, so one wild day cannot dominate
+PV_CALIBRATION_MIN_SLOT_KWH = 0.02  # A half-hour slot forecast below this (kWh) is too small to say anything about the shape
+PV_CALIBRATION_MIN_SLOT_POINTS = 3  # A slot needs this many days of evidence for its own shape, otherwise it takes the day factor
+PV_CALIBRATION_STORE_EXPIRY_DAYS = 60  # The evidence is saved with this expiry, past its 28-day retention
+PV_CALIBRATION_SCAN_MINUTES = 24 * 60  # Gap between history scans for calibration evidence
+PV_CALIBRATION_RETRY_MINUTES = 60  # A scan whose history read failed is tried again after this long
+PV_CALIBRATION_RESAVE_MINUTES = 24 * 60  # The evidence is saved at least this often even when unchanged, so its expiry keeps moving
+PV_CALIBRATION_LOAD_ATTEMPTS = 3  # A store that never reads back is treated as empty after this many failed loads ...
+PV_CALIBRATION_LOAD_WAIT_MINUTES = 10  # ... spanning at least this long, so a storage outage cannot let one scan replace the evidence
+PV_CALIBRATION_STORE_KEY = "pv_calibration_evidence"  # Storage key (namespace "solcast") for the calibration evidence
 INVERTER_REST_TIMEOUT = 10  # Seconds to wait for a REST response before giving up (local network call, should be fast)
 INVERTER_QUICK_UPDATE_SECONDS = 60  # Minimum seconds between quick inverter data updates, also the balance re-apply interval
 BALANCE_CEILING_SHORTFALL_W = 100  # Grid shortfall (W) during a balancing hold that shows the peers are already giving all they can
@@ -143,6 +199,8 @@ PREDBAT_MAX_CARS = 8  # Matches PK_MAX_CARS in prediction_kernel.cpp and the car
 # A car_charging_now sensor that reports a charging power (in W, after unit conversion) rather than
 # on/off counts as charging from this power: above a charger's standby draw, below the smallest charge
 CAR_CHARGING_NOW_POWER_W = 200
+# Planned Octopus dispatch sources the user asks for by hand - never cheap-rate slots, and, like every planned dispatch, dropped while Smart Control is off (#5339)
+OCTOPUS_MANUAL_DISPATCH_SOURCES = ("bump-charge", "BOOST")
 # A manually tracked car with no charge recorded keeps counting from up to this long ago, for energy its charger's history records late
 CAR_MANUAL_SOC_LATE_MINUTES = 60
 # A manually tracked car is only reset once its plugged-in sensor has read unplugged for this long - a charger reconnecting can read unplugged for a few minutes
@@ -171,6 +229,9 @@ MANUAL_RATE_MAX_MINUTES = 7 * 24 * 60
 # 240v x 100 amps x 3 phases / 1000 to kW / 60 minutes in an hour is the maximum kWh in a 1 minute period
 MAX_INCREMENT = 240 * 100 * 3 / 1000 / 60
 MINUTE_WATT = 60 * 1000
+
+# The apps.yaml services that can be sent the charge/discharge rate as {power} - see utils.services_send_power()
+POWER_SERVICES = ("charge_start_service", "charge_freeze_service", "discharge_start_service", "discharge_freeze_service")
 
 INVERTER_TEST = False  # Run inverter control self test
 

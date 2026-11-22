@@ -377,17 +377,17 @@ If you've run out of API calls you will have to wait until midnight GMT for the 
 It's recommended that you don't include the Solcast forecast within your GivEnergy portal to avoid running out of API calls.
 - Check the [Solcast server API status](https://status.solcast.com/) is OK
 
-## Warn: Cannot find battery charge curve
+## Warn: Cannot find battery charge rate grid
 
-If you get one of these messages in the logfile then Predbat is trying to create a battery charge (or discharge) curve but does not have access to the required history information in Home Assistant:
+If you get one of these messages in the logfile then Predbat is trying to learn the battery charge (or discharge) [rate grid](apps-yaml.md#battery-rate-grids) but does not have access to the required history information in Home Assistant:
 
-- "Warn: Inverter 0 Cannot find battery charge curve (settings missing), soc_kw, charge_rate not set in apps.yaml" - the settings listed are not configured in `apps.yaml`
-- "Warn: Inverter 0 Cannot find battery charge curve (missing history), no history found for battery_power (sensor.givtcp_xxxx_battery_power) - check the entity name in apps.yaml and that Home Assistant is recording its history" - the settings are configured,
+- "Warn: Inverter 0 Cannot find battery charge rate grid (settings missing), soc_kw, charge_rate not set in apps.yaml" - the settings listed are not configured in `apps.yaml`
+- "Warn: Inverter 0 Cannot find battery charge rate grid (missing history), no history found for battery_power (sensor.givtcp_xxxx_battery_power) - check the entity name in apps.yaml and that Home Assistant is recording its history" - the settings are configured,
 but the entities listed in brackets returned no history. It is followed by a "Sensor history record counts" line giving the number of history records found for each setting
 
-**Note:** The battery charge curve cannot be calculated if Predbat is in Read Only mode. Even though required history may be available, the log message will continue to appear until Predbat is out of read only mode and has calculated the curve.
+**Note:** In Read Only mode Predbat does not charge or export, so no new evidence for the rate grids is gathered; the `apps.yaml` curves (or what was learned earlier) are used meanwhile.
 
-[Creating the battery charge curve](apps-yaml.md#battery-chargedischarge-curves) is described in the `apps.yaml` document.
+[The battery rate grids](apps-yaml.md#battery-rate-grids) are described in the `apps.yaml` document.
 
 One cause of the "settings missing" message appearing in the logfile is that you are controlling a GivEnergy inverter in REST mode
 but have not uncommented the following entities in `apps.yaml` that Predbat needs to obtain history from to create the battery charge curve:

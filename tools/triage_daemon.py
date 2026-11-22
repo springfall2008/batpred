@@ -192,6 +192,7 @@ OLLAMA_BASE_URL = "http://localhost:11434"
 # 200k assumption, which is wrong but safe - add an entry when you know the real number.
 OLLAMA_CONTEXT_TOKENS = {
     "glm-5.3-flash:cloud": "1000000",
+    "deepseek-v4.1-flash:cloud": "1000000",
 }
 
 EDIT_SCOPE = f"//{CLONE_DIR.relative_to('/')}/**"

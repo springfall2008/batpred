@@ -102,7 +102,7 @@ A row of day buttons under the view buttons lets you look back over the last wee
 
 If Predbat reads your rates directly from Octopus or a Kraken supplier (EDF, E.ON Next), the 'History' view also shows what you were actually billed:
 
-- A **Billed** column shows what your supplier billed for each slot. Hover over it to see the rate buckets the bill was split into - on Intelligent Octopus Go, for example, Home Low/Standard Rate and EV Low/Standard Rate. The column is shown on every History day, including today's slots; a dash means the supplier hasn't published that half hour yet. Billing usually appears one to two days later, and the view updates as soon as Predbat reads it.
+- A **Billed** column shows what your supplier billed for each slot. Hover over it to see the rate buckets the bill was split into - on Intelligent Octopus Go, for example, Home Low/Standard Rate and EV Low/Standard Rate. The column is shown on every History day, including today's slots; a dash means the supplier hasn't published that half hour yet. Billing usually appears one to two days later, and the view updates as soon as Predbat reads it. A billed figure isn't final straight away: the supplier can re-price a half hour it has already published (Octopus first bills an Intelligent Octopus Go dispatch outside the off-peak hours at the standard rate, then re-prices it at the EV rate a day or so later), so Predbat reads each day again once a day until it is five days old, and the Billed and Diff columns and the day's summary follow any revision.
 - A **Diff** column shows the billed amount less Predbat's own Cost for the slot (left blank where Predbat recorded nothing for it, for example while it wasn't running): red when you were billed more than Predbat recorded, green when less. The standing charge is left out of both and shown separately: the Cost column includes the whole day's standing charge in the midnight slot, as the other plan views do, while the bill spreads it over every half hour, so the two are compared once for the day in the summary instead.
 - A summary above the table gives the day's Predbat cost, billed cost and the difference, the import and export kWh Predbat recorded against the meter's, and both standing charges. It says how far the billing reaches and how many half hours before that are still missing (shown as a dash in the table), and only compares the slots that have been billed.
 - A slot with an Octopus saving session, free electricity session, Axle event or a rate you overrode (a manual rate, or a rate override in apps.yaml) is marked with it, and a day that had one gets a dot on its day button - the bill won't show it the way Predbat priced it, so a difference there is expected. These are read from the recorded history of the saving session, free electricity and Axle event entities and of `binary_sensor.predbat_rate_override_import` / `_export`, so every day in the picker is marked. Rate overrides on older days are only marked from when those two sensors started recording.
@@ -137,7 +137,7 @@ There is no predicted SoC per battery, as Predbat plans all your batteries as on
 - **InDay** - Shows Predbat's predicted house load for today, the actual house load that has occurred so far today, and then Predbat's adjusted house load prediction based on the variance of today's actual load to predicted load
 - **PV** - Shows today's predicted solar power generation under the PV, PV10 and PV90 scenarios alongside today's actual solar power generation
 - **PV7** - Similar to the PV chart, but shows actual solar power generation and forecast for the last 7 days including today
-- **PVAccuracy** - Shows how accurate the PV energy forecast is, comparing cumulative PV forecast energy for today to today's actual cumulative solar energy generation
+- **PVCalibration** - Shows how PV calibration is working: whether it is on, the day factor applied (and before it was limited by the evidence), the settings in use and when the history was last scanned, then a chart of every stored day's actual / forecast ratio for each half hour against the calibration, the same for whole days, and a short table in two-hour bands. It replaces the PVAccuracy chart; old PVAccuracy links open it
 - **Load ML** - Shows the correlation between your actual house load and the [Load ML predictions](load-ml.md), charting current prediction, the 1 hour in the future prediction, and the 8 hours future prediction
 - **LoadMLPower** - Similar to the Load ML chart, but also plots actual PV production, predicted PV production and temperature predictions.
 - **MarginalCosts** - Shows the marginal cost of consuming extra electricity at different load levels (1, 2, 4, 8 kWh) across upcoming time windows.
@@ -145,6 +145,11 @@ There is no predicted SoC per battery, as Predbat plans all your batteries as on
     - A status table showing whether the current marginal rate for each load level is **cheap** or **moderate** based on today's import rate range
     - A compact **Grid Rates** heatmap showing the actual import and export rate at each time window
     - A full **Marginal Energy Cost** heatmap matrix coloured green (cheap) to red (expensive) on a shared scale
+- **Curves** - Shows the battery rate grids the plan uses (the rate the battery reaches at each SoC and temperature). The page contains:
+    - A status table for the charge and discharge grids: whether a learned grid is in use, where the grid in use came from, how much evidence it has, its temperature range, when it was learned and when the history was last scanned
+    - Each grid drawn in 3D (SoC, battery temperature and the rate as a fraction of the rated rate), with the evidence from the last 90 days as dots; drag to turn it
+    - A short table of each grid at every 10% SoC and 5 degrees
+    See [Checking the grids](apps-yaml.md#checking-the-grids)
 
 Example PV chart:
 

@@ -104,7 +104,7 @@ async def test_fetch_url_cached_async(my_predbat):
         api.async_download_octopus_url = mock_download
 
         # Test URL for VAR-22-11-01 tariff (electricity rates)
-        test_url = "https://api.octopus.energy/v1/products/VAR-22-11-01/electricity-tariffs/E-2R-VAR-22-11-01-A/standard-unit-rates/"
+        test_url = "https://api.oegb-kraken.energy/v1/products/VAR-22-11-01/electricity-tariffs/E-2R-VAR-22-11-01-A/standard-unit-rates/"
 
         # Test 1: Fetch URL with empty cache (should download and cache)
         print("*** Test 1: Fetch URL with empty cache")
@@ -152,7 +152,7 @@ async def test_fetch_url_cached_async(my_predbat):
 
         # Test 3: Multiple different URLs cache independently
         print("*** Test 3: Multiple URLs with different caches")
-        url2 = "https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-A/standard-unit-rates/"
+        url2 = "https://api.oegb-kraken.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-A/standard-unit-rates/"
 
         data3 = await api.fetch_url_cached(url2)
 
@@ -179,7 +179,7 @@ async def test_fetch_url_cached_async(my_predbat):
 
         # Test 4: Invalid URL (download returns None) handled gracefully
         print("*** Test 4: Invalid URL")
-        invalid_url = "https://api.octopus.energy/v1/products/INVALID/electricity-tariffs/INVALID/standard-unit-rates/"
+        invalid_url = "https://api.oegb-kraken.energy/v1/products/INVALID/electricity-tariffs/INVALID/standard-unit-rates/"
 
         data4 = await api.fetch_url_cached(invalid_url)
 
@@ -191,7 +191,7 @@ async def test_fetch_url_cached_async(my_predbat):
 
         # Test 5: Download returns {} (the real error return) — must NOT be cached
         print("*** Test 5: Empty error response is not cached")
-        empty_url = "https://api.octopus.energy/v1/products/empty-error/electricity-tariffs/empty-error/standard-unit-rates/"
+        empty_url = "https://api.oegb-kraken.energy/v1/products/empty-error/electricity-tariffs/empty-error/standard-unit-rates/"
         empty_hash = hashlib.sha256(empty_url.encode()).hexdigest()[:16]
 
         data5 = await api.fetch_url_cached(empty_url)

@@ -64,6 +64,9 @@ class MockBase:
         self.had_errors = False
         self.components = None
         self.num_cars = 0
+        # As reset() leaves them: no car force-held off by a charger, and none a charger can hold (see car_charger_control.py)
+        self.car_force_hold_until = {}
+        self.car_force_holdable = {}
         # As reset() leaves it: no Axle VPP event is forcing read only
         self.set_read_only_axle = False
         self.currency_symbols = "£p"
@@ -146,6 +149,10 @@ class MockBase:
     def get_history_wrapper(self, entity_id, days=30, required=True, tracked=True):
         """Return None - a standalone run has no Home Assistant recorder, matching PredBat's no-interface path."""
         return None
+
+    def octopus_smart_control_off(self, car_n, save=True):
+        """Return False - a standalone run has no Octopus Smart Control switch to read, so it is never off."""
+        return False
 
     def call_notify(self, message):
         """Print a notification message."""
