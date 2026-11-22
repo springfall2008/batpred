@@ -908,6 +908,23 @@ def run_scenario(my_predbat, scenario, debug=False):
         my_predbat.debug_enable = False  # disable debug output for normal scenario runs (huge overhead)
         t_start = time.perf_counter()
         my_predbat.calculate_plan(recompute=True)
+        # runtime_s is calculate_plan() alone, as documented - not the scoring runs below
+        t_elapsed = time.perf_counter() - t_start
+
+        # The metric is the planner's own objective for this plan, taken from run_prediction_metric - the call
+        # every optimiser pass scores its trials with - so it blends nominal, pv10 and (when the planner
+        # weights it) pv90 exactly as the engine does, with no standing charge. Rebuilding it here from the
+        # reporting runs below scored a different objective from the one the plan was optimised for: those
+        # runs leave pv90 out of the blend, and the save="best" nominal run adds the standing charge and
+        # models low-power charging. It runs first because run_prediction overwrites predict_soc and the
+        # rest on every call, and the save="best" run's state is the one the debug plan output reads.
+        metric = my_predbat.run_prediction_metric(
+            my_predbat.charge_limit_best,
+            my_predbat.charge_window_best,
+            my_predbat.export_window_best,
+            my_predbat.export_limits_best,
+            end_record=my_predbat.end_record,
+        )[0]
 
         # Normal prediction (cost = raw import/export money)
         cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
@@ -920,15 +937,15 @@ def run_scenario(my_predbat, scenario, debug=False):
             save="best",
         )
 
-        # PV10 prediction (pessimistic solar) needed for compute_metric
-        cost10, _, _, _, _, soc10, _, _, _, final_iboost10, _ = my_predbat.run_prediction(
+        # PV10 prediction (pessimistic solar)
+        cost10 = my_predbat.run_prediction(
             my_predbat.charge_limit_best,
             my_predbat.charge_window_best,
             my_predbat.export_window_best,
             my_predbat.export_limits_best,
             PV_SCENARIO_PV10,
             end_record=my_predbat.end_record,
-        )
+        )[0]
 
         # PV90 prediction (optimistic solar, lighter load). Scoring the plan in each future is what makes a
         # hedging feature measurable at all: a plan that weights PV90 spends money the central forecast says
@@ -943,24 +960,6 @@ def run_scenario(my_predbat, scenario, debug=False):
             end_record=my_predbat.end_record,
         )[0]
 
-        # Combined metric: cost + battery value adjustment + pv10 weighting + carbon + self-sufficiency + cycle cost
-        metric, _ = my_predbat.compute_metric(
-            my_predbat.end_record,
-            soc,
-            soc10,
-            cost,
-            cost10,
-            final_iboost,
-            final_iboost10,
-            battery_cycle,
-            metric_keep,
-            final_carbon_g,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-        )
-
-        t_elapsed = time.perf_counter() - t_start
         base_result.update(
             {
                 "metric": round(float(metric), 4),
@@ -1598,3 +1597,50 @@ def _sample_rate_params(rng, rate_type, cheap):
         low = round(rng.uniform(-15.0, 0.0), 2)
         high = round(rng.uniform(25.0, 50.0), 2)
         return {"base_rate": base, "low_rate": low, "high_rate": high, "num_highs": rng.randint(1, 3), "num_lows": rng.randint(1, 3)}
+
+
+def run_random_scenario_metric_tests(my_predbat):
+    """The metric the harness records is the planner's own objective for the final plan.
+
+    run_scenario takes it from run_prediction_metric, the call every optimiser pass scores trials with,
+    so it blends nominal, pv10 and pv90 as the engine does. A metric rebuilt by hand from the reporting
+    runs drifted from that once - it left pv90 out and picked up the standing charge from the save="best"
+    nominal run - and every benchmark comparison then scored a different objective from the one the plans
+    were optimised for. This pins the two together on one scenario, with pv90 weighted so it counts.
+
+    my_predbat is deliberately unused - each run gets a fresh instance, as for run_random_scenario_tests.
+    """
+    print("**** Running random scenario metric matches the engine ****")
+
+    from unit_test import create_predbat
+
+    scenario_predbat = create_predbat()
+    reset_inverter(scenario_predbat)
+    scenario_predbat.read_debug_yaml(RANDOM_TEMPLATE)
+    scenario_predbat.config_root = "./"
+    scenario_predbat.save_restore_dir = "./"
+    scenario_predbat.load_user_config()
+
+    scenario = load_scenarios(RANDOM_SCENARIOS)[0]
+    result = run_scenario(scenario_predbat, scenario)
+    if result["failed"]:
+        print("ERROR: scenario {} failed: {}".format(scenario["id"], result["error"]))
+        return True
+
+    failed = False
+    if not scenario_predbat.pv_metric90_weight > 0:
+        print("ERROR: the template no longer weights pv90 (pv_metric90_weight {}), so this test no longer checks the pv90 term".format(scenario_predbat.pv_metric90_weight))
+        failed = True
+    engine = scenario_predbat.run_prediction_metric(
+        scenario_predbat.charge_limit_best,
+        scenario_predbat.charge_window_best,
+        scenario_predbat.export_window_best,
+        scenario_predbat.export_limits_best,
+        end_record=scenario_predbat.end_record,
+    )[0]
+    if result["metric"] != round(float(engine), 4):
+        print("ERROR: scenario {} recorded metric {} but the planner scores its final plan {}".format(scenario["id"], result["metric"], round(float(engine), 4)))
+        failed = True
+    if not failed:
+        print("Scenario {} metric {} matches the planner's own score".format(scenario["id"], result["metric"]))
+    return failed
