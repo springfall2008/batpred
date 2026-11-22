@@ -170,6 +170,7 @@ desync
 desynced
 devcontainer
 devcontainers
+dewet
 dexport
 deye
 deyecloud
@@ -263,6 +264,7 @@ Fingerbot
 firstparty
 flextras
 fline
+fllash
 FLOMASTA
 fontsize
 fontweight
@@ -466,6 +468,7 @@ misdetecting
 misdetection
 mispairing
 Mixergy
+mkaiser
 mkdocs
 mlugg
 Modbus
@@ -604,6 +607,7 @@ pwindow
 pwr
 pyjwt
 pylint
+Pylontech
 pymyenergi
 pypi
 pyproject
@@ -669,7 +673,9 @@ setpoints
 setstate
 SFMB
 sg05lp1
+SGSH
 sharex
+shelldor
 showlegend
 SIGALRM
 sigcloud
@@ -709,6 +715,7 @@ Southwell
 sparkline
 spki
 springfall
+ssson
 starthour
 startminute
 startswith
@@ -725,6 +732,7 @@ suback
 subclassing
 submessage
 substep
+Sungrow
 sunspec
 sunsynk
 supabase
