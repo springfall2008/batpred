@@ -2,18 +2,21 @@
 # SolaX Modbus integration (https://github.com/wills106/homeassistant-solax-modbus)
 #
 # Gen2 has no remote control (Mode 8) and no Manual/Force Charge mode select, so
-# the Gen4+ template (solax_sx4.yaml) does not work on it. Gen2 is controlled like
-# a timed-charge inverter instead: Predbat writes the charge and discharge slot 1
-# times and the battery charge/discharge current (in Amps), and switches timed
-# operation on and off through two helpers that a small Home Assistant automation
-# turns into the inverter's Charger Use Mode ("Force Time Use" / "Self Use Mode").
+# the Gen4+ template (solax_sx4.yaml) does not work on it. Charge and discharge
+# slot 1 are set once on the inverter to 00:00-23:59, and Predbat starts and stops
+# charging and discharging through two helpers that a small Home Assistant
+# automation turns into the inverter's Charger Use Mode ("Force Time Use" /
+# "Self Use Mode"). Predbat also writes the battery charge/discharge current (in
+# Amps) and the reserve.
 # See the SolaX Gen2 section of the inverter setup docs.
 #
 # Copy this over your apps.yaml and:
 #   1. Install the SolaX Modbus integration and check its sensors work. The entity
 #      names below assume the default "solax" prefix: change them if yours differ.
-#   2. Create the two input_boolean helpers and the Charger Use Mode automation
-#      described in the docs.
+#   2. Set charge and discharge slot 1 to 00:00-23:59 on the inverter, turn
+#      switch.predbat_inverter_set_charge_before off, and create the two
+#      input_boolean helpers and the Charger Use Mode automation described in
+#      the docs.
 #   3. Set soc_max to your battery size in kWh, battery_voltage to the nominal
 #      maximum battery voltage, and check inverter_limit and battery_rate_max.
 #   4. For two inverters set num_inverters to 2 and uncomment the second entry of
@@ -66,7 +69,7 @@ pred_bat:
     charge_control_immediate: false
     current_dp: 1
     charge_discharge_with_rate: false
-    # Timed charge/discharge are switched on and off through the two helpers below
+    # Charge/discharge are switched on and off through the two helpers below
     has_charge_enable_time: true
     has_discharge_enable_time: true
     has_target_soc: false
@@ -80,9 +83,10 @@ pred_bat:
     has_ge_inverter_mode: false
     has_ge_eco_toggle: false
     has_idle_time: false
-    has_time_window: true
-    # Slot times are Home Assistant time entities (HH:MM:SS)
-    charge_time_format: "HH:MM:SS"
+    has_time_window: false
+    # Slot 1 is left open all day on the inverter, so Predbat keeps its own
+    # placeholder window times rather than writing the inverter's time entities
+    charge_time_format: "S"
     charge_time_entity_is_option: false
     can_span_midnight: true
     clock_time_format: "%H:%M:%S"
@@ -91,19 +95,8 @@ pred_bat:
     write_and_poll_sleep: 4
 
   # ─── SolaX Gen2 control surface (write) ───────────────────────────────────
-  # Charge and discharge slot 1 times, written by Predbat
-  charge_start_time:
-    - time.solax_charge_start_1
-    #- time.solax_2_charge_start_1
-  charge_end_time:
-    - time.solax_charge_end_1
-    #- time.solax_2_charge_end_1
-  discharge_start_time:
-    - time.solax_discharge_start_1
-    #- time.solax_2_discharge_start_1
-  discharge_end_time:
-    - time.solax_discharge_end_1
-    #- time.solax_2_discharge_end_1
+  # Don't map charge_start_time etc. to the inverter's slot 1 time entities:
+  # set slot 1 to 00:00-23:59 once on the inverter and leave it.
   # Helpers that the Charger Use Mode automation watches: either one on puts the
   # inverter in "Force Time Use", both off puts it back in "Self Use Mode".
   # Keep them separate - Predbat turns the discharge one off during a charge.
@@ -125,7 +118,8 @@ pred_bat:
   battery_voltage:
     - 52
     #- 52
-  # Self Use minimum SoC (Battery Minimum Capacity, 10-99%)
+  # Self Use minimum SoC (Battery Minimum Capacity, 10-99%). Remove any helper
+  # or automation of your own that writes to it, or it will overwrite Predbat
   reserve:
     - number.solax_battery_minimum_capacity
     #- number.solax_2_battery_minimum_capacity
@@ -135,7 +129,7 @@ pred_bat:
   soc_percent:
     - sensor.solax_battery_capacity
     #- sensor.solax_2_battery_capacity
-  # Battery size in kWh
+  # Battery size in kWh, per inverter (the batteries can differ)
   soc_max:
     - 9.6
     #- 9.6
@@ -154,7 +148,8 @@ pred_bat:
   load_power:
     - sensor.solax_house_load
     #- 0
-  # SolaX meter reads positive while exporting, as Predbat expects
+  # Check the sign: this assumes the SolaX meter reads positive while exporting.
+  # If it reads positive while importing, set grid_power_invert to true
   grid_power:
     - sensor.solax_measured_power
     #- 0
@@ -170,10 +165,11 @@ pred_bat:
 
   # ─── SolaX Gen2 battery and inverter limits ───────────────────────────────
   # Gen2's battery current register tops out at 50 A, which is about 2400 W on
-  # a 48 V battery - more than that would ask the inverter for more than 50 A
+  # a 48 V battery - more than that would ask the inverter for more than 50 A.
+  # 2200 leaves some margin
   battery_rate_max:
-    - 2400
-    #- 2400
+    - 2200
+    #- 2200
   # Inverter AC limit in W, 5000 for the SK-SU5000e
   inverter_limit:
     - 5000

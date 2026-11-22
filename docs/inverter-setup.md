@@ -3136,19 +3136,22 @@ Gen2 has no remote control (Mode 8) and no Manual Mode / Force Charge select. It
 | Charger Use Mode options | Self Use Mode, Force Time Use, Back Up Mode | adds Manual Mode, Peak Shaving, Smart Schedule |
 | Reserve | Battery Minimum Capacity (10-99%) | Self Use discharge min SoC |
 
-Predbat writes the slot 1 times and the battery current, and turns timed charging and discharging on and off through two `input_boolean` helpers.
-A Home Assistant automation follows the helpers and switches the inverter's Charger Use Mode between "Force Time Use" (either helper on) and "Self Use Mode" (both off).
+The inverter's charge and discharge slot 1 are set once to cover the whole day (00:00-23:59), and Predbat starts and stops charging and discharging by switching the inverter's Charger Use Mode instead of rewriting the slot times.
+Predbat turns two `input_boolean` helpers per inverter on and off, and a Home Assistant automation follows them, switching Charger Use Mode to "Force Time Use" while either is on and back to "Self Use Mode" when both are off.
+Predbat also writes the battery charge and discharge current, and the reserve. This avoids a slow Modbus write and read-back of four time registers on every change.
 Thanks @MJP-76 for this configuration.
 
 - Copy the template [solax_gen2.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/solax_gen2.yaml) over your `apps.yaml`
 - Install and configure the Solax Modbus integration and confirm that it is connected to your inverter. The template assumes the integration's default `solax` entity prefix; if yours is different (e.g. `solax_inverter_`), change the entity names in `apps.yaml` and in the automation below
+- On the inverter, set charge slot 1 (`time.solax_charge_start_1` / `time.solax_charge_end_1`) and discharge slot 1 (`time.solax_discharge_start_1` / `time.solax_discharge_end_1`) to 00:00-23:59. Predbat doesn't write these, so you only do this once
+- Turn **switch.predbat_inverter_set_charge_before** off. With the slots always open, Predbat must only turn the helpers on when a charge or export actually starts, not up to a plan interval before it as it normally does
 - Create two helpers (Settings / Devices & services / Helpers / Create helper / Toggle) per inverter: `input_boolean.predbat_solax_charge_enable` and `input_boolean.predbat_solax_discharge_enable`.
   Keep them as two separate helpers: Predbat turns the discharge helper off while it is charging, and vice-versa
 - Create the following automation, which keeps the inverter's Charger Use Mode in step with the helpers:
 
 ```yaml
 alias: Predbat SolaX Gen2 Charger Use Mode
-description: Force Time Use while Predbat has a charge or discharge slot enabled, Self Use otherwise
+description: Force Time Use while Predbat has a charge or discharge enabled, Self Use otherwise
 mode: queued
 triggers:
   - trigger: state
@@ -3176,22 +3179,26 @@ actions:
 
 - In `apps.yaml`:
     - Set **soc_max** to your battery size in kWh
-    - Set **battery_voltage** to the nominal *maximum* voltage of your battery (e.g. 52 for a Pylontech US3000 stack), not a live voltage sensor. Predbat uses it to convert the charge and discharge power it wants into Amps
-    - Keep **battery_rate_max** at about 2400 W per inverter on a 48 V battery. Gen2's battery current register is limited to 50 A, and 2600 W on a 48 V battery would need 54 A
+    - Set **battery_voltage** to the nominal *maximum* voltage of your battery (e.g. 52 for a Pylontech US3000 stack). Predbat uses it to convert the charge and discharge power it wants into Amps
+    - Keep **battery_rate_max** at about 2200-2400 W per inverter on a 48 V battery. Gen2's battery current register is limited to 50 A, and 2600 W on a 48 V battery would need 54 A. The template uses 2200 W to leave some margin
     - Set **inverter_limit** to the AC rating of your inverter (5000 for the SK-SU5000e)
+    - Check the sign of **grid_power**: the template assumes `sensor.solax_measured_power` is positive while exporting. If it reads positive while importing, set **grid_power_invert** to true
     - Gen2 has no house load energy sensor, so create a **load_today** sensor as described in [Data from Home Assistant](apps-yaml.md#data-from-home-assistant). Include battery charge and discharge in it, not just solar, import and export
 - Delete the `template: True` line and restart Predbat
 
 **Two Gen2 inverters:**
 
 - Set `num_inverters: 2`, and uncomment the second entry in each list in the template, changing the entity names to those of your second inverter. Create a second pair of helpers and a second copy of the automation for the second inverter
-- **load_power** and **grid_power** need one entry per inverter, but if you use one whole-house sensor for them (e.g. a separate energy meter), set the second inverter's entry to `0`. Pointing both entries at the same sensor makes Predbat count the house load twice
+- Set **soc_max** for each inverter separately: the batteries don't have to be the same size
+- **load_power** and **grid_power** need one entry per inverter, but if you use one whole-house sensor for them (e.g. a separate energy meter such as an IAMMETER), set the second inverter's entry to `0`. Pointing both entries at the same sensor makes Predbat count the house load twice. **pv_power** and **pv_today** stay per inverter
 - Users have found charge balancing works poorly on Gen2, as it drops the charge rate of the fuller inverter to 0 during a charge. Turn **switch.predbat_balance_inverters_charge** and **switch.predbat_balance_inverters_crosscharge** off and leave **switch.predbat_balance_inverters_discharge** on
 
 Notes:
 
+- **Forced export needs the inverter's grid export setting enabled.** In "Force Time Use" the discharge slot only discharges the battery to cover the house load unless grid export is also enabled on the inverter. If it isn't, Predbat in "Control charge & discharge" mode will only ever discharge to the house, never export
+- If you have your own helper or automation that writes to Battery Minimum Capacity (`number.solax_battery_minimum_capacity`), remove it or it will overwrite the reserve Predbat sets whenever the helper changes
+- Predbat turns a helper off at the first cycle after a charge or export ends, so it can run on for up to one plan interval (5 minutes by default) past the end of the slot
 - The Gen2 battery current registers have a scale of 0.01 (Gen3 and later use 0.1). If the current Predbat writes reads back ten times too big or too small, check that the Solax Modbus integration has detected your inverter as Gen2
-- In "Force Time Use" the Gen2 discharge slot allows the battery to discharge to the house rather than forcing an export, so Predbat's forced exports have not been confirmed to export to the grid. Start with Predbat in "Control charge" mode and check what your inverter does before using "Control charge & discharge"
 
 ## Solis Cloud
 
