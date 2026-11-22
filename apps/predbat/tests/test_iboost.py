@@ -139,35 +139,44 @@ def run_iboost_smart_duplicate_slots_test(my_predbat):
     my_predbat.rate_import = {minute: import_rate for minute in range(0, 48 * 60)}
     my_predbat.rate_export = {minute: 0 for minute in range(0, 48 * 60)}
 
-    my_predbat.iboost_smart = True
+    # The rate and gas gates are pinned open, so no earlier test's settings can stop a slot being booked
+    orig_gates = {key: getattr(my_predbat, key) for key in ["iboost_rate_threshold", "iboost_rate_threshold_export", "iboost_gas", "iboost_gas_export", "iboost_smart"]}
+    my_predbat.iboost_rate_threshold = 9999
+    my_predbat.iboost_rate_threshold_export = 9999
+    my_predbat.iboost_gas = False
+    my_predbat.iboost_gas_export = False
     my_predbat.iboost_slots = []
     my_predbat.iboost_today = 0
     my_predbat.iboost_max_energy = 3
     my_predbat.iboost_max_power = 1 / 60
 
     try:
-        # minutes_now is wall-clock time, so usually not on the plan interval grid: 605 is 5 minutes past one
-        for minutes_now in [0, 605]:
-            for min_length in [0, 60, 120]:
-                my_predbat.minutes_now = minutes_now
-                my_predbat.iboost_smart_min_length = min_length
-                slots = my_predbat.plan_iboost_smart()
-                label = "minutes_now {} min_length {}".format(minutes_now, min_length)
-                planned_kwh = round(sum(slot["kwh"] for slot in slots), 3)
-                # The energy the prediction applies, minute by minute
-                applied_kwh = round(sum(in_iboost_slot(minute, slots) for minute in range(minutes_now, minutes_now + my_predbat.forecast_minutes)) / 60, 3)
-                booked = [minute for slot in slots for minute in range(slot["start"], slot["end"])]
-                if len(booked) != len(set(booked)):
-                    print("ERROR: iboost_duplicate_slots {}: a minute was booked more than once: {}".format(label, slots))
-                    failed = True
-                if any(slot["start"] < minutes_now for slot in slots):
-                    print("ERROR: iboost_duplicate_slots {}: a slot starts before now: {}".format(label, slots))
-                    failed = True
-                if planned_kwh != 3 or applied_kwh != 3:
-                    print("ERROR: iboost_duplicate_slots {}: expected 3 kWh planned and applied, got {} planned and {} applied: {}".format(label, planned_kwh, applied_kwh, slots))
-                    failed = True
+        # minutes_now is wall-clock time, so usually not on the plan interval grid: 605 is 5 minutes past one.
+        # From 1430 the plan crosses midnight, so day 0 has only 10 minutes (1/6 kWh) and day 1 its full 3 kWh
+        for smart in [True, False]:
+            for minutes_now, expect_kwh in [(0, 3), (605, 3), (1430, 3.167)]:
+                for min_length in [0, 60, 120]:
+                    my_predbat.iboost_smart = smart
+                    my_predbat.minutes_now = minutes_now
+                    my_predbat.iboost_smart_min_length = min_length
+                    slots = my_predbat.plan_iboost_smart()
+                    label = "smart {} minutes_now {} min_length {}".format(smart, minutes_now, min_length)
+                    planned_kwh = round(sum(slot["kwh"] for slot in slots), 3)
+                    # The energy the prediction applies, minute by minute
+                    applied_kwh = round(sum(in_iboost_slot(minute, slots) for minute in range(minutes_now, minutes_now + my_predbat.forecast_minutes)) / 60, 3)
+                    booked = [minute for slot in slots for minute in range(slot["start"], slot["end"])]
+                    if len(booked) != len(set(booked)):
+                        print("ERROR: iboost_duplicate_slots {}: a minute was booked more than once: {}".format(label, slots))
+                        failed = True
+                    if any(slot["start"] < minutes_now for slot in slots):
+                        print("ERROR: iboost_duplicate_slots {}: a slot starts before now: {}".format(label, slots))
+                        failed = True
+                    if planned_kwh != expect_kwh or applied_kwh != expect_kwh:
+                        print("ERROR: iboost_duplicate_slots {}: expected {} kWh planned and applied, got {} planned and {} applied: {}".format(label, expect_kwh, planned_kwh, applied_kwh, slots))
+                        failed = True
     finally:
-        my_predbat.iboost_smart = False
+        for key, value in orig_gates.items():
+            setattr(my_predbat, key, value)
         my_predbat.iboost_slots = []
         my_predbat.iboost_today = 0
         my_predbat.iboost_max_energy = my_predbat.get_arg("iboost_max_energy")
