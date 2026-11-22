@@ -248,59 +248,61 @@ def test_solis_energy_control_missing_warnings(my_predbat, ha):
     saved_args = copy.deepcopy(my_predbat.args)
     saved_charge_limit = ha.dummy_items.get("number.charge_limit")
     saved_now = my_predbat.now_utc
-    prefix = "energy_control_switch is not set in apps.yaml, so "
-    for inverter_type, steps, expected in (
-        (
-            "GS_fb00",
-            ("freeze", "freeze", "charge", "charge", "idle", "later", "freeze", "charge", "earlier", "freeze"),
-            [
-                ("Warn", SOLIS_MISSING_SWITCH_HOLD),
-                ("Info", SOLIS_MISSING_SWITCH_HOLD),
-                ("Warn", SOLIS_MISSING_SWITCH_CHARGE),
-                ("Info", SOLIS_MISSING_SWITCH_CHARGE),
-                ("Warn", SOLIS_MISSING_SWITCH_HOLD),
-                ("Warn", SOLIS_MISSING_SWITCH_CHARGE),
-                ("Warn", SOLIS_MISSING_SWITCH_HOLD),
-            ],
-        ),
-        ("GS", ("enable_charge", "enable_charge", "enable_discharge", "enable_eco"), [("Warn", SOLIS_MISSING_SWITCH_CHARGE), ("Info", SOLIS_MISSING_SWITCH_CHARGE), ("Warn", SOLIS_MISSING_SWITCH_DISCHARGE)]),
-    ):
-        log_messages = []
-        orig_log = my_predbat.log
-        try:
-            my_predbat.args["inverter_type"] = [inverter_type]
-            my_predbat.args.pop("energy_control_switch", None)
-            ha.dummy_items["number.charge_limit"] = 100
-            inv = Inverter(my_predbat, 0, quiet=True)
-            inv.sleep = dummy_sleep
-            inv.soc_percent = 50
-            my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
-            for step in steps:
-                if step == "freeze":
-                    inv.adjust_charge_immediate(50, freeze=True)
-                elif step in ("charge", "idle"):
-                    inv.adjust_charge_immediate(100 if step == "charge" else 0)
-                elif step == "later":
-                    my_predbat.now_utc += timedelta(minutes=61)
-                elif step == "earlier":
-                    my_predbat.now_utc -= timedelta(minutes=120)  # the clock set back: the next message warns again
-                else:
-                    inv.alt_charge_discharge_enable(step.split("_")[1], True)
-        finally:
-            my_predbat.log = orig_log
-            my_predbat.now_utc = saved_now
-            my_predbat.args.clear()
-            my_predbat.args.update(saved_args)
+    try:
+        prefix = "energy_control_switch is not set in apps.yaml, so "
+        for inverter_type, steps, expected in (
+            (
+                "GS_fb00",
+                ("freeze", "freeze", "charge", "charge", "idle", "later", "freeze", "charge", "earlier", "freeze"),
+                [
+                    ("Warn", SOLIS_MISSING_SWITCH_HOLD),
+                    ("Info", SOLIS_MISSING_SWITCH_HOLD),
+                    ("Warn", SOLIS_MISSING_SWITCH_CHARGE),
+                    ("Info", SOLIS_MISSING_SWITCH_CHARGE),
+                    ("Warn", SOLIS_MISSING_SWITCH_HOLD),
+                    ("Warn", SOLIS_MISSING_SWITCH_CHARGE),
+                    ("Warn", SOLIS_MISSING_SWITCH_HOLD),
+                ],
+            ),
+            ("GS", ("enable_charge", "enable_charge", "enable_discharge", "enable_eco"), [("Warn", SOLIS_MISSING_SWITCH_CHARGE), ("Info", SOLIS_MISSING_SWITCH_CHARGE), ("Warn", SOLIS_MISSING_SWITCH_DISCHARGE)]),
+        ):
+            log_messages = []
+            orig_log = my_predbat.log
+            try:
+                my_predbat.args["inverter_type"] = [inverter_type]
+                my_predbat.args.pop("energy_control_switch", None)
+                ha.dummy_items["number.charge_limit"] = 100
+                inv = Inverter(my_predbat, 0, quiet=True)
+                inv.sleep = dummy_sleep
+                inv.soc_percent = 50
+                my_predbat.log = lambda msg, *args, **kwargs: log_messages.append(str(msg))
+                for step in steps:
+                    if step == "freeze":
+                        inv.adjust_charge_immediate(50, freeze=True)
+                    elif step in ("charge", "idle"):
+                        inv.adjust_charge_immediate(100 if step == "charge" else 0)
+                    elif step == "later":
+                        my_predbat.now_utc += timedelta(minutes=61)
+                    elif step == "earlier":
+                        my_predbat.now_utc -= timedelta(minutes=120)  # the clock set back: the next message warns again
+                    else:
+                        inv.alt_charge_discharge_enable(step.split("_")[1], True)
+            finally:
+                my_predbat.log = orig_log
+                my_predbat.now_utc = saved_now
+                my_predbat.args.clear()
+                my_predbat.args.update(saved_args)
 
-        missing = [msg for msg in log_messages if prefix in msg]
-        want = ["{}: Inverter 0 {}{}".format(level, prefix, text) for level, text in expected]
-        if missing != want:
-            print("ERROR: solis_energy_control_missing_warnings {}: expected {} got {}".format(inverter_type, want, missing))
-            failed = True
-    if saved_charge_limit is None:
-        ha.dummy_items.pop("number.charge_limit", None)
-    else:
-        ha.dummy_items["number.charge_limit"] = saved_charge_limit
+            missing = [msg for msg in log_messages if prefix in msg]
+            want = ["{}: Inverter 0 {}{}".format(level, prefix, text) for level, text in expected]
+            if missing != want:
+                print("ERROR: solis_energy_control_missing_warnings {}: expected {} got {}".format(inverter_type, want, missing))
+                failed = True
+    finally:
+        if saved_charge_limit is None:
+            ha.dummy_items.pop("number.charge_limit", None)
+        else:
+            ha.dummy_items["number.charge_limit"] = saved_charge_limit
     return failed
 
 

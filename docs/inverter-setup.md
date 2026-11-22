@@ -2678,6 +2678,7 @@ To run PredBat with Solis hybrid inverters with firmware level prior to FB00 (yo
 5. Ensure that the inverter is set to Control Mode 35 - on the Solax integration this is `Timed Charge/Discharge`.
    If you want to use the `Reserve` functionality within PredBat you will need to select `Backup/Reserve` (code 51) instead but be aware that this is not fully tested.
    In due course, these mode settings will be incorporated into the code.
+   With **energy_control_switch** set in `apps.yaml` Predbat switches the Timed Charge/Discharge mode on and off itself. Without it, Predbat warns, at most once an hour for each warning (as Info in between), when it cannot make sure of grid charging, or cannot set timed discharge for a forced export or an export hold.
 
 6. Your inverter will require a "button press" triggered by Predbat to update the schedules. Some Solis inverter integrations feature a combined charge/discharge update button, in which case a single `apps.yaml` entry of:
 
