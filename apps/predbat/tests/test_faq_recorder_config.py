@@ -103,6 +103,16 @@ def test_faq_recorder_config(my_predbat):
         print("ERROR: docs/faq.md no longer contains a recorder filter example to check")
         return True
 
+    # A domains or entity_globs rule under include puts Home Assistant's recorder into allowlist mode,
+    # so every entity not listed (inverter, energy meter and other non-Predbat sensors) stops being
+    # recorded (#5507). Only include.entities is safe in this example.
+    print("Test: the FAQ recorder example has no domains or entity_globs under include")
+    include = recorder.get("include", {}) or {}
+    for key in ("domains", "entity_globs"):
+        if include.get(key):
+            print("ERROR: docs/faq.md recorder example has include.{}, which switches the recorder to allowlist mode and stops it recording every unlisted entity (#5507)".format(key))
+            failed = True
+
     needed = _entities_read_from_history()
     if not needed:
         print("ERROR: found no history reads in the Predbat source, the source scan must be broken")
