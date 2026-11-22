@@ -703,7 +703,14 @@ def test_session_energy_unknown_after_restart():
     apply_session(charger, {"charging": True, "session": None})
     apply_session(charger, {"charging": True, "session": "6"})
     apply_session(charger, {"charging": True, "session": 6.0})
-    assert charger.session_energy_kwh == 1.2 and str(charger.session_id) == "6", (charger.session_energy_kwh, charger.session_id)
+    assert charger.session_energy_kwh == 1.2 and charger.session_id == 6, (charger.session_energy_kwh, charger.session_id)
+    # The same whichever form arrives first
+    text_first = HypervoltCharger(V2_ID)
+    apply_session(text_first, {"charging": True, "session": "7", "watt_hours": 800})
+    for session in (7.0, 7, "7.0"):
+        # No watt_hours, so a wrong reset to 0 would show
+        apply_session(text_first, {"charging": True, "session": session})
+    assert text_first.session_id == 7 and text_first.session_energy_kwh == 0.8, (text_first.session_id, text_first.session_energy_kwh)
     # Energy held from messages without a session id isn't carried into the first session id seen
     v3 = HypervoltCharger(V3_ID, api_version=3)
     apply_session(v3, {"charging": True, "watt_hours": 17836})
