@@ -749,8 +749,8 @@ GoodWe's EMS has no target SoC: you give it a mode and a power setpoint (the EMS
 So Predbat drives the inverter through Home Assistant scripts that pick the EMS mode and setpoint each time they run, plus a follow-through automation that re-checks every minute between Predbat's cycles.
 Predbat writes the charge and export power it wants into two `input_number` helpers, which the scripts read.
 
-The setup below is a simplified starting point. dmacwalter's full configuration, which has run since September 2026 on a GW9.99K-EH (10 kW, 5.4 kW export limit, 22.4 kWh battery), is attached to the [GoodWe issue](https://github.com/springfall2008/batpred/issues/1000) as a working reference.
-It adds solar-forecast-aware charging, `sell_power` export when the surplus is above the export limit, an export limit watchdog and a battery taper guard. Read it alongside the notes below if you want to go further.
+The setup below is a simplified starting point. dmacwalter's full configuration, which has run since September 2026 on a GW9.99K-EH (10 kW, 5.4 kW export limit, 22.4 kWh battery), is kept up to date in [dmacwalter/predbat-goodwe-ems](https://github.com/dmacwalter/predbat-goodwe-ems) as a working reference.
+It adds solar-forecast-aware charging, `sell_power` export when the surplus is above the export limit or the AC output would go over the inverter's ceiling, an export limit watchdog and a battery taper guard. Read it alongside the notes below if you want to go further.
 
 - Install the GoodWe Inverter integration from the [Marketplace](install.md#hacs-and-the-marketplace) (or from HACS on Home Assistant 2026.10 or older), and check that `select.goodwe_ems_mode` and `number.goodwe_ems_power_limit` exist.
   Set the inverter's operation mode (`select.goodwe_inverter_operation_mode`) to `general`
@@ -768,17 +768,21 @@ Scripts (Settings / Automations & scenes / Scripts, edit in YAML, or paste into 
 ```yaml
 predbat_charge:
   alias: Predbat - force charge
-  description: "Daylight: buy_power holds grid import at Predbat's rate and leaves solar free. Night: charge_battery at Predbat's rate."
+  description: "Night: charge_battery at Predbat's rate. Daylight: Predbat's rate is the total battery charge, solar first, so buy_power imports only what the solar surplus doesn't cover, or auto when the surplus covers it all."
   mode: queued
   max: 5
   variables:
     day: "{{ states('sensor.solcast_pv_forecast_power_now') | float(0) >= 500 }}"
-    target_mode: "{{ 'buy_power' if day else 'charge_battery' }}"
-    setpoint: >-
+    rate: >-
       {% set rate_max = 9600 %}
       {% set req = states('input_number.predbat_charge_rate') | float(0) %}
-      {% set target = rate_max if req <= 0 else [req, rate_max] | min %}
-      {{ ((([target, 500] | max) / 100) | round(0) | int) * 100 }}
+      {{ rate_max if req <= 0 else [req, rate_max] | min }}
+    surplus: >-
+      {% set pv = states('sensor.pv_power') | float(0) %}
+      {{ ([pv - states('sensor.house_consumption') | float(0), 0] | max) if pv >= 300 else 0 }}
+    grid: "{{ (rate | float - surplus | float) if day else rate | float }}"
+    target_mode: "{{ 'charge_battery' if not day else ('buy_power' if grid | float >= 500 else 'auto') }}"
+    setpoint: "{{ 10000 if target_mode == 'auto' else ((([grid | float, 500] | max) / 100) | round(0) | int) * 100 }}"
   sequence:
     - alias: Already in the right mode at about this setpoint - nothing to write
       if:
@@ -983,7 +987,7 @@ actions:
       - alias: Charge reached Predbat's target - hold until the next cycle
         conditions:
           - condition: template
-            value_template: "{{ status.startswith('Charging') and tgt > 0 and soc >= tgt and ems in ['charge_battery', 'buy_power'] }}"
+            value_template: "{{ status.startswith('Charging') and tgt > 0 and soc >= tgt and ems in ['charge_battery', 'buy_power', 'auto'] }}"
         sequence:
           - action: script.predbat_freeze
       - alias: Still charging - keep the mode following day/night
@@ -1024,7 +1028,10 @@ Notes on GoodWe EMS behaviour (tested by dmacwalter day and night, and retested 
 | `export_ac`, `conserve`, `charge_pv`, `import_ac` | | Avoid: they curtail PV, or run the house from the grid in daylight |
 
 - **Write order matters.** Always write the EMS power limit before the EMS mode, or the setpoint doesn't stick. Go via `auto` (and wait about 2 seconds) when leaving another forced mode
-- Charging with `charge_battery` in daylight lets the grid fill every cloud dip, which is why the charge script uses `buy_power` in daylight
+- Charging with `charge_battery` in daylight lets the grid fill every cloud dip, which is why the charge script uses `buy_power` in daylight.
+  Predbat's charge rate is the total battery charge rate, solar first, so the script asks `buy_power` only for what the solar surplus doesn't cover. Asking for the full rate would import it on top of all the solar, and once PV plus the setpoint goes over the battery's limit (about 10 kW) `buy_power` curtails PV.
+  In broken cloud the script can switch between `auto` and `buy_power` each minute; a smoothed surplus sensor, or about 300 W of hysteresis, stops that
+- In daylight force export, `discharge_pv` can't charge the battery, so PV above the house load plus the export limit is curtailed. The template sets **inverter_can_charge_during_export** to `false` so Predbat plans for that. dmacwalter's export script switches to `sell_power` instead, which keeps that solar
 - Asking for more AC output than the inverter's ceiling (about 10 kW) minus the house load pins the output at the ceiling, curtails PV and drains the battery, so cap export setpoints at the AC ceiling minus house load minus about 300 W
 - On the tested unit the grid-only charge limit is about 7 kW (set **inverter_limit_charge** to match), PV charging reaches about 10 kW, and battery discharge about 5 kW
 - Near full, once the battery limits its charge current to 15 A or less, `auto` hunts and curtails PV for 20-50 minutes; holding `discharge_pv` near 0 W exports the surplus cleanly instead (dmacwalter's taper guard automation does this)

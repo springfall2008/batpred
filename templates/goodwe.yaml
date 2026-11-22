@@ -157,6 +157,9 @@ pred_bat:
   # Grid export limit in W - set this to your network's export limit
   export_limit:
     - 5400
+  # In daylight force export the scripts use discharge_pv, which can't charge
+  # the battery, so PV above the house load plus the export limit is curtailed
+  inverter_can_charge_during_export: false
   inverter_clock_skew_start: 0
   inverter_clock_skew_end: 0
   inverter_clock_skew_discharge_start: 0

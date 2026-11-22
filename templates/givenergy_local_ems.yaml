@@ -130,11 +130,11 @@ pred_bat:
     - number.{area}_givenergy_{inv1_serial}_battery_soc_reserve
     - number.{area}_givenergy_{inv2_serial}_battery_soc_reserve
   charge_rate_percent:
-    - number.{area}_givenergy_{inv1_serial}_battery_ac_charge_limit
-    - number.{area}_givenergy_{inv2_serial}_battery_ac_charge_limit
+    - number.{area}_givenergy_{inv1_serial}_inverter_charge_power_percentage
+    - number.{area}_givenergy_{inv2_serial}_inverter_charge_power_percentage
   discharge_rate_percent:
-    - number.{area}_givenergy_{inv1_serial}_battery_ac_discharge_limit
-    - number.{area}_givenergy_{inv2_serial}_battery_ac_discharge_limit
+    - number.{area}_givenergy_{inv1_serial}_inverter_discharge_power_percentage
+    - number.{area}_givenergy_{inv2_serial}_inverter_discharge_power_percentage
   inverter_time:
     - datetime.{area}_givenergy_{inv1_serial}_system_time
     - datetime.{area}_givenergy_{inv2_serial}_system_time
