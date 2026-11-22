@@ -681,6 +681,8 @@ You don't need to copy any files anywhere, and you don't need a Home Assistant s
 The `./run_all`, `./run_pre_commit`, `./run_random`, `./run_random_profile` and `./run_shuffle` scripts set up the Python environment themselves. Each time they run, they run `source setup.csh`, which
 creates a virtual environment in `coverage/venv` if there isn't one, and installs the packages in `requirements.txt` into it.
 So the first run takes a little longer, and you don't need to do anything by hand before running them.
+The venv's `pip` is the one that came with your Python, so it is often not the latest release. `setup.csh` turns off pip's version check, so you don't get a
+"new release of pip is available" notice every time a script runs. You don't need to upgrade pip, but you can with `pip install --upgrade pip` once the environment is active.
 
 The environment is only active while one of these scripts runs - it isn't left switched on in your terminal.
 The other scripts (`run_cov`, `run_profile`, `standalone`, `standalone_ha` and the Python helper scripts) don't set it up, so activate it yourself first.
