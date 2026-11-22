@@ -1601,6 +1601,9 @@ When set in Watts, caps the maximum discharge rate used specifically during forc
 This is useful when you want to limit how fast the battery discharges to the grid during forced export periods (e.g. to reduce battery wear or meet grid export limits)
 while still allowing the battery to discharge at full rate during ECO mode to cover house load.
 
+The discharge [rate grid](#battery-rate-grids) is learned from forced exports, so Predbat measures them against this cap. A minute where the battery reached the cap records no battery limit, as the cap rather than the battery held it back.
+A minute where the battery stayed below the cap is recorded as a battery limit: it also caps the ECO mode discharge Predbat plans at that SoC, and it shows on the Curves page. If this is set to 0 there are no forced exports, so no discharge evidence is gathered.
+
 If not set, the value defaults to `inverter_limit_discharge` (or the inverter maximum if that is also not set).
 Predbat will also use this rate when modelling the plan so the prediction accurately reflects the capped export rate.
 
@@ -1700,7 +1703,7 @@ or
 
 - **battery_voltage** - Nominal maximum battery voltage (not current battery voltage) - only needed for inverters controlled via Amps and used internally by Predbat to convert Watts to Amps to control the inverter.
 - **battery_rate_max** - Sets the maximum battery charge/discharge rate in watts (e.g. 6000).  For GivEnergy inverters this can be determined from the inverter, but must be set for non-GivEnergy inverters or Predbat will default to 2600W.
-Predbat also uses **battery_rate_max** when learning the [rate grids](#battery-rate-grids), looking for charging or discharging at 95% of the max rate.
+Predbat also uses **battery_rate_max** when learning the [rate grids](#battery-rate-grids), looking for charging at 95% of the max charge rate (**inverter_limit_charge** when that is lower) and forced exports at 95% of the max export rate (**inverter_limit_export**, else **inverter_limit_discharge**, when lower).
 Be careful of setting the rate at a value higher than your inverter can handle for grid charging in order for Predbat to be able to find the historical 'full rate' charging/discharging needed to learn them.
 - **soc_max** - Entity name for the maximum charge level for the battery in kWh.
 If not set or set to 0, Predbat will attempt to automatically determine the battery size by analyzing historical charging data from `soc_percent` and `battery_power` sensors.
@@ -2916,10 +2919,10 @@ Predbat learns both grids from your battery's own history, automatically, and fa
 
 How the grids are learned:
 
-- When Predbat starts it scans up to **battery_rate_grid_history_days** (default 28) days of your history - as much as Home Assistant has kept, as its recorder keeps 10 days unless you change `purge_keep_days` - then once a day the last **battery_rate_grid_scan_days** (default 2) days, more if it has not scanned for longer. A scan whose history read fails is tried again an hour later. Each scan looks for runs of 15 minutes or more where it was **Charging** (or, for the discharge grid, in a forced **Export**) with the rate set to its maximum.
+- When Predbat starts it scans up to **battery_rate_grid_history_days** (default 28) days of your history - as much as Home Assistant has kept, as its recorder keeps 10 days unless you change `purge_keep_days` - then once a day the last **battery_rate_grid_scan_days** (default 2) days, more if it has not scanned for longer. A scan whose history read fails is tried again an hour later. Each scan looks for runs of 15 minutes or more where it was **Charging** (or, for the discharge grid, in a forced **Export**) with the rate set to its maximum - for charging the max charge rate (**inverter_limit_charge** when set), for a forced export the max export rate (**inverter_limit_export** when set).
   The first and last 5 minutes of each run are dropped (ramping up and down) and the rest is cut into 5-minute segments, each giving one point: SoC, battery temperature and the rate the battery reached.
 - A minute where the battery did not actually charge (or discharge), or a forced export that did not reach the grid (from **grid_power**, when it has history), breaks the run: that is a control failure or the house using the power, not a battery limit.
-  Exports held back by **export_limit** are left out too. If your export limit is below your maximum discharge rate and **grid_power** has no history, no discharge evidence is gathered.
+  An export held back by **export_limit** (the grid export reached it) is still evidence: it shows the battery was not limited by its SoC or temperature, so it records no battery limit. The same goes for a forced export where the battery reached **inverter_limit_export**, which Predbat writes as its discharge rate. Discharge evidence needs **grid_power** history to tell these apart, so without it none is gathered.
 - A battery temperature reading of exactly 0 is treated as missing (several integrations report a missing reading as 0) and also breaks the run. If your temperature sensor only ever reads 0, or **battery_temperature_history** is not set, the grid has no temperature and is learned as a single SoC curve.
 - The points are kept in Predbat's cache for a year, so last winter's cold-weather evidence is still there when the next cold spell arrives. Recent evidence counts for more: a point's weight halves every 90 days.
 - The grid is fitted so the rate never rises as SoC rises (charge) or as SoC falls (discharge), and never rises as the temperature falls. A one-off reading that breaks that rule is averaged against its neighbours rather than followed.

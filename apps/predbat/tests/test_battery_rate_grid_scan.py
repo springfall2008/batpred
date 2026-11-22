@@ -65,8 +65,13 @@ def _install(my_predbat, block, temperature_default=15.0, block_start_hours=BLOC
     my_predbat.ha_interface.get_history = mock_get_history
 
 
-def _make():
-    """A PredBat and inverter 0 (10 kWh, 2.6 kW rated) reading the mocked sensors."""
+def _make(args=None):
+    """
+    A PredBat and inverter 0 (10 kWh, 2.6 kW rated) reading the mocked sensors.
+
+    With args (apps.yaml settings such as inverter_limit_export) the inverter takes its rates from them, as Inverter
+    derives them, instead of having them set to RATED_W.
+    """
     my_predbat = PredBat()
     my_predbat.states = {}
     my_predbat.reset()
@@ -87,9 +92,13 @@ def _make():
     my_predbat.battery_loss = 1.0
     my_predbat.battery_rate_max_scaling = 1.0
     my_predbat.battery_rate_max_scaling_discharge = 1.0
+    if args:
+        my_predbat.args.update(args)
     inv = Inverter(my_predbat, 0)
-    inv.battery_rate_max_charge = RATED_W / 60000
-    inv.battery_rate_max_discharge = RATED_W / 60000
+    if not args:
+        inv.battery_rate_max_charge = RATED_W / 60000
+        inv.battery_rate_max_discharge = RATED_W / 60000
+        inv.battery_rate_max_export = RATED_W / 60000
     inv.soc_max = 10.0
     inv.battery_scaling = 1.0
     return my_predbat, inv
@@ -110,6 +119,7 @@ def _make_two(battery_power):
     inv1 = Inverter(my_predbat, 1)
     inv1.battery_rate_max_charge = RATED_W / 60000
     inv1.battery_rate_max_discharge = RATED_W / 60000
+    inv1.battery_rate_max_export = RATED_W / 60000
     inv1.soc_max = 10.0
     inv1.battery_scaling = 1.0
     my_predbat.num_inverters = 2
@@ -135,9 +145,9 @@ def _charge(minutes, power=-1560, temp=15.3, soc=40):
     return [("Charging", RATED_W, power, soc, temp, -RATED_W) for _ in range(minutes)]
 
 
-def _export(minutes, power=1560, grid=1000, status="Exporting"):
+def _export(minutes, power=1560, grid=1000, status="Exporting", rate=RATED_W):
     """A full-rate forced export block."""
-    return [(status, RATED_W, power, 60, 15.3, grid) for _ in range(minutes)]
+    return [(status, rate, power, 60, 15.3, grid) for _ in range(minutes)]
 
 
 def _pin_local_time(my_predbat, hour, minute=0):
@@ -254,6 +264,7 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     print("Test 6: forced exports - only ones that reached the grid count")
     _, samples = _scan(_export(25), discharge=True)
     failed |= _check("t6 counted", len(_segments(samples)) == 3, samples)
+    failed |= _check("t6 rate relative to the discharge rating", all(abs(s[2] - 0.6) < 1e-6 for s in _segments(samples)), samples)
     _, samples = _scan(_export(25, grid=0), discharge=True)
     failed |= _check("t6 export did not reach the grid", _segments(samples) == [], samples)
     _, samples = _scan(_export(25, status="Discharging"), discharge=True)
@@ -271,21 +282,24 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     segments = _segments(samples)
     failed |= _check("t7", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
 
-    print("Test 7b: an export held back by the export limit is not evidence (moved from the old discharge curve tests)")
+    print("Test 7b: an export held back by the export limit is evidence of no battery limit (the limit, not SoC or temperature, held it)")
 
     my_predbat, inv = _make()
     inv.export_limit = 2000 / 60000
     _install(my_predbat, _export(25, grid=2000))
-    failed |= _check("t7b limited", _segments(inv.find_rate_grid_samples(True)) == [], "export at the limit learned")
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t7b limited", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
     my_predbat, inv = _make()
     inv.export_limit = 2000 / 60000
     _install(my_predbat, _export(25, grid=1000))
-    failed |= _check("t7b below the limit", len(_segments(inv.find_rate_grid_samples(True))) == 3)
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t7b below the limit is a battery limit", len(segments) == 3 and all(abs(s[2] - 0.6) < 1e-6 for s in segments), segments)
     my_predbat, inv = _make()
     inv.export_limit = 2000 / 60000
     my_predbat.args["grid_power_invert"] = [True]
     _install(my_predbat, _export(25, grid=-2000))
-    failed |= _check("t7b inverted grid sensor", _segments(inv.find_rate_grid_samples(True)) == [], "inverted export at the limit learned")
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t7b inverted grid sensor", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
 
     print("Test 7c: without grid_power history an ignored export cannot be told apart, so no discharge evidence is gathered")
 
@@ -387,4 +401,75 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     segments = _segments(samples)
     failed |= _check("t11 count", len(segments) == 3, segments)
     failed |= _check("t11 temperature", all(abs(s[1] - 15.3) < 1e-6 for s in segments), segments)
+
+    print("Test 12: inverter_limit_charge caps the charge rate the evidence is measured against")
+    limits = {"battery_rate_max": [RATED_W], "inverter_limit_charge": [1300]}
+    my_predbat, inv = _make(limits)
+    failed |= _check("t12 charge rate capped", abs(inv.battery_rate_max_charge * 60000 - 1300) < 1e-6, inv.battery_rate_max_charge * 60000)
+    _install(my_predbat, [("Charging", 1300, -1300, 40, 15.3, -1300) for _ in range(25)])
+    segments = _segments(inv.find_rate_grid_samples(False))
+    failed |= _check("t12 a charge at the capped rate is full rate", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+
+    print("Test 13: inverter_limit_export below the discharge rating - forced exports run at the export cap")
+    limits = {"battery_rate_max": [RATED_W], "inverter_limit_export": [1300]}
+    my_predbat, inv = _make(limits)
+    failed |= _check("t13 export rate capped", abs(inv.battery_rate_max_export * 60000 - 1300) < 1e-6 and abs(inv.battery_rate_max_discharge * 60000 - RATED_W) < 1e-6)
+    # Predbat writes the cap as the discharge rate: the battery at the cap, 300 W of it covering the house, 1000 W to the grid
+    _install(my_predbat, _export(25, power=1300, grid=1000, rate=1300))
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t13 an export at the cap is evidence", len(segments) == 3, segments)
+    failed |= _check("t13 an export at the cap records no battery limit", all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+    # The battery tapering below the cap is a real limit, recorded in kW against the discharge rating the plan scales the grid by
+    my_predbat, inv = _make(limits)
+    _install(my_predbat, _export(25, power=650, grid=350, rate=1300))
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t13 a taper below the cap is recorded in kW of the discharge rating", len(segments) == 3 and all(abs(s[2] - 650 / RATED_W) < 1e-6 for s in segments), segments)
+    # PV adding to the export (the grid sees more than the cap) does not hide the taper
+    my_predbat, inv = _make(limits)
+    _install(my_predbat, _export(25, power=650, grid=1350, rate=1300))
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t13 a taper with PV pushing the export past the cap", len(segments) == 3 and all(abs(s[2] - 650 / RATED_W) < 1e-6 for s in segments), segments)
+    # inverter_limit_export 2000 W, export_limit 1000 W: the battery gives 1200 W while the grid export sits at the 1000 W limit
+    # (200 W to the house). Well under its own cap, but the export limit held it back, not the battery: no battery limit
+    my_predbat, inv = _make({"battery_rate_max": [RATED_W], "inverter_limit_export": [2000]})
+    inv.export_limit = 1000 / 60000
+    _install(my_predbat, _export(25, power=1200, grid=1000, rate=2000))
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t13 held at export_limit below the export cap is not a battery limit", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+    # An export written below the cap (low power export) is not full rate
+    my_predbat, inv = _make(limits)
+    _install(my_predbat, _export(25, power=650, rate=650))
+    failed |= _check("t13 an export below the cap is not full rate", _segments(inv.find_rate_grid_samples(True)) == [])
+
+    print("Test 14: inverter_limit_export above the discharge rating - the rate is still recorded against the discharge rating")
+    # The house-load step reads the grid against the discharge rating, so a taper the battery held at 1000 W is 1000 / 1300 there
+    limits = {"battery_rate_max": [RATED_W], "inverter_limit_discharge": [1300], "inverter_limit_export": [RATED_W]}
+    my_predbat, inv = _make(limits)
+    _install(my_predbat, _export(25, power=1000, rate=RATED_W))
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t14 taper", len(segments) == 3 and all(abs(s[2] - 1000 / 1300) < 1e-4 for s in segments), segments)
+    my_predbat, inv = _make(limits)
+    _install(my_predbat, _export(25, power=1300, rate=1300))
+    segments = _segments(inv.find_rate_grid_samples(True))
+    failed |= _check("t14 an export written at the discharge rating (under the cap) asks the battery for all it can give", len(segments) == 3 and all(abs(s[2] - 1.0) < 1e-6 for s in segments), segments)
+
+    print("Test 15: an export cap of 0 means no forced exports - no evidence, no history read, and not None (which retries hourly)")
+    my_predbat, inv = _make({"battery_rate_max": [RATED_W], "inverter_limit_export": [0]})
+    failed |= _check("t15 cap is 0", inv.battery_rate_max_export == 0, inv.battery_rate_max_export)
+    _install(my_predbat, _charge(25) + _export(25, power=1560, rate=0))
+    inv.curve_scan_coverage = {"grid_discharge": "2000-01-01"}  # left from an earlier scan when the cap was not 0
+    reads = []
+    installed = my_predbat.ha_interface.get_history
+
+    def counting(entity_id, now=None, days=30):
+        """Count the history reads."""
+        reads.append(entity_id)
+        return installed(entity_id, now=now, days=days)
+
+    my_predbat.ha_interface.get_history = counting
+    samples = inv.find_rate_grid_samples(True)
+    failed |= _check("t15 no evidence", samples == {}, samples)
+    failed |= _check("t15 no history read", reads == [], reads)
+    failed |= _check("t15 coverage cleared, so the merge keeps the stored days", inv.curve_scan_coverage.get("grid_discharge") is None, inv.curve_scan_coverage)
+    failed |= _check("t15 charge evidence is still gathered", len(_segments(inv.find_rate_grid_samples(False))) == 3, reads)
     return failed

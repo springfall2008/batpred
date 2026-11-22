@@ -184,7 +184,7 @@ def test_executor_handover():
             set_read_only=True,
             inverter_needs_reset=True,
             inverter_needs_reset_force="set_read_only",
-            inverters=[SimpleNamespace(inverter_type="SolisCloud")],
+            inverters=[SimpleNamespace(inverter_type="SolisCloud", start_current_hold_cycle=lambda: None)],
             components=SimpleNamespace(get_component=lambda name: component if name == "solis" else None),
             record_status=lambda *args, **kwargs: calls.append((args, kwargs)),
             isCharging=True,
