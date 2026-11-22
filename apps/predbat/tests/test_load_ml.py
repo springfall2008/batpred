@@ -1217,7 +1217,8 @@ def _test_component_retrain_interval():
 
 def _test_component_run_data_merge():
     """Test LoadMLComponent.run() - mocks _fetch_load_data and verifies:
-    1. Run 1 (first=True): data is fetched and stored, but training is deferred (no save).
+    1. Run 1 (first=True): data is fetched and stored, but training is deferred (no save) and
+       the run still records a success so the component is not reported as failed.
     2. Run 2 (first=False, last_train_time=None): initial training fires because the model
        has never been trained; old keys are shifted before new data is merged.
     3. Run 3 (first=False, model just trained): only a fetch+predict cycle runs (no retrain),
@@ -1331,8 +1332,12 @@ def _test_component_run_data_merge():
         assert component.initial_training_done is False, "initial_training_done should still be False after first run"
         assert save_call_count[0] == 0, f"save_database_history should NOT be called on first run (deferred), called {save_call_count[0]} times"
         assert training_call_count[0] == 0, f"Training should NOT run on first run, ran {training_call_count[0]} times"
+        # Deferring initial training is a healthy state, not a failure: without a success timestamp
+        # components.is_alive() reads the component as dead and the next plan run reports
+        # "component errors: ML Load Forecaster" until training starts a minute later.
+        assert component.last_updated_time() is not None, "Deferred initial training must still record a success so the component reads as alive"
 
-        print("    PASS: Run 1: data populated, training deferred, no save")
+        print("    PASS: Run 1: data populated, training deferred, no save, success recorded")
 
         # ── Advance time by ELAPSED_MINUTES ─────────────────────────────────────
         mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)
