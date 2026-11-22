@@ -1244,9 +1244,15 @@ class Plan:
         enable_coarse_fine=True,
         best_max_charge_slots=1,
         best_max_export_slots=1,
+        block_replay=True,
+        replay_stats=None,
     ):
         """
         Pick an import price threshold which gives the best results
+
+        block_replay=False rebuilds every threshold block instead of replaying a repeated one from
+        tried_list - the result is the same, it only exists so tests can compare the two. When
+        replay_stats is a dict, its 'replayed_blocks' is set to how many blocks this call replayed.
         """
         loop_price = price_set[-1]
         best_price = loop_price
@@ -1378,6 +1384,7 @@ class Plan:
         # depends on charge_mods/best_limits_reset and changes from trial to trial.
         hit_charge_cache = {}
         block_cache = {}  # trial block signature -> hashes of the trials it built
+        replayed_blocks = 0
         prunable_hit_cache = {}  # window_n -> charge window it may be pruned against, or -1
         hit_car_cache = {}  # (start, end) -> does this window hit a car charging slot
         export_allowed_cache = {}  # window_n -> is this export window usable at all
@@ -1500,22 +1507,27 @@ class Plan:
                 # A threshold whose candidate windows (and slot ladders) match an earlier threshold's in this
                 # call builds exactly the same trials, every one of them already in tried_list. All the sweep
                 # would do for it is fold those trials' metrics into levels_score for this threshold, so do
-                # just that from the hashes recorded for the first occurrence.
-                block_key = (
-                    coarse,
-                    tuple(charge_slot_choices),
-                    tuple(export_slot_choices),
-                    tuple(tuple(charge_candidates_for(freeze)) for freeze in charge_freeze_options),
-                    tuple(tuple(export_candidates_for(freeze)) for freeze in export_freeze_options),
-                )
-                block_hashes = block_cache.get(block_key)
-                if block_hashes is not None:
-                    if block_hashes:
-                        block_best = min(tried_list[block_hash] for block_hash in block_hashes)
-                        levels_score[loop_price] = min(levels_score.get(loop_price, 9999999), block_best)
-                    continue
+                # just that from the hashes recorded for the first occurrence. This is common in the region
+                # passes, where windows outside the region still contribute thresholds but no candidates.
                 block_hashes = []
-                block_cache[block_key] = block_hashes
+                if block_replay:
+                    block_key = (
+                        coarse,
+                        tuple(charge_slot_choices),
+                        tuple(export_slot_choices),
+                        tuple(tuple(charge_candidates_for(freeze)) for freeze in charge_freeze_options),
+                        tuple(tuple(export_candidates_for(freeze)) for freeze in export_freeze_options),
+                    )
+                    replay_hashes = block_cache.get(block_key)
+                    if replay_hashes is not None:
+                        replayed_blocks += 1
+                        # Every hash was resolved when its block's pred_table was drained, so none should
+                        # still be a pending True; skip one anyway, as the rebuild path does
+                        replay_metrics = [tried_list[block_hash] for block_hash in replay_hashes if tried_list[block_hash] is not True]
+                        if replay_metrics:
+                            levels_score[loop_price] = min(levels_score.get(loop_price, 9999999), min(replay_metrics))
+                        continue
+                    block_cache[block_key] = block_hashes
 
                 # Every selection is looked up once per side up front instead of once per trial, and the
                 # export-on-charge pruning, which depends only on the pair of selections, is memoised per pair
@@ -1701,6 +1713,9 @@ class Plan:
                     best_export_limits,
                 )
             )
+
+        if replay_stats is not None:
+            replay_stats["replayed_blocks"] = replayed_blocks
 
         # Perform charge limit levelling on best_all_n
         if best_all_n:

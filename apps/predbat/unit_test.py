@@ -219,6 +219,7 @@ from tests.test_trial_memo import run_trial_memo_tests
 from tests.test_batch_job_packing import run_batch_job_packing_tests
 from tests.test_kernel_rounding import run_kernel_rounding_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
+from tests.test_levels_block_replay import run_levels_block_replay_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_export_encoding import run_export_encoding_tests
 from tests.test_export_more_solar_warning import run_export_more_solar_warning_tests
@@ -890,6 +891,7 @@ def main():
         ("batch_job_packing", run_batch_job_packing_tests_isolated, "Kernel batch jobs packed with struct match the per-field fill", False),
         ("kernel_rounding", run_kernel_rounding_tests_isolated, "Kernel returns its scalar results already rounded to 4dp", False),
         ("hit_charge_cache", run_hit_charge_cache_tests, "Hit charge window cache tests", False),
+        ("levels_block_replay", run_levels_block_replay_tests, "Levels pass block replay matches a full rebuild", False),
         ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
         ("kernel_static_cache", run_kernel_static_cache_tests, "Kernel static context cache tests", False),
         ("optimise_export_copy", run_optimise_export_copy_tests, "Optimise export window copying tests", False),
