@@ -934,6 +934,21 @@ def run_cap_actual_charging_tests(my_predbat, midnight_utc, time_format):
         if used != 10 or attributes != {"planned_minutes": 20, "cap_minutes": 30, "remaining_minutes": 0}:
             print("ERROR: cap_actual_sensor: expected 10 minutes used, 20 planned of 30 but got {} {}".format(used, attributes))
             failed = True
+        # ...but with octopus_slot_low_rate off no dispatch is priced cheap, so the car plan counts none, and the sensor
+        # is cleared rather than showing the whole cap left
+        saved_low_rate = my_predbat.args.get("octopus_slot_low_rate")
+        my_predbat.args["octopus_slot_low_rate"] = False
+        try:
+            my_predbat.publish_octopus_cap()
+        finally:
+            if saved_low_rate is None:
+                my_predbat.args.pop("octopus_slot_low_rate", None)
+            else:
+                my_predbat.args["octopus_slot_low_rate"] = saved_low_rate
+        used = my_predbat.get_state_wrapper(my_predbat.prefix + ".octopus_cap_used")
+        if used != 0 or my_predbat.octopus_cap_published:
+            print("ERROR: cap_actual_sensor_no_low_rate: expected the sensor cleared to 0, got {}".format(used))
+            failed = True
 
         # Without a car_charging_now sensor every minute counts, as before
         print("\n**** Cap actual charging: no sensor ****")
@@ -948,12 +963,16 @@ def run_cap_actual_charging_tests(my_predbat, midnight_utc, time_format):
         failed |= check_idle("cap_actual_unknown", list(range(300, 470)) + list(range(490, 530)) + list(range(550, settled)), list(range(-720, 300)) + list(range(470, 490)) + list(range(530, 550)))
 
         # A gap in the readings of up to 5 minutes (the poll skipped while the plan is calculated) is bridged; a longer
-        # one (a restart) counts, as the car may have charged in it
+        # one (HA unreachable, a long cycle) counts, as the car may have charged in it, and so do the 10 minutes before
+        # it, as a charge that started just before the gap and was reported late can no longer cut them
         print("\n**** Cap actual charging: gaps in the readings ****")
         load(spans(), skip=range(400, 404))
         failed |= check_idle("cap_actual_short_gap", range(-720, settled), [])
         load(spans(), skip=range(400, 410))
-        failed |= check_idle("cap_actual_long_gap", list(range(-720, 399)) + list(range(410, settled)), range(399, 410))
+        failed |= check_idle("cap_actual_long_gap", list(range(-720, 389)) + list(range(410, settled)), range(389, 410))
+        # ...and when the first reading after a gap longer than the lag is charging, which cuts back only 10 minutes from itself
+        load(spans((412, 420)), skip=range(400, 412))
+        failed |= check_idle("cap_actual_long_gap_charging", list(range(-720, 389)) + list(range(420, settled)), range(389, 420))
 
         # A restart keeps the record through storage, but the time Predbat was down is not known even when short, and the
         # last 10 minutes before it come off, as a charge reported late can no longer cut them

@@ -4105,7 +4105,9 @@ class Octopus:
         it. Two "not charging" readings at most OCTOPUS_CAP_BRIDGE_MINUTES apart are one stretch, which bridges the poll
         being skipped while the plan is calculated. Anything longer - Predbat restarting or stopped, a charging reading, or no
         evidence - ends the stretch, so a minute nothing was known about counts. A reading that is not "not charging" also
-        takes OCTOPUS_CAP_LAG_MINUTES off the end of the stretch before it, as a charger's sensor can report a charge late.
+        takes OCTOPUS_CAP_LAG_MINUTES off the end of the stretch before it, as a charger's sensor can report a charge late,
+        and so does a gap: a charge that started just before it and was reported late could no longer cut it, as after a
+        restart (octopus_cap_load()).
 
         With save True the record is written to storage when a stretch is cut, and on each cycle (save "cycle") when it has
         changed, so a restart keeps it (see octopus_cap_load()). A new or longer stretch can wait for the cycle, as losing
@@ -4117,14 +4119,15 @@ class Octopus:
         reading = self.octopus_cap_reading()
         runs = self.octopus_cap_runs
         last = self.octopus_cap_last
+        bridged = last is not None and now_ts - last[0] <= OCTOPUS_CAP_BRIDGE_MINUTES * 60
         cut = False
-        if reading:
-            if runs and last and last[1] and runs[-1][1] == last[0] and now_ts - last[0] <= OCTOPUS_CAP_BRIDGE_MINUTES * 60:
-                runs[-1][1] = now_ts
-            else:
-                runs.append([now_ts, now_ts])
-        else:
+        trim_from = None
+        if not reading:
             trim_from = now_ts - OCTOPUS_CAP_LAG_MINUTES * 60
+        if last is not None and not bridged:
+            # The lag comes off the stretch the gap ended, measured from the last reading before it (#6252 review)
+            trim_from = last[0] - OCTOPUS_CAP_LAG_MINUTES * 60 if trim_from is None else min(trim_from, last[0] - OCTOPUS_CAP_LAG_MINUTES * 60)
+        if trim_from is not None:
             kept = []
             for start, end in runs:
                 if end <= trim_from:
@@ -4134,6 +4137,11 @@ class Octopus:
             if kept != runs:
                 cut = True
             runs = kept
+        if reading:
+            if bridged and last[1] and runs and runs[-1][1] == last[0]:
+                runs[-1][1] = now_ts
+            else:
+                runs.append([now_ts, now_ts])
         oldest = now_ts - OCTOPUS_CAP_KEEP_DAYS * 24 * 60 * 60
         self.octopus_cap_runs = [run for run in runs if run[1] >= oldest]
         self.octopus_cap_last = (now_ts, reading)
@@ -4713,8 +4721,11 @@ class Octopus:
         """
         How much of the current midday-to-midday period's daily cap the account's dispatches use, as a dict of minutes:
         used (the dispatch minutes up to now that used it, leaving out those no car charged in, see octopus_cap_record()),
-        planned (the dispatch minutes from now that fit what is left) and cap. None when there is no cap to count.
+        planned (the dispatch minutes from now that fit what is left) and cap. None when there is no cap to count, which
+        includes octopus_slot_low_rate off: no dispatch is priced cheap then, so octopus_cap_segments() counts none of them.
         """
+        if not self.get_arg("octopus_slot_low_rate", True):
+            return None
         cars = self.octopus_cap_cars() if self.num_cars and self.octopus_cap_counts() else []
         if not cars:
             return None
