@@ -619,6 +619,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.ge_url_cache = {}
         self.github_url_cache = {}
         self.load_minutes = {}
+        self.load_filter_energy_data = {}
         self.load_minutes_now = 0
         self.load_minutes_age = 0
         self.load_minutes_source = None

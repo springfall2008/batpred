@@ -301,6 +301,21 @@ predbat:
     - sensor.my_ev_charger_energy
 ```
 
+### Optional: Subtract Metered Appliances
+
+Use [load_filter_energy](apps-yaml.md#metered-appliance-energy) to exclude actual appliance energy from the training load:
+
+```yaml
+predbat:
+  load_filter_energy:
+    - sensor.dishwasher_energy
+    - sensor.washing_machine_energy
+```
+
+These are cumulative energy meters for appliances included in **load_today**. Filtering follows actual consumption, independently of fixed/flexible scheduling and the car-charging hold switch.
+Provide future appliance demand separately through **load_forecast** or another forecast source. Missing meter history is not replaced with scheduled energy.
+Restart Predbat after changing the list; saved history and models prepared with a different exclusion list are rebuilt.
+
 ## Setup Instructions
 
 ### Step 1: Verify Prerequisites

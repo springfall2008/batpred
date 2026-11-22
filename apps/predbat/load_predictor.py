@@ -1871,12 +1871,13 @@ class LoadPredictor:
 
         return result
 
-    def save(self, filepath):
+    def save(self, filepath, source_config=None):
         """
         Save model to file.
 
         Args:
             filepath: Path to save model (without extension)
+            source_config: Optional data preparation configuration to validate when loading
         """
         if not self.model_initialized:
             self.log("Warn: ML Predictor: No model to save")
@@ -1886,6 +1887,7 @@ class LoadPredictor:
             # Prepare metadata
             metadata = {
                 "model_version": MODEL_VERSION,
+                "source_config": source_config or {},
                 "lookback_steps": LOOKBACK_STEPS,
                 "output_steps": OUTPUT_STEPS,
                 "predict_horizon": PREDICT_HORIZON,
@@ -1933,12 +1935,13 @@ class LoadPredictor:
             self.log("Error: ML Predictor: Failed to save model: {}".format(e))
             return False
 
-    def load(self, filepath):
+    def load(self, filepath, source_config=None):
         """
         Load model from file.
 
         Args:
             filepath: Path to model file
+            source_config: Expected data preparation configuration, or None to skip this check
 
         Returns:
             True if successful, False otherwise
@@ -1957,6 +1960,10 @@ class LoadPredictor:
             saved_version = metadata.get("model_version", 0)
             if saved_version != MODEL_VERSION:
                 self.log("Warn: ML Predictor: Model version mismatch (saved={}, current={}), retraining from scratch".format(saved_version, MODEL_VERSION))
+                return False
+
+            if source_config is not None and metadata.get("source_config", {}) != source_config:
+                self.log("Warn: ML Predictor: Model data preparation mismatch, retraining from scratch")
                 return False
 
             # Check architecture compatibility

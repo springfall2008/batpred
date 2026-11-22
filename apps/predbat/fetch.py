@@ -451,9 +451,63 @@ class Fetch:
 
         return values
 
+    def get_load_filter_energy_sensors(self):
+        """Return unique appliance meters, excluding meters already filtered as car or iBoost energy."""
+
+        def entity_ids(key):
+            """Resolve an optional sensor or sensor list to canonical entity IDs."""
+            values = self.get_arg(key, None, indirect=False) or []
+            if isinstance(values, str):
+                values = [values]
+            if not isinstance(values, list):
+                return set()
+            return {value.strip().lower() for value in values if isinstance(value, str) and is_entity_id(value.strip())}
+
+        already_filtered = set()
+        if self.get_arg("car_charging_hold", True) and self.get_arg("car_energy_reported_load", True):
+            already_filtered.update(entity_ids("car_charging_energy"))
+        if self.get_arg("iboost_energy_subtract", True):
+            already_filtered.update(entity_ids("iboost_energy_today"))
+        return sorted(entity_ids("load_filter_energy") - already_filtered)
+
+    def fetch_load_filter_energy(self, days, now_utc):
+        """Fetch measured appliance energy without padding beyond each meter's available history."""
+        energy_data = {}
+        for entity_id in self.get_load_filter_energy_sensors():
+            history = self.minute_data_import_export(days, now_utc, entity_id, required_unit="kWh", pad=False, required=False)
+            if history:
+                energy_data[entity_id] = history
+        return energy_data
+
+    def get_metered_load_increment(self, data, index, step=1):
+        """Return a finite measured increment only when both ends of the interval are available."""
+        start = data.get(index + step)
+        end = data.get(index)
+        try:
+            start, end = float(start), float(end)
+        except (ValueError, TypeError):
+            return 0.0
+        if not math.isfinite(start) or not math.isfinite(end):
+            return 0.0
+        return max(0.0, end - start)
+
+    def subtract_metered_load(self, load_cumulative, energy_data, step=PREDICT_STEP):
+        """Remove measured appliance consumption from cumulative load for ML training."""
+        if not load_cumulative:
+            return {}
+        result = {}
+        total = 0.0
+        max_minute = (max(load_cumulative) // step) * step
+        for minute in range(max_minute, -step, -step):
+            load = self.get_metered_load_increment(load_cumulative, minute, step)
+            excluded = sum(self.get_metered_load_increment(data, minute, step) for data in energy_data.values())
+            total += max(0.0, load - excluded)
+            result[minute] = dp4(total)
+        return result
+
     def get_filtered_load_window(self, data, indices, step):
         """
-        Compute the car-charging/iBoost-filtered load for a single window given its list of backwards minute
+        Compute the car/iBoost/appliance-filtered load for a single window given its list of backwards minute
         indices. Returns (filtered_load, raw_load) for that one window (no base-load applied).
         """
         raw = 0.0
@@ -464,6 +518,8 @@ class Fetch:
                 subtract_energy += self.get_from_incrementing(self.car_charging_energy, idx)
             if self.iboost_energy_subtract and self.iboost_energy_today:
                 subtract_energy += self.get_from_incrementing(self.iboost_energy_today, idx)
+            for energy_data in self.load_filter_energy_data.values():
+                subtract_energy += self.get_metered_load_increment(energy_data, idx)
         load = max(0.0, raw - subtract_energy)
         if self.car_charging_hold and (not self.car_charging_energy) and (load >= (self.car_charging_threshold * step)):
             # Car charging hold - ignore car charging in this window based on the threshold
@@ -1718,6 +1774,9 @@ class Fetch:
 
         # Car charging hold - when enabled battery is held during car charging in simulation
         self.car_charging_energy = self.load_car_energy(self.now_utc)
+
+        # Exclude measured appliance consumption from the historical household baseline.
+        self.load_filter_energy_data = self.fetch_load_filter_energy(self.max_days_previous, self.now_utc)
 
         # Log current values
         self.log("Current data so far today: load {}kWh, import {}kWh, export {}kWh, PV {}kWh".format(dp2(self.load_minutes_now), dp2(self.import_today_now), dp2(self.export_today_now), dp2(self.pv_today_now)))

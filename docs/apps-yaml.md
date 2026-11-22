@@ -1476,6 +1476,28 @@ e.g.
 
 See [Load filtering warning in FAQ's](faq.md#i-see-repeated-log-messages-warn-found-1-periods-of-zero-load-with-power-data-filling-using-power-integration).
 
+### Metered appliance energy
+
+Use **load_filter_energy** to exclude measured appliance consumption from the household load baseline, independently of car charging or iBoost controls:
+
+```yaml
+  load_filter_energy:
+    - sensor.dishwasher_energy
+    - sensor.washing_machine_energy
+```
+
+Each sensor must be a cumulative energy counter, such as a lifetime or daily kWh meter. Energy units such as Wh are converted to kWh, and counter resets use the normal energy-history processing.
+Only include meters whose consumption is already included in **load_today**. Duplicate entity IDs, including meters already excluded by active car/iBoost filtering, are counted once.
+
+Filtering uses the measured time and energy, so manual starts and moved runs are handled too. A requested schedule does not prove consumption: cancelling a request or reaching its finish time never causes forecast kWh to be subtracted.
+Missing meter history is left unfiltered; Predbat does not substitute a scheduled or estimated appliance load.
+
+This applies to both historical forecasting and the built-in Load ML training data. Restart Predbat after changing the list; Load ML rebuilds saved training history and retrains models when the exclusion list changes.
+External load forecasts must apply their own exclusions.
+
+If an appliance is excluded from the baseline, provide its full future consumption through **load_forecast** or another forecast source. [Named additional loads](https://github.com/springfall2008/batpred/pull/3885) are being developed separately and can supply those future cycles too.
+When supplying only a delta beyond an existing baseline, leave that appliance in the baseline instead.
+
 ## iBoost energy
 
 - **iboost_energy_today** - Set to a sensor which tracks the amount of energy sent to your solar diverter, which can also be used to subtract from your historical load

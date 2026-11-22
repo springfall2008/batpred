@@ -150,7 +150,7 @@ class LoadMLComponent(ComponentBase):
 
         # Try to load existing model
         if self.model_filepath and os.path.exists(self.model_filepath):
-            load_success = self.predictor.load(self.model_filepath)
+            load_success = self.predictor.load(self.model_filepath, source_config=self.load_filter_source_config())
             if load_success:
                 self.log("ML Component: Loaded existing model")
                 # Check if model is still valid
@@ -316,6 +316,11 @@ class LoadMLComponent(ComponentBase):
         """True when iBoost/diverter energy is to be subtracted from load history, re-read so a switch change is picked up without a restart."""
         return bool(self.get_arg("iboost_energy_subtract", True) and self.get_arg("iboost_energy_today", default=None, indirect=False))
 
+    def load_filter_source_config(self):
+        """Identify the appliance exclusions used to prepare persisted training data and models."""
+        sensors = self.base.get_load_filter_energy_sensors() if self.get_arg("load_filter_energy", None, indirect=False) else []
+        return {"load_filter_energy": sensors} if sensors else {}
+
     async def _fetch_load_data(self):
         """
         Fetch and process load data from configured sensors.
@@ -348,6 +353,13 @@ class LoadMLComponent(ComponentBase):
                 # ever-growing cumulative series, inflating fill_load_from_power gap-fills.
                 load_power_data, load_minutes_age = self.base.minute_data_load(self.now_utc, "load_power", days_to_fetch, required_unit="W", load_scaling=1.0, interpolate=True, pad=False, clean_increment=False)
                 load_minutes = self.base.fill_load_from_power(load_minutes, load_power_data)
+
+            # Appliance exclusions use actual meter history, independently of any requested schedule.
+            if self.get_arg("load_filter_energy", None, indirect=False):
+                energy_data = self.base.fetch_load_filter_energy(days_to_fetch, self.now_utc)
+                if energy_data:
+                    self.log("ML Component: Applying metered appliance energy subtraction")
+                    load_minutes = self.base.subtract_metered_load(load_minutes, energy_data, step=PREDICT_STEP)
 
             # Subtract iBoost/diverter energy as the standard load forecast does (get_filtered_load_window),
             # whether or not Predbat controls the diverter. Done before the car step so the car threshold test
@@ -405,7 +417,7 @@ class LoadMLComponent(ComponentBase):
                     load_minutes_new[minute] = dp4(total_load_energy + load_delta)
                     total_load_energy += load_delta
 
-            # Get current cumulative load value (excludes car and iBoost) before converting to per-step
+            # Get current cumulative load value (excludes car, iBoost and appliances) before converting to per-step
             # Back to the real start of the day: the history is keyed by real minutes back from now (GH#5760)
             load_minutes_now = get_now_from_cumulative(load_minutes_new, self.minutes_since_day_start(), backwards=True)
 
@@ -897,6 +909,7 @@ class LoadMLComponent(ComponentBase):
                 "age_days": float(self.load_data_age_days),
                 "nan_sentinel": True,
                 "iboost_subtracted": self.iboost_subtract_active(),
+                "source_config": self.load_filter_source_config(),
             }
         )
 
@@ -947,6 +960,10 @@ class LoadMLComponent(ComponentBase):
                 iboost_subtracted = self.iboost_subtract_active()
                 if saved_iboost_subtracted != iboost_subtracted:
                     self.log("Warn: ML Component: Database iBoost subtraction mismatch (saved={}, current={}), discarding".format(saved_iboost_subtracted, iboost_subtracted))
+                    return
+
+                if metadata.get("source_config", {}) != self.load_filter_source_config():
+                    self.log("Warn: ML Component: Database appliance energy filtering mismatch, discarding")
                     return
 
                 saved_utc = datetime.fromisoformat(metadata["saved_utc"])
@@ -1081,7 +1098,7 @@ class LoadMLComponent(ComponentBase):
 
                 # Save model (fast - no lock needed)
                 if self.model_filepath:
-                    self.predictor.save(self.model_filepath)
+                    self.predictor.save(self.model_filepath, source_config=self.load_filter_source_config())
             else:
                 self.log("Warn: ML Component: Training failed")
 

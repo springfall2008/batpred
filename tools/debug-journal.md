@@ -576,6 +576,7 @@ Grep for the named symbol rather than trusting a line number. Each area lists du
 ### Excluded load (`fetch.py`, `web.py`)
 
 - `car_charging_energy` is a generic excluded-load list (any incrementing kWh sensor, heat pumps too), subtracted from load history and gated on `car_charging_hold`; `car_energy_reported_load` is the CT-clamp flag. "Double-counted load" needs these, not a new mechanism (GH#5445).
+- Appliance-filtering branch (`feat/metered-appliance-filtering`): `load_filter_energy` uses metered counters independently of schedules and car hold. An elapsed scheduled slot is not proof of consumption; never subtract its forecast kWh as actual usage. Check both interval endpoints so the first available counter value is not treated as energy used. Filter each historical day before weighting and before the car threshold heuristic. Both saved Load ML rows and trained models need the exclusion configuration checked on reload.
 
 ### Web, MCP and Chat (`web.py`, `web_mcp.py`, `chat.py`)
 
