@@ -2129,9 +2129,11 @@ or **Automatic fallback** to start on historical and require ML to earn selectio
 Change the mode directly in the accuracy panel on **Charts → LoadML / LoadMLPower**
 using **Apply mode**, or use **Config → LoadML forecast guard mode**. Both controls
 use the same saved select (`select.predbat_load_ml_guard_mode`, with your own prefix).
-Choices are **Off**, **Monitoring only**, and **Automatic fallback**. Changes are saved
+The control is exposed only when LoadML is enabled. Choices are **Off**, **Monitoring only**, and **Automatic fallback**. Changes are saved
 immediately and request a new plan without restarting PredBat. They do not change
 `load_ml_source`, the separate choice of whether ML may supply battery planning.
+The immediate save is intentional: applying Automatic and restarting or installing an
+update before the next planning cycle must not revert the mode to Monitoring only.
 
 The saved mode is restored after a restart. Mode changes require no YAML edits.
 
@@ -2155,6 +2157,10 @@ absolute energy error must be at least 20% lower than historical and improve by 
 3 kWh per 24 hours (1 kWh over eight hours) or 40% of actual load. A tie, one good day,
 or correct daily energy with poor eight-hour timing cannot earn selection. Initial
 qualification therefore takes at least three days of prospective 24-hour evidence.
+`load_ml_guard_error_kwh` and `load_ml_guard_error_percent` are qualification-only
+limits, not warning or fallback thresholds. The absolute limit scales with the window
+duration; meeting either the absolute or percentage limit satisfies that cap. The
+relative-improvement requirements must still be met on both horizons.
 
 After qualification, similar performance or one unusual day does not switch sources.
 Either horizon returns planning to historical after three independent windows where
@@ -2162,6 +2168,15 @@ ML's error exceeds 1.10 times historical error plus 0.25 kWh per 24 hours. This 
 catches forecasts beyond the previous severe-error limits. Missing or stale comparison evidence withdraws earned
 selection. Recovery requires the same clear wins on both horizons, using only forecasts
 issued after selection was withdrawn. Retraining alone cannot grant permission.
+
+Temporary missing, unavailable, initialising, stale or short forecast data selects
+Historical immediately in Automatic mode, but retains an already earned grant for up
+to two hours. Returning with valid data within that period does not require another
+three-day qualification. The outage timer survives restarts. A prolonged outage, a hard
+validation failure, changed load definitions, stale comparison evidence or demonstrated
+poor performance still withdraws permission. Grace never qualifies an unproven model.
+Historical planning receives its normal in-day adjustment when enabled; ML planning
+continues to omit that adjustment.
 
 ML keeps forecasting and being scored while historical supplies planning. Monitoring
 can collect qualifying evidence before `load_ml_source` is enabled. Every source change
@@ -2187,14 +2202,25 @@ when it is available. If guard evaluation fails, PredBat continues with its conf
 sources and reports that the guard is unavailable. Explicit `load_forecast_only` and
 separately configured `load_forecast` sources are preserved.
 
-Both scores use the unadjusted household forecast, before in-day, manual and dynamic load
+Both scores use the unadjusted household forecast, before in-day adjustment, manual scaling and dynamic load
 adjustments. Actuals come from the main load counter after its normal power/history fill,
 with the same measured EV and iBoost exclusions as the classic forecast. An EV outside
 the house-load measurement is not subtracted again. Missing counter coverage and
 threshold-inferred EV subtraction are not scored. This is not an independent meter audit:
 bad source readings or their existing gap filling can still affect measured actuals.
 
-Evidence is bounded and saved hourly through Storage, separately from the neural model
+The configured `base_load` minimum belongs to the Historical forecast. ML supplies its
+own forecast curve. Scores compare those configured source forecasts with genuinely
+measured consumption: the minimum is never added to actual readings. A deliberately
+conservative minimum can therefore increase Historical error at low demand; its value
+is included in the accuracy sensor's `base_load_w` attribute.
+
+When ML supplies planning, the extra Historical comparison is calculated only for an
+hourly snapshot or to establish availability. If Historical supplies the plan, it is
+built fresh each cycle and shared with the comparison. Between captures only the last
+availability result is retained, never a stale curve presented as a fresh prediction.
+
+Evidence is bounded and changed evidence is saved promptly through Storage, separately from the neural model
 and its history. Compatible evidence and fallback state survive restarts. Changing the
 load definition starts new guard evidence; no model or history file is deleted. Fresh
 measurement takes at least several days: there is no retrospective accuracy claim, and

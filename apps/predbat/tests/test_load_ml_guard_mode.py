@@ -172,6 +172,15 @@ class GuardModeControlTests(unittest.TestCase):
         self.assertEqual(self.base.get_arg("load_ml_guard_mode"), "auto")
         self.assertIn('name="select__solar_test_load_ml_guard_mode"', self.web.get_load_ml_accuracy_html())
 
+    def test_guard_control_is_enabled_only_for_loadml_installs(self):
+        """Ordinary LoadML users have the control; unrelated installations do not expose it."""
+        item = self.base.config_index["load_ml_guard_mode"]
+        self.assertTrue(self.base.user_config_item_enabled(item))
+        self.base.args["load_ml_enable"] = False
+        self.assertFalse(self.base.user_config_item_enabled(item))
+        self.base.args["load_ml_enable"] = True
+        self.assertTrue(self.base.user_config_item_enabled(item))
+
 
 def run_load_ml_guard_mode_tests(my_predbat):
     """Exercise the saved-mode workflow using Predbat's standard test fixture."""

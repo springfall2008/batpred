@@ -21,6 +21,8 @@ import math
 HORIZONS = (60, 480, 1440)
 RETENTION_MINUTES = 7 * 1440
 STORE_VERSION = 2
+AVAILABILITY_GRACE_MINUTES = 120
+TRANSIENT_FORECAST_PROBLEMS = ("ml_unavailable", "model_unavailable", "model_unknown", "model_not_initialized", "stale_or_short_forecast")
 
 
 def valid_energy(value):
@@ -59,6 +61,7 @@ class LoadForecastGuard:
         self.empty_reads = []
         self.last_save = None
         self.dirty = False
+        self.unavailable_since = None
 
     def restore(self, data, now):
         """Restore compatible, bounded evidence; malformed records never authorise ML."""
@@ -90,11 +93,34 @@ class LoadForecastGuard:
         self.trigger_horizon = data.get("trigger_horizon") if data.get("trigger_horizon") in (480, 1440) else None
         blocked_since = data.get("blocked_since")
         self.blocked_since = blocked_since if type(blocked_since) is int and blocked_since <= now else None
+        unavailable_since = data.get("unavailable_since")
+        self.unavailable_since = unavailable_since if type(unavailable_since) is int and unavailable_since <= now else None
+        if type(unavailable_since) is int and unavailable_since > now:
+            self.require_new_evidence(now)
         self.last_capture = max((r["start"] // 60 for r in self.records), default=None)
 
     def serialise(self):
         """Return JSON-safe evidence for the Storage component, separate from ML files."""
-        return {"version": STORE_VERSION, "fingerprint": self.fingerprint, "records": self.records, "fallback": self.fallback, "trigger_horizon": self.trigger_horizon, "blocked_since": self.blocked_since}
+        return {"version": STORE_VERSION, "fingerprint": self.fingerprint, "records": self.records, "fallback": self.fallback, "trigger_horizon": self.trigger_horizon, "blocked_since": self.blocked_since, "unavailable_since": self.unavailable_since}
+
+    def update_availability(self, now, available, problem="ml_unavailable"):
+        """Manage earned permission separately from the current forecast's usability."""
+        previous = self.unavailable_since
+        if available:
+            if previous is not None and (now < previous or now - previous >= AVAILABILITY_GRACE_MINUTES):
+                self.require_new_evidence(now)
+            self.unavailable_since = None
+        elif problem in TRANSIENT_FORECAST_PROBLEMS:
+            if previous is None or previous > now:
+                self.unavailable_since = now
+                if previous is not None:
+                    self.require_new_evidence(now)
+            if now - self.unavailable_since >= AVAILABILITY_GRACE_MINUTES:
+                self.require_new_evidence(now)
+        else:
+            self.unavailable_since = None
+            self.require_new_evidence(now)
+        self.dirty |= previous != self.unavailable_since
 
     def require_new_evidence(self, now):
         """Withdraw permission; forecasts issued before this event cannot earn it back."""

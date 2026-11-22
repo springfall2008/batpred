@@ -3159,7 +3159,7 @@ class Output:
             },
         )
 
-    def load_today_comparison(self, load_minutes, load_forecast, car_minutes, import_minutes, minutes_now, step=5, save=True):
+    def load_today_comparison(self, load_minutes, load_forecast, car_minutes, import_minutes, minutes_now, step=5, save=True, using_load_ml_forecast=None):
         """
         Compare predicted vs actual load
         """
@@ -3335,7 +3335,8 @@ class Output:
         yesterday_weight = self.inday_yesterday_weight(minutes_now)
 
         # Work out divergence
-        using_load_ml_forecast = self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False)
+        if using_load_ml_forecast is None:
+            using_load_ml_forecast = self.get_arg("load_ml_enable", False) and self.get_arg("load_ml_source", False)
         apply_inday_adjustment = self.calculate_inday_adjustment and (not using_load_ml_forecast)
         today_damped_factor = 1.0
         if not apply_inday_adjustment:

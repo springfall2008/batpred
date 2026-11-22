@@ -48,6 +48,7 @@ class GuardBase(Fetch):
         self.load_forecast_guard_selected = None
         self.load_ml_forecast_problem = "ml_unavailable"
         self.load_forecast_guard_classic = None
+        self.load_forecast_guard_classic_available = None
         self.load_forecast_guard_veto = False
         self.load_forecast_guard_failed = False
 
@@ -660,7 +661,7 @@ class LoadForecastGuardTests(unittest.TestCase):
         self.assertNotEqual(restarted.judge(now), "ml_earned")
 
     def test_unavailable_model_revokes_permission_and_replans(self):
-        """Leftover earned evidence cannot immediately re-enable a model that became unavailable."""
+        """A hard validation failure cannot reuse old earned permission."""
         base = GuardBase()
         base.args["load_ml_guard_mode"] = "auto"
         ml, classic = curve(20 / 1440), curve(24 / 1440)
@@ -668,11 +669,107 @@ class LoadForecastGuardTests(unittest.TestCase):
         now = int(base.now_utc.timestamp() // 60)
         base.load_forecast_guard.records = paired_evidence(now)
         self.assertTrue(base.update_load_forecast_guard(ml, classic)[0])
+        base.load_ml_forecast_problem = "invalid_forecast"
         use_ml, changed = base.update_load_forecast_guard({}, classic)
         self.assertFalse(use_ml)
         self.assertTrue(changed)
         self.assertTrue(base.load_forecast_guard.fallback)
         self.assertFalse(base.update_load_forecast_guard(ml, classic)[0])
+
+    def test_transient_outage_uses_historical_and_retains_permission_across_restart(self):
+        """A brief outage stops ML planning immediately without erasing its earned grant or records."""
+        base = GuardBase()
+        base.args["load_ml_guard_mode"] = "auto"
+        ml, classic = curve(20 / 1440), curve(24 / 1440)
+        base.update_load_forecast_guard(ml, classic)
+        now = int(base.now_utc.timestamp() // 60)
+        guard = base.load_forecast_guard
+        guard.records = paired_evidence(now)
+        self.assertTrue(base.update_load_forecast_guard(ml, classic)[0])
+        records = copy.deepcopy(guard.records)
+        use_ml, changed = base.update_load_forecast_guard({}, classic)
+        self.assertFalse(use_ml)
+        self.assertTrue(changed)
+        self.assertFalse(guard.fallback)
+        self.assertEqual(guard.unavailable_since, now)
+        saved = copy.deepcopy(guard.serialise())
+        restarted = GuardBase()
+        restarted.args.update(base.args)
+        restarted.now_utc += timedelta(minutes=30)
+        restarted.minutes_now = 30
+        restarted.components = Components(FakeStorage(saved))
+        self.assertTrue(restarted.update_load_forecast_guard(ml, classic)[0])
+        self.assertIsNone(restarted.load_forecast_guard.unavailable_since)
+        self.assertIsNone(restarted.load_forecast_guard.blocked_since)
+        for row in records:
+            self.assertIn(row, restarted.load_forecast_guard.records)
+
+    def test_outage_grace_expires_during_unavailability_or_on_late_recovery(self):
+        """Restarting or first checking after two hours cannot extend a transient grant indefinitely."""
+        now = 100000
+        for recovered in (False, True):
+            guard = LoadForecastGuard("house")
+            guard.records = paired_evidence(now)
+            self.assertEqual(guard.judge(now), "ml_earned")
+            guard.update_availability(now, False)
+            saved = copy.deepcopy(guard.serialise())
+            restarted = LoadForecastGuard("house")
+            restarted.restore(saved, now + 121)
+            restarted.update_availability(now + 121, recovered)
+            self.assertTrue(restarted.fallback)
+            self.assertIsNotNone(restarted.blocked_since)
+            self.assertNotEqual(restarted.judge(now + 121), "ml_earned")
+            self.assertCountEqual(restarted.records, guard.records)
+
+    def test_hard_failures_and_bad_accuracy_are_not_hidden_by_availability_grace(self):
+        """Malformed forecasts, invalid models and observed deterioration revoke permission immediately."""
+        now = 100000
+        for problem in ("invalid_forecast", "model_fallback_validation", "model_version_mismatch"):
+            guard = LoadForecastGuard("house")
+            guard.records = paired_evidence(now)
+            guard.judge(now)
+            guard.update_availability(now, False, problem)
+            self.assertTrue(guard.fallback)
+            self.assertIsNone(guard.unavailable_since)
+        guard = LoadForecastGuard("house")
+        guard.records = paired_evidence(now)
+        guard.judge(now)
+        guard.update_availability(now, False)
+        guard.records = paired_evidence(now, ml=30, classic=20, actual=20)
+        self.assertEqual(guard.judge(now), "ml_worse_than_classic")
+        self.assertTrue(guard.fallback)
+
+    def test_qualification_limits_do_not_force_selection_of_a_worse_baseline(self):
+        """Absolute caps gate initial permission; sustained relative performance controls withdrawal."""
+        now = 100000
+        guard = LoadForecastGuard("house")
+        guard.records = paired_evidence(now)
+        self.assertEqual(guard.judge(now), "ml_earned")
+        guard.records = paired_evidence(now, ml=30, classic=40, actual=20)
+        self.assertEqual(guard.judge(now, threshold_kwh=3, threshold_percent=40), "ml_earned")
+
+    def test_configured_base_floor_is_scored_as_forecast_not_measured_consumption(self):
+        """A conservative Historical minimum remains forecast error when measured usage is lower."""
+        base = GuardBase()
+        base.base_load = 1.0
+        base.load_forecast_history = False
+        base.days_previous, base.days_previous_weight = [1], [1]
+        base.load_minutes = {minute: 100 - minute * 0.001 for minute in range(4321)}
+        base.previous_days_modal_filter = Mock()
+        before = base.load_minutes.copy()
+        classic = base.classic_load_forecast_for_guard()
+        now = int(base.now_utc.timestamp() // 60)
+        actual = base.guard_actual_load(now - 60, 60)
+        self.assertAlmostEqual(actual, 0.06)
+        self.assertAlmostEqual(forecast_energy(classic, 0, 60), 1.0, places=3)
+        base.update_load_forecast_guard(curve(0.001), classic)
+        base.load_forecast_guard.records = [{"start": now - 60, "duration": 60, "ml": 0.06, "classic": 1.0, "actual": None}]
+        base.update_load_forecast_guard(curve(0.001), classic)
+        scores = base.load_forecast_guard.scores()["1h"]
+        self.assertEqual(scores["ml_mae_kwh"], 0)
+        self.assertEqual(scores["classic_mae_kwh"], 0.94)
+        self.assertEqual(base.load_minutes, before)
+        self.assertEqual(base.dashboard["sensor.predbat_load_ml_accuracy"]["attributes"]["base_load_w"], 1000)
 
     def test_clock_rollback_cannot_retain_earned_permission(self):
         """A backwards clock jump removes future observations and restarts qualification."""

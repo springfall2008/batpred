@@ -2061,7 +2061,7 @@ class Fetch:
 
         # Load today vs actual
         if self.load_minutes:
-            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now, save=save)
+            self.load_inday_adjustment = self.load_today_comparison(self.load_minutes, self.load_forecast, self.car_charging_energy, self.import_today, self.minutes_now, save=save, using_load_ml_forecast=bool(load_ml_forecast))
         else:
             self.load_inday_adjustment = 1.0
 
@@ -4474,8 +4474,7 @@ class Fetch:
         """Observe both forecasts; keep the configured plan inputs if the guard fails."""
         try:
             observed_ml = self.fetch_ml_load_forecast(self.now_utc, save=False, validate_for_guard=True)
-            classic = self.classic_load_forecast_for_guard()
-            use_ml, changed = self.update_load_forecast_guard(observed_ml, classic, planning_ml=bool(selected_ml))
+            use_ml, changed = self.update_load_forecast_guard(observed_ml, planning_ml=bool(selected_ml))
             if not selected_ml or use_ml:
                 self.load_forecast_guard_failed = False
                 return selected_ml, changed
@@ -4536,7 +4535,7 @@ class Fetch:
             total += load
         return total
 
-    def update_load_forecast_guard(self, ml_forecast, classic_forecast, planning_ml=None):
+    def update_load_forecast_guard(self, ml_forecast, classic_forecast=None, planning_ml=None):
         """Record paired forecasts, publish real-world scores and optionally select classic load."""
         import hashlib
         import json
@@ -4557,6 +4556,7 @@ class Fetch:
         guard = self.load_forecast_guard
         if guard is None or guard.fingerprint != fingerprint:
             guard = self.load_forecast_guard = LoadForecastGuard(fingerprint)
+            self.load_forecast_guard_classic_available = None
         storage = self.components.get_component("storage") if self.components else None
         if storage and not guard.loaded:
             try:
@@ -4574,8 +4574,6 @@ class Fetch:
             except Exception as exc:
                 self.log("Warn: Load forecast accuracy: could not read evidence: {}".format(exc))
         guard.advance(now, self.guard_actual_load)
-        if ml_forecast and classic_forecast:
-            guard.capture(now, self.minutes_now, ml_forecast, classic_forecast)
 
         def setting(name, default, low, high):
             """Read bounded numeric thresholds without allowing invalid YAML to stop a plan."""
@@ -4585,13 +4583,23 @@ class Fetch:
             except (TypeError, ValueError):
                 return default
 
-        reason = guard.judge(now, int(setting("load_ml_guard_min_days", 3, 2, 5)), setting("load_ml_guard_error_kwh", 3.0, 0.1, 100), setting("load_ml_guard_error_percent", 40.0, 1, 1000))
         available = bool(ml_forecast)
+        guard.update_availability(now, available, self.load_ml_forecast_problem)
+        reason = guard.judge(now, int(setting("load_ml_guard_min_days", 3, 2, 5)), setting("load_ml_guard_error_kwh", 3.0, 0.1, 100), setting("load_ml_guard_error_percent", 40.0, 1, 1000))
         if not available:
-            guard.require_new_evidence(now)
             reason = self.load_ml_forecast_problem
         if planning_ml is None:
             planning_ml = available
+        if classic_forecast is None:
+            capture_due = available and guard.last_capture != now // 60
+            needs_historical = not planning_ml or (mode == "auto" and (guard.fallback or not available))
+            if capture_due or needs_historical or self.load_forecast_guard_classic_available is None:
+                classic_forecast = self.classic_load_forecast_for_guard()
+                self.load_forecast_guard_classic_available = bool(classic_forecast)
+            else:
+                classic_forecast = self.load_forecast_guard_classic_available
+        if ml_forecast and isinstance(classic_forecast, dict) and classic_forecast:
+            guard.capture(now, self.minutes_now, ml_forecast, classic_forecast)
         requested = self.get_arg("load_ml_source", False)
         external_only = self.get_arg("load_forecast_only", False)
         # Historical is ineligible with an explicit external-only configuration.
@@ -4630,6 +4638,8 @@ class Fetch:
                 "fallback_horizon_hours": guard.trigger_horizon // 60 if guard.trigger_horizon else None,
                 "scores": guard.scores(),
                 "pending_windows": sum(r["actual"] is None for r in guard.records),
+                "permission_retained_during_outage": not available and not guard.fallback,
+                "base_load_w": self.base_load * 1000,
             },
             app="load_ml",
         )

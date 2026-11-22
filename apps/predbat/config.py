@@ -1340,6 +1340,7 @@ CONFIG_ITEMS = [
     {
         "name": "load_ml_guard_mode",
         "friendly_name": "LoadML forecast guard mode",
+        "enable": "load_ml_enable",
         "type": "select",
         "options": ["off", "monitor", "auto"],
         "option_labels": {"off": "Off", "monitor": "Monitoring only", "auto": "Automatic fallback"},
@@ -3121,8 +3122,8 @@ APPS_SCHEMA = {
     "load_ml_enable": {"type": "boolean"},
     "load_ml_guard_mode": {"type": "string"},
     "load_ml_guard_min_days": {"type": "integer", "min": 2, "max": 5},
-    "load_ml_guard_error_kwh": {"type": "float", "min": 0.1, "max": 100},
-    "load_ml_guard_error_percent": {"type": "float", "min": 1, "max": 1000},
+    "load_ml_guard_error_kwh": {"type": "float", "min": 0.1, "max": 100, "description": "Qualification-only absolute error limit per 24 hours; does not set the relative fallback threshold"},
+    "load_ml_guard_error_percent": {"type": "float", "min": 1, "max": 1000, "description": "Qualification-only percentage error limit; does not set the relative fallback threshold"},
     "load_ml_guard_notify": {"type": "boolean"},
     "load_ml_retrain_interval_hours": {"type": "integer", "min": 1, "max": 48},
     "gateway_device_id": {"type": "string", "empty": False},

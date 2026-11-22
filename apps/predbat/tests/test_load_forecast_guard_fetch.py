@@ -165,6 +165,51 @@ class GuardFetchTests(unittest.TestCase):
         self.assertEqual(len(self.base.load_forecast_array), 2)
         self.assertAlmostEqual(self.future_energy(), 0.78, places=3)
 
+    def test_monitoring_counterfactual_is_hourly_and_never_reused_as_a_new_snapshot(self):
+        """ML planning does no extra historical calculation between actual hourly captures."""
+        self.configure(mode="monitor")
+        with patch.object(self.base, "compute_load_forecast_history", wraps=self.base.compute_load_forecast_history) as classic:
+            self.base.fetch_sensor_data(save=True)
+            first_count = len(self.base.load_forecast_guard.records)
+            self.assertEqual(classic.call_count, 1)
+            self.base.now_utc += timedelta(minutes=5)
+            self.base.minutes_now += 5
+            self.configure(mode="monitor")
+            self.base.fetch_sensor_data(save=True)
+            self.assertEqual(classic.call_count, 1)
+            self.assertIsNone(self.base.load_forecast_guard_classic)
+            self.assertEqual(len(self.base.load_forecast_guard.records), first_count)
+            self.base.now_utc += timedelta(hours=1)
+            self.base.minutes_now += 60
+            self.data = {m: 200 - m * 0.02 for m in range(7201)}
+            self.configure(mode="monitor")
+            self.base.fetch_sensor_data(save=True)
+            self.assertEqual(classic.call_count, 2)
+            newest = max(self.base.load_forecast_guard.records, key=lambda row: row["start"])
+            self.assertEqual(newest["start"], int(self.base.now_utc.timestamp() // 60))
+            self.assertAlmostEqual(newest["classic"], newest["duration"] * 0.02, places=3)
+
+    def test_historical_fallback_uses_normal_inday_adjustment(self):
+        """The real fetch path adjusts Historical after a veto and disables adjustment for ML."""
+        original_history = self.base.get_history_wrapper
+
+        def history(*args, **kwargs):
+            """Supply a known yesterday factor without changing any other input history."""
+            if kwargs.get("entity_id") == self.base.prefix + ".load_inday_adjustment":
+                return [[{"state": "150", "last_updated": (self.base.now_utc - timedelta(days=2)).isoformat()}, {"state": "150", "last_updated": self.base.now_utc.isoformat()}]]
+            return original_history(*args, **kwargs)
+
+        self.base.expose_config("calculate_inday_adjustment", True)
+        with patch.object(self.base, "get_history_wrapper", side_effect=history), patch.object(self.base, "inday_yesterday_weight", return_value=1):
+            self.configure()
+            self.base.fetch_sensor_data(save=True)
+            self.assertEqual(self.base.load_forecast_guard_selected, "classic")
+            self.assertAlmostEqual(self.base.load_inday_adjustment, 1.5)
+            self.configure(mode="monitor")
+            self.base.fetch_sensor_data(save=True)
+            self.assertEqual(self.base.load_forecast_guard_selected, "ml")
+            self.assertEqual(self.base.load_inday_adjustment, 1.0)
+
 
 def run_load_forecast_guard_fetch_tests(my_predbat):
     """Run full fetch integration checks through the normal shared-fixture registry."""
