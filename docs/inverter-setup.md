@@ -812,7 +812,7 @@ predbat_charge:
 
 predbat_freeze:
   alias: Predbat - freeze battery
-  description: "Used for both freeze charge and freeze export. Freeze/hold charge: auto with a solar surplus, otherwise battery_standby at 0 W (hard hold). Freeze exporting: discharge_pv at 0 W with a surplus, otherwise auto."
+  description: "Used for both freeze charge and freeze export. Freeze/hold charge: auto with a solar surplus, otherwise battery_standby at 0 W (hard hold). Freeze exporting (including Demand [Freeze exporting]): discharge_pv at 0 W with a surplus, otherwise auto."
   mode: queued
   max: 5
   variables:
@@ -820,7 +820,7 @@ predbat_freeze:
     surplus: "{{ ([pv - states('sensor.house_consumption') | float(0), 0] | max) if pv >= 300 else 0 }}"
     cur: "{{ states('select.goodwe_ems_mode') }}"
     target_mode: >-
-      {% if states('predbat.status').startswith('Freeze exporting') %}
+      {% if 'Freeze exporting' in states('predbat.status') %}
         {{ 'discharge_pv' if surplus > (200 if cur == 'discharge_pv' else 500) and states('sensor.battery_state_of_charge') | float(0) < 95 else 'auto' }}
       {% else %}
         {{ 'auto' if surplus > (200 if cur == 'auto' else 500) else 'battery_standby' }}
@@ -1007,7 +1007,7 @@ actions:
       - alias: Freeze or hold - keep the mode following the solar surplus
         conditions:
           - condition: template
-            value_template: "{{ status.startswith('Freeze') or status.startswith('Hold') }}"
+            value_template: "{{ 'Freeze' in status or 'Hold for car' in status or 'Hold for iBoost' in status or status.startswith('Hold charging') }}"
         sequence:
           - action: script.predbat_freeze
 ```
@@ -1031,6 +1031,7 @@ Notes on GoodWe EMS behaviour (tested by dmacwalter day and night, and retested 
 - GoodWe isn't a feed-in-first inverter: in freeze export, PV above the house load plus the export limit is clipped rather than charged into the battery
 - Predbat doesn't set the battery reserve, and setting the depth of discharge above the current SoC doesn't make the inverter charge from the grid
 - The tested inverter cut out on heat at about 66 °C radiator temperature. Lowering `number.goodwe_grid_export_limit` as it heats up, plus a fan, stopped that
+- Predbat shows freeze export in `predbat.status` as "Freeze exporting" during an export slot, but as "Demand [Freeze exporting]" when **switch.predbat_set_freeze_export_during_demand** is on. During demand Predbat doesn't call the freeze export service, it only sets the charge rate to 0, so the scripts and the follow-through look for "Freeze exporting" anywhere in the status rather than at the start, and the follow-through is what applies freeze export during demand
 - Put service keys at the top level of each Predbat service entry, not under a nested `data:` block: Predbat passes a nested block to Home Assistant as a key called `data`, which it rejects with "not a valid option at 'data'"
 - Quote every `HH:MM:SS` time in `apps.yaml` (e.g. `"11:00:00"`). Unquoted, YAML reads it as a number of seconds and Predbat fails with `'int' object has no attribute 'count'`
 - Multiple GoodWe inverters in parallel haven't been tested with EMS control
