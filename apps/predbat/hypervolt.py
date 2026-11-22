@@ -29,7 +29,7 @@ import math
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Optional, Union
 
 import aiohttp
 
@@ -139,11 +139,27 @@ def _to_float(value):
 
 
 def _session_key(value):
-    """A session id in one form, so 5, 5.0 and "5" are the same session: a whole number as an int, anything else as text."""
+    """
+    A session id in one form, so 5, 5.0 and "5" are the same session: an int as it is, digit text as an int, another
+    number as an int when whole (a float when not), anything else as its text. None for no session id: None, a bool,
+    empty text, "null" or "none".
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if text == "" or text.lower() in ("null", "none"):
+        return None
+    if text.lstrip("+-").isdigit():
+        try:
+            return int(text)
+        except ValueError:
+            pass  # e.g. "+-5" or a superscript digit: not a whole number after all
     number = _to_float(value)
-    if number is not None and number.is_integer():
-        return int(number)
-    return str(value)
+    if number is not None:
+        return int(number) if number.is_integer() else number
+    return text
 
 
 @dataclass
@@ -159,7 +175,7 @@ class HypervoltCharger:
     charging: bool = False
     pilot_status: Optional[str] = None
     power_w: float = 0.0
-    session_id: Optional[object] = None  # as _session_key() gives it
+    session_id: Optional[Union[int, float, str]] = None  # as _session_key() gives it
     # None while unknown: at start-up, and from the first session id seen since start-up until a message carries its watt_hours,
     # so a restart mid-session never publishes 0 (#6285)
     session_energy_kwh: Optional[float] = None
@@ -169,6 +185,10 @@ class HypervoltCharger:
     lock_state: Optional[str] = None
     # Epoch seconds of the last message from either socket
     last_message: float = 0.0
+
+    def __post_init__(self):
+        """Hold a session id given at construction in the form apply_session() compares."""
+        self.session_id = _session_key(self.session_id)
 
 
 def apply_snapshot(charger, items):
@@ -214,8 +234,7 @@ def apply_session(charger, result):
             # true_milli_amps and voltage already show ~30 A at 231 V, so current x voltage wins then
             charger.power_w = measured
         # A message with neither leaves the last power alone
-    session = result.get("session")
-    session = _session_key(session) if session is not None else None
+    session = _session_key(result.get("session"))
     if session is not None and session != charger.session_id:
         # A new session: its energy starts again from whatever this message says.
         # The first session id seen since start-up may be a session already part-way through, so its energy is unknown until watt_hours arrives,

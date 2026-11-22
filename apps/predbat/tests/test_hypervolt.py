@@ -47,6 +47,7 @@ from hypervolt import (
     is_stale,
     max_current_command,
     plugged_state,
+    _session_key,
     release_command,
     status_text,
 )
@@ -682,6 +683,16 @@ def test_session_energy_v3_without_session_id():
     apply_session(v2, {"charging": True, "watt_hours": 4000})
     assert v2.session_energy_kwh == 5.0
     print("  ✓ Session energy on V3 without a session id")
+
+
+def test_session_key():
+    """Session ids are held in one form: 5, 5.0 and "5" are one session, a large int keeps its value, and empty or null text is no id."""
+    for value, expected in ((5, 5), (5.0, 5), ("5", 5), ("5.0", 5), (" 7 ", 7), (5.5, 5.5), ("5.50", 5.5), (2**53 + 1, 2**53 + 1), (str(2**53 + 1), 2**53 + 1), ("abc", "abc"), ("+-5", "+-5")):
+        assert _session_key(value) == expected and type(_session_key(value)) is type(expected), (value, _session_key(value))
+    for value in (None, True, "", "null", "None"):
+        assert _session_key(value) is None, (value, _session_key(value))
+    assert HypervoltCharger(V2_ID, session_id="5").session_id == 5
+    print("  ✓ Session ids held in one form")
 
 
 def test_session_energy_unknown_after_restart():
@@ -2401,6 +2412,7 @@ def test_hypervolt(my_predbat=None):
     test_apply_session_power()
     test_session_energy_holds_and_resets()
     test_session_energy_v3_without_session_id()
+    test_session_key()
     test_session_energy_unknown_after_restart()
     test_restart_history_counts_session_once()
     test_publishes_unavailable_session_energy_until_known()
