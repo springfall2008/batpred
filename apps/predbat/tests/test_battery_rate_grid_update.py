@@ -424,6 +424,15 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         failed |= _check("t4b an appended key field is compared", not my_predbat.rate_grid_scan_key_matches(key + ["a"], key + ["b"]))
         failed |= _check("t4b a malformed stored key is no match", not my_predbat.rate_grid_scan_key_matches(key, ["x"] + key[1:]))
         failed |= _check("t4b a short stored key is no match", not my_predbat.rate_grid_scan_key_matches(key[:7], key[:7]))
+        # A stored key is checked once where it is read: a damaged one is no key, so the scan reads the full window
+        failed |= _check("t4b a valid stored key is kept", my_predbat.rate_grid_stored_key(list(key)) == key)
+        for name, position, value in (("NaN rate", 0, float("nan")), ("bool history days", 4, True), ("bool version", 5, True), ("text loss", 2, "x"), ("number hash", 6, 1)):
+            damaged = list(key)
+            damaged[position] = value
+            failed |= _check("t4b a stored key with a {} is no key".format(name), my_predbat.rate_grid_stored_key(damaged) is None, damaged)
+        failed |= _check("t4b a stored key of another length is no key", my_predbat.rate_grid_stored_key(key[:7]) is None)
+        days, _ = restart(1, payload=dict(saved, scan_key=[float("nan")] + saved["scan_key"][1:]))
+        failed |= _check("t4b a restart with a damaged stored key reads the full window", days == [28], days)
         days, _ = restart(1, set_arg("export_limit", 3000))
         failed |= _check("t4b export_limit is not part of the charge key", days == [2], days)
         days, _ = restart(1, set_arg("car_charging_battery_size", 77))

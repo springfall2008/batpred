@@ -4267,7 +4267,7 @@ class Fetch:
             # store could not be read), so a scan whose key differs re-measures the stored days. The last success only when
             # cleaning dropped none of the store's own samples (an empty store is fine: a direction with no full-rate evidence
             # yet still scanned successfully); whether the key still matches is decided when the scan runs
-            stored_key = data.get("scan_key")
+            stored_key = self.rate_grid_stored_key(data.get("scan_key"))
             measured_key = self.battery_rate_grid_scan_basis.get(kind)
             if current and stored_samples and measured_key is not None and not (isinstance(stored_key, list) and self.rate_grid_scan_key_matches(measured_key, stored_key)):
                 # Days scanned while the store could not be read, under another key, are now mixed with the stored ones: no key
@@ -4305,10 +4305,11 @@ class Fetch:
                 return
             self.battery_rate_grid_empty_scan_live[kind] = True
             restored = self.rate_grid_stored_time(data.get("last_success"))
-            if restored is not None and isinstance(data.get("scan_key"), list):
+            record_key = self.rate_grid_stored_key(data.get("scan_key"))
+            if restored is not None and record_key is not None:
                 self.battery_rate_grid_last_success[kind] = restored
                 if self.battery_rate_grid_scan_basis.get(kind) is None:
-                    self.battery_rate_grid_scan_basis[kind] = data["scan_key"]
+                    self.battery_rate_grid_scan_basis[kind] = record_key
 
         def save_empty_scan(retire=False):
             """
@@ -4564,6 +4565,28 @@ class Fetch:
         if not isinstance(stored[4], int) or not isinstance(current[4], int) or stored[4] < current[4]:
             return False
         return all(stored[index] == current[index] for index in range(len(current)) if index not in tolerances and index != 4)
+
+    @staticmethod
+    def rate_grid_stored_key(key):
+        """
+        A rate_grid_scan_key() read back from storage, or None when it is not one (an older layout, or a damaged file): eight
+        positions, finite numbers where the key holds numbers (None allowed for the size and the export cap), whole numbers
+        for battery_rate_grid_history_days and the scan version, and text for the settings hash.
+        """
+
+        def number(value, allow_none=False):
+            """A finite number that is not a bool (or None, where allowed)."""
+            if value is None:
+                return allow_none
+            return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+        if not isinstance(key, list) or len(key) != 8:
+            return None
+        rated, size, loss, scaling, history_days, version, settings, export_cap = key
+        whole = all(isinstance(value, int) and not isinstance(value, bool) for value in (history_days, version))
+        if number(rated) and number(size, True) and number(loss) and number(scaling) and whole and isinstance(settings, str) and number(export_cap, True):
+            return key
+        return None
 
     def rate_grid_stored_time(self, text):
         """A stored rate grid scan time, or None when it is missing, malformed or ahead of the clock."""
