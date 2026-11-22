@@ -149,6 +149,85 @@ def _record_pass_order(my_predbat):
     return order, restore
 
 
+class _RecordingLimits(list):
+    """An export_limits_best that logs every element write, so a test can see when the plan changes"""
+
+    def __init__(self, values, events):
+        super().__init__(values)
+        self.events = events
+
+    def __setitem__(self, index, value):
+        self.events.append(("set", index))
+        super().__setitem__(index, value)
+
+
+def _test_partner_swaps_batched_first_pass_kept(my_predbat):
+    """A target's partner swaps are priced as one batch, so the plan must not change while trials are
+    queued, each trial must change only its partner and the target, and of several passing swaps the
+    earliest partner must be kept - the swap a one-at-a-time search stopped at.
+
+    Four equally priced windows exporting in the first two: for target 3 both partners 0 and 1 pass,
+    and partner 0 must be the one applied."""
+    failed = False
+    now = my_predbat.minutes_now
+    export_window_best = [{"start": now + 30 * n, "end": now + 30 * n + 30, "average": 15.0} for n in range(4)]
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_FULL, EXPORT_FULL, EXPORT_OFF, EXPORT_OFF])
+
+    events = []
+    my_predbat.export_limits_best = _RecordingLimits(my_predbat.export_limits_best, events)
+    real_launch = my_predbat.launch_run_prediction_metric
+    real_get = my_predbat.get_run_prediction_metric
+
+    def launch(charge_limit, charge_window, export_window, export_limits, end_record):
+        """Record which windows this trial changes relative to the plan as it stands"""
+        changed = [n for n in range(len(export_limits)) if export_limits[n] != my_predbat.export_limits_best[n] or export_window[n]["start"] != my_predbat.export_window_best[n]["start"]]
+        events.append(("launch", changed))
+        return real_launch(charge_limit, charge_window, export_window, export_limits, end_record)
+
+    def get(handles):
+        events.append(("get",))
+        return real_get(handles)
+
+    my_predbat.launch_run_prediction_metric = launch
+    my_predbat.get_run_prediction_metric = get
+    try:
+        my_predbat.optimise_swap_export(0, len(export_window_best))
+    finally:
+        del my_predbat.launch_run_prediction_metric
+        del my_predbat.get_run_prediction_metric
+        my_predbat.export_limits_best = list(my_predbat.export_limits_best)
+
+    # The plan may only change once a batch has been read
+    queued = False
+    for event in events:
+        if event[0] == "launch":
+            queued = True
+        elif event[0] == "get":
+            queued = False
+        elif queued:
+            print("ERROR: the plan changed (window {}) while a batch of swap trials was still queued, events {}".format(event[1], events))
+            failed = True
+            break
+
+    launches = [event[1] for event in events if event[0] == "launch"]
+    if launches[:2] != [[0, 3], [1, 3]]:
+        print("ERROR: target 3 should queue partners 0 and 1 as one batch, each changing only itself and the target, got {}".format(launches))
+        failed = True
+    for changed in launches:
+        if len(changed) != 2:
+            print("ERROR: a swap trial should change exactly two windows, got {}".format(changed))
+            failed = True
+
+    sets = [event[1] for event in events if event[0] == "set"]
+    if sets[:2] != [0, 3]:
+        print("ERROR: the first kept swap should be partner 0 into target 3 (the earliest passing partner), got writes {}".format(sets))
+        failed = True
+    if [export_mode_of(limit) for limit in my_predbat.export_limits_best] != [EXPORT_MODE_IDLE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_TARGET]:
+        print("ERROR: both exports should end up deferred to windows 2 and 3, got {}".format(my_predbat.export_limits_best))
+        failed = True
+    return failed
+
+
 def run_optimise_swap_export_tests(my_predbat):
     """Run the pairwise export-window swap optimisation tests and return True on failure."""
     print("**** Running Optimise swap export tests ****")
@@ -221,6 +300,11 @@ def run_optimise_swap_export_tests(my_predbat):
     if middle["start"] < now + 30:
         print("ERROR: partial combine grew window 1 back to {} into the manual slot ending {}, windows {}".format(middle["start"], now + 30, my_predbat.export_window_best))
         failed = True
+
+    # ---------------------------------------------------------------------------------------------
+    # Batched partners: priced against an unchanged plan, earliest passing partner kept
+    # ---------------------------------------------------------------------------------------------
+    failed |= _test_partner_swaps_batched_first_pass_kept(my_predbat)
 
     # ---------------------------------------------------------------------------------------------
     # Ordering regression (#4478): the export swap must run after every pass that can enable an
