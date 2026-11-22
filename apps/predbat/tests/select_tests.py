@@ -27,9 +27,13 @@ def keyword_matches(keyword, name, func):
     """Return True if -k keyword selects the test registered as name with function func.
 
     Matches when the keyword appears in the registry name or the function name, or appears in the
-    registry name once a leading "test_" is taken off the keyword.
+    registry name once a leading "test_" is taken off the keyword. A keyword of just "test_" matches
+    nothing: it is in nearly every function name, so it would otherwise run almost the whole suite.
     """
-    return keyword in name or keyword in func.__name__ or _strip_test_prefix(keyword) in name
+    stripped = _strip_test_prefix(keyword)
+    if not stripped:
+        return False
+    return keyword in name or keyword in func.__name__ or stripped in name
 
 
 def name_matches(test_name, name, func):

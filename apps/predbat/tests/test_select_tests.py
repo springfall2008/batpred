@@ -56,6 +56,7 @@ def test_select_tests(my_predbat):
     check("-k end_to_end matches the function name", _names(select_by_keyword(REGISTRY, "end_to_end")), ["currency_icon_e2e"])
     check("-k octopus matches the registry name", _names(select_by_keyword(REGISTRY, "octopus")), ["octopus_url"])
     check("-k nothing_like_this matches nothing", _names(select_by_keyword(REGISTRY, "nothing_like_this")), [])
+    check("-k test_ on its own matches nothing, rather than every test", _names(select_by_keyword(REGISTRY, "test_")), [])
     check("keyword_matches is a substring match", keyword_matches("lookup", "currency_icon_lookup", REGISTRY[1][1]), True)
 
     # --test
@@ -77,6 +78,8 @@ def test_select_tests(my_predbat):
     check("choose_tests returns a copy, so shuffling it leaves the registry alone", entries is REGISTRY, False)
     entries, error = choose_tests(REGISTRY, keyword="nothing_like_this")
     check("choose_tests -k with no match is an error", (entries, error), ([], "ERROR: No tests found matching keyword 'nothing_like_this'"))
+    entries, error = choose_tests(REGISTRY, keyword="test_")
+    check("choose_tests -k test_ is an error, not the whole suite", (entries, error), ([], "ERROR: No tests found matching keyword 'test_'"))
     entries, error = choose_tests(REGISTRY, test_names=["currency_icon_e2e", "no_such_test"])
     check("choose_tests --test with an unknown name is an error", (entries, error), ([], "ERROR: Test 'no_such_test' not found. Use --list to see available tests."))
 
