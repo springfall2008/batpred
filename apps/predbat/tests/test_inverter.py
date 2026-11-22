@@ -244,8 +244,9 @@ def test_solis_energy_control_missing_warnings(my_predbat, ha):
     nothing. On GS the charge and discharge enables warn the same way, and eco says nothing (#5857).
     """
     failed = False
-    print("Test: solis_fb00_missing_switch_warnings")
+    print("Test: solis_energy_control_missing_warnings")
     saved_args = copy.deepcopy(my_predbat.args)
+    saved_charge_limit = ha.dummy_items.get("number.charge_limit")
     saved_now = my_predbat.now_utc
     prefix = "energy_control_switch is not set in apps.yaml, so "
     for inverter_type, steps, expected in (
@@ -294,8 +295,12 @@ def test_solis_energy_control_missing_warnings(my_predbat, ha):
         missing = [msg for msg in log_messages if prefix in msg]
         want = ["{}: Inverter 0 {}{}".format(level, prefix, text) for level, text in expected]
         if missing != want:
-            print("ERROR: solis_missing_switch_warnings {}: expected {} got {}".format(inverter_type, want, missing))
+            print("ERROR: solis_energy_control_missing_warnings {}: expected {} got {}".format(inverter_type, want, missing))
             failed = True
+    if saved_charge_limit is None:
+        ha.dummy_items.pop("number.charge_limit", None)
+    else:
+        ha.dummy_items["number.charge_limit"] = saved_charge_limit
     return failed
 
 

@@ -55,7 +55,7 @@ TIME_FORMAT_HMS = "%H:%M:%S"
 # What a missing energy_control_switch stops Predbat enforcing on a Solis, for write_solis_energy_control() to warn about (#5857)
 SOLIS_MISSING_SWITCH_WARN_MINUTES = 60
 SOLIS_MISSING_SWITCH_CHARGE = "Predbat cannot make sure the inverter allows grid charging"
-SOLIS_MISSING_SWITCH_DISCHARGE = "Predbat cannot enable timed discharge, so a forced export cannot happen"
+SOLIS_MISSING_SWITCH_DISCHARGE = "Predbat cannot set timed discharge, so a forced export or a discharge hold cannot be enforced"
 SOLIS_MISSING_SWITCH_HOLD = "a freeze or hold cannot be enforced: outside a Battery Reserve mode the battery keeps discharging, and where Predbat raises the reserve with grid charging allowed the inverter imports from the grid to reach it"
 
 # Sentinel for "this side has committed nothing yet", distinct from any real commit key a caller
