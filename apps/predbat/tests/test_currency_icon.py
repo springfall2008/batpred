@@ -204,8 +204,8 @@ def test_currency_icon_end_to_end(my_predbat):
     """
     With currency_symbols set to euro in apps.yaml, the icon reaches HA through Predbat's own start-up and
     output code, with nothing in the test applying it: the money input_numbers get mdi:currency-eur when
-    reset() and load_user_config() publish them, and an output money sensor (predbat.cost_today) and
-    Predheat's cost_today use the same icon. Reverting the wiring in reset(), or any of those output
+    reset() and load_user_config() publish them, and an output money sensor (predbat.cost_today),
+    Predheat's cost_today and its predicted cost sensors use the same icon. Reverting the wiring in reset(), or any of those output
     icons back to mdi:currency-usd, fails this test.
     """
     print("**** test_currency_icon_end_to_end ****")
@@ -252,6 +252,17 @@ def test_currency_icon_end_to_end(my_predbat):
     assert attributes.get("icon") == "mdi:currency-eur", "Predheat cost_today icon should be mdi:currency-eur, got {!r}".format(attributes.get("icon"))
     assert attributes.get("unit_of_measurement") == "c", "Predheat cost_today unit should be c, got {!r}".format(attributes.get("unit_of_measurement"))
     print("✓ Predheat cost_today published with the euro icon and minor unit")
+
+    # Predheat's predicted cost sensors from run_simulation()
+    from tests.test_predheat import BASE_TEMP, _make_simulation
+
+    simulation = _make_simulation(predbat, [])
+    simulation.run_simulation(BASE_TEMP, True)
+    for suffix in ["cost", "cost_h1", "cost_h2", "cost_h8"]:
+        attributes = simulation.published.get(simulation.prefix + "." + suffix, {})
+        assert attributes.get("icon") == "mdi:currency-eur", "Predheat {} icon should be mdi:currency-eur, got {!r}".format(suffix, attributes.get("icon"))
+        assert attributes.get("unit_of_measurement") == "c", "Predheat {} unit should be c, got {!r}".format(suffix, attributes.get("unit_of_measurement"))
+    print("✓ Predheat cost, cost_h1, cost_h2 and cost_h8 published with the euro icon and minor unit")
 
     print("✓ Test passed: currency icon wired end to end")
     return False
