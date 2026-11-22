@@ -167,24 +167,48 @@ def _test_partner_swaps_batched_first_pass_kept(my_predbat):
     earliest partner must be kept - the swap a one-at-a-time search stopped at.
 
     Four equally priced windows exporting in the first two: for target 3 both partners 0 and 1 pass,
-    and partner 0 must be the one applied."""
+    and partner 0 must be the one applied. The partners are 20 minutes with a gap before each, against
+    the target's 30, so every trial moves its partner's start back to its end less 30: a start applied
+    to the live plan while trials are still queued then shows up as a plan change."""
     failed = False
     now = my_predbat.minutes_now
-    export_window_best = [{"start": now + 30 * n, "end": now + 30 * n + 30, "average": 15.0} for n in range(4)]
+    export_window_best = [
+        {"start": now + 10, "end": now + 30, "average": 15.0},
+        {"start": now + 40, "end": now + 60, "average": 15.0},
+        {"start": now + 60, "end": now + 90, "average": 15.0},
+        {"start": now + 90, "end": now + 120, "average": 15.0},
+    ]
     setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_FULL, EXPORT_FULL, EXPORT_OFF, EXPORT_OFF])
 
     events = []
     my_predbat.export_limits_best = _RecordingLimits(my_predbat.export_limits_best, events)
     real_launch = my_predbat.launch_run_prediction_metric
     real_get = my_predbat.get_run_prediction_metric
+    # Window starts as they stood when the current batch began. A start moved while trials are queued is
+    # as much a plan change as a limit write: an earlier trial's untouched windows share their dicts with
+    # the live plan, so it would be priced against a start that changed after it was queued
+    batch_starts = []
+
+    def record_moved_starts():
+        """Log a plan write for every window whose start has moved since the current batch began"""
+        for n, window in enumerate(my_predbat.export_window_best):
+            if window["start"] != batch_starts[n]:
+                events.append(("set_start", n))
 
     def launch(charge_limit, charge_window, export_window, export_limits, end_record):
         """Record which windows this trial changes relative to the plan as it stands"""
+        if not batch_starts:
+            batch_starts.extend(window["start"] for window in my_predbat.export_window_best)
+        record_moved_starts()
         changed = [n for n in range(len(export_limits)) if export_limits[n] != my_predbat.export_limits_best[n] or export_window[n]["start"] != my_predbat.export_window_best[n]["start"]]
         events.append(("launch", changed))
         return real_launch(charge_limit, charge_window, export_window, export_limits, end_record)
 
     def get(handles):
+        """Check no start moved while the batch was queued, then read the results"""
+        if batch_starts:
+            record_moved_starts()
+            batch_starts.clear()
         events.append(("get",))
         return real_get(handles)
 
@@ -224,6 +248,32 @@ def _test_partner_swaps_batched_first_pass_kept(my_predbat):
         failed = True
     if [export_mode_of(limit) for limit in my_predbat.export_limits_best] != [EXPORT_MODE_IDLE, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET, EXPORT_MODE_TARGET]:
         print("ERROR: both exports should end up deferred to windows 2 and 3, got {}".format(my_predbat.export_limits_best))
+        failed = True
+    return failed
+
+
+def _test_full_combine(my_predbat):
+    """A trimmed target that still has room for the whole partner absorbs it (Full combine): the partner
+    turns off and goes back to its original start, and the target takes the partner's limit and grows
+    back from its own end by both lengths.
+
+    The target is trimmed to 10 minutes from a 60 minute original (start_orig), and the partner exports
+    for 30 minutes, so 10 + 30 <= 60 and neither the Partial combine nor the Swap branch applies."""
+    failed = False
+    now = my_predbat.minutes_now
+    export_window_best = [
+        {"start": now, "end": now + 30, "average": 15.0},
+        {"start": now + 80, "end": now + 90, "average": 15.0, "start_orig": now + 30},
+    ]
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_FULL, EXPORT_FULL])
+    my_predbat.optimise_swap_export(0, len(export_window_best))
+
+    partner, target = my_predbat.export_window_best
+    if export_mode_of(my_predbat.export_limits_best[0]) != EXPORT_MODE_IDLE or partner["start"] != now:
+        print("ERROR: full combine should turn the partner off at its original start {}, got limit {} start {}".format(now, my_predbat.export_limits_best[0], partner["start"]))
+        failed = True
+    if my_predbat.export_limits_best[1] != EXPORT_FULL or target["start"] != now + 90 - 40:
+        print("ERROR: full combine should give the target the partner's limit {} from {} (its end less both lengths), got limit {} start {}".format(EXPORT_FULL, now + 50, my_predbat.export_limits_best[1], target["start"]))
         failed = True
     return failed
 
@@ -305,6 +355,11 @@ def run_optimise_swap_export_tests(my_predbat):
     # Batched partners: priced against an unchanged plan, earliest passing partner kept
     # ---------------------------------------------------------------------------------------------
     failed |= _test_partner_swaps_batched_first_pass_kept(my_predbat)
+
+    # ---------------------------------------------------------------------------------------------
+    # Full combine: a trimmed target with room for the whole partner absorbs it
+    # ---------------------------------------------------------------------------------------------
+    failed |= _test_full_combine(my_predbat)
 
     # ---------------------------------------------------------------------------------------------
     # Ordering regression (#4478): the export swap must run after every pass that can enable an
