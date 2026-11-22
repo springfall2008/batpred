@@ -89,6 +89,13 @@ _EV_START_BLOCKED_STATUSES = frozenset({"Unavailable", "Faulted", "Offline"})
 # after this long, so the selects show the Hub's own schedule again (seconds).
 _STAGED_EXPIRY_SECONDS = 600
 
+# oauth-refresh answers from its stored MQTT token while that token has not reached its own expiry
+# (GH#6284), so asking again straight away only gets the same token back. After a reply carrying the
+# token already held, the next refresh waits this long, doubled for each repeat up to the cap (seconds).
+# The wait ends early once the held token expires, when a real refresh can succeed.
+_SAME_TOKEN_REFRESH_BACKOFF = 5 * 60
+_SAME_TOKEN_REFRESH_BACKOFF_MAX = 30 * 60
+
 # Sends of one schedule-write command before it is given up as unanswered, one per
 # _COMMAND_ACK_WINDOW, and how often the commit looks for its ack (seconds)
 _COMMIT_ATTEMPTS = 3
@@ -537,6 +544,8 @@ class GatewayMQTT(ComponentBase):
         self._last_plan_timezone = None
         self._plan_version = 0
         self._refresh_in_progress = False
+        self._same_token_count = 0  # refreshes in a row that handed back the MQTT token already held
+        self._token_refresh_after = 0  # wall-clock epoch before which an unexpired token is not refreshed again
         self._error_count = 0
 
         # Entity naming prefix
@@ -4261,7 +4270,8 @@ class GatewayMQTT(ComponentBase):
             return False
 
         if rejected_token and data["access_token"] == rejected_token:
-            self.log("Warn: GatewayMQTT: Token refresh after an auth rejection returned the same token the broker refused")
+            backoff = self._back_off_same_token()
+            self.log(f"Warn: GatewayMQTT: Token refresh after an auth rejection returned the same token the broker refused, next refresh in {backoff}s")
             return False
 
         unchanged = data["access_token"] == self.mqtt_token
@@ -4276,10 +4286,24 @@ class GatewayMQTT(ComponentBase):
             except (ValueError, AttributeError):
                 self.mqtt_token_expires_at = 0
         if unchanged:
-            self.log("Info: GatewayMQTT: Token refresh returned the token already held")
+            backoff = self._back_off_same_token()
+            self.log(f"Info: GatewayMQTT: Token refresh returned the token already held, next refresh in {backoff}s")
         else:
+            self._same_token_count = 0
+            self._token_refresh_after = 0
             self.log("Info: GatewayMQTT: MQTT token refreshed")
         return True
+
+    def _back_off_same_token(self):
+        """Hold off the next token refresh after a reply carrying the token already held (GH#6284); returns the wait in seconds."""
+        self._same_token_count += 1
+        backoff = min(_SAME_TOKEN_REFRESH_BACKOFF * (2 ** (self._same_token_count - 1)), _SAME_TOKEN_REFRESH_BACKOFF_MAX)
+        self._token_refresh_after = self.wall_time() + backoff
+        return backoff
+
+    def _same_token_backoff_active(self, now):
+        """True while the last refresh handed back the token already held and that token has not expired yet."""
+        return now < self._token_refresh_after and self.mqtt_token_expires_at > now
 
     async def _do_token_refresh(self, reason=None):
         """Refresh the MQTT JWT via the oauth-refresh edge function, unconditionally.
@@ -4295,6 +4319,12 @@ class GatewayMQTT(ComponentBase):
         from oauth_mixin import refresh_hook_kwargs  # here, not at module top: oauth_mixin needs aiohttp, which this module treats as optional
 
         if self._refresh_in_progress:
+            return False
+
+        if self._same_token_backoff_active(self.wall_time()):
+            # Both callers land here: the proactive near-expiry check every cycle and the reconnect loop's forced refresh
+            if reason:
+                self.log(f"Warn: GatewayMQTT: the last token refresh returned the token already held, not asking again for {int(self._token_refresh_after - self.wall_time())}s")
             return False
 
         self._refresh_in_progress = True

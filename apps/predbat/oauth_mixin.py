@@ -35,8 +35,7 @@ OAUTH_REFRESH_BACKOFF = 2  # seconds for the first retry, doubled each attempt
 # oauth-refresh service answers from its stored token while that token has not reached its own
 # expiry (GH#6284). Retrying with it achieves nothing, so a same-token answer backs off before the
 # next forced refresh, and enough of them in a row latch oauth_failed (the user must reconnect).
-OAUTH_SAME_TOKEN_BACKOFF = 5 * 60  # seconds before the first repeat forced refresh, doubled each time
-OAUTH_SAME_TOKEN_BACKOFF_MAX = 60 * 60
+OAUTH_SAME_TOKEN_BACKOFF = 5 * 60  # seconds before the first repeat forced refresh, doubled each time (so 5 min, then 10 min, then the latch)
 OAUTH_SAME_TOKEN_LIMIT = 3  # consecutive same-token answers to a forced refresh before latching oauth_failed
 
 
@@ -120,7 +119,7 @@ class OAuthMixin:
             # A same-token latch is the one that can heal: once the rejected token reaches its own
             # expiry an ordinary refresh is allowed, and a new token clears the latch. needs_reauth
             # is the provider refusing the refresh token, which only a reconnect fixes.
-            if getattr(self, "oauth_failed_reason", "") != "same_token" or not self._token_needs_refresh():
+            if self.oauth_failed_reason != "same_token" or not self._token_needs_refresh():
                 return False
 
         if not self._token_needs_refresh():
@@ -238,7 +237,7 @@ class OAuthMixin:
             self.log(f"Info: OAuth token refreshed for {self.provider_name}, expires at {data.get('expires_at')}")
             self._same_token_count = 0
             self._forced_refresh_after = 0
-            if self.oauth_failed and getattr(self, "oauth_failed_reason", "") == "same_token":
+            if self.oauth_failed and self.oauth_failed_reason == "same_token":
                 self.log(f"Info: OAuth for {self.provider_name} recovered with a new token")
                 self.oauth_failed = False
                 self.oauth_failed_reason = ""
@@ -263,13 +262,12 @@ class OAuthMixin:
         if self.auth_method != "oauth":
             return False
 
-        if getattr(self, "oauth_failed", False):
+        if self.oauth_failed:
             return False
 
         now = time.time()
-        forced_refresh_after = getattr(self, "_forced_refresh_after", 0)
-        if now < forced_refresh_after:
-            self.log(f"Warn: Got 401 with OAuth for {self.provider_name}; the last forced refresh did not produce a new token, not asking again for {int(forced_refresh_after - now)}s")
+        if now < self._forced_refresh_after:
+            self.log(f"Warn: Got 401 with OAuth for {self.provider_name}; the last forced refresh did not produce a new token, not asking again for {int(self._forced_refresh_after - now)}s")
             return False
 
         self.log(f"Info: Got 401 with OAuth for {self.provider_name}, attempting token refresh")
@@ -284,13 +282,13 @@ class OAuthMixin:
         # The service answered with the token the provider just rejected (or no refresh could be
         # made at all). Retrying it now would only fail again, so back off; a run of these means
         # the connection is gone.
-        self._same_token_count = getattr(self, "_same_token_count", 0) + 1
+        self._same_token_count += 1
         if self._same_token_count >= OAUTH_SAME_TOKEN_LIMIT:
             self.log(f"Warn: OAuth refresh after 401 did not produce a new token for {self.provider_name} {self._same_token_count} times in a row. User must reconnect.")
             self.oauth_failed = True
             self.oauth_failed_reason = "same_token"
             return False
-        backoff = min(OAUTH_SAME_TOKEN_BACKOFF * (2 ** (self._same_token_count - 1)), OAUTH_SAME_TOKEN_BACKOFF_MAX)
+        backoff = OAUTH_SAME_TOKEN_BACKOFF * (2 ** (self._same_token_count - 1))
         self._forced_refresh_after = now + backoff
         self.log(f"Warn: OAuth refresh after 401 did not produce a new token for {self.provider_name} (the token that was just rejected is still held), not retrying; next forced refresh in {backoff}s")
         return False

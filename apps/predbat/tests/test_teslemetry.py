@@ -89,6 +89,9 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.oauth_failed = False
         self._refresh_in_progress = False
         self.token_hash = ""
+        self.oauth_failed_reason = ""
+        self._same_token_count = 0
+        self._forced_refresh_after = 0
         # automatic_config drives Predbat's own config switches (e.g. inverter_hybrid) through
         # ComponentBase.set_state_external, which is the only path that updates the matching
         # CONFIG_ITEMS value. Capture those writes rather than plain entity states so tests can
