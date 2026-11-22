@@ -109,6 +109,8 @@ GROWATT_SET_ENABLE_CONTROL = "enable_control"
 # percentage, and leaves it there.
 GROWATT_SET_EXPORT_LIMIT = "export_limit"
 GROWATT_EXPORT_LIMIT_OPEN = {"exportLimitEnabled": 0, "percentage": 100}
+# Published as the export limit sensor when there is no limit to plan within, as Sigenergy does
+GROWATT_EXPORT_LIMIT_NONE_W = 99999
 # The timed charge/discharge command. A negative-percentage time slot does not export the battery:
 # a live SPH in an export slot only let surplus out, the battery holding near the house load,
 # even with the export limit disabled. Growatt support: "To force battery export, you also need to
@@ -130,6 +132,11 @@ GROWATT_EXPORT_COMMAND_MINUTES = 10
 GROWATT_EXPORT_COMMAND_RENEW = 4
 # Minutes before retrying an export limit change that could not be confirmed
 GROWATT_EXPORT_OPEN_RETRY = 10
+# Consecutive attempts to disable the export limit that the device reads back as still enabled
+# before Predbat takes it as locked (by the installer, say): it then stops trying and plans within
+# it, until a later read finds the setting changed. A failed read-back is not counted, so a device
+# that is only unreachable for a while is never taken as locked.
+GROWATT_EXPORT_OPEN_ATTEMPTS = 3
 # Refresh clocks saved across a restart (by tier prefix), so a restart neither re-reads the export
 # limit early nor cuts short a release or export-limit retry. The telemetry, static and read-back
 # tiers are not: a fresh process should read those straight away.
