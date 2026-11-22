@@ -644,7 +644,7 @@ They are used in the daily cost-saving and total cost-savings charts - see [crea
 - predbat.cost_yesterday - A sensor that gives the total energy costs in currency minor unit (pence, cents, etc) for yesterday (00:00-23:59 on the previous day)
 - predbat.savings_total_actual - A running total in currency minor unit (pence, cents, etc) of the above cost_yesterday sensor, with attribute of the total in pounds
 - predbat.savings_total_predbat - A running total in currency minor unit (pence, cents, etc) of the *real* (unadjusted) saving each day, deliberately not the same figure as the below savings_yesterday_predbat sensor's own state - see the note below
-- predbat.savings_total_pvbat - A running total of the below savings_yesterday_pvbat sensor, with attribute of the total in pounds
+- predbat.savings_total_pvbat - A running total in currency minor unit (pence, cents, etc) of the below savings_yesterday_pvbat sensor, with attribute of the total in pounds
 - predbat.savings_total_soc - The simulated final SoC in kWh at the end of the most recent 'without Predbat' day simulation. This is used as the starting SoC for the next day's simulation,
   so that the simulated 'without Predbat' universe is self-consistent across days. It will differ from the actual midnight SoC tracked in the 'History' view.
 - predbat.savings_yesterday_predbat - A sensor which tells you how much money Predbat saved you yesterday compared to not using Predbat,
@@ -672,7 +672,7 @@ because without Predbat the baseline assumes charging to 100% in the cheapest wi
 
 ## Marginal energy cost data
 
-After each plan calculation Predbat runs a set of what-if simulations to determine the marginal cost (in currency minor unit (pence, cents, etc) per kWh) of consuming extra electricity at different
+After each plan calculation Predbat runs a set of what-if simulations to determine the marginal cost per kWh in currency minor units (pence, cents, etc) of consuming extra electricity at different
 levels and at different times in the upcoming forecast window. The results are published as a matrix sensor and a set of binary sensors.
 
 The cost is worked out against the current plan, so it includes any planned export the extra load would displace. Energy the battery would otherwise still hold at the end of the plan

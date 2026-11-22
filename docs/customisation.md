@@ -183,7 +183,7 @@ The export rate used here is your tariff's own rate looking forward from the end
 A saving session paying well above your tariff does not count towards it - a one-off event says nothing about whether your surplus can be sold in general,
 and letting it count would switch the discount off for a whole plan on a system that in fact cannot export at all.
 
-**input_number.metric_self_sufficiency** (_expert mode_) A price in currency minor unit (pence, cents, etc) per kWh used to skew the calculations towards self-sufficiency. Defaults to 0.0p/kWh.
+**input_number.predbat_metric_self_sufficiency** (_expert mode_) A price in currency minor unit (pence, cents, etc) per kWh used to skew the calculations towards self-sufficiency. Defaults to 0.0p/kWh.
 Effectively saying to Predbat to account for imports at a higher price than reality in the calculation and thus selecting plans with less import.
 If you want to be as self-sufficient as possible then set this to the difference between your lowest import rate and the highest export rate to take exports that require additional import appear unprofitable.
 This setting will not impact the real calculated costs and is only used for plan selection. Values of 5-10p may be worth trying if you prefer to avoid importing even if it saves you money.
@@ -436,7 +436,7 @@ If you set this to a non-zero value you will need to use the low rate threshold 
 **input_number.predbat_best_soc_max** (_expert mode_) sets the maximum charge level (in kWh) for charging during each slot.
 A value of 0kWh (the default) disables this feature. Be careful setting this feature on as it will constrain charging in the Predbat plan and may result in charging or grid usage in expensive rate periods.
 
-**input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in currency minor unit - pence, cents, etc) to combine charge or export slots into a single larger average rate slot.
+**input_number.predbat_combine_rate_threshold** (_expert mode_) sets a threshold (in currency minor unit - pence, cents, etc) to combine charge or export slots into a single larger average rate slot.
 The default is 0p which disables this feature and all rate changes result in a new slot.
 
 **switch.predbat_combine_charge_slots** Controls if charge slots of > the slot duration (default 30 minutes) can be combined. When turned Off (the default) they will be split up, increasing run times but potentially more accurate for planning.<BR>
