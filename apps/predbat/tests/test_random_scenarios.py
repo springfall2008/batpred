@@ -413,6 +413,13 @@ def generate_random_scenario(scenario_id, seed):
                 "iboost_today": round(feature_rng.uniform(0.0, 3.0), 2),
             }
         )
+        # iboost_on_export (iBoost runs while the battery is forced to export) and iboost_prevent_discharge
+        # (the battery must not feed an iBoost inside the CT clamp) contradict each other: during a forced
+        # export the battery discharges into the iBoost anyway, so a plan can use an export window as a way
+        # round the hold. That is a misconfiguration, not a setup worth benchmarking. Both values are still
+        # drawn above so the rng stream - and so every other scenario - is unchanged; only the conflict is cleared.
+        if features["iboost_on_export"] and features["iboost_prevent_discharge"]:
+            features["iboost_prevent_discharge"] = False
 
     return {
         "id": scenario_id,
