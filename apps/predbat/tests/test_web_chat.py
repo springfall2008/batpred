@@ -3137,6 +3137,80 @@ def test_probe_route_uses_the_stored_key_rather_than_asking_the_browser(my_predb
     return failed
 
 
+def test_saved_key_never_follows_a_new_url(my_predbat):
+    """A saved API key is only sent to the URL it was saved with, by the probe route and by a save.
+
+    Both routes reuse a provider's saved key when the request carries none, so the browser never
+    sees it. Before this check, a request naming an existing provider and a new URL had Predbat
+    send that provider's key to the new URL - once for a probe, and on every chat turn after a save.
+    """
+    failed = False
+    print("**** Testing that a saved API key never follows a new URL ****")
+
+    agent = _ProbeAgent()
+    page = _make_web(my_predbat, agent=agent).chat_page
+
+    response = asyncio.run(page.html_chat_provider_models(FakeRequest(body={"type": "openai", "url": "https://attacker.example/v1", "api_key": None, "name": "openrouter"})))
+    result = json.loads(response.text)
+    if agent.calls:
+        print("ERROR: probing a new URL with a saved key's name dialled it: {}".format(agent.calls))
+        failed = True
+    if response.status != 200 or not result.get("error") or result.get("models") != []:
+        print("ERROR: expected the probe to explain that the key must be typed again, got {} {}".format(response.status, result))
+        failed = True
+
+    # The same endpoint written differently - a trailing slash, an upper-case host - is still the same endpoint
+    asyncio.run(page.html_chat_provider_models(FakeRequest(body={"type": "openrouter", "url": "https://OpenRouter.ai/api/v1/", "api_key": None, "name": "openrouter"})))
+    if not agent.calls or agent.calls[-1]["api_key"] != "sk-or-secret-value":
+        print("ERROR: the saved key was not reused for its own URL written differently: {}".format(agent.calls))
+        failed = True
+
+    # A key typed for the new URL is the user's own choice, so it is sent
+    asyncio.run(page.html_chat_provider_models(FakeRequest(body={"type": "openai", "url": "https://other.example/v1", "api_key": "typed-key", "name": "openrouter"})))
+    if agent.calls[-1] != {"type": "openai", "url": "https://other.example/v1", "api_key": "typed-key"}:
+        print("ERROR: a key typed for a new URL was not used: {}".format(agent.calls[-1]))
+        failed = True
+
+    # An empty URL means the type's default; this route used to fail on it with a NameError
+    response = asyncio.run(page.html_chat_provider_models(FakeRequest(body={"type": "ollama", "url": "", "api_key": None, "name": ""})))
+    if response.status != 200 or agent.calls[-1]["url"] != web_chat.default_url_for("ollama"):
+        print("ERROR: a probe with no URL did not use the type's default: {} {}".format(response.status, agent.calls[-1]))
+        failed = True
+
+    path = _apps_yaml_fixture(APPS_YAML_WITH_PROVIDERS)
+    original = web_chat.APPS_YAML_PATH
+    web_chat.APPS_YAML_PATH = path
+    before = open(path).read()
+    try:
+        agent = _run_inline_on_agent(_make_agent(my_predbat, providers={"openrouter": {"type": "openrouter", "url": "https://openrouter.ai/api/v1", "api_key": "sk-or-secret-value", "model": "a/model"}}))
+        page = _make_web(my_predbat, agent=agent).chat_page
+
+        for label, entry in (
+            ("a new URL", {"name": "openrouter", "type": "openrouter", "url": "https://attacker.example/v1", "model": "a/model", "api_key": None, "original_name": "openrouter"}),
+            ("a new URL under a new name", {"name": "renamed", "type": "openai", "url": "https://attacker.example/v1", "model": "a/model", "api_key": None, "original_name": "openrouter"}),
+            ("a new URL with the masked key", {"name": "openrouter", "type": "openrouter", "url": "https://attacker.example/v1", "model": "a/model", "api_key": web_chat.SECRET_MASK, "original_name": "openrouter"}),
+        ):
+            status, body = _save_providers(page, [entry], active=entry["name"])
+            if status != 400 or "API key" not in str(body.get("error")):
+                print("ERROR: saving {} with no key typed was not refused: {} {}".format(label, status, body))
+                failed = True
+        if open(path).read() != before:
+            print("ERROR: a refused save rewrote apps.yaml:\n{}".format(open(path).read()))
+            failed = True
+        if agent.providers[0]["url"] != "https://openrouter.ai/api/v1":
+            print("ERROR: a refused save moved the live provider: {}".format(agent.providers))
+            failed = True
+
+        status, body = _save_providers(page, [{"name": "openrouter", "type": "openai", "url": "https://other.example/v1", "model": "a/model", "api_key": "sk-new-for-other", "original_name": "openrouter"}], active="openrouter")
+        written = open(path).read()
+        if status != 200 or "sk-new-for-other" not in written or "sk-or-secret-value" in written:
+            print("ERROR: a new URL with its own key typed was not saved with that key: {} {}\n{}".format(status, body, written))
+            failed = True
+    finally:
+        web_chat.APPS_YAML_PATH = original
+    return failed
+
+
 def test_active_provider_is_remembered_across_a_restart(my_predbat):
     """The chosen provider survives the restart that saving apps.yaml can cause.
 
@@ -4073,6 +4147,7 @@ def run_web_chat_tests(my_predbat):
     failed |= test_provider_save_migrates_the_loose_block_without_losing_its_key(my_predbat)
     failed |= test_provider_save_refuses_bad_input_before_touching_the_file(my_predbat)
     failed |= test_probe_route_uses_the_stored_key_rather_than_asking_the_browser(my_predbat)
+    failed |= test_saved_key_never_follows_a_new_url(my_predbat)
     failed |= test_active_provider_is_remembered_across_a_restart(my_predbat)
     failed |= test_chat_page_uses_a_top_bar_and_a_settings_dialog(my_predbat)
     failed |= test_settings_script_wires_the_provider_routes(my_predbat)

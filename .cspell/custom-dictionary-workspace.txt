@@ -275,6 +275,7 @@ foxess
 foxesscloud
 frameon
 freephase
+frombuffer
 fromisoformat
 fronius
 funcs
@@ -676,6 +677,7 @@ sigen
 sigencloud
 sigenergy
 sigenstor
+sizeof
 skynet
 Slee
 slugified
@@ -786,6 +788,7 @@ tzpath
 tzset
 unasserted
 uncalibrated
+uncancellable
 uncompilable
 unconfigured
 underivable

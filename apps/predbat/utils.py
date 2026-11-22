@@ -42,6 +42,9 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    POWER_SERVICES,
+    OCTOPUS_API_URL,
+    OCTOPUS_LEGACY_API_HOST,
     BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
     BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
     RATE_SOURCES,
@@ -292,6 +295,10 @@ class MinuteArray:
 # carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
 # The rate grid evidence (a year of samples) and the grids derived from the learned ones are rebuilt on replay
 # (rate_grids()), so only battery_rate_grid_learned is dumped - every debug_history snapshot would otherwise carry them.
+# control_ledger and control_monitor are execution-side runtime state: a replay only re-plans (calculate_plan), so it
+# never reads them, and the events they hold already reach predbat.log and the control_conflicts/control_failures
+# sensors. As Python objects they were the only !!python/object tags in a fresh dump, and a newer dump on an older
+# tree failed to load on them (GH#5719).
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -319,6 +326,8 @@ DEBUG_EXCLUDE_LIST = [
     "battery_rate_grid_manual",
     "battery_charge_rate_grid",
     "battery_discharge_rate_grid",
+    "control_ledger",
+    "control_monitor",
 ]
 
 
@@ -1012,6 +1021,46 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
     return results
 
 
+def services_send_power(args, direction=None, index=None):
+    """
+    Whether any start or freeze service (POWER_SERVICES) in apps.yaml sends the charge/discharge rate as {power}.
+
+    With a direction ("charge" or "discharge") only that direction's services count, as a rate sent
+    to a charge hook says nothing about what the discharge side was given.
+
+    A service given by name alone is passed every default option, power included. A template entry
+    passes only the keys it lists, so it sends the rate only where one of its values references {power}.
+    Only a string value is formatted, or each string in a per-inverter list; a nested mapping is passed
+    as it is, so a {power} inside one is never filled in and does not count. With an inverter index only
+    that inverter's entry of a per-inverter list counts, as it is the one that inverter is sent; without
+    one, any inverter's does.
+    """
+
+    def formats_power(value):
+        """Whether call_service_template() fills in {power} for this template value."""
+        # {power}, or with a format spec or conversion such as {power:.0f}, as str.format() takes it
+        if not isinstance(value, list):
+            items = [value]
+        elif index is None:
+            items = value
+        else:
+            items = value[index : index + 1]
+        return any(isinstance(item, str) and re.search(r"\{power[}:!]", item) for item in items)
+
+    for service in POWER_SERVICES:
+        if direction and not service.startswith(direction + "_"):
+            continue
+        templates = args.get(service)
+        if not templates:
+            continue
+        for template in templates if isinstance(templates, list) else [templates]:
+            if isinstance(template, str):
+                return True
+            if isinstance(template, dict) and any(formats_power(value) for key, value in template.items() if key != "service"):
+                return True
+    return False
+
+
 def is_entity_id(value):
     """
     Whether a resolved apps.yaml value names a Home Assistant entity rather than being a literal.
@@ -1444,6 +1493,18 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True, whole_span=F
         first_minute = int(max_age.total_seconds() / 60)
         mdata = {minute: value for minute, value in mdata.items() if minute <= first_minute}
     return [mdata, max_days]
+
+
+OCTOPUS_LEGACY_API_RE = re.compile(r"^https?://" + re.escape(OCTOPUS_LEGACY_API_HOST) + r"(?=[/?#:]|$)", re.IGNORECASE)
+
+
+def migrate_octopus_url(url):
+    """Return url with the retired Octopus API host (api.octopus.energy) replaced by its successor (GH#5786).
+
+    Anything else - another host, a non-string, None - is returned unchanged."""
+    if not isinstance(url, str):
+        return url
+    return OCTOPUS_LEGACY_API_RE.sub(OCTOPUS_API_URL, url, count=1)
 
 
 def filter_payment_method(rates, preferred="DIRECT_DEBIT"):

@@ -482,6 +482,8 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Temperature data points: {}".format(len(temperature_data)))
 
             # Import and export prices
+            # The results attribute only starts at yesterday's midnight, so it is not padded back over the rest of the
+            # window: older minutes come from the rate history below or the stored database instead (#6147)
             import_entity = self.prefix + ".rates"
             export_entity = self.prefix + ".rates_export"
             import_rates_future = self.get_state_wrapper(import_entity, attribute="results")
@@ -501,6 +503,7 @@ class LoadMLComponent(ComponentBase):
                     smoothing=False,
                     divide_by=1.0,
                     scale=1.0,
+                    pad=False,
                 )
             export_rates_future = self.get_state_wrapper(export_entity, attribute="results")
             export_rates_data = {}
@@ -519,6 +522,7 @@ class LoadMLComponent(ComponentBase):
                     smoothing=False,
                     divide_by=1.0,
                     scale=1.0,
+                    pad=False,
                 )
 
             # try to retrieve import and export rate history to detect rate-based load patterns
@@ -792,6 +796,10 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Starting initial training")
             else:
                 self.log("ML Component: Initial training is required, delaying until component has started")
+                # Deferring is healthy: without a success timestamp components.is_alive() reads the
+                # component as dead and the next plan run reports it as a component error until
+                # training starts on the following tick (e.g. after a MODEL_VERSION bump).
+                self.update_success_timestamp()
                 return True
         elif should_train:
             self.log("ML Component: Starting fine-tune training ({:g}h interval), model age is {} hours".format(self.ml_retrain_interval_seconds / 3600.0, retrain_age_seconds / 3600.0))
