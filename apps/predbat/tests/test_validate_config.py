@@ -419,6 +419,22 @@ def test_validate_config(my_predbat):
         expect_clean=["charge_rate"],
     )
 
+    print("  [sensor_list modify] input_select. prefix is allowed for modification (#5885)")
+    _run(
+        my_predbat,
+        {"inverter_mode": ["input_select.test_inverter_mode"], "num_inverters": 1},
+        extra_states={"input_select.test_inverter_mode": "Eco"},
+        expect_clean=["inverter_mode"],
+    )
+
+    print("  [sensor_list modify] input_boolean. prefix is allowed for modification (#5885)")
+    _run(
+        my_predbat,
+        {"scheduled_charge_enable": ["input_boolean.test_charge_enable"], "num_inverters": 1},
+        extra_states={"input_boolean.test_charge_enable": "on"},
+        expect_clean=["scheduled_charge_enable"],
+    )
+
     # ==========================================================================
     # SENSOR_LIST boolean sensor_type — gateway EVC fields
     # (car_charging_planned: {"type": "sensor|sensor_list",

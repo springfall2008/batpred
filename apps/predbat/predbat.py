@@ -2301,7 +2301,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
                                 if spec.get("modify", False):
                                     prefix = sensor.split(".")[0]
-                                    if prefix not in ["switch", "select", "input_number", "number", "time", "input_number", "input_datetime"]:
+                                    if prefix not in ["switch", "input_boolean", "select", "input_select", "number", "input_number", "time", "input_datetime"]:
                                         if sensor.startswith(("sensor.predbat_", "sensor.{}_".format(self.prefix))):
                                             # We can ignore predbat generated sensors as they are control placeholders,
                                             # named with this instance's prefix (#5242)
