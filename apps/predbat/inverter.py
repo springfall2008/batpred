@@ -3507,8 +3507,8 @@ class Inverter(BatteryCurve):
         # FB00's Energy Storage Control Switch on an exporting cycle: Feed-in priority - No Grid Charging for a freeze
         # export (PV goes to the load then the grid ahead of the battery, which still covers the load - the plugin
         # offers no Feed-in priority with the Battery Reserve bit, so the inverter's own minimum SoC is the floor), and
-        # Backup/Reserve for a real export. The idle call (target 100) comes on the same cycle as adjust_charge_immediate,
-        # which owns it then.
+        # Backup/Reserve for a real export. The idle call (target 100) only comes on a cycle that is not exporting, where
+        # adjust_charge_immediate owns it - execute_plan skips the idle call when that cycle charged or froze (GH#6340).
         if self.inv_has_target_soc and self.inv_has_solis_energy_control and target_soc < 100:
             self.write_solis_energy_control(64 if freeze else 49, SOLAX_SOLIS_MODES_FB00, "freeze export" if freeze else "export")
 

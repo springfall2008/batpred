@@ -1502,7 +1502,7 @@ class Execute:
                             if carHolding or boostHolding:
                                 charge_stops_discharge = self.queue_charge_immediate(immediate_calls, inverter, inverter.soc_percent, freeze=True)
                             else:
-                                self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, 0))
+                                charge_stops_discharge = self.queue_charge_immediate(immediate_calls, inverter, 0)
                         elif self.is_freeze_charge(self.charge_limit_best[0]):
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(self.soc_kw, self.soc_max), isCharging, isExporting, check=True, isFreezeCharge=True)
                             charge_stops_discharge = self.queue_charge_immediate(immediate_calls, inverter, inv_target_soc_percent, freeze=True)
@@ -1510,7 +1510,7 @@ class Execute:
                             inv_target_soc_percent = self.adjust_battery_target_multi(inverter, calc_percent_limit(max(self.charge_limit_best[0], self.reserve), self.soc_max), isCharging, isExporting, check=True)
                             if not inverter.inv_has_target_soc and not resetReserve and inverter.soc_percent > hold_reserve_percent(inverter, inv_target_soc_percent):
                                 # Hold on the reserve written above: the freeze service (Back-up on FoxESS) would ignore it and pin the battery
-                                self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, 0))
+                                charge_stops_discharge = self.queue_charge_immediate(immediate_calls, inverter, 0)
                             else:
                                 charge_stops_discharge = self.queue_charge_immediate(immediate_calls, inverter, inv_target_soc_percent, freeze=True)
 
@@ -1524,7 +1524,7 @@ class Execute:
                 if carHolding or boostHolding:
                     charge_stops_discharge = self.queue_charge_immediate(immediate_calls, inverter, inverter.soc_percent, freeze=True)
                 else:
-                    self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, 0))
+                    charge_stops_discharge = self.queue_charge_immediate(immediate_calls, inverter, 0)
             # Skipped when this cycle's charge or freeze call has already stopped discharge: the idle call would only send
             # that stop again, after the start, and overwrite it on a shared mode helper (GH#6340)
             if not isExporting and self.set_export_window and not charge_stops_discharge:
