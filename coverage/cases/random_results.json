@@ -2,7 +2,7 @@
   "run_info": {
     "template_yaml": "cases/predbat_debug_agile1.yaml",
     "scenarios_file": "cases/random_scenarios.yaml",
-    "timestamp": "2026-11-22T21:17:16.808337+00:00"
+    "timestamp": "2026-11-22T22:02:08.497897+00:00"
   },
   "results": [
     {
@@ -19,7 +19,7 @@
       "soc_final": 5.9262,
       "battery_cycles": 21.9996,
       "carbon_g": 20258.3,
-      "runtime_s": 1.126,
+      "runtime_s": 1.401,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -38,7 +38,7 @@
       "soc_final": 4.7998,
       "battery_cycles": 16.8052,
       "carbon_g": 20390.83,
-      "runtime_s": 0.715,
+      "runtime_s": 0.691,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -57,7 +57,7 @@
       "soc_final": 2.2311,
       "battery_cycles": 6.2581,
       "carbon_g": 10999.4,
-      "runtime_s": 0.428,
+      "runtime_s": 0.425,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -76,7 +76,7 @@
       "soc_final": 1.4502,
       "battery_cycles": 10.9489,
       "carbon_g": 9769.53,
-      "runtime_s": 0.362,
+      "runtime_s": 0.357,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -95,7 +95,7 @@
       "soc_final": 4.6054,
       "battery_cycles": 10.0672,
       "carbon_g": 18922.7,
-      "runtime_s": 0.248,
+      "runtime_s": 0.242,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -114,7 +114,7 @@
       "soc_final": 1.6992,
       "battery_cycles": 21.6031,
       "carbon_g": 24737.88,
-      "runtime_s": 0.227,
+      "runtime_s": 0.223,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -122,18 +122,18 @@
     {
       "id": 6,
       "seed": 6,
-      "metric": 1104.8942,
-      "cost": 1203.9788,
-      "cost_pv10": 1413.7312,
-      "cost_pv90": 800.1394,
-      "import_kwh_battery": 24.6847,
-      "import_kwh_house": 23.74,
-      "export_kwh": 3.6752,
+      "metric": 1101.7021,
+      "cost": 1201.8753,
+      "cost_pv10": 1418.7563,
+      "cost_pv90": 777.2393,
+      "import_kwh_battery": 27.265,
+      "import_kwh_house": 21.9268,
+      "export_kwh": 4.2793,
       "soc_min": 0.38,
-      "soc_final": 0.4631,
-      "battery_cycles": 36.6121,
-      "carbon_g": 29271.43,
-      "runtime_s": 2.39,
+      "soc_final": 0.38,
+      "battery_cycles": 38.835,
+      "carbon_g": 29310.61,
+      "runtime_s": 1.995,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -152,7 +152,7 @@
       "soc_final": 0.3949,
       "battery_cycles": 14.1532,
       "carbon_g": 22415.34,
-      "runtime_s": 1.087,
+      "runtime_s": 1.06,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -160,18 +160,18 @@
     {
       "id": 8,
       "seed": 8,
-      "metric": 1915.8516,
-      "cost": 2030.6944,
-      "cost_pv10": 2935.9543,
-      "cost_pv90": 1816.3986,
+      "metric": 1885.1307,
+      "cost": 1987.4924,
+      "cost_pv10": 2962.8937,
+      "cost_pv90": 1772.2341,
       "import_kwh_battery": 0.0,
-      "import_kwh_house": 47.9014,
-      "export_kwh": 4.2339,
+      "import_kwh_house": 46.2845,
+      "export_kwh": 4.1537,
       "soc_min": 0.38,
       "soc_final": 0.38,
-      "battery_cycles": 8.6299,
-      "carbon_g": 28863.47,
-      "runtime_s": 0.22,
+      "battery_cycles": 12.1362,
+      "carbon_g": 28264.35,
+      "runtime_s": 0.243,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -190,7 +190,7 @@
       "soc_final": 7.7805,
       "battery_cycles": 30.2938,
       "carbon_g": 11450.71,
-      "runtime_s": 0.293,
+      "runtime_s": 0.285,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -209,7 +209,7 @@
       "soc_final": 0.548,
       "battery_cycles": 27.4999,
       "carbon_g": 20209.35,
-      "runtime_s": 0.594,
+      "runtime_s": 0.582,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -228,7 +228,7 @@
       "soc_final": 1.5231,
       "battery_cycles": 5.0652,
       "carbon_g": 18871.77,
-      "runtime_s": 0.284,
+      "runtime_s": 0.281,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -247,7 +247,7 @@
       "soc_final": 0.38,
       "battery_cycles": 25.9484,
       "carbon_g": 36942.65,
-      "runtime_s": 0.464,
+      "runtime_s": 0.467,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -266,7 +266,7 @@
       "soc_final": 0.38,
       "battery_cycles": 12.0194,
       "carbon_g": 37955.25,
-      "runtime_s": 0.257,
+      "runtime_s": 0.251,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -285,7 +285,7 @@
       "soc_final": 1.2492,
       "battery_cycles": 5.9256,
       "carbon_g": 41297.18,
-      "runtime_s": 0.389,
+      "runtime_s": 0.4,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -304,7 +304,7 @@
       "soc_final": 3.8321,
       "battery_cycles": 11.4296,
       "carbon_g": 31499.76,
-      "runtime_s": 0.528,
+      "runtime_s": 0.504,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -342,7 +342,7 @@
       "soc_final": 0.38,
       "battery_cycles": 23.8173,
       "carbon_g": 22035.3,
-      "runtime_s": 0.533,
+      "runtime_s": 0.521,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -361,7 +361,7 @@
       "soc_final": 0.5188,
       "battery_cycles": 10.6203,
       "carbon_g": 15988.23,
-      "runtime_s": 0.233,
+      "runtime_s": 0.215,
       "failed": false,
       "error": null,
       "end_record": 1440
@@ -380,7 +380,7 @@
       "soc_final": 19.7936,
       "battery_cycles": 64.6917,
       "carbon_g": 27214.39,
-      "runtime_s": 2.381,
+      "runtime_s": 2.369,
       "failed": false,
       "error": null,
       "end_record": 1440
