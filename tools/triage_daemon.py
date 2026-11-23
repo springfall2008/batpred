@@ -386,12 +386,14 @@ _DISALLOWED_TOOLS_BASE = [
     "Bash(gh api*)",
     # Shared memory is add-and-amend only for the bot. Soft deletes are recoverable by an admin,
     # but a prompt-injected run could still blank out what maintainers rely on. Removing a link is
-    # the same kind of loss, so it is denied too; claiming and releasing a claim stay allowed (the
+    # the same kind of loss, so both kinds are denied too (unrelate_memories between memories,
+    # unlink_memory between a memory and a thread); claiming and releasing a claim stay allowed (the
     # bot claims a ticket while it works and releases it when done), and forcing someone else's
     # claim is ruled out by CLAUDE.md, since an argument cannot be denied here.
     f"mcp__{MEMORY_SERVER}__delete",
     f"mcp__{MEMORY_SERVER}__prune",
     f"mcp__{MEMORY_SERVER}__unrelate_memories",
+    f"mcp__{MEMORY_SERVER}__unlink_memory",
 ]
 DISALLOWED_TOOLS = ",".join(_DISALLOWED_TOOLS_BASE)
 # The PR flow needs to push its branch and open the PR - carve those three back out of
