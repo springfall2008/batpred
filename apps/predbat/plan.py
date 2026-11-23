@@ -4783,7 +4783,12 @@ class Plan:
                                 orig_length_target,
                             )
                         )
-                    # Try to swap into the target slot
+                    # Try to swap into the target slot. A swap that is not kept is undone, so every
+                    # partner is tried against the same plan: build each on its own copy of the limits
+                    # and of the two windows it moves, queue them all as one batch, then read the results
+                    # in partner order and keep the first that passes - the swap a one-at-a-time search
+                    # would have stopped at.
+                    trials = []
                     for window_n in range(max(window_n_target - 32, 0), max(window_n_target, 0), 1):
                         previous_end = 0
                         if window_n > 0:
@@ -4811,13 +4816,15 @@ class Plan:
                             if not self.allow_this_export_window(window_n_target):
                                 continue
 
+                            window_end = self.export_window_best[window_n]["end"]
+                            window_end_target = self.export_window_best[window_n_target]["end"]
                             is_combined = False
                             if export_mode_of(export_limit_target) == EXPORT_MODE_TARGET and (window_length_target + window_length) <= orig_length_target:
                                 # Full combine
-                                self.export_limits_best[window_n] = pack_export_limit(EXPORT_MODE_IDLE)
-                                set_window_start(self.export_window_best[window_n], window_start_orig)
-                                self.export_limits_best[window_n_target] = export_limit
-                                set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - (window_length + window_length_target))
+                                limit_new = pack_export_limit(EXPORT_MODE_IDLE)
+                                start_new = window_start_orig
+                                limit_target_new = export_limit
+                                start_target_new = window_end_target - (window_length + window_length_target)
                                 is_combined = True
                             elif export_mode_of(export_limit_target) == EXPORT_MODE_TARGET and window_length_target < orig_length_target:
                                 # Partial combine - move export time from this window into the target, so
@@ -4826,10 +4833,10 @@ class Plan:
                                 amount_to_move = min(orig_length_target - window_length_target, window_length)
                                 window_length_target_new = amount_to_move + window_length_target
                                 window_length_new = window_length - amount_to_move
-                                self.export_limits_best[window_n] = min(export_limit, export_limit_target, key=export_limit_sort_key)
-                                set_window_start(self.export_window_best[window_n], self.export_window_best[window_n]["end"] - window_length_new)
-                                set_window_start(self.export_window_best[window_n_target], self.export_window_best[window_n_target]["end"] - window_length_target_new)
-                                self.export_limits_best[window_n_target] = min(export_limit, export_limit_target, key=export_limit_sort_key)
+                                limit_new = min(export_limit, export_limit_target, key=export_limit_sort_key)
+                                start_new = window_end - window_length_new
+                                start_target_new = window_end_target - window_length_target_new
+                                limit_target_new = limit_new
                                 is_combined = True
                             else:
                                 # Swap
@@ -4838,34 +4845,67 @@ class Plan:
                                     continue
 
                                 # Set the current window to off and optimise the swap window
-                                self.export_limits_best[window_n] = export_limit_target
-                                set_window_start(self.export_window_best[window_n], max(self.export_window_best[window_n]["end"] - window_length_target, previous_end))
-                                self.export_limits_best[window_n_target] = export_limit
-                                set_window_start(self.export_window_best[window_n_target], max(self.export_window_best[window_n_target]["end"] - window_length, previous_end_target))
+                                limit_new = export_limit_target
+                                start_new = max(window_end - window_length_target, previous_end)
+                                limit_target_new = export_limit
+                                start_target_new = max(window_end_target - window_length, previous_end_target)
 
-                            best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.run_prediction_metric(
-                                self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
+                            try_export_limits = self.export_limits_best.copy()
+                            try_export_limits[window_n] = limit_new
+                            try_export_limits[window_n_target] = limit_target_new
+                            try_export_window = self.export_window_best.copy()
+                            try_export_window[window_n] = dict(self.export_window_best[window_n], start=start_new)
+                            try_export_window[window_n_target] = dict(self.export_window_best[window_n_target], start=start_target_new)
+                            handles = self.launch_run_prediction_metric(self.charge_limit_best, self.charge_window_best, try_export_window, try_export_limits, self.end_record)
+                            trials.append((window_n, previous_end, window_length, export_limit, is_combined, limit_new, start_new, limit_target_new, start_target_new, handles))
+
+                    for window_n, previous_end, window_length, export_limit, is_combined, limit_new, start_new, limit_target_new, start_target_new, handles in trials:
+                        best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.get_run_prediction_metric(handles)
+
+                        if self.debug_enable:
+                            self.log(
+                                "Try to swap export combine {} window {} {}-{} previous end {} window_length {} limit {} with {} => {}-{} previous_end_target {} length_target {} limit_target {} metric {} (current best {}) cost {} keep {} cycle {} carbon {} import {}".format(
+                                    is_combined,
+                                    window_n,
+                                    self.time_abs_str(start_new),
+                                    self.time_abs_str(self.export_window_best[window_n]["end"]),
+                                    self.time_abs_str(previous_end),
+                                    window_length,
+                                    export_limit,
+                                    window_n_target,
+                                    self.time_abs_str(start_target_new),
+                                    self.time_abs_str(self.export_window_best[window_n_target]["end"]),
+                                    self.time_abs_str(previous_end_target),
+                                    window_length_target,
+                                    export_limit_target,
+                                    best_metric,
+                                    dp2(selected_metric),
+                                    dp2(best_cost),
+                                    dp2(best_keep),
+                                    dp2(best_cycle),
+                                    dp0(best_carbon),
+                                    dp2(best_import),
+                                )
                             )
 
+                        if ((selected_metric - best_metric) >= self.metric_min_improvement_swap) and (best_metric <= selected_metric or ((export_mode_of(export_limit_target) == EXPORT_MODE_IDLE or is_combined))):
                             if self.debug_enable:
                                 self.log(
-                                    "Try to swap export combine {} window {} {}-{} previous end {} window_length {} limit {} with {} => {}-{} previous_end_target {} length_target {} limit_target {} metric {} (current best {}) cost {} keep {} cycle {} carbon {} import {}".format(
-                                        is_combined,
+                                    "Swap export window {} {}-{} limit {} with {} => {}-{} metric {}{}, selected_metric {}{}, min_improvement_swap {}, cost {}{}, keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(
                                         window_n,
-                                        self.time_abs_str(self.export_window_best[window_n]["start"]),
+                                        self.time_abs_str(start_new),
                                         self.time_abs_str(self.export_window_best[window_n]["end"]),
-                                        self.time_abs_str(previous_end),
-                                        window_length,
                                         export_limit,
                                         window_n_target,
-                                        self.time_abs_str(self.export_window_best[window_n_target]["start"]),
+                                        self.time_abs_str(start_target_new),
                                         self.time_abs_str(self.export_window_best[window_n_target]["end"]),
-                                        self.time_abs_str(previous_end_target),
-                                        window_length_target,
-                                        export_limit_target,
                                         best_metric,
-                                        dp2(selected_metric),
+                                        curr,
+                                        selected_metric,
+                                        curr,
+                                        self.metric_min_improvement_swap,
                                         dp2(best_cost),
+                                        curr,
                                         dp2(best_keep),
                                         dp2(best_cycle),
                                         dp0(best_carbon),
@@ -4873,48 +4913,23 @@ class Plan:
                                     )
                                 )
 
-                            if ((selected_metric - best_metric) >= self.metric_min_improvement_swap) and (best_metric <= selected_metric or ((export_mode_of(export_limit_target) == EXPORT_MODE_IDLE or is_combined))):
-                                if self.debug_enable:
-                                    self.log(
-                                        "Swap export window {} {}-{} limit {} with {} => {}-{} metric {}{}, selected_metric {}{}, min_improvement_swap {}, cost {}{}, keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(
-                                            window_n,
-                                            self.time_abs_str(self.export_window_best[window_n]["start"]),
-                                            self.time_abs_str(self.export_window_best[window_n]["end"]),
-                                            export_limit,
-                                            window_n_target,
-                                            self.time_abs_str(self.export_window_best[window_n_target]["start"]),
-                                            self.time_abs_str(self.export_window_best[window_n_target]["end"]),
-                                            best_metric,
-                                            curr,
-                                            selected_metric,
-                                            curr,
-                                            self.metric_min_improvement_swap,
-                                            dp2(best_cost),
-                                            curr,
-                                            dp2(best_keep),
-                                            dp2(best_cycle),
-                                            dp0(best_carbon),
-                                            dp2(best_import),
-                                        )
-                                    )
+                            # Apply the kept swap to the plan
+                            self.export_limits_best[window_n] = limit_new
+                            set_window_start(self.export_window_best[window_n], start_new)
+                            self.export_limits_best[window_n_target] = limit_target_new
+                            set_window_start(self.export_window_best[window_n_target], start_target_new)
 
-                                # Update best
-                                selected_metric = best_metric
-                                selected_battery_value = best_battery_value
-                                selected_cost = best_cost
-                                selected_keep = best_keep
-                                selected_cycle = best_cycle
-                                selected_carbon = best_carbon
-                                selected_import = best_import
-                                swapped = True
-                                swapped_target[window_n_target] = True
-                                break
-                            else:
-                                # Revert the change
-                                self.export_limits_best[window_n] = export_limit
-                                set_window_start(self.export_window_best[window_n], window_start)
-                                self.export_limits_best[window_n_target] = export_limit_target
-                                set_window_start(self.export_window_best[window_n_target], window_start_target)
+                            # Update best
+                            selected_metric = best_metric
+                            selected_battery_value = best_battery_value
+                            selected_cost = best_cost
+                            selected_keep = best_keep
+                            selected_cycle = best_cycle
+                            selected_carbon = best_carbon
+                            selected_import = best_import
+                            swapped = True
+                            swapped_target[window_n_target] = True
+                            break
 
             self.log(
                 "Swap export optimisation finished metric {}{}, cost {}{}, metric_keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(
