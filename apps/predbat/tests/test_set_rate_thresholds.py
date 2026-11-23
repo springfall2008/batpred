@@ -523,7 +523,7 @@ def test_set_rate_thresholds_ignores_export_saving_boost_in_automatic_mode(my_pr
     """Automatic export mode (rate_high_threshold=0) must derive its threshold from the underlying export tariff.
 
     A +50p event on a flat 15p export tariff gives a boosted export max of 65p. On the unfiltered
-    stats that changes both automatic branches: export max != min, so export took min + 0.5 (15.5) under the old automatic rule
+    stats that changes both automatic branches: export max != min, so export takes min + 0.5 (15.5)
     instead of the flat-tariff min - 0.1 (14.9); and 65p > the 30p import max takes the "export beats
     import" branch, so import takes max + 0.1 (30.1) instead of max - 0.5 (29.5). The clean stats
     must give 14.9 and 29.5.
@@ -1107,14 +1107,12 @@ def test_axle_event_on_flat_export_tariff_admits_ordinary_windows(my_predbat):
 
     Built through load_axle_slot() (not hand-seeded tags), then run through the same
     set_rate_thresholds() -> rate_scan_window() -> ratchet sequence as fetch_sensor_data()
-    (fetch.py "Find discharging windows"). The automatic export threshold is min - 0.1 = 19.9p, so
-    the ordinary 20p windows are candidates and the ratchet settles on the tariff's own 20p.
-
-    The original bug needed the automatic rule's old "everything but the cheapest" branch: the
-    +100p event made export max != min, the threshold became min + 0.5 = 20.5p and only the event
-    windows were left. Automatic mode now offers every export rate, so the last block clears the
-    saving state and checks that the ordinary windows are still admitted - the bug class cannot
-    come back through the export threshold.
+    (fetch.py "Find discharging windows"). Without the saving-excluded stats the +100p event makes
+    export max != min, so the automatic threshold is min + 0.5 = 20.5p, every ordinary 20p window
+    sits below it, only the two event windows are candidates and the ratchet lifts the threshold
+    to the event rate. With them the tariff is flat again: threshold min - 0.1 = 19.9p, the
+    ordinary windows are candidates and the ratchet settles on the tariff's own 20p. The last
+    block clears the saving state to prove the test would fail on the unfixed behaviour.
     """
     print("**** test_axle_event_on_flat_export_tariff_admits_ordinary_windows ****")
     failed = False
@@ -1164,8 +1162,8 @@ def test_axle_event_on_flat_export_tariff_admits_ordinary_windows(my_predbat):
         failed = True
 
     _, threshold, windows, ratcheted = run_sequence(False)
-    if abs(threshold - 19.9) > 0.01 or not any(window["end"] <= event_start for window in windows) or abs(ratcheted - 20.0) > 0.01:
-        print("ERROR: without the saving state the automatic threshold should still admit the ordinary windows (19.9p, ratchet to 20p) - got threshold {}, ratchet {}, {} windows".format(threshold, ratcheted, len(windows)))
+    if abs(threshold - 20.5) > 0.01 or any(window["end"] <= event_start for window in windows) or ratcheted < 90:
+        print("ERROR: control run without the saving state should reproduce the unfixed behaviour (20.5p, event windows only, ratchet to event rate) - got threshold {}, ratchet {}, {} windows".format(threshold, ratcheted, len(windows)))
         failed = True
 
     if not failed:
@@ -1597,6 +1595,7 @@ _SNAPSHOT_FIELDS = (
     "rate_import_pre_event_threshold",
     "rate_import_tariff_max",
     "rate_export_cost_threshold",
+    "rate_export_candidate_threshold",
     # test_compare_and_annual_clear_stale_saving_minutes drives the real scan pipeline through
     # annual._apply_rates()/Compare.fetch_rates(), which populate these from its synthetic tariff -
     # unrestored they leak a 48h tariff's windows onto the shared fixture (#5079 class of bug, and
@@ -1604,6 +1603,7 @@ _SNAPSHOT_FIELDS = (
     "low_rates",
     "low_rates_tariff",
     "high_export_rates",
+    "high_export_rates_published",
     "rate_min_forward",
     # Rebuilt by Compare.fetch_rates() for a tariff with its own export rates
     "rate_export_max_forward",
@@ -1624,16 +1624,19 @@ _SNAPSHOT_FIELDS = (
 )
 
 
-def test_automatic_export_threshold_offers_the_cheapest_rate(my_predbat):
-    """In automatic mode every export rate is a candidate, the cheapest included.
+def test_automatic_export_candidates_include_the_cheapest_rate(my_predbat):
+    """In automatic mode the optimiser is offered every export rate, the cheapest included, but only the
+    high rate is published as one.
 
-    On a dual-rate export tariff (5p 00:30-05:30, 15p otherwise) the old automatic rule took
-    min + 0.5 = 5.5p and so dropped the whole night band. That hid the export a battery still
-    holding energy at dawn needs before an export-limited solar day: exported at 5p it earns
-    something, displaced by solar that is then clipped it earns nothing. The threshold must be
-    min - 0.1 = 4.9p, the night windows must be candidates, and the ratchet settles on 5p.
+    On a dual-rate export tariff (5p 00:30-05:30, 15p otherwise) the automatic high-rate threshold is
+    min + 0.5 = 5.5p, which drops the whole night band. As the optimiser's candidate threshold that hid
+    the export a battery still holding energy at dawn needs before an export-limited solar day:
+    exported at 5p it earns something, displaced by solar that is then clipped it earns nothing (#6214).
+    So high_export_rates, which calculate_plan() seeds export_window_best from, must hold night windows,
+    while high_export_rates_published, behind the high_rate_export entities, and the ratcheted
+    threshold behind the plan table's shading must still describe the 15p band alone.
     """
-    print("**** test_automatic_export_threshold_offers_the_cheapest_rate ****")
+    print("**** test_automatic_export_candidates_include_the_cheapest_rate ****")
     failed = False
 
     _setup_export_event(my_predbat)
@@ -1646,20 +1649,26 @@ def test_automatic_export_threshold_offers_the_cheapest_rate(my_predbat):
     my_predbat.rate_export_min, my_predbat.rate_export_max, my_predbat.rate_export_average, _, _ = my_predbat.rate_minmax(rate_export)
 
     my_predbat.set_rate_thresholds()
-    threshold = my_predbat.rate_export_cost_threshold
-    windows, lowest, _ = my_predbat.rate_scan_window(my_predbat.rate_export, 5, threshold, True, alt_rates=my_predbat.rate_import)
-    if my_predbat.rate_high_threshold == 0 and lowest <= my_predbat.rate_export_max:
-        my_predbat.rate_export_cost_threshold = lowest
+    if abs(my_predbat.rate_export_cost_threshold - 5.5) > 0.01 or abs(my_predbat.rate_export_candidate_threshold - 4.9) > 0.01:
+        print("ERROR: automatic thresholds should be high-rate 5.5 (5p + 0.5) and candidate 4.9 (5p - 0.1), got {} and {}".format(my_predbat.rate_export_cost_threshold, my_predbat.rate_export_candidate_threshold))
+        failed = True
 
-    if abs(threshold - 4.9) > 0.01:
-        print("ERROR: automatic export threshold should be 4.9 (cheapest rate 5p - 0.1), got {}".format(threshold))
+    my_predbat.scan_export_windows(alt_rates=my_predbat.rate_import)
+
+    def in_night(window):
+        return 30 <= window["start"] % 1440 < 330
+
+    if not any(in_night(w) for w in my_predbat.high_export_rates):
+        print("ERROR: no night-band export window is offered to the optimiser - candidates were {}".format([(w["start"], w["end"]) for w in my_predbat.high_export_rates]))
         failed = True
-    night = [w for w in windows if 30 <= w["start"] < 330]
-    if not night:
-        print("ERROR: no night-band export window is a candidate - candidates were {}".format([(w["start"], w["end"]) for w in windows]))
+    if not any(not in_night(w) for w in my_predbat.high_export_rates):
+        print("ERROR: the 15p windows are missing from the optimiser's candidates")
         failed = True
-    if abs(my_predbat.rate_export_cost_threshold - 5.0) > 0.01:
-        print("ERROR: ratchet should settle on the cheapest rate 5p, got {}".format(my_predbat.rate_export_cost_threshold))
+    if not my_predbat.high_export_rates_published or any(in_night(w) for w in my_predbat.high_export_rates_published):
+        print("ERROR: the published high-rate windows should be the 15p band only - got {}".format([(w["start"], w["end"], w["average"]) for w in my_predbat.high_export_rates_published]))
+        failed = True
+    if abs(my_predbat.rate_export_cost_threshold - 15.0) > 0.01:
+        print("ERROR: the ratchet should settle on the cheapest high-rate window, 15p, got {}".format(my_predbat.rate_export_cost_threshold))
         failed = True
 
     if not failed:
@@ -1715,7 +1724,7 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_compare_reused_live_rates_keep_saving_minutes(my_predbat)
         failed |= test_compare_override_reaches_kept_pre_saving_snapshot(my_predbat)
         failed |= test_compare_rate_min_forward_ignores_live_sessions(my_predbat)
-        failed |= test_automatic_export_threshold_offers_the_cheapest_rate(my_predbat)
+        failed |= test_automatic_export_candidates_include_the_cheapest_rate(my_predbat)
         return failed
     finally:
         for field, value in snapshot.items():

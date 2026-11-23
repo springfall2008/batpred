@@ -813,9 +813,7 @@ def apply_scenario_to_predbat(my_predbat, scenario):
         my_predbat.set_rate_thresholds()
 
     if my_predbat.rate_export:
-        my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True, alt_rates=my_predbat.rate_import)
-        if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
-            my_predbat.rate_export_cost_threshold = export_lowest
+        my_predbat.scan_export_windows(alt_rates=my_predbat.rate_import)
 
     if my_predbat.rate_import:
         my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export)
