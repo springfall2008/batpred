@@ -923,8 +923,8 @@ def run_scenario(my_predbat, scenario, debug=False):
         # weights it) pv90 exactly as the engine does, with no standing charge. Rebuilding it here from the
         # reporting runs below scored a different objective from the one the plan was optimised for: those
         # runs leave pv90 out of the blend, and the save="best" nominal run adds the standing charge and
-        # models low-power charging. It runs first because run_prediction overwrites predict_soc and the
-        # rest on every call, and the save="best" run's state is the one the debug plan output reads.
+        # models low-power charging. The order is not load-bearing: a save=None run writes only predict_soc,
+        # which run_prediction_metric restores itself, and none of the best/best10/best90 state the runs below save.
         metric = my_predbat.run_prediction_metric(
             my_predbat.charge_limit_best,
             my_predbat.charge_window_best,
@@ -934,7 +934,7 @@ def run_scenario(my_predbat, scenario, debug=False):
         )[0]
 
         # Normal prediction (cost = raw import/export money)
-        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
+        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, _, _, final_carbon_g = my_predbat.run_prediction(
             my_predbat.charge_limit_best,
             my_predbat.charge_window_best,
             my_predbat.export_window_best,
@@ -1604,6 +1604,36 @@ def _sample_rate_params(rng, rate_type, cheap):
         low = round(rng.uniform(-15.0, 0.0), 2)
         high = round(rng.uniform(25.0, 50.0), 2)
         return {"base_rate": base, "low_rate": low, "high_rate": high, "num_highs": rng.randint(1, 3), "num_lows": rng.randint(1, 3)}
+
+
+def run_random_scenario_generator_tests(my_predbat):
+    """The committed scenarios are exactly what the generator makes, and none sets both iBoost conflict flags.
+
+    The plan tests replay cases/random_scenarios.yaml, not generate_random_scenario, so a generator change
+    (a dropped normalisation, a moved draw, a new probability) passes them all and only shows up at the
+    next ./run_random regeneration. iboost_on_export with iboost_prevent_discharge is a misconfiguration
+    the generator clears; this fails the moment it could come back.
+
+    my_predbat is deliberately unused - no plan is run.
+    """
+    print("**** Running random scenario generator matches the committed scenarios ****")
+    committed = load_scenarios(RANDOM_SCENARIOS)
+    # Round-trip through YAML so the comparison sees the types the committed file holds
+    generated = yaml.load(yaml.dump({"scenarios": generate_scenarios(len(committed))}), Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))["scenarios"]
+
+    failed = False
+    for scenario in generated:
+        features = scenario["params"].get("features", {})
+        if features.get("iboost_on_export") and features.get("iboost_prevent_discharge"):
+            print("ERROR: generated scenario {} sets both iboost_on_export and iboost_prevent_discharge".format(scenario["id"]))
+            failed = True
+    differing = [g["id"] for g, c in zip(generated, committed) if g != c]
+    if differing:
+        print("ERROR: generate_scenarios({}) differs from {} in scenario(s) {} - regenerate the fixture and the baseline with ./run_random, or restore the generator".format(len(committed), RANDOM_SCENARIOS, differing))
+        failed = True
+    if not failed:
+        print("PASS: {} generated scenarios match the committed file".format(len(generated)))
+    return failed
 
 
 def run_random_scenario_metric_tests(my_predbat):
