@@ -574,6 +574,10 @@ def run_execute_test(
             assert_soc_target_force_dis = assert_immediate_discharge_soc_target_array[inverter.id]
         else:
             assert_soc_target_force_dis = assert_immediate_soc_target if assert_status in ["Exporting", "Freeze exporting"] else 100
+            # Untouched (-1) when the cycle charged or froze with a target: that call already stopped discharge, so the
+            # idle-export call is skipped (GH#6340)
+            if assert_soc_target_force > 0:
+                assert_soc_target_force_dis = -1
             if not set_export_window:
                 assert_soc_target_force_dis = -1
         if inverter.immediate_discharge_soc_target != assert_soc_target_force_dis:
@@ -2381,6 +2385,75 @@ def test_reserve_hold_via_discharge_rate(my_predbat):
     return failed
 
 
+def test_shared_mode_helper_keeps_charge(my_predbat, inverters, charge_window_best, charge_limit_best):
+    """
+    GH#6340: a service-template inverter whose services all set one mode helper must end a charging cycle on Charging.
+
+    Models the Sigenergy template with `repeat: true` and no discharge_stop_service: every service call is really sent,
+    and the discharge stop falls back to charge_stop_service, which sets Demand. adjust_charge_immediate() with a target
+    sets Demand then Charging. The idle-export call sets Demand again, so if it comes after the charge in the same cycle
+    the helper ends on Demand and the inverter never charges. A cycle that is not charging still needs the idle call.
+    """
+    helper = {}
+
+    def charge_call(inverter, call):
+        """Record the helper writes adjust_charge_immediate() makes, then make the call."""
+
+        def wrapped(target_soc, freeze=False):
+            """Discharge stop (Demand), then the charge or freeze start; a plain stop when target_soc is 0."""
+            if target_soc > 0:
+                helper.setdefault(inverter.id, []).extend(["Demand", "Freeze Charging" if freeze else "Charging"])
+            else:
+                helper.setdefault(inverter.id, []).append("Demand")
+            call(target_soc, freeze=freeze)
+
+        return wrapped
+
+    def export_call(inverter, call):
+        """Record the helper writes adjust_export_immediate() makes, then make the call."""
+
+        def wrapped(target_soc, freeze=False):
+            """The idle call (target 100) is a discharge stop, which falls back to charge_stop_service (Demand)."""
+            helper.setdefault(inverter.id, []).append("Demand" if target_soc >= 100 else "Discharging")
+            call(target_soc, freeze=freeze)
+
+        return wrapped
+
+    failed = False
+    for inverter in inverters:
+        inverter.adjust_charge_immediate = charge_call(inverter, inverter.adjust_charge_immediate)
+        inverter.adjust_export_immediate = export_call(inverter, inverter.adjust_export_immediate)
+    try:
+        failed |= run_execute_test(
+            my_predbat,
+            "charge_shared_mode_helper",
+            charge_window_best=charge_window_best,
+            charge_limit_best=charge_limit_best,
+            assert_charge_time_enable=True,
+            set_charge_window=True,
+            set_export_window=True,
+            assert_status="Charging",
+            assert_charge_start_time_minutes=-1,
+            assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
+        )
+        for inverter in inverters:
+            if helper.get(inverter.id, [None])[-1] != "Charging":
+                print("ERROR: charge_shared_mode_helper: inverter {} mode helper should end on Charging, writes {}".format(inverter.id, helper.get(inverter.id)))
+                failed = True
+
+        helper.clear()
+        failed |= run_execute_test(my_predbat, "no_charge_shared_mode_helper", set_charge_window=True, set_export_window=True)
+        for inverter in inverters:
+            if helper.get(inverter.id) != ["Demand", "Demand"]:
+                print("ERROR: no_charge_shared_mode_helper: inverter {} should get the charge stop and the idle-export stop, writes {}".format(inverter.id, helper.get(inverter.id)))
+                failed = True
+    finally:
+        for inverter in inverters:
+            del inverter.adjust_charge_immediate
+            del inverter.adjust_export_immediate
+    return failed
+
+
 def run_execute_tests(my_predbat):
     print("**** Running execute tests ****\n")
 
@@ -2609,6 +2682,10 @@ def run_execute_tests(my_predbat):
         assert_charge_start_time_minutes=-1,
         assert_charge_end_time_minutes=my_predbat.minutes_now + 60,
     )
+    if failed:
+        return failed
+
+    failed |= test_shared_mode_helper_keeps_charge(my_predbat, inverters, charge_window_best, charge_limit_best)
     if failed:
         return failed
 
