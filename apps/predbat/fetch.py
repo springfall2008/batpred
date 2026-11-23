@@ -2179,6 +2179,20 @@ class Fetch:
             return None
         return planned_entity_id
 
+    def octopus_car_plugged(self, car_n, slot_entries):
+        """
+        Whether car car_n counts as plugged in for its Octopus Intelligent dispatches.
+
+        Each car is normally enrolled with its own octopus_intelligent_slot entry, so its own
+        car_charging_planned / car_charging_now say whether it is plugged in. With fewer entries than cars, one
+        Octopus device (typically one charger) covers several cars and Predbat cannot tell which of them
+        is on it, so any car plugged in or charging counts: otherwise the dispatches stay tied to the car
+        the entry happens to be listed for, and are dropped while the other car is the one charging.
+        """
+        if slot_entries < self.num_cars:
+            return any(self.car_charging_planned) or any(self.car_charging_now)
+        return bool(self.car_charging_planned[car_n] or self.car_charging_now[car_n])
+
     def car_arg_configured(self, arg, car_n, entity=False):
         """
         Whether apps.yaml sets arg for car car_n - with entity, only when it names an entity rather than a fixed value.
@@ -2658,7 +2672,7 @@ class Fetch:
                     self.octopus_slots[car_n] += completed
                 planned_kept = self.smart_control_off_slots(planned, bool(planned_entity_id)) if smart_control_off else planned
                 planned_used = []
-                if planned_kept and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                if planned_kept and (not self.octopus_intelligent_ignore_unplugged or self.octopus_car_plugged(car_n, len(entity_id_list))):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
                     planned_used = planned_kept
@@ -2743,7 +2757,7 @@ class Fetch:
                     plug_arg = self.car_plug_arg(car_n)
                     plugged = self.car_plugged_in_now(car_n, plug_arg) if plug_arg else None
                     if plugged is None:
-                        plugged = bool(self.car_charging_planned[car_n] or self.car_charging_now[car_n] or (planned and not self.octopus_intelligent_ignore_unplugged))
+                        plugged = bool(self.octopus_car_plugged(car_n, len(entity_id_list)) or (planned and not self.octopus_intelligent_ignore_unplugged))
                     base_soc = self.octopus_charge_target_base_soc(car_n, plugged, save)
                     if octopus_limit:
                         octopus_limit = dp3(float(octopus_limit) * self.car_charging_battery_size[car_n] / 100.0)
@@ -2780,7 +2794,7 @@ class Fetch:
                     # and the house its cheap rate
                     if not entity_id_list[car_n]:
                         continue
-                    if not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]:
+                    if not self.octopus_intelligent_ignore_unplugged or self.octopus_car_plugged(car_n, len(entity_id_list)):
                         self.car_charging_slots[car_n] = self.load_octopus_slots(car_n, self.octopus_slots[car_n], self.octopus_intelligent_consider_full)
                         if self.car_charging_slots[car_n]:
                             iog_slot_cars.append(car_n)
