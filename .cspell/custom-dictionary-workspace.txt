@@ -210,6 +210,7 @@ EMEA
 emqx
 emszzzz
 Encharge
+encryptor
 enctype
 endfor
 endhour
@@ -338,6 +339,7 @@ hassio
 heartbeating
 heatingactive
 heatingtemp
+Heatmembrane
 heatpump
 heatsink
 holdout
@@ -472,6 +474,7 @@ Modbus
 mogons
 monkeypatched
 monokai
+MOSFET
 Mosquitto
 mousedown
 mpan
