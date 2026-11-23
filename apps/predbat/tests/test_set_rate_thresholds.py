@@ -1603,7 +1603,7 @@ _SNAPSHOT_FIELDS = (
     "low_rates",
     "low_rates_tariff",
     "high_export_rates",
-    "high_export_rates_published",
+    "high_export_rates_tariff",
     "rate_min_forward",
     # Rebuilt by Compare.fetch_rates() for a tariff with its own export rates
     "rate_export_max_forward",
@@ -1633,8 +1633,8 @@ def test_automatic_export_candidates_include_the_cheapest_rate(my_predbat):
     the export a battery still holding energy at dawn needs before an export-limited solar day:
     exported at 5p it earns something, displaced by solar that is then clipped it earns nothing (#6214).
     So high_export_rates, which calculate_plan() seeds export_window_best from, must hold night windows,
-    while high_export_rates_published, behind the high_rate_export entities, and the ratcheted
-    threshold behind the plan table's shading must still describe the 15p band alone.
+    while high_export_rates_tariff, behind the high_rate_export sensors, and the ratcheted
+    threshold must still describe the 15p band alone.
     """
     print("**** test_automatic_export_candidates_include_the_cheapest_rate ****")
     failed = False
@@ -1664,8 +1664,8 @@ def test_automatic_export_candidates_include_the_cheapest_rate(my_predbat):
     if not any(not in_night(w) for w in my_predbat.high_export_rates):
         print("ERROR: the 15p windows are missing from the optimiser's candidates")
         failed = True
-    if not my_predbat.high_export_rates_published or any(in_night(w) for w in my_predbat.high_export_rates_published):
-        print("ERROR: the published high-rate windows should be the 15p band only - got {}".format([(w["start"], w["end"], w["average"]) for w in my_predbat.high_export_rates_published]))
+    if not my_predbat.high_export_rates_tariff or any(in_night(w) for w in my_predbat.high_export_rates_tariff):
+        print("ERROR: the published high-rate windows should be the 15p band only - got {}".format([(w["start"], w["end"], w["average"]) for w in my_predbat.high_export_rates_tariff]))
         failed = True
     if abs(my_predbat.rate_export_cost_threshold - 15.0) > 0.01:
         print("ERROR: the ratchet should settle on the cheapest high-rate window, 15p, got {}".format(my_predbat.rate_export_cost_threshold))

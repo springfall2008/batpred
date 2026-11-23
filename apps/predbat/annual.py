@@ -767,7 +767,7 @@ def reset_sample_state(predbat):
     # leaving these downstream products in place would look handled while still leaking.
     predbat.low_rates = []
     predbat.high_export_rates = []
-    predbat.high_export_rates_published = []
+    predbat.high_export_rates_tariff = []
     predbat.rate_import = {}
     predbat.rate_export = {}
     predbat.rate_import_replicated = {}
@@ -1207,7 +1207,7 @@ def _apply_rates(predbat, rate_import, rate_export):
         predbat.scan_export_windows()
     else:
         predbat.high_export_rates = []
-        predbat.high_export_rates_published = []
+        predbat.high_export_rates_tariff = []
 
     if predbat.rate_import:
         predbat.low_rates, _, highest = predbat.rate_scan_window(predbat.rate_import, 5, predbat.rate_import_cost_threshold, False)

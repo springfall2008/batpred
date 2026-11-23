@@ -3807,18 +3807,19 @@ class Fetch:
         """
         Find the export windows, after set_rate_thresholds().
 
+        The export counterpart of find_low_rate_windows()'s low_rates / low_rates_tariff (GH#5050).
         high_export_rates is what the optimiser is offered (calculate_plan() seeds export_window_best from it):
         every window at or above rate_export_candidate_threshold, which in automatic mode is every export slot.
-        high_export_rates_published is only the high-rate windows, at or above rate_export_cost_threshold, and
-        drives the high_rate_export entities - publishing the tariff's cheapest band as the next high rate
-        would be wrong. In automatic mode the threshold is then ratcheted to the cheapest high-rate window,
-        which the plan table's shading reads. Returns the lowest and highest average of the high-rate windows.
+        high_export_rates_tariff is the tariff's own high-rate windows, at or above rate_export_cost_threshold,
+        and drives the high_rate_export sensors - publishing the tariff's cheapest band as the next high rate
+        would be wrong. In automatic mode the threshold is then ratcheted to the cheapest high-rate window.
+        Returns the lowest and highest average of the high-rate windows.
         """
-        self.high_export_rates_published, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=alt_rates)
+        self.high_export_rates_tariff, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=alt_rates)
         if self.rate_export_candidate_threshold < self.rate_export_cost_threshold:
             self.high_export_rates, _, _ = self.rate_scan_window(self.rate_export, 5, self.rate_export_candidate_threshold, True, alt_rates=alt_rates)
         else:
-            self.high_export_rates = self.high_export_rates_published
+            self.high_export_rates = self.high_export_rates_tariff
         if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
             self.rate_export_cost_threshold = lowest
         return lowest, highest
