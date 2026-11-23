@@ -378,6 +378,7 @@ from tests.test_random_scenarios import (
     run_random_scenario_reapply_tests,
     run_random_scenario_metric_tests,
     run_random_scenario_dawn_surplus_tests,
+    run_random_scenario_axle_precharge_tests,
     run_random_scenario_generator_tests,
 )
 from tests import network_guard
@@ -1103,6 +1104,7 @@ def main():
         ("random_reapply", run_random_scenario_reapply_tests, "Running a random scenario leaves it unchanged, so a re-run plans identically", False),
         ("random_metric", run_random_scenario_metric_tests, "The random scenario harness records the planner's own metric for the final plan", False),
         ("random_dawn_surplus", run_random_scenario_dawn_surplus_tests, "A battery holding energy at dawn before a clipped solar day exports it at the night rate", False),
+        ("random_axle_precharge", run_random_scenario_axle_precharge_tests, "Charging at the peak rate ahead of an Axle event does not make the peak a published low rate", False),
         ("random_generator", run_random_scenario_generator_tests, "The committed random scenarios are what the generator makes, with no iBoost conflict", False),
         ("gecloud_budget_harness", run_gecloud_budget_harness_tests, "GE Cloud API budget harness unit tests", False),
         ("gecloud_api_budget", run_gecloud_api_budget, "GE Cloud API calls over a simulated day (baseline measurement)", True),
