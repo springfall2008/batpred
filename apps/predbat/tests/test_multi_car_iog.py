@@ -1199,6 +1199,35 @@ def run_iog_shared_device_plugged_test(testname, my_predbat):
         print("ERROR: one entry per car - car 0 is unplugged so its own dispatch should still be ignored")
         failed = True
 
+    # Three cars, two entries: car 0 is plugged in but its entry has no dispatch, car 1 has one and reads unplugged.
+    # The plugged state is read before the loops overwrite car_charging_planned with whether each car got slots,
+    # so car 1 keeps its dispatch rather than seeing car 0's overwritten False
+    my_predbat.num_cars = 3
+    my_predbat.car_charging_plan_smart = [False] * 3
+    my_predbat.car_charging_plan_max_price = [0] * 3
+    my_predbat.car_charging_plan_time = ["07:00:00"] * 3
+    my_predbat.car_charging_battery_size = [100.0, 80.0, 60.0]
+    my_predbat.car_charging_limit = [80.0, 64.0, 48.0]
+    my_predbat.car_charging_rate = [7.4] * 3
+    my_predbat.car_charging_exclusive = [False] * 3
+    my_predbat.car_charging_manual_soc = [False] * 3
+    my_predbat.args["car_charging_soc"] = [50.0, 50.0, 50.0]
+    my_predbat.args["car_charging_limit"] = [80.0, 80.0, 80.0]
+    my_predbat.ha_interface.set_state(
+        "binary_sensor.octopus_energy_shared_intelligent_dispatching",
+        "off",
+        attributes={"completed_dispatches": [], "planned_dispatches": [], "vehicle_battery_size_in_kwh": 100.0, "charge_point_power_in_kw": 7.4},
+    )
+    my_predbat.args["octopus_intelligent_slot"] = per_car
+    my_predbat.car_charging_planned = [True, False, False]
+    my_predbat.car_charging_now = [False, False, False]
+    my_predbat.car_charging_slots = [[], [], []]
+    my_predbat.octopus_slots = [[], [], []]
+    my_predbat.fetch_sensor_data_cars()
+    if not my_predbat.car_charging_slots[1]:
+        print("ERROR: three cars, two entries - car 1's dispatch should be kept while car 0 is plugged in, got no slots")
+        failed = True
+
     # Restore the shared fixture state captured above
     for key in arg_keys:
         if key in saved_args:

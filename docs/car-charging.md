@@ -397,6 +397,8 @@ When only the charger is enrolled, its dispatches belong to the car whose **octo
 
 With fewer **octopus_intelligent_slot** entries than cars, one Octopus device covers several cars, and Predbat cannot tell which of them is on it. **switch.predbat_octopus_intelligent_ignore_unplugged** then keeps the dispatches while *any* car reads plugged in (**car_charging_planned**) or charging (**car_charging_now**), rather than only the car the entry is listed for. The dispatches are still planned against that car's state of charge.
 
+This is decided by the number of entries, not by which charger each car is on, so it has two limits. A second car that is not on Octopus Intelligent, with its own **car_charging_planned** sensor on a different charger, also keeps the first car's dispatches while it is plugged in. And a setup with one entry per car, but a plug sensor wired to one car only, is not covered.
+
 ### Multiple cars with Octopus Intelligent Go (IOG)
 
 If you have **two or more EVs enrolled in Octopus Intelligent Go**, Predbat can track the scheduled dispatch slots for each car independently.
