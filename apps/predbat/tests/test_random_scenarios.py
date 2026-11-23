@@ -1606,6 +1606,36 @@ def _sample_rate_params(rng, rate_type, cheap):
         return {"base_rate": base, "low_rate": low, "high_rate": high, "num_highs": rng.randint(1, 3), "num_lows": rng.randint(1, 3)}
 
 
+def run_random_scenario_generator_tests(my_predbat):
+    """The committed scenarios are exactly what the generator makes, and none sets both iBoost conflict flags.
+
+    The plan tests replay cases/random_scenarios.yaml, not generate_random_scenario, so a generator change
+    (a dropped normalisation, a moved draw, a new probability) passes them all and only shows up at the
+    next ./run_random regeneration. iboost_on_export with iboost_prevent_discharge is a misconfiguration
+    the generator clears; this fails the moment it could come back.
+
+    my_predbat is deliberately unused - no plan is run.
+    """
+    print("**** Running random scenario generator matches the committed scenarios ****")
+    committed = load_scenarios(RANDOM_SCENARIOS)
+    # Round-trip through YAML so the comparison sees the types the committed file holds
+    generated = yaml.load(yaml.dump({"scenarios": generate_scenarios(len(committed))}), Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))["scenarios"]
+
+    failed = False
+    for scenario in generated:
+        features = scenario["params"].get("features", {})
+        if features.get("iboost_on_export") and features.get("iboost_prevent_discharge"):
+            print("ERROR: generated scenario {} sets both iboost_on_export and iboost_prevent_discharge".format(scenario["id"]))
+            failed = True
+    differing = [g["id"] for g, c in zip(generated, committed) if g != c]
+    if differing:
+        print("ERROR: generate_scenarios({}) differs from {} in scenario(s) {} - regenerate the fixture and the baseline with ./run_random, or restore the generator".format(len(committed), RANDOM_SCENARIOS, differing))
+        failed = True
+    if not failed:
+        print("PASS: {} generated scenarios match the committed file".format(len(generated)))
+    return failed
+
+
 def run_random_scenario_metric_tests(my_predbat):
     """The metric the harness records is the planner's own objective for the final plan.
 
