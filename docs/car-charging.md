@@ -1168,7 +1168,8 @@ The sensor stays off during a cancelled slot, so a Predbat-led charger does not 
 
 ## Charging from solar surplus
 
-Predbat plans car charging from energy rates. It will not start your car because the sun came out.
+Predbat plans car charging ahead of time - from energy rates, and with **switch.predbat_car_charging_solar** On from forecast sunshine too
+(see [Predbat-led charging](#predbat-led-charging)). It will not start your car because the sun has come out right now.
 Two sensors let you do that yourself in a Home Assistant automation, or switch a charger into its own solar mode:
 
 | Entity | Meaning |
