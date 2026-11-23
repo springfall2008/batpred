@@ -435,6 +435,9 @@ is normally needed to convert them into a sensor with `raw_today` and (optionall
 
 These are read independently of the Octopus handling. A `metric_spot_*` sensor is never treated as an Octopus tariff: Agile detection (`futurerate_adjust_auto`) and the automatic AgilePredict region lookup only look at `metric_octopus_*`, so a spot sensor cannot trigger either.
 
+If you are moving a sensor from `metric_octopus_import` / `metric_octopus_export` to `metric_spot_import` / `metric_spot_export`, remove (or comment out) the `metric_octopus_*` lines when you add the new ones.
+While both are set `metric_octopus_*` is used, `metric_spot_*` is ignored, and a warning is logged.
+
 The AgilePredict forecast is designed for Octopus Agile tariffs and should be left off for other suppliers. (It can only be used alongside spot rates if you explicitly turn on `futurerate_agilepredict` and `futurerate_adjust_import` / `futurerate_adjust_export` and set `futurerate_agilepredict_region` yourself).
 
 The separate Nord Pool day-ahead future rate options (`futurerate_url` with `futurerate_adjust_import` / `futurerate_adjust_export`) are independent of the rate settings, and work with whichever import and export rates Predbat has loaded.
