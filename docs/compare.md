@@ -47,8 +47,12 @@ Look through that page to find the right URL for usage charges in your DNO area
 
 Check the tariff results for the final URL, and in particular the *valid_from* and *valid_to* dates in the first few records returned.  These should be showing tariff prices for a few days in the future and for today.  If they do not, and the records are all for dates in the past then Octopus have expired the tariff and you'll need to repeat the process to find the correct tariff URL.
 
-As well as Octopus rate URLs (rates_import_octopus_url/rates_export_octopus_url) you can use manual rates (rates_import/rates_export),
-Octopus integration rates (metric_octopus_import/metric_octopus_export) and Energi Data service rates (metric_energidataservice_import/metric_energidataservice_export).
+As well as [Octopus rate URLs](energy-rates.md#octopus-rates-url) you can use [manual rates](energy-rates.md#manually-over-riding-energy-rates), [Octopus integration rates](energy-rates.md#configuring-predbat-to-use-the-octopus-energy-integration),
+[rates from any other supplier held in a sensor with raw_today/raw_tomorrow attributes](energy-rates.md#other-energy-spot-rate-sensor-integrations), [Energi Data service rates](energy-rates.md#energidataservice-integration) or [Stromligning rates](energy-rates.md#strømligning-integration).
+
+Import and export rates can be configured separately.
+
+If a tariff sets more than one of these for the same side (import or export), Predbat uses the same order as for your main rates - see [Which rate source is used](energy-rates.md#which-rate-source-is-used).
 
 Each tariff must be given an ID which will be used to create a sensor to track predicted cost over time, the full name is used in the description of that sensor and on the web page.
 The ID can contain alphanumeric characters or underscores; do not use slashes, commas, spaces or other special characters in the ID or Predbat will crash when running the compare!

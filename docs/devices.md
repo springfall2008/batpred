@@ -216,8 +216,10 @@ This is built into Predbat, see the [apps.yaml configuration guide](car-charging
 Can be linked to Predbat to provide energy rates in your region e.g:
 
 ```yaml
-  metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
+  metric_spot_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
 ```
+
+If you have configured `metric_octopus_import` to your nordpool sensor then this configuration will continue to work, with a one-time warning issued in the Predbat logfile. `metric_octopus_import` is deprecated for spot energy rates and its recommended to swap the configuration to the dedicated `metric_spot_import` configuration in `apps.yaml`.
 
 ## PodPoint
 

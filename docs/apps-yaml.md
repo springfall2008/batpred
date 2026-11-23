@@ -2333,18 +2333,20 @@ Note you can omit any of these settings for a default value. They do not have to
 
 There are a number of configuration items in `apps.yaml` for telling Predbat what your import and export rates are.
 
-These are described in detail in [Energy Rates](energy-rates.md) and are listed here just for completeness:
+These are described in detail in [Energy Rates](energy-rates.md) and are listed here just for completeness. Which of these is used when several are set is described in [Which rate source is used](energy-rates.md#which-rate-source-is-used):
 
 - **plan_interval_minutes** - Sets time duration of the slots used by Predbat for planning
-- **metric_octopus_import** - Import rates from the Octopus Energy integration
-- **metric_octopus_export** - Export rates from the Octopus Energy integration
+- **metric_octopus_import** - Import rates from the Octopus Energy integration (also enables Agile future rate prediction).
+- **metric_octopus_export** - Export rates from the Octopus Energy integration (also enables Agile future rate prediction).
 - **metric_octopus_gas** - Gas rates from the Octopus Energy integration
+- **metric_spot_import** - Import rates from any other supplier, a sensor with `raw_today` / `raw_tomorrow` attributes (see [Other Energy Spot Rate sensor integrations](energy-rates.md#other-energy-spot-rate-sensor-integrations))
+- **metric_spot_export** - Export rates from any other supplier, same format as metric_spot_import
 - **octopus_intelligent_slot** - Octopus Intelligent GO slot sensor from the Octopus Energy integration
 - **octopus_saving_session** - Energy saving sessions event sensor from the Octopus Energy integration
 - **octopus_saving_session_octopoints_per_penny** - Sets the Octopoints per pence
 - **rates_import_octopus_url** - Octopus pricing URL (over-rides metric_octopus_import)
 - **rates_export_octopus_url** - Octopus export pricing URL (over-rides metric_octopus_export)
-- **metric_standing_charge** - Standing charge in pounds
+- **metric_standing_charge** - Standing charge in major currency unit (pounds, euros, etc)
 - **rates_import** - Import rates over a 24-hour period with start and end times
 - **rates_export** - Export rates over a 24-hour period with start and end times
 - **rates_gas** - Gas rates over a 24-hour period with start and end times

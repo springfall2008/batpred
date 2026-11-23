@@ -47,6 +47,7 @@ from const import (
     OCTOPUS_LEGACY_API_HOST,
     BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
     BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
+    RATE_SOURCES,
 )
 import copy
 import pytz
@@ -3726,3 +3727,82 @@ def intelligent_device_is_charger(dispatch_attribute, target_attribute=None):
     if size is not None and rate is None:
         return False
     return None
+
+
+def rate_source(args, direction):
+    """
+    Work out which rate source is selected, the first of RATE_SOURCES[direction] that has a key in args.
+
+    :param args: The apps.yaml args, or a Compare tariff - anything that supports "key in args"
+    :param direction: "import" or "export"
+    :return: The name of the source (the first key of its group in RATE_SOURCES) or None if none of them is set
+    """
+    for group in RATE_SOURCES.get(direction, []):
+        for key in group:
+            if key in args:
+                return group[0]
+    return None
+
+
+def rate_sources_below_octopus(direction):
+    """
+    The apps.yaml keys of the rate sources ranked below metric_octopus_<direction> in RATE_SOURCES.
+
+    Auto-discovery of metric_octopus_<direction> (the Octopus and Kraken components) would silently out-rank any of these
+    that the user set, so it leaves metric_octopus_<direction> alone when one is.
+
+    :param direction: "import" or "export" - anything else (gas) has no rate sources and gives []
+    :return: list of apps.yaml keys
+    """
+    keys = []
+    below = False
+    for group in RATE_SOURCES.get(direction, []):
+        if below:
+            keys.extend(group)
+        elif group[0] == "metric_octopus_{}".format(direction):
+            below = True
+    return keys
+
+
+def rate_slot_keys(first_slot):
+    """
+    Work out the layout of a list of rate slots from its first slot, for sensors that publish raw_today / raw_tomorrow /
+    rates / prices. Shared by fetch_octopus_rates() and fetch_spot_rates() so a sensor gives the same rates under
+    either apps.yaml name.
+
+    Layouts that work (rate key / from key / to key):
+    - rate / from / to - pence or cents, used as is
+    - value_inc_vat / valid_from / valid_to - pence or cents, used as is
+    - value / start / end - currency per kWh, scaled by 100
+    - price / from / till - currency per kWh, scaled by 100
+    - price / start / end - currency per kWh, scaled by 100
+
+    :param first_slot: The first dict of the list
+    :return: tuple of (rate_key, from_key, to_key, scale)
+    """
+    rate_key = "rate"
+    from_key = "from"
+    to_key = "to"
+    scale = 1.0
+    if rate_key not in first_slot:
+        rate_key = "value_inc_vat"
+        from_key = "valid_from"
+        to_key = "valid_to"
+    if from_key not in first_slot:
+        from_key = "start"
+        to_key = "end"
+        scale = 100.0
+    if rate_key not in first_slot:
+        rate_key = "value"
+    if rate_key not in first_slot:
+        rate_key = "price"
+        if "start" in first_slot and "end" in first_slot and "from" not in first_slot:
+            # price / start / end
+            from_key = "start"
+            to_key = "end"
+            scale = 100.0
+        else:
+            # Nord Pool style: price / from / till
+            from_key = "from"
+            to_key = "till"
+    return rate_key, from_key, to_key, scale

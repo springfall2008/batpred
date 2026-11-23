@@ -10,15 +10,14 @@ pred_bat:
   prefix: predbat
 
   # Timezone to work in
-  timezone: Europe/Tallinn
+  timezone: Europe/London
 
    # XXX: Template configuration, delete this line once you have set up for your system
   template: True
 
-  # Currency, symbol for main currency second symbol for 1/100s e.g. $ c or £ p or e c
   currency_symbols:
-   - '€'
-   - 's'
+    - '£'
+    - 'p'
 
   # Number of threads to use in plan calculation
   # Can be auto for automatic, 0 for off or values 1-N for a fixed number
@@ -290,10 +289,8 @@ pred_bat:
   #       event.octopus_energy_electricity_xxxxxxxx_export_current_day_rates
   #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
   # Predbat will automatically find the event. entities from the link below to the sensors
-  #   metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
-  #   metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
-  metric_octopus_import: 'sensor.nordpool_kwh_import_with_additional_costs_and_vat'
-  metric_octopus_export: 'sensor.nordpool_kwh_export_subtracting_sales_margin'
+  metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
+  metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
 
   # Standing charge in pounds, can be set to a sensor or manually entered (e.g. 0.50 is 50p)
   # The default below will pick up the standing charge from the Octopus Plugin
@@ -305,15 +302,15 @@ pred_bat:
   # If start/end is missing it's assumed to be a fixed rate
   # Gaps are filled with zero rate
   #rates_import:
-  #  -  start: "00:30:00"
-  #     end: "04:30:00"
-  #     rate: 7.5
-  #  -  start: "04:30:00"
-  #     end: "00:30:00"
-  #     rate: 40.0
+  #  - start: "00:30:00"
+  #    end: "04:30:00"
+  #    rate: 7.5
+  #  - start: "04:30:00"
+  #    end: "00:30:00"
+  #    rate: 40.0
   #
   #rates_export:
-  #  -  rate: 4.2
+  #  - rate: 4.2
 
   # Can be used instead of the plugin to get import rates directly online
   # Overrides metric_octopus_import and rates_import
@@ -332,7 +329,7 @@ pred_bat:
   # This will override even the Octopus plugin rates if enabled
   #
   #rates_import_override:
-  # -  date: '2023-09-10'
+  #  - date: '2023-09-10'
   #    start: '14:00:00'
   #    end: '14:30:00'
   #    rate: 112

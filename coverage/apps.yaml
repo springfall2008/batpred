@@ -355,7 +355,7 @@ pred_bat:
   #       event.octopus_energy_electricity_xxxxxxxx_export_next_day_rates
   # Predbat will automatically find the event. entities from the link below to the sensors
   #metric_octopus_import: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_current_rate)'
-  #metric_octopus_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
+  #metric_spot_import: 'sensor.nordpool_kwh_oslo_eur_3_10_025'
   #metric_octopus_export: 're:(sensor.(octopus_energy_|)electricity_[0-9a-z]+_[0-9a-z]+_export_current_rate)'
 
   # Standing charge in pounds, can be set to a sensor or manually entered (e.g. 0.50 is 50p)

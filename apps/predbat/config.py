@@ -3068,6 +3068,8 @@ APPS_SCHEMA = {
     "octopus_night_times": {"type": "dict_list"},
     "metric_octopus_import": {"type": "sensor", "sensor_type": "float"},
     "metric_octopus_export": {"type": "sensor", "sensor_type": "float"},
+    "metric_spot_import": {"type": "sensor", "sensor_type": "float"},
+    "metric_spot_export": {"type": "sensor", "sensor_type": "float"},
     "octopus_api_key": {"type": "string", "empty": False},
     "octopus_api_account": {"type": "string", "empty": False},
     "rates_import": {"type": "dict_list"},
