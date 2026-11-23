@@ -916,8 +916,8 @@ def run_scenario(my_predbat, scenario, debug=False):
         # weights it) pv90 exactly as the engine does, with no standing charge. Rebuilding it here from the
         # reporting runs below scored a different objective from the one the plan was optimised for: those
         # runs leave pv90 out of the blend, and the save="best" nominal run adds the standing charge and
-        # models low-power charging. It runs first because run_prediction overwrites predict_soc and the
-        # rest on every call, and the save="best" run's state is the one the debug plan output reads.
+        # models low-power charging. The order is not load-bearing: a save=None run writes only predict_soc,
+        # which run_prediction_metric restores itself, and none of the best/best10/best90 state the runs below save.
         metric = my_predbat.run_prediction_metric(
             my_predbat.charge_limit_best,
             my_predbat.charge_window_best,
@@ -927,7 +927,7 @@ def run_scenario(my_predbat, scenario, debug=False):
         )[0]
 
         # Normal prediction (cost = raw import/export money)
-        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
+        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, _, _, final_carbon_g = my_predbat.run_prediction(
             my_predbat.charge_limit_best,
             my_predbat.charge_window_best,
             my_predbat.export_window_best,
