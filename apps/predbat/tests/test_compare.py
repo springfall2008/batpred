@@ -51,6 +51,8 @@ class _FakePredbat:
         self.config_root = "."
         self.prefix = "predbat"
         self.currency_symbols = ["£", "p"]
+        # PredBat.reset() establishes this attribute before the Compare engine is used.
+        self.currency_scale = 1.0
         self.comparisons = {}
 
     def log(self, msg):

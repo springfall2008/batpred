@@ -5016,7 +5016,7 @@ class Octopus:
                             # certain, so it keeps its own rate and stays unmarked. rate_min_base is rounded by
                             # dp2 but the tariff feed is not, so allow for that: an off-peak 5.2314p is not
                             # lowered by the 5.23p dispatch (#5392).
-                            if assumed_price < rates.get(minute, assumed_price) - IO_RATE_TOLERANCE:
+                            if assumed_price < rates.get(minute, assumed_price) - IO_RATE_TOLERANCE * self.currency_scale:
                                 self.io_adjusted[minute] = True
                                 rates[minute] = assumed_price
                         else:
