@@ -759,7 +759,7 @@ In the plan, each kind of diversion is limited only by the rates of the energy i
 - Diverting while Predbat charges the battery (**switch.predbat_iboost_charging**) uses grid energy, so only the import limits apply: **iboost_rate_threshold** and **iboost_gas**.
 - Diverting excess solar (**switch.predbat_iboost_solar_excess**, with **switch.predbat_iboost_solar** on) uses energy that would otherwise be exported (solar, and with **iboost_on_export** battery energy in a forced export), so only the export limits apply: **iboost_rate_threshold_export** and **iboost_gas_export**.
 - Diverting any solar (**switch.predbat_iboost_solar** without excess) takes solar that would otherwise cover the house or be exported, so both the import and the export limits apply.
-- The rate-based plan (**switch.predbat_iboost_smart**, or iBoost with neither solar nor charging diversion on) still applies both the import and the export limits to the slots it picks.
+- The rate-based plan (**switch.predbat_iboost_smart**, or iBoost with neither solar nor charging diversion on) still applies both the import and the export limits to the slots it picks. It picks slots from the rates without looking at the solar forecast, and in a slot with surplus solar the boost takes solar that would otherwise be exported, so the export limits stay. The cost is that with **switch.predbat_iboost_gas_export** on, or **iboost_rate_threshold_export** lowered below the export rate, it books no slot while the export rate is above the limit, not even a cheap grid-import slot overnight.
 
 So with both gas switches on, excess solar is still diverted when export rates are below gas, even while import rates are above it.
 
