@@ -217,6 +217,36 @@ void build_soc_percent_thresholds(std::vector<double> &out, double soc_max)
     }
 }
 
+// build_soc_percent_thresholds costs about half a millisecond - 100 exact bisections, each step a
+// round_py - and its table depends on nothing but soc_max, yet every context used to build its own:
+// about 31 per plan, nearly all of them for the marginal cost matrix. Contexts now copy a table
+// memoised on soc_max's bit pattern. A hit returns exactly what a fresh build would, so no result
+// changes. Guarded by its own mutex because contexts may be created from any thread, and bounded so a
+// long-lived process that sees many battery sizes cannot grow it without limit.
+std::mutex g_soc_table_mutex;
+std::map<uint64_t, std::vector<double>> g_soc_table_cache;
+constexpr size_t SOC_TABLE_CACHE_MAX = 16;
+
+void cached_soc_percent_thresholds(std::vector<double> &out, double soc_max)
+{
+    uint64_t key;
+    std::memcpy(&key, &soc_max, sizeof(key));
+    {
+        std::lock_guard<std::mutex> lock(g_soc_table_mutex);
+        auto it = g_soc_table_cache.find(key);
+        if (it != g_soc_table_cache.end()) {
+            out = it->second;
+            return;
+        }
+    }
+    build_soc_percent_thresholds(out, soc_max);
+    std::lock_guard<std::mutex> lock(g_soc_table_mutex);
+    if (g_soc_table_cache.size() >= SOC_TABLE_CACHE_MAX) {
+        g_soc_table_cache.clear();
+    }
+    g_soc_table_cache[key] = out;
+}
+
 // Per-plan static context passed from Python, arrays are all n_steps long
 // (index k covers relative minute k*5) unless stated otherwise.
 // Field order MUST match the ctypes Structure in prediction_kernel.py exactly.
@@ -656,7 +686,7 @@ int64_t pk_context_create(const PkContext *in)
         return 0;
     }
     auto store = std::make_unique<ContextStore>();
-    build_soc_percent_thresholds(store->soc_percent_threshold, in->soc_max);
+    cached_soc_percent_thresholds(store->soc_percent_threshold, in->soc_max);
     size_t n = static_cast<size_t>(in->n_steps);
     store->rate_import.assign(in->rate_import, in->rate_import + n);
     store->rate_export.assign(in->rate_export, in->rate_export + n);
@@ -2005,6 +2035,29 @@ int32_t pk_verify_soc_percent_table(double soc_max, int32_t samples)
             if (want != got) {
                 bad++;
             }
+        }
+    }
+    return bad;
+}
+
+// Test hook: confirm a context's SoC percent table - copied from the soc_max memo - is exactly what
+// a fresh build for that context's soc_max gives. Returns the number of differing entries, -1 for an
+// unknown handle (0 = identical).
+int32_t pk_verify_context_soc_table(int64_t handle)
+{
+    const ContextStore *store = lookup_context(handle);
+    if (!store) {
+        return -1;
+    }
+    std::vector<double> fresh;
+    build_soc_percent_thresholds(fresh, store->ctx.soc_max);
+    if (fresh.size() != store->soc_percent_threshold.size()) {
+        return static_cast<int32_t>(fresh.size() + store->soc_percent_threshold.size());
+    }
+    int32_t bad = 0;
+    for (size_t i = 0; i < fresh.size(); i++) {
+        if (std::memcmp(&fresh[i], &store->soc_percent_threshold[i], sizeof(double)) != 0) {
+            bad++;
         }
     }
     return bad;

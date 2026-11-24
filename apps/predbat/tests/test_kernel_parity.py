@@ -1722,6 +1722,57 @@ def run_soc_percent_table_tests():
     return failed
 
 
+def run_soc_table_memo_tests(my_predbat):
+    """Check contexts built with alternating battery sizes each hold their own size's SoC percent table.
+
+    pk_context_create copies the table from a memo keyed on soc_max instead of rebuilding it per
+    context (about half a millisecond each, ~31 times a plan). A memo that handed one size's table to
+    another would move SoC-to-percent bucket edges and so the charge curve the kernel reads. The sizes
+    are interleaved so each lookup follows a build for a different size, every context's table is
+    compared bit for bit with a fresh build, and each size is also run through both engines.
+    """
+    print("**** Running SoC table memo tests ****")
+    lib = prediction_kernel.KERNEL_LIB
+    if not lib or not hasattr(lib, "pk_verify_context_soc_table"):
+        print("SKIP: kernel does not expose pk_verify_context_soc_table")
+        return False
+    lib.pk_verify_context_soc_table.restype = ctypes.c_int32
+    lib.pk_verify_context_soc_table.argtypes = [ctypes.c_int64]
+
+    saved_soc_max = my_predbat.soc_max
+    saved_soc_kw = my_predbat.soc_kw
+    saved_enable = my_predbat.prediction_kernel_enable
+    failed = False
+    try:
+        pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, pv_kw=2.0, load_kw=0.6)
+        charge_window = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 240, "average": 7.5}]
+        export_window = [{"start": my_predbat.minutes_now + 600, "end": my_predbat.minutes_now + 720, "average": 30.0}]
+        my_predbat.prediction_kernel_enable = True
+        for round_n in range(2):
+            for soc_max in (9.5, 13.5, 4.8, 13.5, 25.6, 9.5):
+                my_predbat.soc_max = soc_max
+                my_predbat.soc_kw = soc_max / 2
+                prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+                if not prediction.kernel_handle:
+                    print("ERROR: SoC table memo context creation failed for soc_max {}".format(soc_max))
+                    return True
+                bad = lib.pk_verify_context_soc_table(prediction.kernel_handle)
+                if bad:
+                    print("ERROR: round {} soc_max {}: context SoC table differs from a fresh build in {} entries".format(round_n, soc_max, bad))
+                    failed = True
+                charge_limit = [soc_max * 0.8]
+                export_limits = [30.0]
+                failed |= dual_run("soc_table_memo_{}_{}".format(round_n, soc_max), my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, my_predbat.forecast_minutes)
+                my_predbat.prediction_kernel_enable = True
+    finally:
+        my_predbat.soc_max = saved_soc_max
+        my_predbat.soc_kw = saved_soc_kw
+        my_predbat.prediction_kernel_enable = saved_enable
+    if not failed:
+        print("SoC table memo: every context held its own soc_max's table and matched the Python engine")
+    return failed
+
+
 def run_scratch_reuse_tests(my_predbat, batches=10):
     """Check a thread builds its scratch buffers once, not once per batch, returns True on failure.
 
@@ -2054,6 +2105,7 @@ def run_kernel_parity_tests(my_predbat):
     try:
         failed = run_marshalling_tests()
         failed |= run_soc_percent_table_tests()
+        failed |= run_soc_table_memo_tests(my_predbat)
         failed |= run_cancel_context_tests()
         failed |= run_edge_case_tests(my_predbat)
         failed |= run_export_floor_parity_tests(my_predbat)
