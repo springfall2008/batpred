@@ -10,14 +10,17 @@
 """
 Battery thermal model: a forecast of the battery temperature from the outdoor temperature forecast and the planned battery power.
 
-The battery is treated as one thermal mass that drifts towards the outdoor temperature (plus an offset for its siting) and
-is warmed by its own charging and discharging:
+The battery is treated as one thermal mass that cools or warms towards the outdoor temperature and is warmed by its own
+charging and discharging:
 
-    dT/dt = (ambient + offset - T) / tau + heat_rate * |battery power|
+    dT/dt = (ambient - T) / tau + heat_rate * |battery power|
 
-tau (hours), heat_rate (degrees C per hour per kW) and offset (degrees C) are fitted per install by least squares on one
-step ahead changes in the battery temperature history (GH#5919). The offset absorbs a battery sited indoors or against a
-warm wall and a bias in the outdoor temperature source.
+tau (hours) and heat_rate (degrees C per hour per kW) are fitted per install by least squares on one step ahead changes in
+the battery temperature history (GH#5919). tau comes from the idle periods and heat_rate from the charging and discharging,
+so the two are fitted separately. There is deliberately no offset or partial coupling to the outdoor temperature: over the
+narrow range of outdoor temperatures seen in a week, those trade against each other and against heat_rate and extrapolate
+badly into colder weather. A battery that the outdoor temperature does not fully reach (a garage or a heated room) fits a
+long tau instead; it is forecast too cold, which errs towards a lower charge rate, and only matters if it gets cold.
 
 Series follow Predbat's minute conventions: history is keyed by minutes ago (0 is now) and forecasts by minutes ahead.
 """
@@ -30,7 +33,8 @@ from utils import str2time
 THERMAL_TAU_HOURS_MIN = 0.5
 THERMAL_TAU_HOURS_MAX = 200.0
 THERMAL_HEAT_RATE_MAX = 5.0
-THERMAL_OFFSET_MAX = 25.0
+# The number of fitted parameters: dt / tau and heat_rate * dt
+THERMAL_PARAMETERS = 2
 # The fit needs at least a day of complete steps
 THERMAL_MIN_SAMPLES_MINUTES = 24 * 60
 # The forecast is held within the range a battery temperature sensor can sensibly report
@@ -38,30 +42,31 @@ THERMAL_TEMPERATURE_MIN = -30.0
 THERMAL_TEMPERATURE_MAX = 60.0
 
 
-def solve_linear_3(matrix, vector):
+def solve_linear(matrix, vector):
     """
-    Solve a 3x3 linear system by Gaussian elimination with partial pivoting.
+    Solve a square linear system by Gaussian elimination with partial pivoting.
 
     Args:
-        matrix: three rows of three floats
-        vector: three floats
+        matrix: n rows of n floats
+        vector: n floats
 
     Returns:
-        The solution as a list of three floats, or None when the system is singular
+        The solution as a list of n floats, or None when the system is singular
     """
-    rows = [list(matrix[i]) + [vector[i]] for i in range(3)]
-    for col in range(3):
-        pivot = max(range(col, 3), key=lambda r: abs(rows[r][col]))
+    size = len(vector)
+    rows = [list(matrix[i]) + [vector[i]] for i in range(size)]
+    for col in range(size):
+        pivot = max(range(col, size), key=lambda r: abs(rows[r][col]))
         if abs(rows[pivot][col]) < 1e-12:
             return None
         rows[col], rows[pivot] = rows[pivot], rows[col]
-        for r in range(col + 1, 3):
+        for r in range(col + 1, size):
             factor = rows[r][col] / rows[col][col]
-            for c in range(col, 4):
+            for c in range(col, size + 1):
                 rows[r][c] -= factor * rows[col][c]
-    solution = [0.0, 0.0, 0.0]
-    for r in range(2, -1, -1):
-        total = rows[r][3] - sum(rows[r][c] * solution[c] for c in range(r + 1, 3))
+    solution = [0.0] * size
+    for r in range(size - 1, -1, -1):
+        total = rows[r][size] - sum(rows[r][c] * solution[c] for c in range(r + 1, size))
         solution[r] = total / rows[r][r]
     return solution
 
@@ -187,8 +192,7 @@ def thermal_statistics(temperature, power, ambient, history_minutes, step, newes
     """
     Least squares statistics of the thermal model over history: what thermal_fit_statistics() solves.
 
-    The model, stepped by dt hours, is T[n+1] - T[n] = a (A[n] - T[n]) + b + h |P[n]|, with a = dt / tau,
-    b = a * offset and h = heat_rate * dt. Keeping the sums rather than the samples lets evidence build up over months
+    The model, stepped by dt hours, is T[n+1] - T[n] = k (A[n] - T[n]) + h |P[n]|, with k = dt / tau and h = heat_rate * dt. Keeping the sums rather than the samples lets evidence build up over months
     in a few numbers (thermal_statistics_merge) without reading months of history.
 
     Args:
@@ -200,10 +204,11 @@ def thermal_statistics(temperature, power, ambient, history_minutes, step, newes
         newest_minute: the newest step to use, in minutes ago (default one step ago, the newest complete step)
 
     Returns:
-        dict of xtx (3x3), xty (3), yty, weight (the number of steps, decayed once merged) and samples (steps added)
+        dict of xtx (2x2), xty (2), yty, weight (the number of steps, decayed once merged) and samples (steps added)
     """
-    xtx = [[0.0] * 3 for _ in range(3)]
-    xty = [0.0, 0.0, 0.0]
+    size = THERMAL_PARAMETERS
+    xtx = [[0.0] * size for _ in range(size)]
+    xty = [0.0] * size
     yty = 0.0
     samples = 0
     for minute in range(newest_minute or step, history_minutes + 1, step):
@@ -213,13 +218,13 @@ def thermal_statistics(temperature, power, ambient, history_minutes, step, newes
         power_now = power.get(minute)
         if temp_now is None or temp_next is None or ambient_now is None or power_now is None:
             continue
-        x = (ambient_now - temp_now, 1.0, power_now)
+        x = (ambient_now - temp_now, power_now)
         y = temp_next - temp_now
         samples += 1
         yty += y * y
-        for i in range(3):
+        for i in range(size):
             xty[i] += x[i] * y
-            for j in range(3):
+            for j in range(size):
                 xtx[i][j] += x[i] * x[j]
     return {"xtx": xtx, "xty": xty, "yty": yty, "weight": float(samples), "samples": samples}
 
@@ -238,9 +243,10 @@ def thermal_statistics_merge(stored, new, decay):
     """
     if not valid_thermal_statistics(stored):
         return {"xtx": [list(row) for row in new["xtx"]], "xty": list(new["xty"]), "yty": new["yty"], "weight": new["weight"], "samples": new["samples"]}
+    size = THERMAL_PARAMETERS
     return {
-        "xtx": [[stored["xtx"][i][j] * decay + new["xtx"][i][j] for j in range(3)] for i in range(3)],
-        "xty": [stored["xty"][i] * decay + new["xty"][i] for i in range(3)],
+        "xtx": [[stored["xtx"][i][j] * decay + new["xtx"][i][j] for j in range(size)] for i in range(size)],
+        "xty": [stored["xty"][i] * decay + new["xty"][i] for i in range(size)],
         "yty": stored["yty"] * decay + new["yty"],
         "weight": stored["weight"] * decay + new["weight"],
         "samples": stored.get("samples", 0) + new["samples"],
@@ -248,9 +254,10 @@ def thermal_statistics_merge(stored, new, decay):
 
 
 def valid_thermal_statistics(stats):
-    """True when stats has the shape thermal_statistics() returns (as read back from storage)."""
+    """True when stats has the shape thermal_statistics() returns (as read back from storage; an older shape is not valid)."""
+    size = THERMAL_PARAMETERS
     try:
-        return len(stats["xtx"]) == 3 and all(len(row) == 3 for row in stats["xtx"]) and len(stats["xty"]) == 3 and float(stats["yty"]) >= 0 and float(stats["weight"]) >= 0
+        return len(stats["xtx"]) == size and all(len(row) == size for row in stats["xtx"]) and len(stats["xty"]) == size and float(stats["yty"]) >= 0 and float(stats["weight"]) >= 0
     except (KeyError, TypeError, ValueError):
         return False
 
@@ -264,30 +271,29 @@ def thermal_fit_statistics(stats, step):
         step: step length in minutes the statistics were gathered at
 
     Returns:
-        dict with tau_hours, heat_rate, offset, samples (decayed step count, rounded) and rmse (degrees C per step), or None
+        dict with tau_hours, heat_rate, samples (decayed step count, rounded) and rmse (degrees C per step), or None
         when there is less than THERMAL_MIN_SAMPLES_MINUTES of evidence or the fit lies outside the plausible bounds
     """
     if not valid_thermal_statistics(stats) or stats["weight"] * step < THERMAL_MIN_SAMPLES_MINUTES:
         return None
     xtx, xty = stats["xtx"], stats["xty"]
-    solution = solve_linear_3(xtx, xty)
+    solution = solve_linear(xtx, xty)
     if solution is None:
         return None
-    a, b, h = solution
+    k, h = solution
     dt_hours = step / 60.0
-    if a <= 0:
+    if k <= 0:
         return None
-    tau_hours = dt_hours / a
-    offset = b / a
+    tau_hours = dt_hours / k
     heat_rate = h / dt_hours
-    if not (THERMAL_TAU_HOURS_MIN <= tau_hours <= THERMAL_TAU_HOURS_MAX) or not (0 <= heat_rate <= THERMAL_HEAT_RATE_MAX) or abs(offset) > THERMAL_OFFSET_MAX:
+    if not (THERMAL_TAU_HOURS_MIN <= tau_hours <= THERMAL_TAU_HOURS_MAX) or not (0 <= heat_rate <= THERMAL_HEAT_RATE_MAX):
         return None
     # Residual sum of squares from the sums: y'y - 2 s'X'y + s'X'X s
-    sum_squares = stats["yty"] - 2 * sum(solution[i] * xty[i] for i in range(3)) + sum(solution[i] * xtx[i][j] * solution[j] for i in range(3) for j in range(3))
+    size = THERMAL_PARAMETERS
+    sum_squares = stats["yty"] - 2 * sum(solution[i] * xty[i] for i in range(size)) + sum(solution[i] * xtx[i][j] * solution[j] for i in range(size) for j in range(size))
     return {
         "tau_hours": round(tau_hours, 3),
         "heat_rate": round(heat_rate, 4),
-        "offset": round(offset, 3),
         "samples": int(round(stats["weight"])),
         "rmse": round((max(sum_squares, 0.0) / stats["weight"]) ** 0.5, 4),
     }
@@ -317,7 +323,8 @@ def thermal_forecast(current_temp, model, ambient, power, forecast_minutes, step
     Args:
         current_temp: the battery temperature now, degrees C
         model: a thermal_fit result
-        ambient: outdoor temperature forecast keyed by minutes ahead; a missing minute holds the last value
+        ambient: outdoor temperature forecast keyed by minutes ahead; a missing minute holds the last value, and before the
+            first value the battery is held at its target
         power: magnitude of the planned battery power in kW keyed by minutes ahead; a missing minute counts as idle
         forecast_minutes: how far ahead to forecast
         step: step length in minutes
@@ -328,13 +335,13 @@ def thermal_forecast(current_temp, model, ambient, power, forecast_minutes, step
     dt_hours = step / 60.0
     tau_hours = model["tau_hours"]
     heat_rate = model["heat_rate"]
-    offset = model["offset"]
     temp = float(current_temp)
-    ambient_last = ambient.get(0, temp - offset)
+    ambient_last = ambient.get(0)
     forecast = {}
     for minute in range(0, forecast_minutes, step):
         forecast[minute] = round(temp, 2)
         ambient_last = ambient.get(minute, ambient_last)
-        temp += dt_hours * ((ambient_last + offset - temp) / tau_hours + heat_rate * power.get(minute, 0.0))
+        target = temp if ambient_last is None else ambient_last
+        temp += dt_hours * ((target - temp) / tau_hours + heat_rate * power.get(minute, 0.0))
         temp = min(max(temp, THERMAL_TEMPERATURE_MIN), THERMAL_TEMPERATURE_MAX)
     return forecast

@@ -3048,7 +3048,7 @@ class Fetch:
         if thermal:
             predicted_temp = thermal
             predict_timestamps = {(self.now_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT): value for minute, value in thermal.items()}
-            model_attributes = {"model": "thermal", "thermal_tau_hours": self.battery_thermal_model["tau_hours"], "thermal_heat_rate": self.battery_thermal_model["heat_rate"], "thermal_offset": self.battery_thermal_model["offset"]}
+            model_attributes = {"model": "thermal", "thermal_tau_hours": self.battery_thermal_model["tau_hours"], "thermal_heat_rate": self.battery_thermal_model["heat_rate"]}
 
         self.dashboard_item(
             self.prefix + ".battery_temperature",
@@ -3174,7 +3174,7 @@ class Fetch:
         self.battery_thermal_model = thermal_fit_statistics(self.battery_thermal_stats, step) if self.battery_thermal_stats else None
         model = self.battery_thermal_model
         if model and previous is None:
-            self.log("Battery thermal model fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, offset {} °C, step error {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["offset"], model["rmse"]))
+            self.log("Battery thermal model fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, step error {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["rmse"]))
         elif previous and not model:
             self.log("Warn: Battery thermal model no longer fits its evidence, using the history look back")
 
@@ -3191,7 +3191,7 @@ class Fetch:
                     self.battery_thermal_last_save = self.now_utc
                     self.battery_thermal_dirty = False
                     if model:
-                        self.log("Battery thermal model saved, fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, offset {} °C, step error {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["offset"], model["rmse"]))
+                        self.log("Battery thermal model saved, fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, step error {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["rmse"]))
                 else:
                     self.log("Warn: {}: failed to save the evidence".format(BATTERY_THERMAL_STORE_KEY))
             except Exception as e:

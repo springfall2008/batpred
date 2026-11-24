@@ -14,14 +14,16 @@ from datetime import datetime, timedelta, timezone
 
 import tempfile
 
-from battery_thermal import ambient_from_results, battery_power_from_soc, plan_power_minutes, solve_linear_3, thermal_fit, thermal_fit_statistics, thermal_forecast, thermal_statistics, thermal_statistics_merge
+from battery_thermal import ambient_from_results, battery_power_from_soc, plan_power_minutes, solve_linear, thermal_fit, thermal_fit_statistics, thermal_forecast, thermal_statistics, thermal_statistics_merge
 from const import PREDICT_STEP, TIME_FORMAT
 from fetch import BATTERY_TEMPERATURE_HISTORY_DAYS, BATTERY_THERMAL_FIT_DAYS, BATTERY_THERMAL_HALF_LIFE_DAYS, BATTERY_THERMAL_RETRY_MINUTES, BATTERY_THERMAL_STORE_KEY
 from tests.test_infra import MockStorageComponents, make_test_storage, run_async
 
 NOW = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
 STEP = 5
-MODEL = {"tau_hours": 6.7, "heat_rate": 0.62, "offset": 2.6}
+MODEL = {"tau_hours": 6.7, "heat_rate": 0.62}
+# A battery in a heated room, simulated: barely follows the outdoor temperature (alpha) and is held near the room temperature (offset)
+INDOOR_TRUTH = {"tau_hours": 10.0, "alpha": 0.05, "heat_rate": 0.4, "offset": 18.0}
 
 
 def check(failed, condition, message):
@@ -63,7 +65,8 @@ def simulate_absolute(model, days):
         temperature[minute_absolute] = temp
         soc_kwh[minute_absolute] = soc
         power = power_at(minute_absolute)
-        temp += dt_hours * ((ambient_at(minute_absolute) + model["offset"] - temp) / model["tau_hours"] + model["heat_rate"] * power)
+        target = model.get("alpha", 1.0) * ambient_at(minute_absolute) + model.get("offset", 0.0)
+        temp += dt_hours * ((target - temp) / model["tau_hours"] + model["heat_rate"] * power)
         # Alternate the direction of the battery level change so the level stays in range; the fit uses |power|
         soc += power * dt_hours * (1 if (minute_absolute // (24 * 60)) % 2 == 0 else -1)
     return temperature, soc_kwh
@@ -87,28 +90,35 @@ def simulate_history(model, days):
     return minutes_ago(temperature, total, total), minutes_ago(soc_kwh, total, total), ambient
 
 
-def test_solve_linear_3():
-    """The 3x3 solver returns the solution and None for a singular system."""
+def test_solve_linear():
+    """The solver returns the solution and None for a singular system."""
     failed = False
-    solution = solve_linear_3([[2, 1, 0], [1, 3, 1], [0, 1, 4]], [3, 5, 5])
-    failed = check(failed, solution is not None and all(abs(v - 1.0) < 1e-9 for v in solution), "solve_linear_3 expected [1, 1, 1], got {}".format(solution))
-    failed = check(failed, solve_linear_3([[1, 2, 3], [2, 4, 6], [1, 1, 1]], [1, 2, 3]) is None, "solve_linear_3 should return None for a singular system")
+    solution = solve_linear([[2, 1, 0], [1, 3, 1], [0, 1, 4]], [3, 5, 5])
+    failed = check(failed, solution is not None and all(abs(v - 1.0) < 1e-9 for v in solution), "solve_linear expected [1, 1, 1], got {}".format(solution))
+    solution = solve_linear([[3, 1], [1, 2]], [4, 3])
+    failed = check(failed, solution is not None and all(abs(v - 1.0) < 1e-9 for v in solution), "solve_linear 2x2 expected [1, 1], got {}".format(solution))
+    failed = check(failed, solve_linear([[1, 2, 3], [2, 4, 6], [1, 1, 1]], [1, 2, 3]) is None, "solve_linear should return None for a singular system")
     return failed
 
 
 def test_fit_recovers_model():
-    """Fitting simulated history recovers the model that made it."""
+    """Fitting simulated history recovers the model that made it; a battery in a heated room fits a long tau instead."""
     failed = False
-    temperature, soc_kwh, ambient = simulate_history(MODEL, days=7)
     history_minutes = 7 * 24 * 60
+    temperature, soc_kwh, ambient = simulate_history(MODEL, days=7)
     power = battery_power_from_soc(soc_kwh, history_minutes, STEP)
     fit = thermal_fit(temperature, power, ambient, history_minutes, STEP)
     failed = check(failed, fit is not None, "thermal_fit returned None on clean simulated history")
     if fit:
         failed = check(failed, abs(fit["tau_hours"] - MODEL["tau_hours"]) < 0.05, "tau_hours {} expected {}".format(fit["tau_hours"], MODEL["tau_hours"]))
         failed = check(failed, abs(fit["heat_rate"] - MODEL["heat_rate"]) < 0.01, "heat_rate {} expected {}".format(fit["heat_rate"], MODEL["heat_rate"]))
-        failed = check(failed, abs(fit["offset"] - MODEL["offset"]) < 0.05, "offset {} expected {}".format(fit["offset"], MODEL["offset"]))
         failed = check(failed, fit["rmse"] < 0.001, "rmse {} expected near 0".format(fit["rmse"]))
+
+    # Indoors the outdoor temperature barely reaches the battery: the fit is still accepted, with a tau far longer than outdoors
+    temperature, soc_kwh, ambient = simulate_history(INDOOR_TRUTH, days=7)
+    power = battery_power_from_soc(soc_kwh, history_minutes, STEP)
+    fit = thermal_fit(temperature, power, ambient, history_minutes, STEP)
+    failed = check(failed, fit is not None and fit["tau_hours"] > 3 * MODEL["tau_hours"], "an indoor battery should fit a long tau, got {}".format(fit))
     return failed
 
 
@@ -151,8 +161,12 @@ def test_forecast_matches_simulation():
     failed = check(failed, forecast[minute_0230] - idle[minute_0230] > 5.0, "charging should warm the battery: {} vs idle {}".format(forecast[minute_0230], idle[minute_0230]))
 
     # A missing ambient minute holds the last value
-    held = thermal_forecast(10.0, {"tau_hours": 1.0, "heat_rate": 0.0, "offset": 0.0}, {0: 0.0}, {}, 24 * 60, STEP)
+    held = thermal_forecast(10.0, {"tau_hours": 1.0, "heat_rate": 0.0}, {0: 0.0}, {}, 24 * 60, STEP)
     failed = check(failed, held[24 * 60 - STEP] < 0.1, "forecast should approach the held ambient, got {}".format(held[24 * 60 - STEP]))
+
+    # Before the outdoor forecast starts the battery holds its temperature, then it follows the outdoor temperature
+    late = thermal_forecast(10.0, {"tau_hours": 1.0, "heat_rate": 0.0}, {60: 0.0}, {}, 6 * 60, STEP)
+    failed = check(failed, late[60] == 10.0 and late[6 * 60 - STEP] < 1.0, "forecast should hold until the outdoor forecast starts, then follow it, got {} {}".format(late[60], late[6 * 60 - STEP]))
     return failed
 
 
@@ -395,7 +409,7 @@ def test_statistics_merge():
     newer = thermal_statistics(temperature, power, ambient, 3 * 24 * 60, STEP)
     merged = thermal_statistics_merge(older, newer, 1.0)
     failed = check(failed, merged["samples"] == whole["samples"] and abs(merged["weight"] - whole["weight"]) < 1e-9, "merged halves should count as the whole")
-    failed = check(failed, all(abs(merged["xtx"][i][j] - whole["xtx"][i][j]) < 1e-6 for i in range(3) for j in range(3)), "merged xtx should equal the whole")
+    failed = check(failed, all(abs(merged["xtx"][i][j] - whole["xtx"][i][j]) < 1e-6 for i in range(2) for j in range(2)), "merged xtx should equal the whole")
     fit = thermal_fit_statistics(merged, STEP)
     failed = check(failed, fit is not None and abs(fit["tau_hours"] - MODEL["tau_hours"]) < 0.05 and fit["rmse"] < 0.001, "merged statistics should fit the model, got {}".format(fit))
     halved = thermal_statistics_merge(older, newer, 0.5)
@@ -403,13 +417,16 @@ def test_statistics_merge():
     fresh = thermal_statistics_merge({"xtx": "bad"}, newer, 0.5)
     failed = check(failed, fresh["weight"] == newer["weight"] and fresh["xtx"] == newer["xtx"] and fresh["xtx"] is not newer["xtx"], "invalid stored statistics should be replaced by a copy of the new")
     failed = check(failed, thermal_fit_statistics({"xtx": None}, STEP) is None, "invalid statistics should not fit")
+    for size in (3, 4):
+        old_shape = {"xtx": [[1.0] * size for _ in range(size)], "xty": [0.0] * size, "yty": 0.0, "weight": 1000.0, "samples": 1000}
+        failed = check(failed, thermal_fit_statistics(old_shape, STEP) is None, "statistics of an older {} parameter shape should not fit".format(size))
     return failed
 
 
 def run_battery_thermal_tests(my_predbat=None):
     """Run the battery thermal model tests; returns True on failure."""
     failed = False
-    failed |= test_solve_linear_3()
+    failed |= test_solve_linear()
     failed |= test_fit_recovers_model()
     failed |= test_fit_rejects_short_or_implausible()
     failed |= test_forecast_matches_simulation()
