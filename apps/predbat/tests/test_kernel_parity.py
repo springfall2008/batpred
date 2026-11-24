@@ -1690,6 +1690,33 @@ def run_model_kernel_tests(my_predbat):
         my_predbat.prediction_kernel_enable = False
 
 
+def run_soc_percent_walk_tests():
+    """Check the kernel's walk to a SoC's percent bucket gives exactly upper_bound's answer, returns True on failure.
+
+    The hot loop finds the bucket by walking from the previous step's percent instead of bisecting, which
+    is only legitimate if it lands on the same bucket from any starting point. pk_verify_soc_percent_walk
+    sweeps SoC densely, probes either side of every bucket boundary, and starts each lookup from the
+    extremes, a random percent and the previous lookup's answer.
+    """
+    print("**** Running SoC percent walk tests ****")
+    lib = prediction_kernel.KERNEL_LIB
+    if not lib or not hasattr(lib, "pk_verify_soc_percent_walk"):
+        print("SKIP: kernel does not expose pk_verify_soc_percent_walk")
+        return False
+    lib.pk_verify_soc_percent_walk.restype = ctypes.c_int32
+    lib.pk_verify_soc_percent_walk.argtypes = [ctypes.c_double, ctypes.c_int32, ctypes.c_uint64]
+    failed = False
+    for soc_max in (0.5, 2.0, 4.8, 5.0, 9.5, 10.0, 13.5, 20.0, 25.6, 30.0, 100.0):
+        for seed in (1, 987654321):
+            bad = lib.pk_verify_soc_percent_walk(ctypes.c_double(soc_max), 100000, seed)
+            if bad:
+                print("ERROR: SoC percent walk disagrees with upper_bound in {} places for soc_max {} (seed {})".format(bad, soc_max, seed))
+                failed = True
+    if not failed:
+        print("SoC percent walk matches upper_bound from every starting percent, boundaries included")
+    return failed
+
+
 def run_soc_percent_table_tests():
     """Check the kernel's SoC percent bucket table is exactly the round_py path it replaced.
 
@@ -2132,6 +2159,7 @@ def run_kernel_parity_tests(my_predbat):
     try:
         failed = run_marshalling_tests()
         failed |= run_soc_percent_table_tests()
+        failed |= run_soc_percent_walk_tests()
         failed |= run_soc_table_memo_tests(my_predbat)
         failed |= run_round_py_tests()
         failed |= run_cancel_context_tests()

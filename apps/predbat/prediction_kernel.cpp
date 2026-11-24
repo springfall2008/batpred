@@ -188,6 +188,25 @@ int32_t percent_via_round(double soc, double soc_max)
     return calc_percent_limit(round_py(soc, 1), soc_max);
 }
 
+// The number of entries of table[1..100] that are <= soc, for the non-decreasing table
+// build_soc_percent_thresholds makes - exactly what std::upper_bound over table[1..] returns. The answer
+// is the one p with (p == 0 or table[p] <= soc) and (p == 100 or table[p + 1] > soc), so walking from any
+// starting p until both hold gives it; the hint only decides how far the walk goes. A battery's SoC
+// moves a few percent at most between 5 minute steps, so starting from the previous step's percent is
+// one or two comparisons where the binary search cost seven, each a hard-to-predict branch. soc must
+// not be NaN (the caller only takes this path for soc >= 0), and table must hold 101 entries.
+inline int32_t soc_percent_walk(const double *table, double soc, int32_t hint)
+{
+    int32_t p = hint;
+    while (p < 100 && table[p + 1] <= soc) {
+        p++;
+    }
+    while (p > 0 && table[p] > soc) {
+        p--;
+    }
+    return p;
+}
+
 // Smallest SoC whose percent_via_round() reaches p, found by bisecting the double's bit pattern.
 //
 // Non-negative doubles compare in the same order as their bit patterns read as integers, so this is
@@ -970,6 +989,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     const double *pv_step = is_pv10 ? c->pv10 : (is_pv90 ? c->pv90 : c->pv);
     const double *load_step = is_pv10 ? c->load10 : (is_pv90 ? c->load90 : c->load);
 
+    // The SoC percent of the previous step (-1 before the first), the starting point of the next lookup
+    int32_t soc_percent_hint = -1;
     // Simulate each forward step - prediction.py:570-1200
     for (int32_t k = 0; k < n_steps; k++) {
         const int32_t minute = k * step;
@@ -1238,7 +1259,19 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // Python rounds SoC to 1dp here purely to quantise an lru_cache key, but the rounding moves
         // the percent at bucket edges so it is observable. The precomputed bucket boundaries give
         // the identical percent from a binary search, with no round_py in the loop at all.
-        const int32_t soc_percent_round1 = soc >= 0.0 ? static_cast<int32_t>(std::upper_bound(soc_pct_threshold.begin() + 1, soc_pct_threshold.end(), soc) - (soc_pct_threshold.begin() + 1)) : percent_via_round(soc, soc_max);
+        int32_t soc_percent_round1;
+        if (soc >= 0.0) {
+            // Walks from the previous step's percent (see soc_percent_walk); the first step starts at the
+            // percent soc/soc_max suggests, which only has to be near
+            if (soc_percent_hint < 0) {
+                soc_percent_hint = (soc_max > 0.0 && soc < soc_max * 1.5) ? static_cast<int32_t>(soc * 100.0 / soc_max) : 0;
+                soc_percent_hint = std::min(std::max(soc_percent_hint, 0), 100);
+            }
+            soc_percent_round1 = soc_percent_walk(soc_pct_threshold.data(), soc, soc_percent_hint);
+            soc_percent_hint = soc_percent_round1;
+        } else {
+            soc_percent_round1 = percent_via_round(soc, soc_max);
+        }
         // The step's battery ceiling curves, picked for its forecast temperature (rate grid rows)
         const double *charge_row = c->charge_curves + PK_CURVE_WIDTH * static_cast<size_t>(c->charge_curve_row[k]);
         const double *discharge_row = c->discharge_curves + PK_CURVE_WIDTH * static_cast<size_t>(c->discharge_curve_row[k]);
@@ -2063,6 +2096,64 @@ int32_t pk_verify_soc_percent_table(double soc_max, int32_t samples)
             }
         }
     }
+    return bad;
+}
+
+// Test hook: confirm soc_percent_walk gives exactly std::upper_bound's answer from every starting hint, over
+// a dense SoC sweep, either side of every bucket boundary, and random jumps between consecutive lookups.
+// Returns the number of disagreements (0 = identical).
+int32_t pk_verify_soc_percent_walk(double soc_max, int32_t samples, uint64_t seed)
+{
+    std::vector<double> table;
+    build_soc_percent_thresholds(table, soc_max);
+    uint64_t state = seed ? seed : 0x9E3779B97F4A7C15ull;
+    auto next = [&state]() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return state;
+    };
+    int32_t bad = 0;
+    auto check = [&](double soc, int32_t hint) {
+        const int32_t want = static_cast<int32_t>(std::upper_bound(table.begin() + 1, table.end(), soc) - (table.begin() + 1));
+        if (soc_percent_walk(table.data(), soc, hint) != want) {
+            bad++;
+        }
+    };
+    const double hi = soc_max * 1.2 + 0.5;
+    int32_t previous = 0;
+    for (int32_t i = 0; i <= samples; i++) {
+        const double soc = hi * static_cast<double>(i) / static_cast<double>(samples);
+        check(soc, 0);
+        check(soc, 100);
+        check(soc, static_cast<int32_t>(next() % 101));
+        check(soc, previous);
+        previous = static_cast<int32_t>(std::upper_bound(table.begin() + 1, table.end(), soc) - (table.begin() + 1));
+    }
+    for (int32_t p = 1; p <= 100; p++) {
+        const double edge = table[p];
+        if (!std::isfinite(edge)) {
+            continue;
+        }
+        double below = edge;
+        double above = edge;
+        for (int32_t d = 0; d < 3; d++) {
+            below = std::nextafter(below, -1.0);
+            above = std::nextafter(above, 1e18);
+            for (int32_t hint = 0; hint <= 100; hint += 25) {
+                check(edge, hint);
+                if (below >= 0.0) {
+                    check(below, hint);
+                }
+                check(above, hint);
+            }
+        }
+    }
+    check(0.0, 0);
+    check(0.0, 100);
+    check(1e300, 0);
+    check(1e300, 100);
+    check(std::numeric_limits<double>::infinity(), 50);
     return bad;
 }
 
