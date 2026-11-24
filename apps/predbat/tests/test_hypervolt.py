@@ -691,7 +691,6 @@ def test_session_key():
         assert _session_key(value) == expected and type(_session_key(value)) is type(expected), (value, _session_key(value))
     for value in (None, True, "", "null", "None"):
         assert _session_key(value) is None, (value, _session_key(value))
-    assert HypervoltCharger(V2_ID, session_id="5").session_id == 5
     print("  ✓ Session ids held in one form")
 
 

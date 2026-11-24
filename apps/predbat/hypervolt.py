@@ -186,10 +186,6 @@ class HypervoltCharger:
     # Epoch seconds of the last message from either socket
     last_message: float = 0.0
 
-    def __post_init__(self):
-        """Hold a session id given at construction in the form apply_session() compares."""
-        self.session_id = _session_key(self.session_id)
-
 
 def apply_snapshot(charger, items):
     """Fold a sync.snapshot or sync.apply body - a list of single-key objects - into a charger. Bad items are skipped."""
