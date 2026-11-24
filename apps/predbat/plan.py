@@ -176,46 +176,27 @@ def slots_around(target_slots, slot_lengths):
     return slot_choices
 
 
-def select_window_candidates(entries, price_selected, allow_freeze, accept=None):
+def select_window_candidates(entries, threshold, charge_side, allow_freeze, accept=None):
     """
     Ordered, deduplicated list of (window_n, freeze) that a price threshold makes available.
 
     entries is a [price, window_n, freeze] list for one side of the search, in the order the
-    optimiser considers them. A window is taken when its price passes price_selected, its freeze
-    flag is allowed by allow_freeze, it has not already been taken, and accept (when given) passes
-    it. Only taken windows count as seen, so a window that accept rejects is offered again if it
-    appears later - which is what the capped scan this replaces did.
+    optimiser considers them. A window is taken when its price passes threshold, its freeze flag is
+    allowed by allow_freeze, it has not already been taken, and accept (when given) passes it. Only
+    taken windows count as seen, so a window that accept rejects is offered again if it appears
+    later - which is what the capped scan this replaces did.
+
+    charge_side takes the entries whose price passes threshold >= price (a charge threshold), and
+    otherwise threshold < price (an export threshold). The comparison is made inline rather than
+    through a predicate: calling one per entry was most of the selection cost, as the levels pass
+    scans these lists about 110,000 times a plan.
 
     The result is deliberately unbounded: capping at max_slots is the caller slicing the first
     max_slots off the front. That equivalence holds because the cap in the original scan was
     monotonic - once reached, nothing further was ever taken - and it is what lets one scan per
     price threshold serve every slot count the search tries. test_window_selection pins it against
-    a reference implementation of the original capped loop.
-    """
-    chosen = []
-    seen = set()
-    for price, window_n, freeze in entries:
-        if not price_selected(price):
-            continue
-        if freeze and not allow_freeze:
-            continue
-        if window_n in seen:
-            continue
-        if accept is not None and not accept(window_n):
-            continue
-        seen.add(window_n)
-        chosen.append((window_n, freeze))
-    return chosen
-
-
-def select_window_candidates_at(entries, threshold, charge_side, allow_freeze, accept=None):
-    """
-    select_window_candidates for the levels search's own two price tests, compared inline.
-
-    charge_side takes the entries whose price passes threshold >= price (a charge threshold), and
-    otherwise threshold < price (an export threshold) - the exact comparisons the search's lambdas
-    made. Calling a predicate per entry was most of the selection cost: the levels pass scans these
-    lists about 110,000 times a plan. test_window_selection pins it against select_window_candidates.
+    a reference implementation of the original capped loop, and pins the inline comparisons against
+    the predicate form this function used to take.
     """
     chosen = []
     seen = set()
@@ -1481,7 +1462,7 @@ class Plan:
                 """Every charge window this price threshold makes available, uncapped"""
                 candidates = charge_candidates.get(allow_freeze)
                 if candidates is None:
-                    candidates = select_window_candidates_at(price_set_charge, loop_price, True, allow_freeze)
+                    candidates = select_window_candidates(price_set_charge, loop_price, True, allow_freeze)
                     charge_candidates[allow_freeze] = candidates
                 return candidates
 
@@ -1489,7 +1470,7 @@ class Plan:
                 """Every export window this price threshold makes available, uncapped"""
                 candidates = export_candidates.get(allow_freeze)
                 if candidates is None:
-                    candidates = select_window_candidates_at(price_set_export, loop_price, False, allow_freeze, accept=export_window_allowed)
+                    candidates = select_window_candidates(price_set_export, loop_price, False, allow_freeze, accept=export_window_allowed)
                     export_candidates[allow_freeze] = candidates
                 return candidates
 

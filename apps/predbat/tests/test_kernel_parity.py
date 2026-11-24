@@ -1452,6 +1452,105 @@ def run_clipping_parity_tests(my_predbat, count=250):
     return failed
 
 
+def make_multi_split_windows(rng, minutes_now, forecast_minutes):
+    """Build a layout where each charge window has two to four export windows strictly inside it.
+
+    make_intersecting_windows puts at most one export window against each charge window, so a charge
+    window there clips to at most two segments. With k export windows inside it a charge window clips
+    to k + 1 segments, which is the layout that overran the kernel's output buffers when they were
+    sized at two segments per charge window. Gaps between the export windows are mostly 5 minutes or
+    more, so most remnants survive the 5 minute minimum, with the odd short one to keep that rule in play.
+    """
+    charge_window = []
+    export_window = []
+    minute = minutes_now + rng.choice([0, 5, 30])
+    for _ in range(rng.randint(1, 3)):
+        length = rng.choice([120, 180, 240, 360])
+        end = min(minute + length, minutes_now + forecast_minutes)
+        if end - minute < 60:
+            break
+        charge_window.append({"start": minute, "end": end, "average": round(rng.uniform(0, 40), 2)})
+        cursor = minute + rng.choice([2, 5, 10, 30])
+        for _ in range(rng.randint(2, 4)):
+            dstart = cursor
+            dend = dstart + rng.choice([5, 10, 30])
+            if dend >= end - 2:
+                break
+            export_window.append({"start": dstart, "end": dend, "average": round(rng.uniform(0, 40), 2)})
+            cursor = dend + rng.choice([3, 5, 10, 30])
+        minute = end + rng.choice([0, 5, 30])
+        if minute >= minutes_now + forecast_minutes:
+            break
+    export_window.sort(key=lambda w: w["start"])
+    return charge_window, export_window
+
+
+def run_multi_split_parity_tests(my_predbat, count=80):
+    """Compare both engines when one charge window is split by several export windows, returns True on failure.
+
+    Pins clip_intersecting_charge_windows for layouts that clip to more than two segments per charge
+    window, both through pk_run and through pk_run_batch, whose window setup is carried between jobs.
+    """
+    failed = False
+    over_two = 0
+    layouts = 0
+    for seed in range(count):
+        rng = random.Random(700000 + seed)
+        reset_inverter(my_predbat)
+        reset_rates(my_predbat, 10.0, 5.0)
+        my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
+        apply_random_scenario(my_predbat, rng)
+        pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, rng=rng)
+
+        charge_window, export_window = make_multi_split_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes)
+        if not charge_window:
+            continue
+        charge_limit = [rng.choice([my_predbat.reserve, my_predbat.soc_max, round(rng.uniform(0.1, my_predbat.soc_max), 2)]) for _ in charge_window]
+        export_limits = [unpack_export_limit(rng.choice([99.0, 0.0, 0.0, round(rng.uniform(0, 100), 1)])) for _ in export_window]
+        end_record = my_predbat.forecast_minutes
+
+        layouts += 1
+        _, clipped_windows = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
+        if len(clipped_windows) > 2 * len(charge_window):
+            over_two += 1
+
+        for pv_scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10):
+            name = "multi_split_{}_s{}".format(seed, pv_scenario)
+            failed |= dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record)
+
+            # The batch path carries the clipped windows between jobs, so run the layout twice in one batch
+            prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+            my_predbat.prediction_kernel_enable = False
+            expect = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False, export_floor=False)
+            prediction.kernel_handle = create_kernel_context(prediction)
+            job = prediction_kernel.BatchJob(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, 5)
+            batched = prediction_kernel.run_prediction_kernel_batch(prediction, [job, job])
+            if batched is None:
+                print("ERROR: Scenario {} kernel batch run failed".format(name))
+                failed = True
+            else:
+                # A batch returns no predict_soc series, so compare only the result fields
+                for job_n, entry in enumerate(batched):
+                    for index, result_name in enumerate(RESULT_NAMES):
+                        tolerance = PARITY_TOLERANCE if result_name in UNROUNDED_RESULTS else ROUNDED_RESULT_TOLERANCE
+                        if entry[0] is None or abs(expect[index] - entry[0][index]) > tolerance:
+                            print("ERROR: Scenario {}_batch{} mismatch on {}: python {} kernel {}".format(name, job_n, result_name, expect[index], None if entry[0] is None else entry[0][index]))
+                            failed = True
+                            break
+            if failed:
+                print("Multi-split sweep failed at seed {} scenario {}".format(seed, pv_scenario))
+                print("   charge {} limits {}".format([(w["start"], w["end"]) for w in charge_window], charge_limit))
+                print("   export {} limits {}".format([(w["start"], w["end"]) for w in export_window], export_limits))
+                break
+        if failed:
+            break
+    print("Multi-split sweep ran {} layouts, {} of which clipped to more than two segments per charge window".format(layouts, over_two))
+    if over_two == 0:
+        print("ERROR: multi-split sweep never clipped past two segments per charge window - it is not exercising the case it exists for")
+        failed = True
+    return failed
+
+
 def build_batch_jobs(my_predbat, rng, count, window_variants=1):
     """Build a list of BatchJob scenarios plus the Prediction they run against.
 
@@ -2323,6 +2422,8 @@ def run_kernel_parity_tests(my_predbat):
             failed |= run_random_sweep_tests(my_predbat)
         if not failed:
             failed |= run_clipping_parity_tests(my_predbat)
+        if not failed:
+            failed |= run_multi_split_parity_tests(my_predbat)
         if not failed:
             failed |= run_batch_parity_tests(my_predbat)
         if not failed:

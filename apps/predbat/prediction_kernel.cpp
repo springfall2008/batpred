@@ -646,16 +646,24 @@ static void build_export_active(std::vector<std::pair<int32_t, int32_t>> &export
 static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, std::vector<int32_t> &out_end, std::vector<double> &out_limit, std::vector<int32_t> &out_src, int32_t n_charge, const int32_t *charge_start, const int32_t *charge_end, const double *charge_limit,
                                              const std::vector<std::pair<int32_t, int32_t>> &export_active)
 {
-    // A charge window yields at most two segments (the head before an export window, and what is left
-    // after it), so the outputs are sized for that and written by index; the push_backs this replaces
-    // were a call each and the clip is a visible share of a job
-    const size_t capacity = static_cast<size_t>(n_charge) * 2;
+    // The outputs are written by index rather than with push_back, which was a call per segment and the
+    // clip is a visible share of a job. Most charge windows yield one or two segments, so the outputs
+    // start at two per charge window, but a charge window with k enabled export windows strictly inside
+    // it yields k + 1, so emit grows them whenever they are full
+    size_t capacity = static_cast<size_t>(n_charge) * 2;
     out_start.resize(capacity);
     out_end.resize(capacity);
     out_limit.resize(capacity);
     out_src.resize(capacity);
     size_t count = 0;
     auto emit = [&](int32_t start, int32_t end, double limit, int32_t src) {
+        if (count == capacity) {
+            capacity = capacity * 2 + 2;
+            out_start.resize(capacity);
+            out_end.resize(capacity);
+            out_limit.resize(capacity);
+            out_src.resize(capacity);
+        }
         out_start[count] = start;
         out_end[count] = end;
         out_limit[count] = limit;
