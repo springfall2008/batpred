@@ -34,11 +34,13 @@ from utils import in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 # ABI 11: scalar results come back already rounded to 4dp. ABI 13 (car cancel branch) adds the car slot cancel table and cancel_floor_kw to
-# PkContext; ABI 12 (main) the rate grid curve rows; ABI 14 is both.
-KERNEL_ABI_VERSION = 14
+# PkContext; ABI 12 (main) the rate grid curve rows; ABI 14 is both. ABI 15: the export budget fields at the end of PkContext.
+KERNEL_ABI_VERSION = 15
 # Parity 22 (car cancel branch): an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted -
 # merged with main's parity 20. Parity 23 (main): the battery rate grids. Parity 24: both.
-KERNEL_PARITY_REVISION = 24
+# Parity 25: the optional export energy budget (export_budget_mode) caps forced battery export.
+# Parity 26: pv_origin holds the PV part of the stored energy at the export budget cap.
+KERNEL_PARITY_REVISION = 26
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -154,6 +156,10 @@ class PkContext(ctypes.Structure):
         ("iboost_on_export", ctypes.c_int32),
         ("has_rate_gas", ctypes.c_int32),
         ("has_iboost_plan", ctypes.c_int32),
+        ("export_budget_mode", ctypes.c_int32),
+        ("export_budget_cap", ctypes.c_double),
+        ("export_budget_seed_bucket", ctypes.c_double),
+        ("export_budget_seed_pv_share", ctypes.c_double),
     ]
 
 
@@ -916,6 +922,11 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_on_export = 1 if pred.iboost_on_export else 0
         ctx.has_rate_gas = 1 if pred.rate_gas else 0
         ctx.has_iboost_plan = 1 if pred.iboost_plan else 0
+        ctx.export_budget_mode = int(getattr(pred, "export_budget_mode", 0) or 0)
+        budget_cap = getattr(pred, "export_budget_cap_kwh", 0.0) or 0.0
+        ctx.export_budget_cap = budget_cap if budget_cap > 0 else pred.soc_max
+        budget_seed = getattr(pred, "export_budget_seed", None) if ctx.export_budget_mode else None
+        ctx.export_budget_seed_bucket, ctx.export_budget_seed_pv_share = budget_seed if budget_seed else (0.0, 0.0)
 
         handle = lib.pk_context_create(ctypes.byref(ctx))
         if handle:
