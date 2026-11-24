@@ -121,7 +121,7 @@ inline bool pk_export_is_freeze(int32_t mode) { return mode == PK_EXPORT_MODE_FR
 // Mirror of CPython round(x, n): correctly-rounded decimal rounding (ties to even).
 // snprintf performs a correctly-rounded binary->decimal conversion and strtod a
 // correctly-rounded decimal->binary conversion, matching CPython's _Py_dg_dtoa path.
-double round_py(double value, int ndigits)
+double round_py_slow(double value, int ndigits)
 {
     if (!std::isfinite(value)) {
         return value;
@@ -129,6 +129,32 @@ double round_py(double value, int ndigits)
     char buf[64];
     snprintf(buf, sizeof(buf), "%.*f", ndigits, value);
     return strtod(buf, nullptr);
+}
+
+// round_py with the snprintf+strtod round trip (~96ns, the most expensive thing in the SoC-range and
+// window-end loops) replaced by arithmetic wherever that provably gives the same double.
+//
+// With p = 10^ndigits (exact), y = value * p carries at most half an ulp of error. The correctly
+// rounded decimal snprintf prints is the integer k nearest the EXACT value * p; nearbyint(y) is the
+// integer nearest y. The two agree whenever y is further than half an ulp from a half-integer, and the
+// guard below demands 1e-6, well above half an ulp of any |y| < 1e9. The string then denotes k / p,
+// and strtod returns the double nearest k / p - which is exactly what the IEEE division k / p returns,
+// as k and p are both exact. Anything near a tie, large, or non-finite takes the original path.
+// pk_verify_round_py compares the two bit for bit, ties and signed zeros included.
+__attribute__((noinline)) double round_py(double value, int ndigits)
+{
+    static const double pow10[] = {1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0};
+    if (ndigits >= 0 && ndigits <= 6 && std::isfinite(value)) {
+        const double p = pow10[ndigits];
+        const double y = value * p;
+        if (std::fabs(y) < 1e9) {
+            const double distance = std::fabs((y - std::floor(y)) - 0.5);
+            if (distance > 1e-6) {
+                return std::nearbyint(y) / p;
+            }
+        }
+    }
+    return round_py_slow(value, ndigits);
 }
 
 // The 4dp rounding the result fields are returned with (Python's kernel_result_tuple used to apply
@@ -2059,6 +2085,67 @@ int32_t pk_verify_context_soc_table(int64_t handle)
         if (std::memcmp(&fresh[i], &store->soc_percent_threshold[i], sizeof(double)) != 0) {
             bad++;
         }
+    }
+    return bad;
+}
+
+// Test hook: compare round_py's arithmetic path with the snprintf+strtod original, bit for bit,
+// over random values of every magnitude the kernel rounds, values a few representable steps either side of every
+// decimal tie, exact binary ties (odd multiples of 1/16 and 1/2048) and signed zeros, for ndigits 0-6.
+// Returns the number of disagreements (0 = identical).
+int32_t pk_verify_round_py(int32_t samples, uint64_t seed)
+{
+    uint64_t state = seed ? seed : 0x9E3779B97F4A7C15ull;
+    auto next = [&state]() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return state;
+    };
+    auto same = [](double a, double b) { return std::memcmp(&a, &b, sizeof(double)) == 0; };
+    int32_t bad = 0;
+    auto check = [&](double v, int nd) {
+        if (!same(round_py(v, nd), round_py_slow(v, nd))) {
+            bad++;
+        }
+    };
+    static const double scales[] = {1e-6, 1e-3, 0.1, 1.0, 10.0, 100.0, 1000.0, 1e5};
+    for (int32_t i = 0; i < samples; i++) {
+        const int nd = static_cast<int>(next() % 7);
+        const double unit = static_cast<double>(next() >> 11) / 9007199254740992.0;
+        const double scale = scales[next() % 8];
+        double v = unit * scale;
+        if (next() & 1) {
+            v = -v;
+        }
+        check(v, nd);
+        // A few representable steps either side of the nearest decimal tie at this precision
+        const double p = std::pow(10.0, nd);
+        const double tie = (std::floor(v * p) + 0.5) / p;
+        double probe = tie;
+        for (int32_t d = 0; d < 4; d++) {
+            check(probe, nd);
+            probe = std::nextafter(probe, 1e300);
+        }
+        probe = tie;
+        for (int32_t d = 0; d < 4; d++) {
+            probe = std::nextafter(probe, -1e300);
+            check(probe, nd);
+        }
+    }
+    for (int32_t m = -4001; m <= 4001; m += 2) {
+        for (int nd = 0; nd <= 6; nd++) {
+            check(m / 16.0, nd);
+            check(m / 2048.0, nd);
+        }
+    }
+    for (int nd = 0; nd <= 6; nd++) {
+        check(0.0, nd);
+        check(-0.0, nd);
+        check(-1e-12, nd);
+        check(1e-12, nd);
+        check(2e9, nd);
+        check(-2e9, nd);
     }
     return bad;
 }

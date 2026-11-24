@@ -1773,6 +1773,33 @@ def run_soc_table_memo_tests(my_predbat):
     return failed
 
 
+def run_round_py_tests():
+    """Check the kernel's arithmetic round_py gives exactly the snprintf+strtod result it replaces.
+
+    round_py mirrors CPython's round(x, n) and feeds the SoC series, the SoC range of a charge window,
+    the window-end SoCs, iBoost and car SoCs. Its fast path is only legitimate if it is bit-identical to
+    the correctly-rounded string round trip for every value that can reach it, so the kernel's
+    pk_verify_round_py hook sweeps random values of every magnitude, probes a few representable steps either side of
+    each decimal tie, and checks exact binary ties and signed zeros, for 0 to 6 digits.
+    """
+    print("**** Running kernel round_py tests ****")
+    lib = prediction_kernel.KERNEL_LIB
+    if not lib or not hasattr(lib, "pk_verify_round_py"):
+        print("SKIP: kernel does not expose pk_verify_round_py")
+        return False
+    lib.pk_verify_round_py.restype = ctypes.c_int32
+    lib.pk_verify_round_py.argtypes = [ctypes.c_int32, ctypes.c_uint64]
+    failed = False
+    for seed in (1, 20260824, 987654321):
+        bad = lib.pk_verify_round_py(300000, seed)
+        if bad:
+            print("ERROR: kernel round_py differs from snprintf+strtod in {} cases (seed {})".format(bad, seed))
+            failed = True
+    if not failed:
+        print("Kernel round_py matches snprintf+strtod bit for bit, ties and signed zeros included")
+    return failed
+
+
 def run_scratch_reuse_tests(my_predbat, batches=10):
     """Check a thread builds its scratch buffers once, not once per batch, returns True on failure.
 
@@ -2106,6 +2133,7 @@ def run_kernel_parity_tests(my_predbat):
         failed = run_marshalling_tests()
         failed |= run_soc_percent_table_tests()
         failed |= run_soc_table_memo_tests(my_predbat)
+        failed |= run_round_py_tests()
         failed |= run_cancel_context_tests()
         failed |= run_edge_case_tests(my_predbat)
         failed |= run_export_floor_parity_tests(my_predbat)
