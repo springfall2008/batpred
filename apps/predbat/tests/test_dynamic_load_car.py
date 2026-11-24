@@ -1210,14 +1210,31 @@ def _run_short_dispatch(my_predbat):
         _cycle(my_predbat, 910, slots=[{"start": 900, "end": 930, "kwh": 3.0, "octopus": True}])
         failed |= _check("t56 old half hour pruned", old not in my_predbat.dynamic_load_car_confirmed_periods[0], "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
 
-        print("Test 57: a one-minute dispatch in the first 2 minutes of a half hour is never confirmed")
-        # Deliberate: the sensor can still show charging for a car that stopped just before the boundary, and a
-        # dispatch that short is not trusted (dispatch_too_short()), so the guard is kept for it too
-        _reset(my_predbat)
-        _sensor(my_predbat, "on")
-        my_predbat.car_charging_slots = [[{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]]
-        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
-        failed |= _check("t57 14:00-14:30 not confirmed at 14:00:30", not my_predbat.dynamic_load_car_confirmed_periods.get(0), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        # A sensor reading in the first DYNAMIC_LOAD_CAR_CONFIRM_MINUTES of a half hour can still show a car that
+        # stopped just before the boundary, so it does not confirm - except for a dispatch that starts and ends
+        # within those minutes, which could otherwise never be confirmed (GH#6354)
+        def confirmed_at(slots, minute, seconds):
+            _reset(my_predbat)
+            _sensor(my_predbat, "on")
+            my_predbat.car_charging_slots = [slots]
+            my_predbat.dynamic_load_car_poll(_at(my_predbat, minute, seconds))
+            return my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set())
+
+        print("Test 57: a dispatch inside the first 2 minutes of a half hour is confirmed by a reading inside it")
+        failed |= _check("t57 14:00-14:01 confirmed at 14:00:30", confirmed_at([{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}], 840, 30))
+        failed |= _check("t57 14:00-14:02 confirmed at 14:01:45", confirmed_at([{"start": 840, "end": 842, "kwh": 0.2, "octopus": True}], 841, 45))
+        failed |= _check("t57 14:01-14:02 confirmed at 14:01:15", confirmed_at([{"start": 841, "end": 842, "kwh": 0.1, "octopus": True}], 841, 15))
+
+        print("Test 57b: the car must be seen inside the dispatch - a reading after it ends does not confirm")
+        failed |= _check("t57b 14:00-14:02 not confirmed at 14:02:30", not confirmed_at([{"start": 840, "end": 842, "kwh": 0.2, "octopus": True}], 842, 30))
+
+        print("Test 57c: the guard still applies to a dispatch that runs past the first 2 minutes")
+        failed |= _check("t57c 14:00-14:03 not confirmed at 14:01:30", not confirmed_at([{"start": 840, "end": 843, "kwh": 0.3, "octopus": True}], 841, 30))
+        failed |= _check("t57c 14:00-14:03 confirmed at 14:02:30", confirmed_at([{"start": 840, "end": 843, "kwh": 0.3, "octopus": True}], 842, 30))
+
+        print("Test 57d: the guard still applies to a dispatch running on from the previous half hour")
+        # 13:50-14:00 and 14:00-14:01 touch, so they are one run starting at 13:50, not a dispatch starting at the boundary
+        failed |= _check("t57d 13:50-14:01 not confirmed at 14:00:30", not confirmed_at([{"start": 830, "end": 840, "kwh": 1.0, "octopus": True}, {"start": 840, "end": 841, "kwh": 0.1, "octopus": True}], 840, 30))
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
             if value is None:
