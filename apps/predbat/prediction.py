@@ -191,6 +191,8 @@ class Prediction(PredictionBatch):
             self.battery_rate_max_scaling_discharge = base.battery_rate_max_scaling_discharge
             self.battery_loss = base.battery_loss
             self.battery_loss_discharge = base.battery_loss_discharge
+            self.battery_soc_full_hysteresis = base.battery_soc_full_hysteresis
+            self.battery_full_hysteresis_active = base.battery_full_hysteresis_active
             self.best_soc_keep = base.best_soc_keep
             self.best_soc_keep_weight = base.best_soc_keep_weight
             self.best_soc_min = base.best_soc_min
@@ -807,10 +809,26 @@ class Prediction(PredictionBatch):
 
         # Simulate each forward minute
         minute = 0
+        # Battery full hysteresis: seed from the real, live state (set on the base object from actual
+        # telemetry) so the very first simulated minute matches reality, then let it evolve minute by
+        # minute as the simulated soc rises and falls - this is what lets the plan already account for
+        # the inverter refusing charge current near 100%, rather than only the live controller doing so.
+        battery_soc_full_hysteresis = self.battery_soc_full_hysteresis
+        full_hysteresis_active = self.battery_full_hysteresis_active if battery_soc_full_hysteresis else False
         while minute < self.forecast_minutes:
             # Minute yesterday can wrap if days_previous is only 1
             minute_absolute = minute + self.minutes_now
             prev_soc = soc
+            if battery_soc_full_hysteresis:
+                # Precise float percent, not calc_percent_limit's integer rounding: a user can
+                # configure the hysteresis band down to 0.5% steps, and rounding soc to the nearest
+                # whole percent first would make anything finer than 1% meaningless and could shift
+                # the activate/clear transition by up to half a percentage point either way.
+                soc_percent_now = (soc / soc_max * 100.0) if soc_max > 0 else 0.0
+                if soc_percent_now >= 100.0:
+                    full_hysteresis_active = True
+                elif soc_percent_now <= (100.0 - battery_soc_full_hysteresis):
+                    full_hysteresis_active = False
             reserve_expected = reserve
             force_charging = False
             import_rate = rate_import.get(minute_absolute, 0)
@@ -1078,7 +1096,7 @@ class Prediction(PredictionBatch):
                     discharge_rate_now = battery_rate_min
 
             # Current real charge rate
-            charge_rate_now_curve = charge_rate_lookup(round(soc, 1), charge_rate_now, soc_max, battery_rate_max_charge, battery_rate_min) * battery_rate_max_scaling
+            charge_rate_now_curve = 0.0 if full_hysteresis_active else charge_rate_lookup(round(soc, 1), charge_rate_now, soc_max, battery_rate_max_charge, battery_rate_min) * battery_rate_max_scaling
             charge_rate_now_curve_step = charge_rate_now_curve * step
             discharge_rate_now_curve = discharge_rate_lookup(round(soc, 1), discharge_rate_now, soc_max, battery_rate_max_discharge, battery_rate_min) * self.battery_rate_max_scaling_discharge
             discharge_rate_now_curve_step = discharge_rate_now_curve * step
@@ -1122,7 +1140,7 @@ class Prediction(PredictionBatch):
                             reduce_by = reduce_by - battery_draw * inverter_loss
 
                             if inverter_hybrid:
-                                charge_rate_now_curve_dc = charge_rate_lookup(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
+                                charge_rate_now_curve_dc = 0.0 if full_hysteresis_active else charge_rate_lookup(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
                                 charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
                                 # Hybrid charges from PV on the DC side (see pv_dc below), so the AC surplus maps
                                 # back to DC through the loss reciprocal. Clamp by battery_to_max (remaining charge
@@ -1156,7 +1174,7 @@ class Prediction(PredictionBatch):
                             reduce_by = reduce_by - battery_draw
                             battery_draw = 0
                             if self.inverter_can_charge_during_export:
-                                charge_rate_now_curve_dc = charge_rate_lookup(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
+                                charge_rate_now_curve_dc = 0.0 if full_hysteresis_active else charge_rate_lookup(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
                                 charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
                                 # reduce_by here is in the same DC-equivalent throughput units as total_inverted
                                 # (get_total_inverted counts the battery and the PV diverted to DC 1:1), so the
@@ -1222,6 +1240,7 @@ class Prediction(PredictionBatch):
                     pv_window_kwh=pv_window_kwh,
                     low_power_pv_threshold_w=self.low_power_pv_threshold_w,
                     solar_full_rate=self.set_charge_low_power_solar_full_rate,
+                    full_hysteresis_active=full_hysteresis_active,
                 )
                 charge_rate_now_curve_step = charge_rate_now_curve * step
 
@@ -1282,7 +1301,7 @@ class Prediction(PredictionBatch):
                     if inverter_hybrid:
                         charge_rate_now_dc = battery_rate_max_charge_dc
 
-                        charge_rate_now_curve_dc = charge_rate_lookup(soc, charge_rate_now_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
+                        charge_rate_now_curve_dc = 0.0 if full_hysteresis_active else charge_rate_lookup(soc, charge_rate_now_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
                         charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step * charge_rate_scale
 
                         virtual_inverter_limit = inverter_limit + pv_now
@@ -1314,7 +1333,7 @@ class Prediction(PredictionBatch):
                     if diff < 0 and abs(diff) > export_limit and self.inverter_can_charge_during_export and self.inverter_support_feedin_first:
                         over_limit = abs(diff) - export_limit
                         if inverter_hybrid:
-                            charge_rate_now_curve_dc = charge_rate_lookup(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
+                            charge_rate_now_curve_dc = 0.0 if full_hysteresis_active else charge_rate_lookup(soc, battery_rate_max_charge_dc, soc_max, battery_rate_max_charge_dc, battery_rate_min) * battery_rate_max_scaling
                             charge_rate_now_curve_dc_step = charge_rate_now_curve_dc * step
                             battery_draw = max(-over_limit * inverter_loss_recp, -battery_to_max, -charge_rate_now_curve_dc_step)
                         else:

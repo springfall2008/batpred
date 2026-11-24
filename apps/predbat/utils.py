@@ -2755,7 +2755,7 @@ def rate_curve_function(rate_curve):
     return lookup
 
 
-def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_rate_curve, battery_rate_min):
+def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_rate_curve, battery_rate_min, full_hysteresis_active=False):
     """
     True charging rate from SoC and charge rate setting
 
@@ -2765,15 +2765,26 @@ def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate
     charge_rate_curve is the battery's charge ceiling by SoC percent in kW per minute for the current temperature
     (battery_rate_grid.rate_grid_curve(grid, temperature, rated=...)), a tuple so it can key the cache; the path's own
     maximum (battery_rate_max_charge) is a separate limit, and a setting below both is used as it is.
+
+    full_hysteresis_active is True when the (per-inverter) battery has recently reached 100% SoC and
+    has not yet dropped below the configured battery_soc_full_hysteresis band - see find_charge_rate.
+    Some inverters clamp their real max charge current to (near) zero for the whole of this band, for
+    ALL charge current (grid charging, PV self-consumption charging, and export recapture alike) -
+    this is the single low-level choke point every one of those charging paths calls through, so the
+    clamp belongs here rather than only in find_charge_rate. The floor is 0.0, not battery_rate_min:
+    battery_rate_min models a different, unrelated inverter quirk (some inverters still trickle-charge
+    a little even when commanded to 0), which is the opposite of what is being modelled here.
     """
+    if full_hysteresis_active:
+        return 0.0
     return max(min(charge_rate_setting, rate_curve_ceiling(soc, soc_max, battery_rate_max_charge, charge_rate_curve)), battery_rate_min)
 
 
-def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_rate_curve, battery_rate_min):
+def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_rate_curve, battery_rate_min, full_hysteresis_active=False):
     """
     Compute true charging rate from SoC and charge rate setting
     """
-    return get_charge_rate_curve_cached(round(soc, 1), charge_rate_setting, soc_max, battery_rate_max_charge, tuple(charge_rate_curve) if charge_rate_curve else (), battery_rate_min)
+    return get_charge_rate_curve_cached(round(soc, 1), charge_rate_setting, soc_max, battery_rate_max_charge, tuple(charge_rate_curve) if charge_rate_curve else (), battery_rate_min, full_hysteresis_active)
 
 
 def get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, discharge_rate_curve, battery_rate_min):
@@ -2905,6 +2916,7 @@ def find_charge_rate(
     pv_window_kwh=0.0,
     low_power_pv_threshold_w=0.0,
     solar_full_rate=True,
+    full_hysteresis_active=False,
 ):
     """
     Find the lowest charge rate that fits the charge slow
@@ -2925,6 +2937,8 @@ def find_charge_rate(
 
     charge_rate_curve is the battery's charge ceiling by SoC percent for the window's temperature
     (battery_rate_grid.rate_grid_curve), as get_charge_rate_curve_cached() takes it.
+
+    full_hysteresis_active (see get_charge_rate_curve_cached) holds the charge rate at zero.
     """
     charge_rate_curve = tuple(charge_rate_curve) if charge_rate_curve else ()
     margin = charge_low_power_margin
@@ -2933,6 +2947,11 @@ def find_charge_rate(
     # Current charge rate
     if current_charge_rate is None:
         current_charge_rate = max_rate
+
+    if full_hysteresis_active:
+        if log_to:
+            log_to("Battery full hysteresis active: SoC recently reached 100%, holding charge current at zero until it drops through the hysteresis band")
+        return 0.0, 0.0
 
     # Real achieved max rate
     max_rate_real = get_charge_rate_curve_cached(round(soc, 1), max_rate, soc_max, max_rate, charge_rate_curve, battery_rate_min) * battery_rate_max_scaling
