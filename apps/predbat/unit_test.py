@@ -368,7 +368,17 @@ from tests.test_find_charge_window import test_find_charge_window
 from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
 from tests.test_fetch_no_load_source import test_fetch_no_load_source
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
-from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests, run_random_scenario_reapply_tests
+from tests.test_random_scenarios import (
+    generate_scenarios,
+    save_scenarios,
+    run_scenarios_from_file,
+    compare_results,
+    profile_scenario,
+    run_random_scenario_tests,
+    run_random_scenario_reapply_tests,
+    run_random_scenario_metric_tests,
+    run_random_scenario_generator_tests,
+)
 from tests import network_guard
 from tests.test_network_guard import test_network_guard
 from tests.test_debug_yaml_cache import test_debug_yaml_cache
@@ -1090,6 +1100,8 @@ def main():
         ("ml_training_perf", run_ml_training_perf_tests, "ML training performance tests", True),
         ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
         ("random_reapply", run_random_scenario_reapply_tests, "Running a random scenario leaves it unchanged, so a re-run plans identically", False),
+        ("random_metric", run_random_scenario_metric_tests, "The random scenario harness records the planner's own metric for the final plan", False),
+        ("random_generator", run_random_scenario_generator_tests, "The committed random scenarios are what the generator makes, with no iBoost conflict", False),
         ("gecloud_budget_harness", run_gecloud_budget_harness_tests, "GE Cloud API budget harness unit tests", False),
         ("gecloud_api_budget", run_gecloud_api_budget, "GE Cloud API calls over a simulated day (baseline measurement)", True),
         ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),
