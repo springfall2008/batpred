@@ -1131,6 +1131,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             "scheduled_discharge_enable": control("switch", "schedule_discharge_enable"),
             "schedule_write_button": control("switch", "schedule_write"),
             "battery_export_permitted": sensor("battery_export_permitted", domain="binary_sensor"),
+            # The Powerwall's fixed 0% reserve floor: a constant, not something site_info reports
+            "battery_min_soc": {"value": TESLA_MIN_RESERVE, "access": "r"},
         }
         for limit_arg in ("battery_rate_max", "inverter_limit", "inverter_limit_charge", "export_limit"):
             if self.get_state_wrapper(self.entity(limit_arg)) is not None:
@@ -1149,9 +1151,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         published readable like every identifier.
 
         Ratings are the figures site_info reports (nameplate energy and power, the configured export
-        limit), plus battery_min_soc, the Powerwall's fixed 0% reserve floor. inverter_limit_charge is
-        derived per battery unit and the battery_count capacity estimate is a guess, so neither is a
-        rating; both stay bound as entities where automatic_config() binds them.
+        limit). inverter_limit_charge is derived per battery unit and the battery_count capacity
+        estimate is a guess, so neither is a rating; both stay bound as entities where automatic_config()
+        binds them. battery_min_soc is a fixed constant rather than a reported figure, so it is an entity
+        value stand-in, not a rating.
 
         Never reported: the site name, address, timezone, gateway DINs and device UUIDs.
 
@@ -1180,7 +1183,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             hardware_ids={"serial": str(serial)} if serial else None,
             account_ids={"energy_site_id": str(self.site_id)},
             info=info,
-            ratings=dict(self.site_ratings or {}, battery_min_soc=TESLA_MIN_RESERVE),
+            ratings=dict(self.site_ratings or {}),
             entities=self._discovery_entities(),
         )
         return {"automatic": self.automatic, "inverters": [record]}

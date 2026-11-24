@@ -543,7 +543,11 @@ def test_teslemetry_automatic_config_binds_zero_battery_min_soc():
     assert run_async(api.fetch_site_info()) is True
     run_async(api.automatic_config())
     assert api.args_set["battery_min_soc"] == [0], api.args_set.get("battery_min_soc")
-    assert _discovery_tesla().build_discovery()["inverters"][0]["ratings"]["battery_min_soc"] == 0
+    # A constant Predbat supplies rather than a figure the device reports, so it is an entity value stand-in
+    # (as SolaX's is), not a rating - spec D14 and section 1.3
+    record = _discovery_tesla().build_discovery()["inverters"][0]
+    assert record["entities"]["battery_min_soc"] == {"value": 0, "access": "r"}, record["entities"].get("battery_min_soc")
+    assert "battery_min_soc" not in record["ratings"], record["ratings"]
 
     api = MockTeslemetryAPI()
     api.base.args_from_apps_yaml = {"battery_min_soc": 10}
