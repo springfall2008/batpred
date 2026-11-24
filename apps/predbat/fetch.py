@@ -3121,6 +3121,44 @@ class Fetch:
         except Exception as e:
             self.log("Warn: Battery thermal model update failed, continuing without it: {}".format(e))
 
+    def battery_thermal_load(self):
+        """
+        Read the thermal model's stored evidence once, until it reads back (GH#5919). A failed read is counted in
+        battery_thermal_load_failures, so a store that never reads back is eventually treated as empty and saved over.
+
+        Returns:
+            The storage component, or None without one
+        """
+        from ha import run_async
+
+        storage = self.components.get_component("storage") if self.components else None
+        if self.battery_thermal_loaded:
+            return storage
+        data = None
+        if storage:
+            try:
+                data = run_async(storage.load("predbat", BATTERY_THERMAL_STORE_KEY))
+            except Exception as e:
+                self.log("Warn: {}: failed to load the stored evidence: {}".format(BATTERY_THERMAL_STORE_KEY, e))
+        else:
+            self.battery_thermal_loaded = True
+        if isinstance(data, dict):
+            self.battery_thermal_loaded = True
+            self.battery_thermal_load_failures = []
+            stats = data.get("stats")
+            last = None
+            try:
+                last = str2time(data.get("last"))
+            except (ValueError, TypeError):
+                pass
+            if valid_thermal_statistics(stats) and last is not None:
+                # The stored evidence replaces any seeded in memory while the store could not be read
+                self.battery_thermal_stats = stats
+                self.battery_thermal_last = last
+        elif storage:
+            self.battery_thermal_load_failures.append(self.now_utc)
+        return storage
+
     def battery_thermal_refresh(self, soc_fresh):
         """
         Grow the battery thermal model's evidence and refit it (GH#5919). Runs whenever battery_temperature_history is set and
@@ -3145,41 +3183,15 @@ class Fetch:
             # No outdoor temperature (the temperature component is off): nothing to fit against, so no history is read
             self.battery_thermal_model = None
             return
-        storage = self.components.get_component("storage") if self.components else None
-        if not self.battery_thermal_loaded:
-            data = None
-            if storage:
-                try:
-                    data = run_async(storage.load("predbat", BATTERY_THERMAL_STORE_KEY))
-                except Exception as e:
-                    self.log("Warn: {}: failed to load the stored evidence: {}".format(BATTERY_THERMAL_STORE_KEY, e))
-            else:
-                self.battery_thermal_loaded = True
-            if isinstance(data, dict):
-                self.battery_thermal_loaded = True
-                self.battery_thermal_load_failures = []
-                stats = data.get("stats")
-                last = None
-                try:
-                    last = str2time(data.get("last"))
-                except (ValueError, TypeError):
-                    pass
-                if valid_thermal_statistics(stats) and last is not None:
-                    # The stored evidence replaces any seeded in memory while the store could not be read
-                    self.battery_thermal_stats = stats
-                    self.battery_thermal_last = last
-            elif storage:
-                self.battery_thermal_load_failures.append(self.now_utc)
-
+        storage = self.battery_thermal_load()
         step = PREDICT_STEP
         if self.battery_thermal_stats is None:
             if self.battery_thermal_last_seed is None or (self.now_utc - self.battery_thermal_last_seed) >= timedelta(minutes=BATTERY_THERMAL_RETRY_MINUTES):
                 self.battery_thermal_last_seed = self.now_utc
                 history_minutes = BATTERY_THERMAL_FIT_DAYS * 24 * 60
-                entity_id = self.get_arg("battery_temperature_history", "", indirect=False)
-                if isinstance(entity_id, list):
-                    entity_id = entity_id[0] if entity_id else ""
-                temperature = self.battery_thermal_history(entity_id, BATTERY_THERMAL_FIT_DAYS) if entity_id else {}
+                # Several sensors (one per inverter) are averaged, as fetch_battery_temperature() averages the live history
+                entity_ids = battery_temperature_entities(self.get_arg("battery_temperature_history", indirect=False))
+                temperature = average_temperature_minutes([self.battery_thermal_history(entity_id, BATTERY_THERMAL_FIT_DAYS) for entity_id in entity_ids])
                 soc_kwh = self.battery_thermal_history(self.prefix + ".soc_kw_h0", BATTERY_THERMAL_FIT_DAYS, required_unit="kWh")
                 ambient, _ = self.battery_thermal_ambient(history_minutes, 0)
                 stats = thermal_statistics(temperature, battery_power_from_soc(soc_kwh, history_minutes, step), ambient, history_minutes, step)
@@ -3238,10 +3250,18 @@ class Fetch:
             (forecast, ambient, power): the forecast keyed by minutes ahead (None when the model is not fitted or there is
             no outdoor forecast), and the outdoor temperature and planned battery power it used, keyed by minutes ahead
         """
-        if not self.battery_thermal_model:
-            return None, {}, {}
         _, ambient = self.battery_thermal_ambient(0, self.forecast_minutes)
         if not ambient:
+            return None, {}, {}
+        if not self.battery_thermal_model and not self.battery_thermal_loaded and not self.battery_thermal_load_failures:
+            # The first forecast after a restart runs before this cycle's update, so fit from the stored evidence now
+            self.battery_thermal_load()
+            if self.battery_thermal_stats:
+                self.battery_thermal_model = thermal_fit_statistics(self.battery_thermal_stats, PREDICT_STEP)
+                model = self.battery_thermal_model
+                if model:
+                    self.log("Battery thermal model loaded, fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, step rms {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["rmse"]))
+        if not self.battery_thermal_model:
             return None, {}, {}
         power = plan_power_minutes(self.battery_power_plan_best, self.now_utc, self.forecast_minutes, step)
         return thermal_forecast(current_temp, self.battery_thermal_model, ambient, power, self.forecast_minutes, step), ambient, power

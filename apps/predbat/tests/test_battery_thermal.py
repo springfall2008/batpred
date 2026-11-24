@@ -214,6 +214,7 @@ def test_battery_power_from_soc():
 
 
 TEMP_SENSOR = "sensor.battery_temperature_thermal_test"
+TEMP_SENSOR_2 = "sensor.battery_temperature_thermal_test_2"
 
 
 def records_from_minutes(series, now_utc, unit=None):
@@ -258,6 +259,8 @@ def test_fetch_integration(my_predbat):
             if not state["temperature_history"]:
                 return None
             return records_from_minutes({m: round(v, 2) for m, v in minutes_ago(temperature_abs, clock["now"], days * 24 * 60).items()}, my_predbat.now_utc)
+        if entity_id == TEMP_SENSOR_2:
+            return records_from_minutes({m: round(v + 2.0, 2) for m, v in minutes_ago(temperature_abs, clock["now"], days * 24 * 60).items()}, my_predbat.now_utc)
         if entity_id == my_predbat.prefix + ".soc_kw_h0":
             return records_from_minutes({m: round(v, 4) for m, v in minutes_ago(soc_abs, clock["now"], days * 24 * 60).items()}, my_predbat.now_utc, unit="kWh")
         return None
@@ -393,6 +396,9 @@ def test_fetch_integration(my_predbat):
         restart(storage)
         set_clock(days * 24 * 60 + 6 * STEP)
         reads.clear()
+        # The first forecast after the restart runs before the update, so it fits from the store rather than logging no fit
+        my_predbat.fetch_battery_temperature()
+        failed = check(failed, logged and "thermal [" in logged[-1], "the first forecast after a restart should use the stored fit, got {}".format(logged[-1:]))
         my_predbat.battery_thermal_update(soc_fresh=True)
         failed = check(failed, my_predbat.battery_thermal_loaded and all(read[1] != days for read in reads), "a restart should read the store, not the history, read {}".format(reads))
         # Saved at +10 minutes, restarted at +30: the 4 steps between are added
@@ -403,6 +409,15 @@ def test_fetch_integration(my_predbat):
         failed = check(failed, abs(my_predbat.battery_thermal_stats["weight"] - (stored["stats"]["weight"] * decay + 4)) < 1e-6, "the stored evidence should decay by age")
 
         # No outdoor temperature on a new install: nothing is read or fitted, and the look back is used
+        # Two sensors (one per inverter): the seed reads both and averages them, as the live history does
+        restart(make_test_storage(my_predbat, tmpdir + "/c"))
+        my_predbat.args["battery_temperature_history"] = [TEMP_SENSOR, TEMP_SENSOR_2]
+        reads.clear()
+        my_predbat.battery_thermal_update(soc_fresh=True)
+        failed = check(failed, (TEMP_SENSOR, days, False) in reads and (TEMP_SENSOR_2, days, False) in reads, "the seed should read every sensor, read {}".format(reads))
+        failed = check(failed, my_predbat.battery_thermal_model is not None, "two sensors should still fit")
+        my_predbat.args["battery_temperature_history"] = TEMP_SENSOR
+
         restart(make_test_storage(my_predbat, tmpdir + "/b"))
         state["results"] = None
         reads.clear()
