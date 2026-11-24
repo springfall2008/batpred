@@ -4005,6 +4005,8 @@ If however, you want the service to be called on each Predbat run then you shoul
       repeat: True
 ```
 
+With **repeat** set, the service is sent every time Predbat asks for it, even when nothing has changed. Several services can be sent in one run: for example, starting a charge sends **discharge_stop_service** and then **charge_start_service**. If several of your services write the same helper or mode, make sure the one sent last in a run leaves it in the state you want.
+
 #### charge_start_service
 
 Called to start a charge

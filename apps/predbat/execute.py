@@ -700,13 +700,13 @@ class Execute:
         """
         Queue inverter.adjust_charge_immediate(target_soc, freeze) through queue_immediate().
 
-        Returns True when target_soc is above 0: adjust_charge_immediate() then stops any discharge itself before it
-        starts the charge or freeze, so the cycle's idle-export call is not needed. That call sends the same stop again,
-        after the start, and on a service-template inverter whose services all set one mode helper it overwrites the
-        charge or freeze with Demand. The service dedup normally hides it, `repeat: true` does not (GH#6340).
+        Returns True when adjust_charge_immediate() stops any discharge itself before it starts the charge or freeze
+        (Inverter.charge_immediate_stops_discharge()), so the cycle's idle-export call is not needed. That call sends the
+        same stop again, after the start, and on a service-template inverter whose services all set one mode helper it
+        overwrites the charge or freeze with Demand. The service dedup normally hides it, `repeat: true` does not (GH#6340).
         """
         self.queue_immediate(immediate_calls, partial(inverter.adjust_charge_immediate, target_soc, freeze=freeze))
-        return target_soc > 0
+        return inverter.charge_immediate_stops_discharge(target_soc)
 
     def execute_plan(self):
         # Per-inverter detail segments, assembled into the status text after the headline status is

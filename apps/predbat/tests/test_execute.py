@@ -16,9 +16,14 @@ from utils import pack_export_limit
 from utils import calc_percent_limit
 from utils import services_send_power
 from control_monitor import ControlMonitor, MODE_CHARGING, MODE_EXPORTING, GRACE_S
+from inverter import Inverter
 
 
 class ActiveTestInverter:
+    # The executor asks the inverter whether a charge-immediate call stops discharge itself (GH#6340); use the
+    # real predicate so the double cannot drift from it.
+    charge_immediate_stops_discharge = staticmethod(Inverter.charge_immediate_stops_discharge)
+
     def __init__(self, id, soc_kw, soc_max, now_utc):
         self.soc_target = -1
         self.id = id

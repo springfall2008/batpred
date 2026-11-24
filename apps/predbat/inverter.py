@@ -3447,6 +3447,16 @@ class Inverter(BatteryCurve):
         # transient failure would silently downgrade a freeze into a stop rather than retrying it.
         return True
 
+    @staticmethod
+    def charge_immediate_stops_discharge(target_soc):
+        """
+        True when adjust_charge_immediate(target_soc) stops any discharge itself before it starts the charge or freeze.
+
+        The executor reads this at queue time to skip the cycle's idle-export stop (GH#6340), so it must stay the
+        predicate that adjust_charge_immediate() branches on.
+        """
+        return target_soc > 0
+
     def adjust_charge_immediate(self, target_soc, freeze=False):
         """
         Adjust from charging or not charging based on passed target soc
@@ -3463,7 +3473,7 @@ class Inverter(BatteryCurve):
 
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
-        if target_soc > 0:
+        if self.charge_immediate_stops_discharge(target_soc):
             current_rate = self.get_current_charge_rate()
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
