@@ -98,6 +98,8 @@ BATTERY_THERMAL_SAVE_MINUTES = 60
 # A store that never reads back is only treated as empty after this many cycles over this many minutes, as for the rate grids
 BATTERY_THERMAL_LOAD_ATTEMPTS = 3
 BATTERY_THERMAL_LOAD_WAIT_MINUTES = 10
+# The per-cycle forecast log line covers this many hours ahead
+BATTERY_THERMAL_LOG_HOURS = 24
 
 # Car state that changes at run time and that the plan reads (the rest is configuration, which a debug yaml holds)
 REPLAY_CAR_FIELDS = (
@@ -3028,6 +3030,7 @@ class Fetch:
 
         predicted_temp = {}
         current_temp = battery_temperature_history.get(0, 20)
+        current_temp_now = current_temp
         predict_timestamps = {}
 
         for minute in range(0, self.forecast_minutes, step):
@@ -3042,13 +3045,25 @@ class Fetch:
             current_temp += change
             current_temp = max(min(current_temp, 30), -20)
 
-        # With the thermal model on and fitted, its forecast replaces the look back (GH#5919)
+        # The thermal model forecasts alongside the look back whenever it is fitted, and replaces it with battery_temperature_outdoor on (GH#5919)
+        # Guarded: a fault in the experimental model falls back to the look back rather than stopping the cycle
         model_attributes = {"model": "history"}
-        thermal = self.battery_thermal_forecast(battery_temperature_history.get(0, 20), step)
-        if thermal:
+        thermal = None
+        try:
+            thermal, ambient, power = self.battery_thermal_forecast(current_temp_now, step)
+            model = self.battery_thermal_model
+            if thermal:
+                model_attributes.update({"thermal_tau_hours": model["tau_hours"], "thermal_heat_rate": model["heat_rate"], "thermal_samples": model["samples"], "thermal_step_rms": model["rmse"]})
+                if self.battery_temperature_outdoor:
+                    model_attributes["model"] = "thermal"
+            self.battery_thermal_log(model_attributes["model"], current_temp_now, predicted_temp, thermal, ambient, power)
+        except Exception as e:
+            self.log("Warn: Battery thermal forecast failed, using the look back: {}".format(e))
+            thermal = None
+            model_attributes = {"model": "history"}
+        if model_attributes["model"] == "thermal":
             predicted_temp = thermal
             predict_timestamps = {(self.now_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT): value for minute, value in thermal.items()}
-            model_attributes = {"model": "thermal", "thermal_tau_hours": self.battery_thermal_model["tau_hours"], "thermal_heat_rate": self.battery_thermal_model["heat_rate"]}
 
         self.dashboard_item(
             self.prefix + ".battery_temperature",
@@ -3095,7 +3110,22 @@ class Fetch:
 
     def battery_thermal_update(self, soc_fresh):
         """
-        Grow the battery thermal model's evidence and refit it (GH#5919). Only runs with battery_temperature_outdoor on.
+        Grow and refit the battery thermal model (battery_thermal_refresh), guarded: the model is experimental, so a fault in
+        it is logged as a warning and the cycle carries on without it rather than stopping (GH#5919).
+
+        Args:
+            soc_fresh: True when the battery level history was read this cycle
+        """
+        try:
+            self.battery_thermal_refresh(soc_fresh)
+        except Exception as e:
+            self.log("Warn: Battery thermal model update failed, continuing without it: {}".format(e))
+
+    def battery_thermal_refresh(self, soc_fresh):
+        """
+        Grow the battery thermal model's evidence and refit it (GH#5919). Runs whenever battery_temperature_history is set and
+        the temperature component gives an outdoor temperature, whether or not battery_temperature_outdoor is on, so the fit
+        and its forecast can be judged before the plan uses them.
 
         The model's least squares sums (battery_thermal.thermal_statistics) are kept in storage, so the fit builds up over
         months without reading months of history. Each cycle adds the steps since the last one from the in-memory battery
@@ -3111,7 +3141,8 @@ class Fetch:
         """
         from ha import run_async
 
-        if not self.battery_temperature_outdoor:
+        if not isinstance(self.get_state_wrapper("sensor." + self.prefix + "_temperature", attribute="results"), dict):
+            # No outdoor temperature (the temperature component is off): nothing to fit against, so no history is read
             self.battery_thermal_model = None
             return
         storage = self.components.get_component("storage") if self.components else None
@@ -3174,7 +3205,7 @@ class Fetch:
         self.battery_thermal_model = thermal_fit_statistics(self.battery_thermal_stats, step) if self.battery_thermal_stats else None
         model = self.battery_thermal_model
         if model and previous is None:
-            self.log("Battery thermal model fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, step error {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["rmse"]))
+            self.log("Battery thermal model fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, step rms {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["rmse"]))
         elif previous and not model:
             self.log("Warn: Battery thermal model no longer fits its evidence, using the history look back")
 
@@ -3191,7 +3222,7 @@ class Fetch:
                     self.battery_thermal_last_save = self.now_utc
                     self.battery_thermal_dirty = False
                     if model:
-                        self.log("Battery thermal model saved, fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, step error {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["rmse"]))
+                        self.log("Battery thermal model saved, fitted on {} steps: tau {} hours, heat rate {} °C/h per kW, step rms {} °C".format(model["samples"], model["tau_hours"], model["heat_rate"], model["rmse"]))
                 else:
                     self.log("Warn: {}: failed to save the evidence".format(BATTERY_THERMAL_STORE_KEY))
             except Exception as e:
@@ -3201,16 +3232,52 @@ class Fetch:
         """
         Forecast the battery temperature with the fitted thermal model, warmed by the previous cycle's best plan.
 
+        Runs whether or not battery_temperature_outdoor is on, so the forecast can be logged and judged before it is used.
+
         Returns:
-            The forecast keyed by minutes ahead, or None when the model is off, not fitted or there is no outdoor forecast
+            (forecast, ambient, power): the forecast keyed by minutes ahead (None when the model is not fitted or there is
+            no outdoor forecast), and the outdoor temperature and planned battery power it used, keyed by minutes ahead
         """
-        if not self.battery_temperature_outdoor or not self.battery_thermal_model:
-            return None
+        if not self.battery_thermal_model:
+            return None, {}, {}
         _, ambient = self.battery_thermal_ambient(0, self.forecast_minutes)
         if not ambient:
-            return None
+            return None, {}, {}
         power = plan_power_minutes(self.battery_power_plan_best, self.now_utc, self.forecast_minutes, step)
-        return thermal_forecast(current_temp, self.battery_thermal_model, ambient, power, self.forecast_minutes, step)
+        return thermal_forecast(current_temp, self.battery_thermal_model, ambient, power, self.forecast_minutes, step), ambient, power
+
+    def battery_thermal_log(self, used, current_temp, history, thermal, ambient, power):
+        """
+        Log both battery temperature forecasts each cycle, hourly, so they can be compared with what happened (GH#5919).
+
+        One line per cycle: the forecast in use, the current temperature, then hourly from one hour ahead the look back
+        forecast, the thermal forecast and its fit, the outdoor temperature and the planned battery power (the mean
+        magnitude over each hour) the thermal forecast used.
+
+        Args:
+            used: the forecast the plan uses, "history" or "thermal"
+            current_temp: the battery temperature now
+            history: the look back forecast keyed by minutes ahead
+            thermal: the thermal forecast keyed by minutes ahead, or None
+            ambient: the outdoor temperature forecast keyed by minutes ahead
+            power: the planned battery power magnitude in kW keyed by minutes ahead
+        """
+        hours = range(1, min(BATTERY_THERMAL_LOG_HOURS, self.forecast_minutes // 60) + 1)
+
+        def hourly(series):
+            """The series at each whole hour ahead, '-' where it has no value."""
+            return ", ".join("-" if series.get(hour * 60) is None else str(dp1(series[hour * 60])) for hour in hours)
+
+        text = "Battery temperature forecast: using {}, now {} °C; hourly from +1h: history [{}]".format(used, dp1(current_temp), hourly(history))
+        model = self.battery_thermal_model
+        if thermal and model:
+            mean_power = {hour * 60: sum(power.get(minute, 0.0) for minute in range((hour - 1) * 60, hour * 60, PREDICT_STEP)) / (60 // PREDICT_STEP) for hour in hours}
+            text += ", thermal [{}] (tau {} h, heat rate {} °C/h per kW, {} steps, step rms {} °C), outdoor [{}], planned power [{}] kW".format(
+                hourly(thermal), model["tau_hours"], model["heat_rate"], model["samples"], model["rmse"], hourly(ambient), hourly(mean_power)
+            )
+        else:
+            text += ", thermal none ({})".format("not fitted" if not model else "no outdoor forecast")
+        self.log(text)
 
     def download_ge_data(self, now_utc):
         """

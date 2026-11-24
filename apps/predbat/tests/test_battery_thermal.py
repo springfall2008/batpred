@@ -17,6 +17,7 @@ import tempfile
 from battery_thermal import ambient_from_results, battery_power_from_soc, plan_power_minutes, solve_linear, thermal_fit, thermal_fit_statistics, thermal_forecast, thermal_statistics, thermal_statistics_merge
 from const import PREDICT_STEP, TIME_FORMAT
 from fetch import BATTERY_TEMPERATURE_HISTORY_DAYS, BATTERY_THERMAL_FIT_DAYS, BATTERY_THERMAL_HALF_LIFE_DAYS, BATTERY_THERMAL_RETRY_MINUTES, BATTERY_THERMAL_STORE_KEY
+from utils import classify_log_line
 from tests.test_infra import MockStorageComponents, make_test_storage, run_async
 
 NOW = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
@@ -223,9 +224,10 @@ def records_from_minutes(series, now_utc, unit=None):
 
 def test_fetch_integration(my_predbat):
     """
-    With battery_temperature_outdoor, battery_thermal_update() seeds the model's sums from a week of history, adds each
-    cycle's new step, saves the sums once the store is ready and reads them back after a restart; the forecast follows the
-    outdoor temperature and the previous best plan, and falls back to the look back without a model.
+    battery_thermal_update() seeds the model's sums from a week of history, adds each cycle's new step, saves the sums once
+    the store is ready and reads them back after a restart. The thermal forecast is fitted and logged each cycle whether or
+    not battery_temperature_outdoor is on (shadow mode); only with it on does it replace the look back. It follows the
+    outdoor temperature and the previous best plan, and without an outdoor temperature nothing is read or fitted.
     """
     failed = False
     days = BATTERY_THERMAL_FIT_DAYS
@@ -234,8 +236,10 @@ def test_fetch_integration(my_predbat):
     clock = {"now": days * 24 * 60}  # minutes from the start of the simulation
     # The outdoor temperature sensor, hourly, from the start of the simulation to 2 days past its end
     results = {(start_utc + timedelta(hours=hour)).strftime(TIME_FORMAT): round(ambient_at(hour * 60), 3) for hour in range(0, (days + 3) * 24)}
-    state = {"results": results}
+    state = {"results": results, "temperature_history": True}
     reads = []
+    logged = []
+    thermal_lines = []
 
     def set_clock(minute_absolute):
         """Move Predbat's now and its in-memory histories to minute_absolute of the simulation."""
@@ -251,6 +255,8 @@ def test_fetch_integration(my_predbat):
         """Serve the simulated temperature and battery level history up to the clock, recording each read."""
         reads.append((entity_id, days, tracked))
         if entity_id == TEMP_SENSOR:
+            if not state["temperature_history"]:
+                return None
             return records_from_minutes({m: round(v, 2) for m, v in minutes_ago(temperature_abs, clock["now"], days * 24 * 60).items()}, my_predbat.now_utc)
         if entity_id == my_predbat.prefix + ".soc_kw_h0":
             return records_from_minutes({m: round(v, 4) for m, v in minutes_ago(soc_abs, clock["now"], days * 24 * 60).items()}, my_predbat.now_utc, unit="kWh")
@@ -258,6 +264,15 @@ def test_fetch_integration(my_predbat):
 
     saved_history = my_predbat.get_history_wrapper
     saved_state = my_predbat.get_state_wrapper
+    saved_log = my_predbat.log
+
+    def fake_log(text, *args, **kwargs):
+        """Keep the forecast log lines, pass everything to the real log."""
+        if text.startswith("Battery temperature forecast:"):
+            logged.append(text)
+        if text.startswith("Battery thermal") or text.startswith("Battery temperature forecast:"):
+            thermal_lines.append(text)
+        return saved_log(text, *args, **kwargs)
 
     def fake_state(entity_id=None, default=None, attribute=None, refresh=False, required_unit=None, raw=False):
         """Serve the outdoor temperature results; everything else from the real wrapper."""
@@ -305,6 +320,7 @@ def test_fetch_integration(my_predbat):
     tmpdir = tempfile.mkdtemp()
     my_predbat.get_history_wrapper = fake_history
     my_predbat.get_state_wrapper = fake_state
+    my_predbat.log = fake_log
     my_predbat.args["battery_temperature_history"] = TEMP_SENSOR
     my_predbat.max_days_previous = 2
     try:
@@ -312,21 +328,13 @@ def test_fetch_integration(my_predbat):
         restart(storage)
         set_clock(days * 24 * 60)
 
-        # Off (the default): no model, no fit reads, the look back as before
+        # Off (the default) with an empty store: seeded from a week of history read untracked and fitted at once (shadow mode),
+        # not saved until the store is ready; the plan keeps the look back
         my_predbat.battery_temperature_outdoor = False
         cycle()
-        lookback = my_predbat.predict_battery_temperature(my_predbat.battery_temperature_history, step=PREDICT_STEP)
-        failed = check(failed, my_predbat.battery_thermal_model is None and my_predbat.battery_thermal_stats is None, "off should not fit")
-        failed = check(failed, my_predbat.battery_temperature_prediction == lookback, "off should give the look back forecast")
-        failed = check(failed, all(read[1] != days for read in reads), "off should not read the fit history, read {}".format(reads))
-        failed = check(failed, saved_state(my_predbat.prefix + ".battery_temperature", attribute="model") == "history", "off should publish model history")
-
-        # On with an empty store: seeded from a week of history read untracked, fitted at once, not saved until the store is ready
-        my_predbat.battery_temperature_outdoor = True
-        reads.clear()
-        cycle()
+        failed = check(failed, logged and "using history" in logged[-1] and "thermal none (not fitted)" in logged[-1], "the first cycle should log the look back with no fit yet, got {}".format(logged[-1:]))
         model = my_predbat.battery_thermal_model
-        failed = check(failed, model is not None, "on should fit from the seed")
+        failed = check(failed, model is not None, "off should still fit from the seed")
         if model:
             failed = check(failed, abs(model["tau_hours"] - MODEL["tau_hours"]) / MODEL["tau_hours"] < 0.1, "fitted tau {} expected about {}".format(model["tau_hours"], MODEL["tau_hours"]))
             failed = check(failed, abs(model["heat_rate"] - MODEL["heat_rate"]) / MODEL["heat_rate"] < 0.1, "fitted heat rate {} expected about {}".format(model["heat_rate"], MODEL["heat_rate"]))
@@ -334,24 +342,45 @@ def test_fetch_integration(my_predbat):
         failed = check(failed, run_async(storage.load("predbat", BATTERY_THERMAL_STORE_KEY)) is None, "an empty store should not be saved over on the first cycle")
         seeded = my_predbat.battery_thermal_stats["samples"]
 
+        # Off and fitted: the plan uses the look back, the thermal forecast is published as attributes and logged hourly
+        set_clock(days * 24 * 60 + STEP)
+        reads.clear()
+        cycle()
+        lookback = my_predbat.predict_battery_temperature(my_predbat.battery_temperature_history, step=PREDICT_STEP)
+        failed = check(failed, my_predbat.battery_temperature_prediction == lookback, "off should give the look back forecast")
+        failed = check(failed, saved_state(my_predbat.prefix + ".battery_temperature", attribute="model") == "history", "off should publish model history")
+        failed = check(failed, saved_state(my_predbat.prefix + ".battery_temperature", attribute="thermal_tau_hours") is not None, "off should publish the fit as attributes")
+        line = logged[-1] if logged else ""
+        failed = check(failed, "using history" in line and "thermal [" in line and "outdoor [" in line and "planned power [" in line, "off should log both forecasts, got {}".format(line))
+        history_part = line.split("history [")[1].split("]")[0].split(", ") if "history [" in line else []
+        failed = check(failed, len(history_part) == 24, "the log should give 24 hourly values, got {}".format(len(history_part)))
+
+        # On: the thermal forecast replaces the look back
+        my_predbat.battery_temperature_outdoor = True
+
         # The next cycles forecast with the model and add one step each; the save waits for 3 empty reads over 10 minutes
-        for k in range(1, 4):
+        for k in range(2, 5):
             set_clock(days * 24 * 60 + k * STEP)
             reads.clear()
             cycle()
             failed = check(failed, all(read[1] != days for read in reads), "cycle {} should not re-read the fit history, read {}".format(k, reads))
-        failed = check(failed, my_predbat.battery_thermal_stats["samples"] == seeded + 3, "3 cycles should add 3 steps, {} vs {}".format(my_predbat.battery_thermal_stats["samples"], seeded))
+        failed = check(failed, my_predbat.battery_thermal_stats["samples"] == seeded + 4, "4 cycles should add 4 steps, {} vs {}".format(my_predbat.battery_thermal_stats["samples"], seeded))
         failed = check(failed, my_predbat.battery_temperature_prediction != lookback, "on should forecast with the model")
         failed = check(failed, saved_state(my_predbat.prefix + ".battery_temperature", attribute="model") == "thermal", "on should publish model thermal")
+        failed = check(failed, logged and "using thermal" in logged[-1], "on should log the thermal forecast in use")
+        # The log page files any line containing "error" under Errors, so the model's routine lines must not say it
+        failed = check(failed, any("fitted" in line for line in thermal_lines), "the fit should be logged, got {}".format(thermal_lines[:3]))
+        misfiled = [line for line in thermal_lines if classify_log_line(line) != "log"]
+        failed = check(failed, not misfiled, "routine thermal log lines should not be classed as errors or warnings, got {}".format(misfiled[:2]))
         stored = run_async(storage.load("predbat", BATTERY_THERMAL_STORE_KEY))
         # Ready on the third empty read (10 minutes after the first), so saved with 2 steps added; the next save is an hour later
         failed = check(failed, isinstance(stored, dict) and stored.get("stats", {}).get("samples") == seeded + 2, "the sums should be saved once the store is ready, got {}".format(stored and stored.get("stats", {}).get("samples")))
 
         # A stale battery level history adds nothing
-        set_clock(days * 24 * 60 + 4 * STEP)
+        set_clock(days * 24 * 60 + 5 * STEP)
         last = my_predbat.battery_thermal_last
         cycle(soc_fresh=False)
-        failed = check(failed, my_predbat.battery_thermal_stats["samples"] == seeded + 3 and my_predbat.battery_thermal_last == last, "a stale battery level history should add nothing")
+        failed = check(failed, my_predbat.battery_thermal_stats["samples"] == seeded + 4 and my_predbat.battery_thermal_last == last, "a stale battery level history should add nothing")
 
         # A plan that charges at 5 kW for the next 3 hours warms the forecast
         idle = dict(my_predbat.battery_temperature_prediction)
@@ -373,22 +402,56 @@ def test_fetch_integration(my_predbat):
         decay = 0.5 ** ((4 * STEP) / (24 * 60) / BATTERY_THERMAL_HALF_LIFE_DAYS)
         failed = check(failed, abs(my_predbat.battery_thermal_stats["weight"] - (stored["stats"]["weight"] * decay + 4)) < 1e-6, "the stored evidence should decay by age")
 
-        # No outdoor temperature on a new install: nothing to seed, the look back is used, and the seed is retried within the hour
+        # No outdoor temperature on a new install: nothing is read or fitted, and the look back is used
         restart(make_test_storage(my_predbat, tmpdir + "/b"))
         state["results"] = None
+        reads.clear()
         cycle()
         failed = check(failed, my_predbat.battery_thermal_stats is None and my_predbat.battery_thermal_model is None, "no outdoor temperature should not seed")
+        failed = check(failed, all(read[1] != days for read in reads), "no outdoor temperature should not read the fit history, read {}".format(reads))
         failed = check(failed, saved_state(my_predbat.prefix + ".battery_temperature", attribute="model") == "history", "no model should publish model history")
+
+        # The outdoor temperature arrives but the battery temperature history is empty: the seed is retried within the hour
         state["results"] = results
+        state["temperature_history"] = False
+        my_predbat.battery_thermal_update(soc_fresh=True)
+        failed = check(failed, my_predbat.battery_thermal_stats is None, "an empty history should not seed")
+        state["temperature_history"] = True
         set_clock(clock["now"] + BATTERY_THERMAL_RETRY_MINUTES - STEP)
         my_predbat.battery_thermal_update(soc_fresh=True)
         failed = check(failed, my_predbat.battery_thermal_stats is None, "the seed should not be retried before {} minutes".format(BATTERY_THERMAL_RETRY_MINUTES))
         set_clock(clock["now"] + STEP)
         my_predbat.battery_thermal_update(soc_fresh=True)
         failed = check(failed, my_predbat.battery_thermal_model is not None, "the seed should be retried after {} minutes".format(BATTERY_THERMAL_RETRY_MINUTES))
+        # A fault in the model is a warning: the update carries on without it, the forecast falls back to the look back
+        warned = []
+        saved_refresh, saved_forecast = my_predbat.battery_thermal_refresh, my_predbat.battery_thermal_forecast
+
+        def boom(*args, **kwargs):
+            """Fail as an unexpected bug would."""
+            raise ZeroDivisionError("test fault")
+
+        def warn_log(text, *args, **kwargs):
+            """Keep the warnings."""
+            if text.startswith("Warn:"):
+                warned.append(text)
+            return fake_log(text, *args, **kwargs)
+
+        my_predbat.log = warn_log
+        my_predbat.battery_thermal_refresh = boom
+        my_predbat.battery_thermal_forecast = boom
+        try:
+            my_predbat.battery_thermal_update(soc_fresh=True)
+            prediction = my_predbat.predict_battery_temperature(my_predbat.battery_temperature_history, step=PREDICT_STEP)
+        finally:
+            my_predbat.battery_thermal_refresh, my_predbat.battery_thermal_forecast = saved_refresh, saved_forecast
+            my_predbat.log = fake_log
+        failed = check(failed, any("update failed" in text for text in warned) and any("forecast failed" in text for text in warned), "faults should be logged as warnings, got {}".format(warned))
+        failed = check(failed, prediction and saved_state(my_predbat.prefix + ".battery_temperature", attribute="model") == "history", "a forecast fault should fall back to the look back")
     finally:
         my_predbat.get_history_wrapper = saved_history
         my_predbat.get_state_wrapper = saved_state
+        my_predbat.log = saved_log
         for field, value in saved.items():
             setattr(my_predbat, field, value)
         if saved_arg is None:

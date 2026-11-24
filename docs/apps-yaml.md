@@ -3096,21 +3096,40 @@ any other reading between -1 and 1 degrees uses the 1 (or -1) degree entry, and 
 
 ### Battery temperature forecast
 
-By default Predbat forecasts the battery temperature by repeating the changes it saw over the same hours yesterday.
-If your battery is outdoors, or somewhere that follows the outdoor temperature such as an unheated shed, set
-**battery_temperature_outdoor** to `True` (experimental, off by default) to forecast it with a thermal model instead. The model treats the battery as one mass
-that drifts towards the outdoor temperature and is warmed by its own charging and discharging,
-so a battery that charges hard overnight is forecast warmer than one that sits idle. Leave it off for a battery in a garage, indoors or in a heated space: it is forecast colder than it gets.
+**EXPERIMENTAL:** The thermal model below is new and has so far been checked against one outdoor battery. For now it runs alongside the existing forecast so you can see how it does on your battery;
+switching the plan over to it is opt-in, and a follow-on change will make the plan follow the model once it has proved itself. Please try it carefully and report what you see on
+[GitHub issue #5919](https://github.com/springfall2008/batpred/issues/5919), with:
 
-- It needs **battery_temperature_history** and the [Temperature component](components.md#temperature-api-temperature) (`temperature_enable: true`) for the outdoor temperature.
+- where your battery is (outdoors, in a shed or garage, or indoors) and which sensor you use for **battery_temperature_history**;
+- the start of your `predbat.log`, which shows your configuration;
+- the `Battery thermal model` and `Battery temperature forecast` log lines for a day or two, ideally including a cold night and a charge. The log only keeps a few days, so save a copy soon;
+- if you can, a `predbat_debug` yaml (from `switch.predbat_debug_enable`) taken during a cold charge.
+
+Check the files for anything personal before attaching them.
+
+By default Predbat forecasts the battery temperature by repeating the changes it saw over the same hours yesterday.
+With **battery_temperature_history** set and the [Temperature component](components.md#temperature-api-temperature) enabled (`temperature_enable: true`),
+Predbat also learns a thermal model of your battery and forecasts with it alongside. The model treats the battery as one mass that cools or warms
+towards the outdoor temperature and is warmed by its own charging and discharging, so a battery that charges hard overnight is forecast
+warmer than one that sits idle. It suits a battery outdoors or in an unheated shed; a battery in a garage or indoors is forecast colder than it gets.
+
+The thermal forecast is only used for the plan when you set **battery_temperature_outdoor** to `True` (off by default).
+Until then it runs in the background and changes nothing Predbat does. Turning it on changes the plan only if your battery's charge or discharge rate depends on temperature
+(a **battery_temperature_charge_curve** / **battery_temperature_discharge_curve**, or rates Predbat has learned at low temperatures): the plan then uses the thermal forecast's temperature
+to decide how fast the battery can charge or discharge at each step. Watch the `Battery temperature forecast` log lines for a few days before turning it on.
+
+- If your battery reports several temperatures, use the coldest cell for **battery_temperature_history**: the battery limits its charge rate by its coldest cell.
 - Predbat learns the model from your battery temperature, battery level (`predbat.soc_kw_h0`) and the outdoor temperature.
   It starts from the last week of history, so your Home Assistant recorder must keep `predbat.soc_kw_h0`, and then keeps learning each cycle;
   the evidence is kept in Predbat's storage, with older evidence counting for half every 30 days.
-- The fit is logged as `Battery thermal model fitted ...`, giving how quickly the battery follows the outdoor temperature (tau, in hours)
-  and how much it warms per kW of charging or discharging.
-- Each forecast starts from the current temperature and uses the battery power of the plan from the previous cycle.
+- The fit is published as attributes of `predbat.battery_temperature` and logged (`Battery thermal model fitted ...`):
+    - **tau**: how quickly, in hours, the battery follows the outdoor temperature; several hours outdoors, and much longer for a battery the outdoor temperature barely reaches;
+    - **heat rate**: how much it warms per kW of charging or discharging.
+- Each cycle Predbat logs both forecasts hourly for the next 24 hours (`Battery temperature forecast: ...`), with the outdoor temperature and the planned battery power the thermal forecast used,
+  so the two can be compared with the temperature the battery actually reached.
+- Each thermal forecast starts from the current temperature and uses the battery power of the plan from the previous cycle.
 - Until the model has a day of evidence, or without an outdoor temperature forecast, the forecast falls back to repeating yesterday's changes.
-  The `model` attribute of `predbat.battery_temperature` shows which forecast is in use (`thermal` or `history`).
+  The `model` attribute of `predbat.battery_temperature` shows which forecast the plan uses (`thermal` or `history`).
 
 ```yaml
   battery_temperature_outdoor: True
