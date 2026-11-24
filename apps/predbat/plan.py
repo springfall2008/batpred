@@ -208,6 +208,34 @@ def select_window_candidates(entries, price_selected, allow_freeze, accept=None)
     return chosen
 
 
+def select_window_candidates_at(entries, threshold, charge_side, allow_freeze, accept=None):
+    """
+    select_window_candidates for the levels search's own two price tests, compared inline.
+
+    charge_side takes the entries whose price passes threshold >= price (a charge threshold), and
+    otherwise threshold < price (an export threshold) - the exact comparisons the search's lambdas
+    made. Calling a predicate per entry was most of the selection cost: the levels pass scans these
+    lists about 110,000 times a plan. test_window_selection pins it against select_window_candidates.
+    """
+    chosen = []
+    seen = set()
+    for price, window_n, freeze in entries:
+        if charge_side:
+            if not threshold >= price:
+                continue
+        elif not threshold < price:
+            continue
+        if freeze and not allow_freeze:
+            continue
+        if window_n in seen:
+            continue
+        if accept is not None and not accept(window_n):
+            continue
+        seen.add(window_n)
+        chosen.append((window_n, freeze))
+    return chosen
+
+
 def distinct_slot_trials(slot_choices, candidate_counts):
     """
     Slot counts worth trying for one side of the levels search, each with the freeze options it is new for.
@@ -1246,13 +1274,18 @@ class Plan:
         best_max_export_slots=1,
         block_replay=True,
         replay_stats=None,
+        dedupe_entries=True,
     ):
         """
         Pick an import price threshold which gives the best results
 
         block_replay=False rebuilds every threshold block instead of replaying a repeated one from
         tried_list - the result is the same, it only exists so tests can compare the two. When
-        replay_stats is a dict, its 'replayed_blocks' is set to how many blocks this call replayed.
+        replay_stats is a dict, its 'replayed_blocks' is set to how many blocks this call replayed
+        and its 'deduped_entries' to how many repeated charge or export selections it skipped.
+
+        dedupe_entries=False keeps every charge and export selection of a block even when it selects
+        the same windows as an earlier one, again only so tests can compare the two (see below).
         """
         loop_price = price_set[-1]
         best_price = loop_price
@@ -1385,6 +1418,17 @@ class Plan:
         hit_charge_cache = {}
         block_cache = {}  # trial block signature -> hashes of the trials it built
         replayed_blocks = 0
+        deduped_entries = 0
+        slot_trials_cache = {}  # (slot ladder, candidate counts) -> distinct_slot_trials result
+        # One canonical selection object per distinct selection (the windows taken, in order, with their
+        # freeze flags) for the whole call. A selection's windows, limits and hash depend on nothing else,
+        # so equal selections from different thresholds, slot counts or freeze options are the same
+        # object: a repeat inside a block is then an identity check, and the export-on-charge pruning
+        # below - a pure function of the two selections and of state fixed for the call - is memoised
+        # across thresholds. Both content caches pin their selections, so no id() is reused mid-call.
+        charge_content_cache = {}
+        export_content_cache = {}
+        prune_cache = {}
         prunable_hit_cache = {}  # window_n -> charge window it may be pruned against, or -1
         hit_car_cache = {}  # (start, end) -> does this window hit a car charging slot
         export_allowed_cache = {}  # window_n -> is this export window usable at all
@@ -1432,13 +1476,12 @@ class Plan:
             export_candidates = {}
             charge_selection_cache = {}
             export_selection_cache = {}
-            prune_cache = {}
 
             def charge_candidates_for(allow_freeze, loop_price=loop_price):
                 """Every charge window this price threshold makes available, uncapped"""
                 candidates = charge_candidates.get(allow_freeze)
                 if candidates is None:
-                    candidates = select_window_candidates(price_set_charge, lambda price: loop_price >= price, allow_freeze)
+                    candidates = select_window_candidates_at(price_set_charge, loop_price, True, allow_freeze)
                     charge_candidates[allow_freeze] = candidates
                 return candidates
 
@@ -1446,7 +1489,7 @@ class Plan:
                 """Every export window this price threshold makes available, uncapped"""
                 candidates = export_candidates.get(allow_freeze)
                 if candidates is None:
-                    candidates = select_window_candidates(price_set_export, lambda price: loop_price < price, allow_freeze, accept=export_window_allowed)
+                    candidates = select_window_candidates_at(price_set_export, loop_price, False, allow_freeze, accept=export_window_allowed)
                     export_candidates[allow_freeze] = candidates
                 return candidates
 
@@ -1456,10 +1499,13 @@ class Plan:
                 count = min(max_slots, len(candidates))
                 entry = charge_selection_cache.get((count, allow_freeze))
                 if entry is None:
-                    taken = candidates[:count]
-                    # The third element is this selection's summed hash delta: the scenario hash is a sum
-                    # of integers, so it can be accumulated per side once rather than per trial
-                    entry = ([window_n for window_n, _ in taken], dict(taken), sum(charge_hash_delta[window_n][freeze] for window_n, freeze in taken))
+                    taken = tuple(candidates[:count])
+                    entry = charge_content_cache.get(taken)
+                    if entry is None:
+                        # The third element is this selection's summed hash delta: the scenario hash is a sum
+                        # of integers, so it can be accumulated per side once rather than per trial
+                        entry = ([window_n for window_n, _ in taken], dict(taken), sum(charge_hash_delta[window_n][freeze] for window_n, freeze in taken))
+                        charge_content_cache[taken] = entry
                     charge_selection_cache[(count, allow_freeze)] = entry
                 return entry
 
@@ -1469,8 +1515,11 @@ class Plan:
                 count = min(max_slots, len(candidates))
                 entry = export_selection_cache.get((count, allow_freeze))
                 if entry is None:
-                    taken = candidates[:count]
-                    entry = ([window_n for window_n, _ in taken], dict(taken), sum(export_hash_delta[window_n][freeze] for window_n, freeze in taken))
+                    taken = tuple(candidates[:count])
+                    entry = export_content_cache.get(taken)
+                    if entry is None:
+                        entry = ([window_n for window_n, _ in taken], dict(taken), sum(export_hash_delta[window_n][freeze] for window_n, freeze in taken))
+                        export_content_cache[taken] = entry
                     export_selection_cache[(count, allow_freeze)] = entry
                 return entry
 
@@ -1501,8 +1550,18 @@ class Plan:
                 # below, having already paid for the selection, the export-on-charge pruning and the
                 # hash: on a typical dump that was several hundred thousand trials for a few hundred
                 # distinct plans. Each side is filtered on its own because the sweep is their product.
-                charge_trials = distinct_slot_trials(charge_slot_choices, {freeze: len(charge_candidates_for(freeze)) for freeze in charge_freeze_options})
-                export_trials = distinct_slot_trials(export_slot_choices, {freeze: len(export_candidates_for(freeze)) for freeze in export_freeze_options})
+                # distinct_slot_trials is a pure function of the ladder and the candidate counts, which repeat
+                # across thresholds and blocks, so its answer is memoised for the call
+                charge_trials_key = (tuple(charge_slot_choices), tuple((freeze, len(charge_candidates_for(freeze))) for freeze in charge_freeze_options))
+                charge_trials = slot_trials_cache.get(charge_trials_key)
+                if charge_trials is None:
+                    charge_trials = distinct_slot_trials(charge_slot_choices, dict(charge_trials_key[1]))
+                    slot_trials_cache[charge_trials_key] = charge_trials
+                export_trials_key = (tuple(export_slot_choices), tuple((freeze, len(export_candidates_for(freeze))) for freeze in export_freeze_options))
+                export_trials = slot_trials_cache.get(export_trials_key)
+                if export_trials is None:
+                    export_trials = distinct_slot_trials(export_slot_choices, dict(export_trials_key[1]))
+                    slot_trials_cache[export_trials_key] = export_trials
 
                 # A threshold whose candidate windows (and slot ladders) match an earlier threshold's in this
                 # call builds exactly the same trials, every one of them already in tried_list. All the sweep
@@ -1533,6 +1592,38 @@ class Plan:
                 # export-on-charge pruning, which depends only on the pair of selections, is memoised per pair
                 charge_entries = [(max_charge_slots, [(try_charge_freeze, charge_selection_for(max_charge_slots, try_charge_freeze)) for try_charge_freeze in charge_freeze_trials]) for max_charge_slots, charge_freeze_trials in charge_trials]
                 export_entries = [(max_export_slots, [export_selection_for(max_export_slots, try_export_freeze) for try_export_freeze in export_freeze_trials]) for max_export_slots, export_freeze_trials in export_trials]
+                if dedupe_entries:
+                    # A selection equal to an earlier one in this block - typically the freeze and non-freeze
+                    # options when no freeze entry is taken first - is the same canonical object, and pairs
+                    # with every other side into trials the block has already built earlier in its loop
+                    # order. Such a repeat is a tried_list hit that adds nothing: its hash is already in
+                    # block_hashes (whose replay only takes a min) and its metric is either pending or
+                    # already folded into levels_score[loop_price]. So it is skipped, and the trials that
+                    # run, their order and every tie-break are unchanged.
+                    seen_charge = set()
+                    kept_charge_entries = []
+                    for max_charge_slots, charge_side in charge_entries:
+                        kept_side = []
+                        for item in charge_side:
+                            if id(item[1]) in seen_charge:
+                                deduped_entries += 1
+                                continue
+                            seen_charge.add(id(item[1]))
+                            kept_side.append(item)
+                        kept_charge_entries.append((max_charge_slots, kept_side))
+                    charge_entries = kept_charge_entries
+                    seen_export = set()
+                    kept_export_entries = []
+                    for max_export_slots, export_side in export_entries:
+                        kept_side = []
+                        for entry in export_side:
+                            if id(entry) in seen_export:
+                                deduped_entries += 1
+                                continue
+                            seen_export.add(id(entry))
+                            kept_side.append(entry)
+                        kept_export_entries.append((max_export_slots, kept_side))
+                    export_entries = kept_export_entries
                 prune_export = not self.calculate_export_oncharge
                 for max_charge_slots, charge_side in charge_entries:
                     for max_export_slots, export_side in export_entries:
@@ -1543,8 +1634,8 @@ class Plan:
 
                                 # Remove export hitting charge windows if this is disabled
                                 if prune_export:
-                                    # Both entries live in this threshold's selection caches, as long as prune_cache
-                                    # does, so their ids identify the pair
+                                    # Both entries are canonical selections pinned by the call's content caches, which
+                                    # live as long as prune_cache does, so their ids identify the pair for the whole call
                                     pair_key = (id(charge_entry), id(export_entry))
                                     pruned = prune_cache.get(pair_key)
                                     if pruned is None:
@@ -1716,6 +1807,7 @@ class Plan:
 
         if replay_stats is not None:
             replay_stats["replayed_blocks"] = replayed_blocks
+            replay_stats["deduped_entries"] = deduped_entries
 
         # Perform charge limit levelling on best_all_n
         if best_all_n:

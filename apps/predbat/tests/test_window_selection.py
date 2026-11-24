@@ -24,7 +24,9 @@ four-deep sweep: the trials that survive must be exactly the ones that were the 
 set of windows, in the same order, because the search breaks ties on the first trial it sees.
 """
 
-from plan import distinct_slot_trials, select_window_candidates, slots_around
+import random
+
+from plan import distinct_slot_trials, select_window_candidates, select_window_candidates_at, slots_around
 
 # The slot length lists optimise_charge_limit_price_threads sweeps (local to that function)
 COARSE_SLOT_LENGTHS = [32, 16, 8, 4, 2, 1, 0]
@@ -41,6 +43,43 @@ def run_window_selection_tests(my_predbat):
     failed |= test_prefix_property_matches_capped_scan()
     failed |= test_distinct_slot_trials_drop_repeats()
     failed |= test_distinct_slot_trials_match_full_sweep()
+    failed |= test_threshold_selection_matches_predicate()
+    return failed
+
+
+def test_threshold_selection_matches_predicate():
+    """select_window_candidates_at gives exactly what select_window_candidates gives with the levels
+    search's two lambdas (charge: loop_price >= price, export: loop_price < price).
+
+    Prices are drawn from a small set so thresholds land on entry prices - the boundary the two
+    comparisons must get the same way - and windows repeat, mixing freeze flags, with and without a
+    rejecting accept filter.
+    """
+    print("**** test_threshold_selection_matches_predicate ****")
+    failed = False
+    rng = random.Random(6086)
+    prices = [-2.5, 0.0, 4.0, 7.25, 7.3, 15.0, 30.0]
+    for case in range(400):
+        entries = [[rng.choice(prices), rng.randrange(8), rng.random() < 0.4] for _ in range(rng.randrange(0, 14))]
+        rejected = set(rng.sample(range(8), rng.randrange(0, 3)))
+
+        def accept(window_n, rejected=rejected):
+            """Reject a random few windows so the accept filter is exercised"""
+            return window_n not in rejected
+
+        for threshold in prices + [rng.uniform(-5, 35)]:
+            for allow_freeze in (True, False):
+                for use_accept in (False, True):
+                    acceptor = accept if use_accept else None
+                    expect_charge = select_window_candidates(entries, lambda price: threshold >= price, allow_freeze, accept=acceptor)
+                    got_charge = select_window_candidates_at(entries, threshold, True, allow_freeze, accept=acceptor)
+                    expect_export = select_window_candidates(entries, lambda price: threshold < price, allow_freeze, accept=acceptor)
+                    got_export = select_window_candidates_at(entries, threshold, False, allow_freeze, accept=acceptor)
+                    if got_charge != expect_charge or got_export != expect_export:
+                        print("ERROR: case {} threshold {} freeze {} accept {}: charge {} want {}, export {} want {}".format(case, threshold, allow_freeze, use_accept, got_charge, expect_charge, got_export, expect_export))
+                        failed = True
+    if not failed:
+        print("PASS")
     return failed
 
 

@@ -51,6 +51,9 @@ SAVED_ATTRIBUTES = (
     "best_soc_keep",
     "best_soc_keep_weight",
     "num_inverters",
+    "set_charge_freeze",
+    "set_export_freeze",
+    "metric_battery_cycle",
 )
 
 WINDOW_COUNT = 6
@@ -62,6 +65,7 @@ def run_levels_block_replay_tests(my_predbat):
     failed = False
     failed |= test_region_replay_matches_rebuild(my_predbat)
     failed |= test_whole_plan_replay_matches_rebuild(my_predbat)
+    failed |= test_entry_dedupe_matches_full_loop(my_predbat)
     return failed
 
 
@@ -220,4 +224,94 @@ def test_whole_plan_replay_matches_rebuild(my_predbat):
         restore_state(my_predbat, saved)
     if not failed:
         print("PASS ({} blocks replayed)".format(replay_count))
+    return failed
+
+
+def run_levels_dedupe(my_predbat, dedupe_entries, region=None, enable_coarse_fine=True):
+    """As run_levels, with block replay on and the repeated-selection skip on or off. Returns the
+    result tuple and the call's stats."""
+    charge_window = my_predbat.charge_window_best
+    export_window = my_predbat.export_window_best
+    window_sorted, window_index, price_set, price_links = my_predbat.sort_window_by_price_combined(charge_window, export_window)
+    region_start, region_end = region if region else (None, None)
+    stats = {}
+    result = my_predbat.optimise_charge_limit_price_threads(
+        price_set,
+        price_links,
+        window_index,
+        len(charge_window),
+        len(export_window),
+        list(my_predbat.charge_limit_best),
+        charge_window,
+        export_window,
+        list(my_predbat.export_limits_best),
+        end_record=my_predbat.end_record,
+        region_start=region_start,
+        region_end=region_end,
+        quiet=True,
+        replay_stats=stats,
+        dedupe_entries=dedupe_entries,
+        enable_coarse_fine=enable_coarse_fine,
+    )
+    return result, stats
+
+
+def test_entry_dedupe_matches_full_loop(my_predbat):
+    """Skipping a charge or export selection that repeats an earlier one in its block changes nothing
+    the caller sees.
+
+    With charge and export freeze on, the fine blocks try every slot count with and without freeze,
+    and as none of these windows is a freeze-only one the two options select the same windows: the
+    case the skip exists for. The skipping and the full loop must agree on the plan, on every
+    recorded metric in tried_list, on levels_score and on the best slot counts, and the skip must
+    actually have been taken. Run over the whole plan and over a region, and with a battery cycle
+    cost, which only a charge entry pays, so each window's freeze entry sorts below its charge entry:
+    then the freeze option selects the same windows as the non-freeze one but with freeze flags set,
+    which must not be taken for a repeat. Also run without the coarse/fine split, where no coarse
+    block has already tried the non-freeze selections, so a skip that ignored the freeze flags would
+    drop trials nothing else runs.
+    """
+    print("**** test_entry_dedupe_matches_full_loop ****")
+    failed = False
+    saved = setup_levels_scenario(my_predbat)
+    try:
+        my_predbat.set_charge_freeze = True
+        my_predbat.set_export_freeze = True
+        my_predbat.prediction = Prediction(my_predbat, my_predbat.pv_forecast_minute_step, my_predbat.pv_forecast_minute10_step, my_predbat.load_minutes_step, my_predbat.load_minutes_step10)
+        now = my_predbat.minutes_now
+        names = ("best_limits", "best_export_limits", "best_metric", "best_cost", "best_keep", "best_soc_min", "best_cycle", "best_carbon", "best_import", "best_battery_value")
+        cases = []
+        for battery_cycle in (0.0, 2.0):
+            for coarse_fine in (True, False):
+                for region_label, region in (("whole plan", None), ("region", (now, now + 60 * REGION_WINDOWS))):
+                    cases.append(("{} battery_cycle {} coarse_fine {}".format(region_label, battery_cycle, coarse_fine), battery_cycle, coarse_fine, region))
+        for label, battery_cycle, coarse_fine, region in cases:
+            my_predbat.metric_battery_cycle = battery_cycle
+            deduped, deduped_stats = run_levels_dedupe(my_predbat, True, region, coarse_fine)
+            full, full_stats = run_levels_dedupe(my_predbat, False, region, coarse_fine)
+            for index, name in enumerate(names):
+                if deduped[index] != full[index]:
+                    print("ERROR: {}: {} differs with the skip: {} vs {} in full".format(label, name, deduped[index], full[index]))
+                    failed = True
+            if deduped[10] != full[10]:
+                print("ERROR: {}: tried_list differs with the skip ({} vs {} scenarios)".format(label, len(deduped[10]), len(full[10])))
+                failed = True
+            if deduped[11] != full[11]:
+                print("ERROR: {}: levels_score differs with the skip: {} vs {} in full".format(label, deduped[11], full[11]))
+                failed = True
+            if deduped[12:14] != full[12:14]:
+                print("ERROR: {}: best slot counts differ with the skip: {} vs {} in full".format(label, deduped[12:14], full[12:14]))
+                failed = True
+            if deduped_stats["deduped_entries"] <= 0:
+                print("ERROR: {}: expected repeated selections to be skipped, got {} - the test no longer exercises the skip".format(label, deduped_stats["deduped_entries"]))
+                failed = True
+            if full_stats["deduped_entries"] != 0:
+                print("ERROR: {}: dedupe_entries=False still skipped {} selections".format(label, full_stats["deduped_entries"]))
+                failed = True
+            if not failed:
+                print("{}: {} repeated selections skipped, results identical".format(label, deduped_stats["deduped_entries"]))
+    finally:
+        restore_state(my_predbat, saved)
+    if not failed:
+        print("PASS")
     return failed
