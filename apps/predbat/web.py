@@ -4023,7 +4023,7 @@ chart.render();
             "stale_or_short_forecast": "The ML forecast is out of date or has too little future coverage.",
             "invalid_forecast": "The ML forecast contains missing or invalid values.",
             "guard_unavailable": "PredBat could not evaluate the guard and is using the configured load sources. See the PredBat log for details.",
-            "report_unavailable": "The accuracy report could not be read. You can still change the guard mode below.",
+            "report_unavailable": "The accuracy report could not be read. You can still change the guard mode in Forecast settings.",
         }
         explanation = explanations.get(reason, "Waiting for the first accuracy report from a PredBat planning cycle.")
         if reason == "within_limits":
@@ -4068,7 +4068,7 @@ chart.render();
             recommendation = "Awaiting a fresh report"
         if mode == "off":
             headline, tone = "Monitoring off", "info"
-            explanation = "Accuracy recording is disabled. Select a monitoring mode below or in Config to collect real-world comparisons."
+            explanation = "Accuracy recording is disabled. Choose a mode in Forecast settings or Config to collect comparisons."
             source, recommendation = "Not reported", "Monitoring is off"
         scores = attributes.get("scores")
         scores = scores if isinstance(scores, dict) and mode != "off" else {}
@@ -4077,22 +4077,8 @@ chart.render();
             """A finite, non-negative energy error, or None for missing/malformed scores."""
             return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value) and value >= 0 else None
 
-        text = get_load_ml_accuracy_css()
-        text += """<section class="load-accuracy" aria-label="Load forecast accuracy"><h2>Load forecast accuracy</h2>"""
-        text += '<div class="la-status la-{}" role="status">{}</div><p>{}</p>'.format(tone, html_module.escape(headline), html_module.escape(explanation))
-        text += '<div class="la-cards">'
-        for label, value in (("Mode", {"off": "Off", "monitor": "Monitoring only", "auto": "Automatic fallback"}[mode]), ("Planning source (last report)" if stale else "Planning source", source), ("Guard recommendation", recommendation)):
-            if label == "Mode":
-                field = html_module.escape("select__" + self.prefix + "_load_ml_guard_mode", quote=True)
-                return_chart = chart if chart in ("LoadML", "LoadMLPower") else "LoadML"
-                text += '<div class="la-card"><label class="la-label" for="load-ml-guard-mode">Mode</label><form class="la-mode-form" method="post" action="./config">'
-                text += '<input type="hidden" name="_load_ml_guard_return_chart" value="{}"><select id="load-ml-guard-mode" name="{}">'.format(return_chart, field)
-                for option, title in (("off", "Off"), ("monitor", "Monitoring only"), ("auto", "Automatic fallback")):
-                    text += '<option value="{}"{}>{}</option>'.format(option, " selected" if option == mode else "", title)
-                text += '</select><button type="submit">Apply mode</button></form><small>Saved immediately; no restart needed. Guard mode does not enable ML for planning.</small></div>'
-                continue
-            text += '<div class="la-card"><span class="la-label">{}</span><strong>{}</strong></div>'.format(html_module.escape(label), html_module.escape(value))
-        text += '</div><p>Average energy error over the past seven days. Lower is better.</p><div class="la-table"><table><thead><tr><th scope="col">Forecast window</th><th scope="col">LoadML error</th><th scope="col">Historical error</th><th scope="col">Closer forecast</th></tr></thead><tbody>'
+        rows = []
+        wins = {"LoadML": 0, "Historical": 0}
         for horizon in (1, 8, 24):
             row = scores.get("{}h".format(horizon), {})
             row = row if isinstance(row, dict) else {}
@@ -4101,12 +4087,62 @@ chart.render();
             ml, classic = error_value(row.get("ml_mae_kwh")), error_value(row.get("classic_mae_kwh"))
             ready = count > 0 and ml is not None and classic is not None
             winner = "Waiting for results" if not ready else "Similar" if abs(ml - classic) < 0.005 else "LoadML" if ml < classic else "Historical"
-            ml_text = "{:.2f} kWh".format(ml) if ready else "&mdash;"
-            classic_text = "{:.2f} kWh".format(classic) if ready else "&mdash;"
-            text += '<tr><th scope="row">{} hour{}<small>{} completed windows</small></th><td class="{}">{}</td><td class="{}">{}</td><td>{}</td></tr>'.format(
-                horizon, "s" if horizon != 1 else "", count, "la-best" if winner == "LoadML" else "", ml_text, "la-best" if winner == "Historical" else "", classic_text, winner
-            )
-        text += '</tbody></table></div><p>Scores appear after each forecast window has elapsed. Hourly windows overlap; automatic fallback uses evidence from separate days. These compare unadjusted household forecasts with later measured load.</p><a href="./log">Open PredBat log</a></section>'
+            if winner in wins:
+                wins[winner] += 1
+            rows.append((horizon, count, ml, classic, ready, winner))
+        completed_checks = sum(row[4] for row in rows)
+        leader = "Collecting evidence"
+        if completed_checks:
+            if wins["LoadML"] == wins["Historical"]:
+                leader = "Similar accuracy" if not sum(wins.values()) else "Mixed results"
+            else:
+                name = max(wins, key=wins.get)
+                leader = "{} · {} of {} checks".format(name, wins[name], completed_checks)
+        if reason in ("guard_unavailable", "report_unavailable"):
+            leader = "Unavailable"
+        if stale:
+            leader = "Awaiting a fresh report"
+        elif mode == "off":
+            leader = "Not reported"
+
+        def icon(paths, colour="green"):
+            """Render a decorative inline icon without remote font dependencies."""
+            return '<svg class="la-icon la-icon-{}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true" focusable="false">{}</svg>'.format(colour, paths)
+
+        icons = (
+            icon('<rect x="4" y="5" width="16" height="16" rx="1"/><path d="M8 2v6m8-6v6M4 10h16m-12 5 3 3 6-6"/>'),
+            icon('<path d="M12 2 3 6v6c0 5 9 10 9 10s9-5 9-10V6l-9-4Z"/><path d="m7 12 3 3 7-7"/>', "blue"),
+            icon('<circle cx="12" cy="12" r="8"/><path d="M12 1v7m0 8v7M1 12h7m8 0h7"/>'),
+        )
+        text = get_load_ml_accuracy_css()
+        text += '<section class="load-accuracy" aria-label="Load forecast accuracy"><div class="la-cards">'
+        for image, label, value in zip(icons, ("Planning source (last report)" if stale else "Planning source", "Guard mode", "Accuracy leader"), (source, {"off": "Off", "monitor": "Monitoring only", "auto": "Automatic fallback"}[mode], leader)):
+            text += '<div class="la-card">{}<div><span class="la-label">{}</span><strong>{}</strong></div></div>'.format(image, html_module.escape(label), html_module.escape(value))
+        text += '</div><div class="la-panel"><div class="la-panel-heading"><h2>Forecast accuracy · Last 7 days</h2>'
+        text += '<details class="la-settings"><summary>Forecast settings</summary><div class="la-settings-body">'
+        prominent = tone == "warning" or mode == "off" or headline == "ML unavailable"
+        if not prominent:
+            text += '<div class="la-status la-{}" role="status">{}</div><p>{}</p>'.format(tone, html_module.escape(headline), html_module.escape(explanation))
+        text += "<p>Guard recommendation: <strong>{}</strong>.</p>".format(html_module.escape(recommendation))
+        field = html_module.escape("select__" + self.prefix + "_load_ml_guard_mode", quote=True)
+        return_chart = chart if chart in ("LoadML", "LoadMLPower") else "LoadML"
+        text += '<form class="la-mode-form" method="post" action="./config"><input type="hidden" name="_load_ml_guard_return_chart" value="{}">'.format(return_chart)
+        text += '<label for="load-ml-guard-mode">Guard mode</label><select id="load-ml-guard-mode" name="{}">'.format(field)
+        for option, title in (("off", "Off"), ("monitor", "Monitoring only"), ("auto", "Automatic fallback")):
+            text += '<option value="{}"{}>{}</option>'.format(option, " selected" if option == mode else "", title)
+        text += '</select><button type="submit">Apply mode</button></form>'
+        text += "<small>Saved immediately. Guard mode does not enable ML for planning.</small>"
+        text += '<details class="la-help"><summary>How to read the scores</summary><p>The accuracy leader summarises the lower average errors in the table. Automatic selection requires sustained evidence on both the 8-hour and 24-hour checks.</p>'
+        text += "<p>Hourly windows overlap. Scores compare unadjusted household forecasts with later measured consumption.</p></details></div></details></div>"
+        if prominent:
+            text += '<div class="la-alert la-{}" role="status"><strong>{}</strong><p>{}</p></div>'.format(tone, html_module.escape(headline), html_module.escape(explanation))
+        text += '<div class="la-table"><table><thead><tr><th scope="col">Window</th><th scope="col">LoadML error</th><th scope="col">Historical error</th><th scope="col">Closer forecast</th></tr></thead><tbody>'
+        for horizon, count, ml, classic, ready, winner in rows:
+            text += '<tr><th scope="row">{} hour{}<small>{} completed windows</small></th>'.format(horizon, "s" if horizon != 1 else "", count)
+            for name, value in (("LoadML", ml), ("Historical", classic)):
+                text += '<td class="{}">{}</td>'.format("la-best" if winner == name else "", "{:.2f} kWh".format(value) if ready else "&mdash;")
+            text += '<td><span class="{}">{}</span></td></tr>'.format("la-winner" if winner in wins else "la-neutral", winner)
+        text += '</tbody></table></div><div class="la-footer"><span>ⓘ Lower error is better · 7-day average (kWh)</span><a href="./log">Open PredBat log ↗</a></div></div></section>'
         return text
 
     async def html_charts(self, request):
@@ -4142,9 +4178,11 @@ chart.render();
 
         if chart in ("LoadML", "LoadMLPower"):
             text += self.get_load_ml_accuracy_html(chart)
-        if chart not in ("MarginalCosts", "Curves", "PVCalibration", "PVAccuracy"):
-            text += '<div id="chart"></div>'
-        text += self.get_chart(chart=chart)
+            text += '<div class="load-forecast-chart"><div id="chart"></div>' + self.get_chart(chart=chart) + "</div>"
+        else:
+            if chart not in ("MarginalCosts", "Curves", "PVCalibration", "PVAccuracy"):
+                text += '<div id="chart"></div>'
+            text += self.get_chart(chart=chart)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
 

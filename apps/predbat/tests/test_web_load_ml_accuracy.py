@@ -66,6 +66,7 @@ class WebLoadMLAccuracyTests(unittest.TestCase):
         for chart in ("LoadML", "LoadMLPower"):
             response = asyncio.run(web.html_charts(SimpleNamespace(query={"chart": chart})))
             self.assertLess(response.text.index('<section class="load-accuracy"'), response.text.index('<div id="chart">'))
+            self.assertIn('<div class="load-forecast-chart"><div id="chart"></div>', response.text)
             self.assertIn('id="original-chart"', response.text)
             self.assertIn("Monitoring only", response.text)
 
@@ -97,9 +98,11 @@ class WebLoadMLAccuracyTests(unittest.TestCase):
         self.assertIn("2.50 kWh", html)
         self.assertIn("0.80 kWh", html)
         self.assertIn("40 completed windows", html)
-        self.assertIn("<td>Historical</td>", html)
-        self.assertIn("<td>LoadML</td>", html)
-        self.assertIn("<td>Similar</td>", html)
+        self.assertIn('<td><span class="la-winner">Historical</span></td>', html)
+        self.assertIn('<td><span class="la-winner">LoadML</span></td>', html)
+        self.assertIn('<td><span class="la-neutral">Similar</span></td>', html)
+        self.assertIn('<span class="la-label">Accuracy leader</span><strong>Mixed results</strong>', html)
+        self.assertIn("<summary>Forecast settings</summary>", html)
 
     def test_monitor_warning_does_not_claim_a_switch(self):
         """An ML-selected monitor report warns while honestly showing ML still supplies planning."""

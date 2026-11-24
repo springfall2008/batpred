@@ -2126,8 +2126,8 @@ household-load forecasts before consumption occurs and preserves the configured 
 forecast. It works with `load_ml_source` either on or off. Choose **Off** to stop recording,
 or **Automatic fallback** to start on historical and require ML to earn selection.
 
-Change the mode directly in the accuracy panel on **Charts → LoadML / LoadMLPower**
-using **Apply mode**, or use **Config → LoadML forecast guard mode**. Both controls
+Open **Forecast settings** on **Charts → LoadML / LoadMLPower**, choose a guard mode
+and select **Apply mode**, or use **Config → LoadML forecast guard mode**. Both controls
 use the same saved select (`select.predbat_load_ml_guard_mode`, with your own prefix).
 The control is exposed only when LoadML is enabled. Choices are **Off**, **Monitoring only**, and **Automatic fallback**. Changes are saved
 immediately and request a new plan without restarting PredBat. They do not change
@@ -2140,8 +2140,9 @@ The saved mode is restored after a restart. Mode changes require no YAML edits.
 `sensor.predbat_load_ml_accuracy` shows the selected source, reason, recommended source,
 and seven-day energy MAE and signed bias for one-hour, eight-hour and 24-hour windows.
 For an everyday view, open **Charts → LoadML** or **Charts → LoadMLPower** in PredBat.
-An accuracy summary above the graph shows the mode, planning source, warning or fallback
-status, and a table comparing ML and historical errors. Empty windows show that results
+An accuracy summary above the graph shows the planning source, guard mode, and which
+forecast wins across the most scored horizons. The table compares
+LoadML and Historical errors by window. Warnings appear above the table. Empty windows show that results
 are still pending; a real zero error is displayed as zero. The page refreshes with the
 existing chart refresh and flags reports more than 15 minutes old.
 Positive bias means the forecast was higher than actual load. Snapshots are taken at most once per hour and frozen;
