@@ -94,7 +94,9 @@
 // Parity 24: the car cancel branch's parity 22 merged with main's parity 23.
 // Parity 25: optional export energy budget (export_budget_mode) caps forced battery export, mirroring
 // export_budget.py; a capped step recomputes the grid balance before the iBoost solar excess.
-#define PK_PARITY_REVISION 25
+// Parity 26: pv_origin holds the PV part of the stored energy at export_budget_cap (export_budget.py), in the
+// seed and after every step, so a battery bigger than the export allowance stores the rest as grid.
+#define PK_PARITY_REVISION 26
 #define PK_MAX_CARS 8
 #define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
@@ -171,6 +173,10 @@ inline void pk_export_budget_update(int32_t mode, double &bucket, double &pv_par
     } else {
         pv_part = 0.0;
         grid_part = soc_after;
+    }
+    if (pv_part > cap) {
+        grid_part += pv_part - cap;
+        pv_part = cap;
     }
 }
 inline bool pk_export_is_freeze(int32_t mode) { return mode == PK_EXPORT_MODE_FREEZE; }
@@ -981,7 +987,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     const int32_t budget_mode = c->export_budget_mode;
     const double budget_cap = c->export_budget_cap;
     double budget_bucket = budget_mode ? c->export_budget_seed_bucket : 0.0;
-    double budget_pv_part = budget_mode ? soc * c->export_budget_seed_pv_share : 0.0;
+    double budget_pv_part = (budget_mode && c->export_budget_seed_pv_share) ? std::min(soc * c->export_budget_seed_pv_share, budget_cap) : 0.0;
     double budget_grid_part = soc - budget_pv_part;
     const double budget_stored_to_ac = battery_loss_discharge * inverter_loss;
 

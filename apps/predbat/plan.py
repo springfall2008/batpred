@@ -41,7 +41,7 @@ from const import (
     EXPORT_MODE_IDLE,
     RUN_EVERY,
 )
-from export_budget import EXPORT_BUDGET_PV_EQUIVALENT, export_budget_floor_percent
+from export_budget import EXPORT_BUDGET_PV_EQUIVALENT, export_budget_floor_percent, export_budget_seed_pv_part
 
 from utils import (
     calc_percent_limit,
@@ -4247,7 +4247,8 @@ class Plan:
             stored_to_ac = self.battery_loss_discharge * self.inverter_loss
             exportable = seed[0] / stored_to_ac if seed and stored_to_ac > 0 else 0.0
         else:
-            exportable = self.soc_kw * seed[1] if seed else 0.0
+            cap = self.export_budget_cap_kwh if self.export_budget_cap_kwh > 0 else self.soc_max
+            exportable = export_budget_seed_pv_part(self.soc_kw, seed[1], cap) if seed else 0.0
         floor_percent = export_budget_floor_percent(self.soc_kw, exportable, self.soc_max)
         for window_n, window in enumerate(self.export_window_best):
             limit = self.export_limits_best[window_n]

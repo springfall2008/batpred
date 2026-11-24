@@ -39,7 +39,8 @@ KERNEL_ABI_VERSION = 15
 # Parity 22 (car cancel branch): an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted -
 # merged with main's parity 20. Parity 23 (main): the battery rate grids. Parity 24: both.
 # Parity 25: the optional export energy budget (export_budget_mode) caps forced battery export.
-KERNEL_PARITY_REVISION = 25
+# Parity 26: pv_origin holds the PV part of the stored energy at the export budget cap.
+KERNEL_PARITY_REVISION = 26
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS

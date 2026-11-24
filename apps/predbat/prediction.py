@@ -33,7 +33,7 @@ from utils import (
     pack_export_limit,
 )
 from car_cancel import cancelled_mask, step_reverted
-from export_budget import EXPORT_BUDGET_OFF, EXPORT_BUDGET_PV_EQUIVALENT, export_budget_battery_export_allowed, export_budget_house_from_battery, export_budget_update
+from export_budget import EXPORT_BUDGET_OFF, EXPORT_BUDGET_PV_EQUIVALENT, export_budget_battery_export_allowed, export_budget_house_from_battery, export_budget_seed_pv_part, export_budget_update
 from prediction_batch import EXPORT_FLOOR_SCENARIOS, PredictionBatch, export_end_soc_from_series, floor_export_limits, prediction_cache_key
 from battery_rate_grid import rate_grid_curve
 from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
@@ -816,7 +816,7 @@ class Prediction(PredictionBatch):
         budget_cap = self.export_budget_cap_kwh if self.export_budget_cap_kwh > 0 else self.soc_max
         budget_seed = self.export_budget_seed if budget_mode else None
         budget_bucket = budget_seed[0] if budget_seed else 0.0
-        budget_pv_part = soc * budget_seed[1] if budget_seed else 0.0
+        budget_pv_part = export_budget_seed_pv_part(soc, budget_seed[1], budget_cap) if budget_seed else 0.0
         budget_grid_part = soc - budget_pv_part
         budget_stored_to_ac = battery_loss_discharge * inverter_loss
         predict_export_budget = {}

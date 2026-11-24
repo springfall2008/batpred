@@ -25,6 +25,7 @@ from export_budget import (
     export_budget_house_from_battery,
     export_budget_update,
     export_budget_replay,
+    export_budget_seed_pv_part,
 )
 
 
@@ -164,6 +165,23 @@ def test_update_pv_origin():
     # Empty parts with SoC left (e.g. reserve) count as grid
     _, pv, grid = export_budget_update(EXPORT_BUDGET_PV_ORIGIN, 0, 0.0, 0.0, 0.5, 0.5, 0, 0, 1.0, 0, 10)
     failed = check(failed, close(pv, 0.0) and close(grid, 0.5), "empty parts -> grid")
+    # Cap (a bigger battery, exporting no more than the old size): the PV part is held at the cap and the
+    # rest of the stored energy counts as grid, so it can only run the house
+    _, pv, grid = export_budget_update(EXPORT_BUDGET_PV_ORIGIN, 0, 0.5, 0.5, 1.0, 1.5, 0.5, 0.2, 1.0, 0, 0.5)
+    failed = check(failed, close(pv, 0.5) and close(grid, 1.0), "cap holds the PV part {} {}".format(pv, grid))
+    # Discharge from a capped battery: the house takes the grid part first, so the PV part below the cap is kept
+    _, pv, grid = export_budget_update(EXPORT_BUDGET_PV_ORIGIN, 0, 0.5, 1.0, 1.5, 1.0, 0, 0, 1.0, 0, 0.5)
+    failed = check(failed, close(pv, 0.5) and close(grid, 0.5), "capped discharge to house {} {}".format(pv, grid))
+    return failed
+
+
+def test_seed_pv_part():
+    """The seed's PV share applies to the SoC, held at the cap"""
+    failed = False
+    failed = check(failed, close(export_budget_seed_pv_part(8.0, 0.25, 10.0), 2.0), "share of the SoC")
+    failed = check(failed, close(export_budget_seed_pv_part(8.0, 1.0, 7.1), 7.1), "held at the cap")
+    failed = check(failed, close(export_budget_seed_pv_part(8.0, 0.0, 7.1), 0.0), "no PV share")
+    failed = check(failed, close(export_budget_seed_pv_part(8.0, None, 7.1), 0.0), "no seed")
     return failed
 
 
@@ -191,6 +209,14 @@ def test_replay():
     history = (cumulative([0.0, 0.0, 1.0]), cumulative([0.0, 0.0, 1.0]), cumulative([1.0, 1.0, 0.0]), cumulative([0.0, 0.0, 0.5]), 20.0, 20.0)
     seed, noncompliant, _ = export_budget_replay(EXPORT_BUDGET_PV_ORIGIN, *history, soc_history=cumulative([1.0, 1.0, -0.5]))
     failed = check(failed, close(noncompliant, 0.0) and close(seed[1], 0.0), "pv_origin battery covers load while PV exports {} {}".format(seed, noncompliant))
+    # pv_origin with a cap: 12 kWh charged from PV on a 20 kWh battery keeps a PV part of only 7.1, the rest counts as grid
+    seed, noncompliant, steps = export_budget_replay(EXPORT_BUDGET_PV_ORIGIN, cumulative([1.0] * n), cumulative([0.0] * n), cumulative([0.0] * n), cumulative([0.0] * n), 20.0, 7.1)
+    failed = check(failed, steps == n and close(seed[1], 7.1 / 12) and close(noncompliant, 0.0), "pv_origin cap {} {}".format(seed, noncompliant))
+    seed, noncompliant, steps = export_budget_replay(EXPORT_BUDGET_PV_ORIGIN, cumulative([1.0] * n), cumulative([0.0] * n), cumulative([0.0] * n), cumulative([0.0] * n), 20.0, 7.1, soc_history=cumulative([1.0] * n))
+    failed = check(failed, steps == n and close(seed[1], 7.1 / 12) and close(noncompliant, 0.0), "pv_origin cap, measured SoC {} {}".format(seed, noncompliant))
+    # Exporting 8 kWh from that battery: 0.9 kWh beyond the capped PV part is non-compliant
+    seed, noncompliant, steps = export_budget_replay(EXPORT_BUDGET_PV_ORIGIN, cumulative([1.0] * n + [0.0]), cumulative([0.0] * n + [8.0]), cumulative([0.0] * (n + 1)), cumulative([0.0] * (n + 1)), 20.0, 7.1, soc_history=cumulative([1.0] * n + [-8.0]))
+    failed = check(failed, close(noncompliant, 0.9) and close(seed[1], 0.0), "pv_origin cap non-compliant {} {}".format(seed, noncompliant))
     # No history at all
     seed, noncompliant, steps = export_budget_replay(EXPORT_BUDGET_PV_ORIGIN, {}, {}, {}, {}, 10.0, 10.0)
     failed = check(failed, seed is None and steps == 0, "no history")
@@ -256,6 +282,10 @@ BUDGET_CASES = [
     {"name": "origin_sunny_export_all_grid", "soc": 10.0, "seed": (0.0, 0.0), "pv": [(0, 60, 2.4)], "load": 1.2, "charge": [], "export": [(0, 60)], "end": 60, "expect": {0: (7.2, 4.0), 1: (2.4, 8.8), 2: (2.4, 8.8)}},
     # Same with 1 kWh of PV stored: the grid part covers the load, so all 2.4 kWh of PV goes out with the 1 kWh
     {"name": "origin_sunny_export_pv_part", "soc": 10.0, "seed": (0.0, 0.1), "pv": [(0, 60, 2.4)], "load": 1.2, "charge": [], "export": [(0, 60)], "end": 60, "expect": {0: (7.2, 4.0), 1: (3.4, 7.8), 2: (2.4, 8.8)}},
+    # A full battery of PV energy with a 4 kWh cap (the old battery size): pv_origin sells only 4 kWh of it
+    {"name": "origin_cap_seed", "soc": 10.0, "seed": (3.0, 1.0), "cap": 4.0, "pv": [], "load": 0.0, "charge": [], "export": [(0, 120)], "end": 120, "expect": {0: (10.0, 0.0), 1: (4.0, 6.0), 2: (3.0, 7.0)}},
+    # PV stores 6 kWh, then an export: only the 4 kWh cap of it counts as PV
+    {"name": "origin_cap_pv_charge", "soc": 0.0, "seed": (0.0, 0.0), "cap": 4.0, "pv": [(0, 60, 6.0)], "load": 0.0, "charge": [], "export": [(60, 120)], "end": 120, "expect": {0: (6.0, 0.0), 1: (4.0, 2.0), 2: (4.0, 2.0)}},
 ]
 
 
@@ -277,7 +307,7 @@ def setup_budget_case(my_predbat, case):
     my_predbat.battery_rate_max_scaling = 1.0
     my_predbat.battery_rate_max_scaling_discharge = 1.0
     my_predbat.battery_rate_min = 0.0
-    my_predbat.export_budget_cap_kwh = 10.0
+    my_predbat.export_budget_cap_kwh = case.get("cap", 10.0)
     pv_step = {}
     load_step = {}
     for minute in range(0, my_predbat.forecast_minutes, 5):
@@ -652,6 +682,47 @@ def test_measured_floor(my_predbat):
     return failed
 
 
+def test_cap_seed_consumers(my_predbat):
+    """With a cap below the stored PV, the sensor and the measured export floor use the capped PV part"""
+    from const import EXPORT_MODE_TARGET
+    from utils import pack_export_limit, export_target_of
+
+    failed = False
+    minutes_now = FIXTURE_MINUTES_NOW
+    my_predbat.minutes_now = minutes_now
+    my_predbat.export_budget_mode = 1
+    my_predbat.export_budget_cap_kwh = 1.0
+    my_predbat.soc_max = 10.0
+    my_predbat.soc_kw = 5.0
+    my_predbat.battery_loss_discharge = 1.0
+    my_predbat.inverter_loss = 1.0
+    my_predbat.export_budget_seed = (0.0, 1.0)
+    my_predbat.export_budget_noncompliant_kwh = 0.0
+    my_predbat.export_budget_replay_steps = 1
+    my_predbat.export_budget_planned_battery_export = 0.0
+    my_predbat.manual_export_times = []
+    my_predbat.export_budget_capped_minutes = []
+    my_predbat.predict_export_budget = {}
+    # All 5 kWh stored is PV, but the cap lets 1 kWh go: the floor of the running window is (5 - 1) / 10 = 40%
+    my_predbat.export_window_best = [{"start": minutes_now - 30, "end": minutes_now + 30, "average": 50.0, "target": 10.0}]
+    my_predbat.export_limits_best = [pack_export_limit(EXPORT_MODE_TARGET, 10, 1.0)]
+    my_predbat.apply_export_budget_floor()
+    target = export_target_of(my_predbat.export_limits_best[0])
+    if target != 40:
+        print("ERROR: export_budget capped measured floor gave {} expected 40".format(target))
+        failed = True
+    my_predbat.publish_export_budget()
+    item = my_predbat.dashboard_values.get(my_predbat.prefix + ".export_budget", {})
+    attributes = item.get("attributes", {})
+    if abs(float(item.get("state", -1)) - 1.0) > 1e-6 or attributes.get("pv_part_kwh") != 1.0 or attributes.get("grid_part_kwh") != 4.0 or attributes.get("cap") != 1.0:
+        print("ERROR: export_budget capped sensor state {} attributes {}".format(item.get("state"), attributes))
+        failed = True
+    my_predbat.export_budget_mode = 0
+    my_predbat.export_budget_seed = None
+    my_predbat.export_budget_cap_kwh = 0.0
+    return failed
+
+
 def test_budget_iboost_excess(my_predbat):
     """iBoost solar-excess diversion only sees the export left after the cap, so the cap never makes the house import"""
     failed = False
@@ -699,6 +770,7 @@ def run_export_budget_tests(my_predbat):
     failed |= test_house_from_battery()
     failed |= test_update_pv_equivalent()
     failed |= test_update_pv_origin()
+    failed |= test_seed_pv_part()
     failed |= test_replay()
     failed |= test_replay_skips_counter_glitch()
     failed |= test_replay_measured_soc()
@@ -734,6 +806,7 @@ def run_export_budget_tests(my_predbat):
                 "minutes_now",
                 "battery_loss_discharge",
                 "inverter_loss",
+                "predict_export_budget",
             )
         }
         try:
@@ -743,6 +816,7 @@ def run_export_budget_tests(my_predbat):
             failed |= test_seed_hook_measured_soc(my_predbat)
             failed |= test_publish_sensor(my_predbat)
             failed |= test_measured_floor(my_predbat)
+            failed |= test_cap_seed_consumers(my_predbat)
         finally:
             for attr, value in saved.items():
                 setattr(my_predbat, attr, value)

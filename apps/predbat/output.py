@@ -57,7 +57,7 @@ from utils import (
     pack_export_limit,
     export_limit_from_stored,
 )
-from export_budget import EXPORT_BUDGET_PV_EQUIVALENT, EXPORT_BUDGET_MODE_NAMES
+from export_budget import EXPORT_BUDGET_PV_EQUIVALENT, EXPORT_BUDGET_MODE_NAMES, export_budget_seed_pv_part
 from prediction import Prediction
 from billing import attach_billing, billing_entity_id, parse_axle_events, parse_saving_events, saving_session_events, BILLING_DAYS, BILLING_EVENT_LABELS, BILLING_SLOT_FORMAT
 
@@ -2699,7 +2699,7 @@ class Output:
         if self.export_budget_mode == EXPORT_BUDGET_PV_EQUIVALENT:
             state = seed[0] if seed else 0.0
         else:
-            pv_part = self.soc_kw * (seed[1] if seed else 0.0)
+            pv_part = export_budget_seed_pv_part(self.soc_kw, seed[1], cap) if seed else 0.0
             state = pv_part
             attributes["pv_part_kwh"] = dp2(pv_part)
             attributes["grid_part_kwh"] = dp2(self.soc_kw - pv_part)

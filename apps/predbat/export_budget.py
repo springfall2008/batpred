@@ -13,7 +13,8 @@ Limits battery-to-grid export to energy derived from the household's own PV:
 
 - pv_origin: stored energy is split into a PV part and a grid part. Battery output up to the whole
   on-site load counts as the house's own use and draws the grid part first, even while PV is exported.
-  Only battery output beyond the load is export, and only the PV part may be exported.
+  Only battery output beyond the load is export, and only the PV part may be exported. The PV part is held
+  at the cap (default the battery size), so a battery bigger than the export allowance stores the rest as grid.
 - pv_equivalent: a bucket filled by PV production and drained by all export, capped (default the
   battery size); battery export is allowed while the bucket has energy.
 
@@ -39,6 +40,11 @@ def parse_export_budget_mode(value):
     if not isinstance(value, str):
         return None
     return EXPORT_BUDGET_MODE_NAMES.get(value.strip().lower())
+
+
+def export_budget_seed_pv_part(soc, pv_share, cap):
+    """pv_origin PV part of `soc` stored kWh for a seed PV share, held at the cap"""
+    return min(soc * pv_share, cap) if pv_share else 0.0
 
 
 def export_budget_house_from_battery(mode, battery_out, load, pv):
@@ -71,7 +77,8 @@ def export_budget_update(mode, bucket, pv_part, grid_part, soc_before, soc_after
 
     charge_kwh is the DC energy drawn into the battery this step (0 when not charging), house_frac the
     share of this step's battery output that served on-site load, export_kwh the energy that reached the
-    meter. pv_origin parts are renormalised to soc_after so they always sum to the SoC.
+    meter. pv_origin parts are renormalised to soc_after so they always sum to the SoC, and the PV part
+    is held at the cap (the excess counts as grid).
     """
     if mode == EXPORT_BUDGET_PV_EQUIVALENT:
         bucket = min(max(bucket + pv_now - export_kwh, 0.0), cap)
@@ -99,6 +106,9 @@ def export_budget_update(mode, bucket, pv_part, grid_part, soc_before, soc_after
     else:
         pv_part = 0.0
         grid_part = soc_after
+    if pv_part > cap:
+        grid_part += pv_part - cap
+        pv_part = cap
     return bucket, pv_part, grid_part
 
 
@@ -202,6 +212,9 @@ def export_budget_replay(mode, pv_today, export_today, import_today, load_minute
             if soc_max > 0 and total > soc_max:
                 pv_part *= soc_max / total
                 grid_part *= soc_max / total
+            if pv_part > cap:
+                grid_part += pv_part - cap
+                pv_part = cap
         steps += 1
     if steps == 0:
         return None, 0.0, 0

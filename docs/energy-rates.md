@@ -788,7 +788,7 @@ battery exports within such a rule. Set in `apps.yaml`:
 
 ```yaml
   export_budget_mode: pv_origin   # off (default) | pv_origin | pv_equivalent
-  # export_budget_cap_kwh: 7.1    # pv_equivalent only, defaults to the battery size
+  # export_budget_cap_kwh: 7.1    # defaults to the battery size
 ```
 
 - **pv_origin**: Predbat tracks how much of the stored energy came from PV and how much from the
@@ -797,6 +797,13 @@ battery exports within such a rule. Set in `apps.yaml`:
   may be force exported. Every kWh that reaches the grid is PV, sent directly or stored first, and
   grid energy is only ever used on site. Use this where the rule is "only PV energy may be sold" and
   storing grid energy for your own use is allowed.
+
+  `export_budget_cap_kwh` (default the battery size) caps the PV part: stored PV beyond it counts as
+  grid energy, which runs the house but is never force exported. Use it when you may export no more
+  than a smaller battery could hold, for example after enlarging the battery but before the grid
+  operator has approved exporting from the larger one: with a 14 kWh battery and the cap at 7.1, at
+  most 7.1 kWh of stored PV is exportable at any time. PV charging the battery again later tops it up
+  to the cap again.
 
   For example (ignoring losses), the battery charges 5 kWh from the grid while PV makes 5 kWh and the
   house uses 5 kWh. The 5 kWh stored counts as PV and the house is deemed to have used the grid energy,
