@@ -646,24 +646,22 @@ static void build_export_active(std::vector<std::pair<int32_t, int32_t>> &export
 static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, std::vector<int32_t> &out_end, std::vector<double> &out_limit, std::vector<int32_t> &out_src, int32_t n_charge, const int32_t *charge_start, const int32_t *charge_end, const double *charge_limit,
                                              const std::vector<std::pair<int32_t, int32_t>> &export_active)
 {
-    out_start.clear();
-    out_end.clear();
-    out_limit.clear();
-    out_src.clear();
-    out_start.reserve(n_charge);
-    out_end.reserve(n_charge);
-    out_limit.reserve(n_charge);
-    out_src.reserve(n_charge);
-
-    if (export_active.empty()) {
-        for (int32_t n = 0; n < n_charge; n++) {
-            out_start.push_back(charge_start[n]);
-            out_end.push_back(charge_end[n]);
-            out_limit.push_back(charge_limit[n]);
-            out_src.push_back(n);
-        }
-        return;
-    }
+    // A charge window yields at most two segments (the head before an export window, and what is left
+    // after it), so the outputs are sized for that and written by index; the push_backs this replaces
+    // were a call each and the clip is a visible share of a job
+    const size_t capacity = static_cast<size_t>(n_charge) * 2;
+    out_start.resize(capacity);
+    out_end.resize(capacity);
+    out_limit.resize(capacity);
+    out_src.resize(capacity);
+    size_t count = 0;
+    auto emit = [&](int32_t start, int32_t end, double limit, int32_t src) {
+        out_start[count] = start;
+        out_end[count] = end;
+        out_limit[count] = limit;
+        out_src[count] = src;
+        count++;
+    };
 
     for (int32_t n = 0; n < n_charge; n++) {
         int32_t start = charge_start[n];
@@ -672,10 +670,7 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
 
         if (!(limit > 0.0)) {
             // A disabled charge window can never be clipped
-            out_start.push_back(start);
-            out_end.push_back(end);
-            out_limit.push_back(limit);
-            out_src.push_back(n);
+            emit(start, end, limit, n);
             continue;
         }
 
@@ -683,7 +678,12 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
         for (const auto &dw : export_active) {
             const int32_t dstart = dw.first;
             const int32_t dend = dw.second;
-            if ((dstart < end) && (dend >= start)) {
+            // export_active is sorted by start and a window's end only ever moves down while it is clipped, so
+            // once an export window starts at or after the end none that follow can overlap it either
+            if (dstart >= end) {
+                break;
+            }
+            if (dend >= start) {
                 if (dstart <= start) {
                     if (start != dend) {
                         start = dend;
@@ -697,10 +697,7 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
                 } else {
                     // Two segments - emit the head now, carry on clipping the tail
                     if ((dstart - start) >= 5) {
-                        out_start.push_back(start);
-                        out_end.push_back(dstart);
-                        out_limit.push_back(limit);
-                        out_src.push_back(n);
+                        emit(start, dstart, limit, n);
                     }
                     start = dend;
                     clipped = true;
@@ -709,12 +706,13 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
         }
 
         if (!clipped || ((end - start) >= 5)) {
-            out_start.push_back(start);
-            out_end.push_back(end);
-            out_limit.push_back(limit);
-            out_src.push_back(n);
+            emit(start, end, limit, n);
         }
     }
+    out_start.resize(count);
+    out_end.resize(count);
+    out_limit.resize(count);
+    out_src.resize(count);
 }
 
 // Shared with the charge side, which has a bare kWh limit and no mode - hence both arrays, with

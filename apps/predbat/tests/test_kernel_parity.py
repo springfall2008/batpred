@@ -1661,6 +1661,69 @@ def run_batch_window_variant_tests(my_predbat, count=30, window_variants=6):
     return failed
 
 
+def run_window_setup_cache_tests(my_predbat, seeds=(11, 22, 33), count=36):
+    """Check the kernel's window setup carried between jobs of a batch never leaks from one job to another, returns True on failure.
+
+    pk_run_one keeps a thread's window clipping and membership from one job to the next while the next
+    job's buffers and enabled-limit pattern are the same. Real fan-outs hand every job of a trial the very
+    same lists, so here jobs come in threes that share their charge and export limit lists (as a trial's
+    nominal, pv10 and pv90 scenarios do) while the window lists are shared by the whole batch. Between
+    trials the limits change the way a trial changes them: one limit moved but still enabled (the carried
+    setup applies), a window switched off, everything off, an export window made idle or a freeze (the
+    carried setup must not apply). Each batch is compared with the per-job pk_run reference, which never
+    carries anything, at every thread count; later seeds build new lists after the earlier ones are freed,
+    so a recycled buffer address with different contents is exercised too.
+    """
+    print("**** Running kernel window setup cache tests ****")
+    if not prediction_kernel.KERNEL_HAS_BATCH:
+        print("SKIP: kernel does not expose pk_run_batch")
+        return False
+
+    failed = False
+    checked = 0
+    for seed in seeds:
+        rng = random.Random(seed)
+        prediction, jobs = build_batch_jobs(my_predbat, rng, count)
+        if not prediction.kernel_handle:
+            print("ERROR: window setup cache kernel context creation failed")
+            return True
+        for group in range(0, len(jobs), 3):
+            trial = group // 3
+            charge_limit = list(jobs[group].charge_limit)
+            export_limits = list(jobs[group].export_limits)
+            charge_mode = trial % 5
+            if charge_limit:
+                position = rng.randrange(len(charge_limit))
+                if charge_mode == 1:
+                    charge_limit[position] = round(rng.uniform(0.1, prediction.soc_max), 2)
+                elif charge_mode == 2:
+                    charge_limit[position] = 0.0
+                elif charge_mode == 3:
+                    charge_limit = [0.0] * len(charge_limit)
+                elif charge_mode == 4:
+                    charge_limit = [round(rng.uniform(0.1, prediction.soc_max), 2) for _ in charge_limit]
+            export_mode = (trial // 2) % 4
+            if export_limits and export_mode:
+                position = rng.randrange(len(export_limits))
+                export_limits[position] = unpack_export_limit([0.0, 99.0, 100.0][export_mode - 1])
+            for job in jobs[group : group + 3]:
+                job.charge_limit = charge_limit
+                job.export_limits = export_limits
+        reference = build_batch_reference(prediction, jobs)
+        if reference is None:
+            return True
+        for n_threads in (1, 2, 4, 8):
+            batched = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads)
+            if batched is None:
+                print("ERROR: pk_run_batch failed at {} threads".format(n_threads))
+                return True
+            failed |= check_batch_results(jobs, reference, batched, n_threads)
+            checked += len(jobs)
+    if not failed:
+        print("Window setup cache: {} trial scenarios bit-identical to pk_run across limit, window-off and export-mode changes at 1, 2, 4 and 8 threads".format(checked))
+    return failed
+
+
 def kernel_available():
     """Ensure the kernel library is built and loaded, returns (available, required_failure)"""
     if not ensure_kernel_built():
@@ -2173,6 +2236,8 @@ def run_kernel_parity_tests(my_predbat):
             failed |= run_batch_parity_tests(my_predbat)
         if not failed:
             failed |= run_batch_window_variant_tests(my_predbat)
+        if not failed:
+            failed |= run_window_setup_cache_tests(my_predbat)
         if not failed:
             failed |= run_scratch_reuse_tests(my_predbat)
         if not failed:
