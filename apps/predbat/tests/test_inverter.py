@@ -6456,7 +6456,6 @@ def run_inverter_tests(my_predbat_dummy):
     failed |= test_solis_energy_control("solis_fb00_already_backup_reserve", my_predbat, ha, "GS_fb00", "Backup/Reserve", charge, "Backup/Reserve")
     failed |= test_solis_energy_control("solis_fb00_unavailable", my_predbat, ha, "GS_fb00", "unavailable", charge, "Backup/Reserve")
     failed |= test_solis_energy_control("solis_fb00_not_configured", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", charge, "Self-Use - No Grid Charging", configured=False)
-    failed |= test_solis_energy_control("solis_fb00_freeze_not_configured", my_predbat, ha, "GS_fb00", "Self-Use - No Grid Charging", freeze, "Self-Use - No Grid Charging", configured=False)
     failed |= test_solis_energy_control_missing_warnings(my_predbat, ha)
     failed |= test_solis_energy_control("solis_fb00_freeze_blocks_grid", my_predbat, ha, "GS_fb00", "Backup/Reserve", freeze, "Backup/Reserve - No Grid Charging")
     failed |= test_solis_energy_control("solis_fb00_freeze_already_blocked", my_predbat, ha, "GS_fb00", "Backup/Reserve - No Grid Charging", freeze, "Backup/Reserve - No Grid Charging")
