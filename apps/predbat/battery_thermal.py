@@ -226,8 +226,9 @@ def thermal_statistics(temperature, power, ambient, history_minutes, step, newes
         if not all(math.isfinite(value) for value in (temp_now, temp_next, ambient_now, power_now)):
             continue
         # One glitch would dominate the sums and stay in the stored evidence for months, so implausible steps are left out:
-        # a 0 reading (how several integrations report a missing one), a jump no heat explains, or more power than the battery has
-        if temp_now == 0 or temp_next == 0 or abs(temp_next - temp_now) > THERMAL_MAX_CHANGE_PER_MINUTE * step:
+        # a jump no heat explains (which also catches a missing reading reported as 0 by a warmer battery, while a real
+        # reading at freezing is kept) or more power than the battery has
+        if abs(temp_next - temp_now) > THERMAL_MAX_CHANGE_PER_MINUTE * step:
             continue
         if max_power is not None and power_now > max_power:
             continue
@@ -298,6 +299,11 @@ def thermal_fit_statistics(stats, step):
     if solution is None:
         return None
     k, h = solution
+    if h < 0 and xtx[0][0] > 0:
+        # Warming can't be negative: a slightly negative heat term (charging that happened to coincide with cooling) means
+        # none was seen, so fit the time constant alone rather than dropping the model
+        k, h = xty[0] / xtx[0][0], 0.0
+        solution = [k, h]
     dt_hours = step / 60.0
     if k <= 0:
         return None
@@ -356,7 +362,9 @@ def thermal_forecast(current_temp, model, ambient, power, forecast_minutes, step
     ambient_last = ambient.get(0)
     forecast = {}
     for minute in range(0, forecast_minutes, step):
-        forecast[minute] = round(temp, 2)
+        # An exact 0 is looked up as a missing reading (utils.battery_temperature_index), which a forecast never is
+        value = round(temp, 2)
+        forecast[minute] = value if value != 0 else (0.01 if temp >= 0 else -0.01)
         ambient_last = ambient.get(minute, ambient_last)
         target = temp if ambient_last is None else ambient_last
         temp += dt_hours * ((target - temp) / tau_hours + heat_rate * power.get(minute, 0.0))

@@ -3121,7 +3121,7 @@ to decide how fast the battery can charge or discharge at each step. Watch the `
 - If your battery reports several temperatures, use the coldest cell for **battery_temperature_history**: the battery limits its charge rate by its coldest cell.
 - Predbat learns the model from your battery temperature, battery level (`predbat.soc_kw_h0`) and the outdoor temperature.
   It starts from the last week of history, so your Home Assistant recorder must keep `predbat.soc_kw_h0`, and then keeps learning each cycle;
-  the evidence is kept in Predbat's storage, with older evidence counting for half every 30 days.
+  the evidence is kept in Predbat's storage, with older evidence counting for half every 30 days. Changing **battery_temperature_history** starts the model again from the new sensor's history.
 - The fit is published as attributes of `predbat.battery_temperature` and logged (`Battery thermal model fitted ...`):
     - **tau**: how quickly, in hours, the battery follows the outdoor temperature; several hours outdoors, and much longer for a battery the outdoor temperature barely reaches;
     - **heat rate**: how much it warms per kW of charging or discharging.

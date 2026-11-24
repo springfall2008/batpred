@@ -3121,6 +3121,10 @@ class Fetch:
         except Exception as e:
             self.log("Warn: Battery thermal model update failed, continuing without it: {}".format(e))
 
+    def battery_thermal_sensors(self):
+        """The battery temperature sensors the thermal model is fitted on, as stored with its evidence (GH#5919)."""
+        return sorted(battery_temperature_entities(self.get_arg("battery_temperature_history", indirect=False)))
+
     def battery_thermal_max_power(self):
         """
         The most power in kW the battery can charge or discharge at, with a margin, above which a step of the battery level
@@ -3158,10 +3162,15 @@ class Fetch:
                 last = str2time(data.get("last"))
             except (ValueError, TypeError):
                 pass
-            if valid_thermal_statistics(stats) and last is not None:
+            sensors = data.get("sensors")
+            if sensors is not None and sensors != self.battery_thermal_sensors():
+                # Evidence from other temperature sensors would bias the fit for months: start again from these
+                self.log("Info: {}: the stored evidence was fitted on {}, not {}, so the model is seeded again".format(BATTERY_THERMAL_STORE_KEY, sensors, self.battery_thermal_sensors()))
+            elif valid_thermal_statistics(stats) and last is not None:
                 # The stored evidence replaces any seeded in memory while the store could not be read
                 self.battery_thermal_stats = stats
                 self.battery_thermal_last = last
+                self.battery_thermal_restored = True
         elif storage:
             # Only the first failure's time and the count up to BATTERY_THERMAL_LOAD_ATTEMPTS matter, so the list stays short
             failures = self.battery_thermal_load_failures
@@ -3201,8 +3210,11 @@ class Fetch:
         storage = self.battery_thermal_load()
         step = PREDICT_STEP
         if self.battery_thermal_stats is None:
-            if self.battery_thermal_last_seed is None or (self.now_utc - self.battery_thermal_last_seed) >= timedelta(minutes=BATTERY_THERMAL_RETRY_MINUTES):
+            # Retried hourly at first, then less often (up to daily), so an install whose seed never finds data stops re-reading a week of history every hour
+            retry_minutes = min(BATTERY_THERMAL_RETRY_MINUTES * 2 ** max(self.battery_thermal_seed_attempts - 1, 0), 24 * 60)
+            if self.battery_thermal_last_seed is None or (self.now_utc - self.battery_thermal_last_seed) >= timedelta(minutes=retry_minutes):
                 self.battery_thermal_last_seed = self.now_utc
+                self.battery_thermal_seed_attempts += 1
                 history_minutes = BATTERY_THERMAL_FIT_DAYS * 24 * 60
                 # Several sensors (one per inverter) are averaged, as fetch_battery_temperature() averages the live history
                 entity_ids = battery_temperature_entities(self.get_arg("battery_temperature_history", indirect=False))
@@ -3214,6 +3226,7 @@ class Fetch:
                     self.battery_thermal_stats = stats
                     self.battery_thermal_last = self.now_utc
                     self.battery_thermal_dirty = True
+                    self.battery_thermal_seed_attempts = 0
                 self.log("Battery thermal model seeded from {} steps of history ({} temperature, {} battery level and {} outdoor temperature minutes)".format(stats["samples"], len(temperature), len(soc_kwh), len(ambient) * step))
         elif soc_fresh and self.battery_thermal_last is not None:
             elapsed_minutes = (self.now_utc - self.battery_thermal_last).total_seconds() / 60.0
@@ -3222,7 +3235,13 @@ class Fetch:
             if oldest >= step:
                 ambient, _ = self.battery_thermal_ambient(oldest, 0)
                 power = battery_power_from_soc(self.soc_kwh_history, oldest, step)
-                new = thermal_statistics(self.battery_temperature_history, power, ambient, oldest, step, max_power=self.battery_thermal_max_power())
+                if self.battery_thermal_restored:
+                    # The battery level history is Predbat's own, so it reads flat while Predbat was down and would count any
+                    # charging then as idle: after a restart the gap since the last save is skipped (only decayed)
+                    new = thermal_statistics({}, {}, {}, 0, step)
+                    self.battery_thermal_restored = False
+                else:
+                    new = thermal_statistics(self.battery_temperature_history, power, ambient, oldest, step, max_power=self.battery_thermal_max_power())
                 decay = 0.5 ** (elapsed_minutes / (24 * 60) / BATTERY_THERMAL_HALF_LIFE_DAYS)
                 self.battery_thermal_stats = thermal_statistics_merge(self.battery_thermal_stats, new, decay)
                 self.battery_thermal_last = self.now_utc
@@ -3239,7 +3258,7 @@ class Fetch:
         due = self.battery_thermal_last_save is None or (self.now_utc - self.battery_thermal_last_save) >= timedelta(minutes=BATTERY_THERMAL_SAVE_MINUTES)
         if storage and self.battery_thermal_loaded and self.battery_thermal_dirty and due and self.battery_thermal_stats:
             try:
-                if run_async(storage.save("predbat", BATTERY_THERMAL_STORE_KEY, {"stats": self.battery_thermal_stats, "last": self.battery_thermal_last.strftime(TIME_FORMAT), "model": model}, format="json")):
+                if run_async(storage.save("predbat", BATTERY_THERMAL_STORE_KEY, {"stats": self.battery_thermal_stats, "last": self.battery_thermal_last.strftime(TIME_FORMAT), "model": model, "sensors": self.battery_thermal_sensors()}, format="json")):
                     self.battery_thermal_last_save = self.now_utc
                     self.battery_thermal_dirty = False
                     if model:

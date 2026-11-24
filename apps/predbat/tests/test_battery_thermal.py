@@ -129,6 +129,31 @@ def fit_equations(temperature, power, ambient):
     return stats["xtx"], stats["xty"]
 
 
+def test_fit_and_forecast_edges():
+    """A slightly negative heat term fits the time constant alone; a forecast at freezing is never exactly 0 (a missing reading)."""
+    failed = False
+    step = STEP
+    dt_hours = step / 60.0
+    # Sums from k = dt/6 and h = -0.001: the heat term is dropped and tau comes from the first column alone
+    k_true = dt_hours / 6.0
+    xs = [(10.0 - 0.1 * i, (i % 3) * 1.0) for i in range(400)]
+    ys = [k_true * a - 0.001 * p for a, p in xs]
+    stats = {
+        "xtx": [[sum(a * a for a, _ in xs), sum(a * p for a, p in xs)], [sum(a * p for a, p in xs), sum(p * p for _, p in xs)]],
+        "xty": [sum(a * y for (a, _), y in zip(xs, ys)), sum(p * y for (_, p), y in zip(xs, ys))],
+        "yty": sum(y * y for y in ys),
+        "weight": 400.0,
+        "samples": 400,
+    }
+    fit = thermal_fit_statistics(stats, step)
+    failed = check(failed, fit is not None and fit["heat_rate"] == 0 and 5.0 < fit["tau_hours"] < 7.0, "a slightly negative heat term should fit tau alone, got {}".format(fit))
+
+    # Cooling from +1 towards -1 passes through 0: no step reads exactly 0
+    forecast = thermal_forecast(1.0, {"tau_hours": 2.0, "heat_rate": 0.0}, {0: -1.0}, {}, 24 * 60, step)
+    failed = check(failed, all(value != 0 for value in forecast.values()) and min(forecast.values()) < 0, "a forecast should never be exactly 0, got {}".format(sorted(set(forecast.values()))[:5]))
+    return failed
+
+
 def test_fit_ignores_glitches():
     """
     A dropped battery level reading (a huge apparent power), a 0 °C reading or a sudden jump in one step would otherwise
@@ -331,6 +356,8 @@ def test_fetch_integration(my_predbat):
         "battery_thermal_loaded",
         "battery_thermal_load_failures",
         "battery_thermal_last_seed",
+        "battery_thermal_seed_attempts",
+        "battery_thermal_restored",
         "battery_thermal_last_save",
         "battery_thermal_dirty",
         "battery_power_plan_best",
@@ -353,6 +380,8 @@ def test_fetch_integration(my_predbat):
         my_predbat.battery_thermal_loaded = False
         my_predbat.battery_thermal_load_failures = []
         my_predbat.battery_thermal_last_seed = None
+        my_predbat.battery_thermal_seed_attempts = 0
+        my_predbat.battery_thermal_restored = False
         my_predbat.battery_thermal_last_save = None
         my_predbat.battery_thermal_dirty = False
         my_predbat.battery_power_plan_best = {}
@@ -446,23 +475,30 @@ def test_fetch_integration(my_predbat):
         failed = check(failed, logged and "thermal [" in logged[-1], "the first forecast after a restart should use the stored fit, got {}".format(logged[-1:]))
         my_predbat.battery_thermal_update(soc_fresh=True)
         failed = check(failed, my_predbat.battery_thermal_loaded and all(read[1] != days for read in reads), "a restart should read the store, not the history, read {}".format(reads))
-        # Saved at +10 minutes, restarted at +30: the 4 steps between are added
+        # Saved at +10 minutes, restarted at +30: the battery level history is Predbat's own and reads flat while it was down,
+        # so the 4 steps between are skipped and the stored evidence only decays by age
         failed = check(
-            failed, my_predbat.battery_thermal_stats["samples"] == seeded + 6 and my_predbat.battery_thermal_model is not None, "a restart should add the 4 steps since the save, got {}".format(my_predbat.battery_thermal_stats["samples"] - seeded)
+            failed, my_predbat.battery_thermal_stats["samples"] == seeded + 2 and my_predbat.battery_thermal_model is not None, "a restart should skip the steps since the save, got {}".format(my_predbat.battery_thermal_stats["samples"] - seeded)
         )
         decay = 0.5 ** ((4 * STEP) / (24 * 60) / BATTERY_THERMAL_HALF_LIFE_DAYS)
-        failed = check(failed, abs(my_predbat.battery_thermal_stats["weight"] - (stored["stats"]["weight"] * decay + 4)) < 1e-6, "the stored evidence should decay by age")
+        failed = check(failed, abs(my_predbat.battery_thermal_stats["weight"] - stored["stats"]["weight"] * decay) < 1e-6, "the stored evidence should decay by age")
+        failed = check(failed, stored.get("sensors") == [TEMP_SENSOR], "the store should record the sensors it was fitted on, got {}".format(stored.get("sensors")))
+        # The cycle after adds its new steps again
+        set_clock(days * 24 * 60 + 7 * STEP)
+        my_predbat.battery_thermal_update(soc_fresh=True)
+        failed = check(failed, my_predbat.battery_thermal_stats["samples"] == seeded + 3, "the cycle after a restart should add its step, got {}".format(my_predbat.battery_thermal_stats["samples"] - seeded))
 
-        # No outdoor temperature on a new install: nothing is read or fitted, and the look back is used
-        # Two sensors (one per inverter): the seed reads both and averages them, as the live history does
-        restart(make_test_storage(my_predbat, tmpdir + "/c"))
+        # Changed sensors (now two, one per inverter): the stored evidence is for the old one, so the model is seeded again,
+        # reading both sensors and averaging them as the live history does
+        restart(storage)
         my_predbat.args["battery_temperature_history"] = [TEMP_SENSOR, TEMP_SENSOR_2]
         reads.clear()
         my_predbat.battery_thermal_update(soc_fresh=True)
-        failed = check(failed, (TEMP_SENSOR, days, False) in reads and (TEMP_SENSOR_2, days, False) in reads, "the seed should read every sensor, read {}".format(reads))
+        failed = check(failed, (TEMP_SENSOR, days, False) in reads and (TEMP_SENSOR_2, days, False) in reads, "changed sensors should seed again from every sensor, read {}".format(reads))
         failed = check(failed, my_predbat.battery_thermal_model is not None, "two sensors should still fit")
         my_predbat.args["battery_temperature_history"] = TEMP_SENSOR
 
+        # No outdoor temperature on a new install: nothing is read or fitted, and the look back is used
         restart(make_test_storage(my_predbat, tmpdir + "/b"))
         state["results"] = None
         reads.clear()
@@ -483,6 +519,20 @@ def test_fetch_integration(my_predbat):
         set_clock(clock["now"] + STEP)
         my_predbat.battery_thermal_update(soc_fresh=True)
         failed = check(failed, my_predbat.battery_thermal_model is not None, "the seed should be retried after {} minutes".format(BATTERY_THERMAL_RETRY_MINUTES))
+
+        # Seeds that keep finding nothing back off: after two empty seeds the next waits twice as long
+        restart(make_test_storage(my_predbat, tmpdir + "/d"))
+        state["temperature_history"] = False
+        my_predbat.battery_thermal_update(soc_fresh=True)
+        set_clock(clock["now"] + BATTERY_THERMAL_RETRY_MINUTES)
+        my_predbat.battery_thermal_update(soc_fresh=True)
+        state["temperature_history"] = True
+        set_clock(clock["now"] + BATTERY_THERMAL_RETRY_MINUTES)
+        my_predbat.battery_thermal_update(soc_fresh=True)
+        failed = check(failed, my_predbat.battery_thermal_stats is None and my_predbat.battery_thermal_seed_attempts == 2, "after two empty seeds the third should wait {} minutes".format(2 * BATTERY_THERMAL_RETRY_MINUTES))
+        set_clock(clock["now"] + BATTERY_THERMAL_RETRY_MINUTES)
+        my_predbat.battery_thermal_update(soc_fresh=True)
+        failed = check(failed, my_predbat.battery_thermal_stats is not None and my_predbat.battery_thermal_seed_attempts == 0, "the backed-off seed should run and reset the count")
         # A fault in the model is a warning: the update carries on without it, the forecast falls back to the look back
         warned = []
         saved_refresh, saved_forecast = my_predbat.battery_thermal_refresh, my_predbat.battery_thermal_forecast
@@ -553,6 +603,7 @@ def run_battery_thermal_tests(my_predbat=None):
     failed |= test_fit_recovers_model()
     failed |= test_fit_rejects_short_or_implausible()
     failed |= test_fit_ignores_glitches()
+    failed |= test_fit_and_forecast_edges()
     failed |= test_forecast_matches_simulation()
     failed |= test_ambient_from_results()
     failed |= test_plan_power_minutes()

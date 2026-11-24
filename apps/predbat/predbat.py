@@ -814,6 +814,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_thermal_loaded = False  # True once the stored sums have been read (or there is no storage)
         self.battery_thermal_load_failures = []  # times of cycles whose store reads came back empty
         self.battery_thermal_last_seed = None  # time the sums were last seeded from history
+        self.battery_thermal_seed_attempts = 0  # seeds in a row that found no evidence, which space out the retries
+        self.battery_thermal_restored = False  # the sums were just read from storage, so the gap since they were saved is skipped
         self.battery_thermal_last_save = None  # time the sums were last saved
         self.battery_thermal_dirty = False  # the sums changed since they were saved
         self.battery_power_plan_best = {}  # the best plan's battery power in kW by timestamp, for the next cycle's temperature forecast
