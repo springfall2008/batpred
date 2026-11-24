@@ -1604,13 +1604,46 @@ def _sample_rate_params(rng, rate_type, cheap):
         return {"base_rate": base, "low_rate": low, "high_rate": high, "num_highs": rng.randint(1, 3), "num_lows": rng.randint(1, 3)}
 
 
+def _scenario_mismatch(generated, committed, path=""):
+    """Return the path of the first value that differs between two scenarios, or None when they match.
+
+    Floats are compared to 1e-12 rather than exactly: the rate, load and PV shapes come from math.cos and
+    math.exp, whose last bit differs between platform maths libraries (macOS against glibc), so the same
+    seed gives a fixture that differs in the 16th significant digit on Linux CI.
+    """
+    if isinstance(generated, dict) and isinstance(committed, dict):
+        if generated.keys() != committed.keys():
+            return "{} keys {} vs {}".format(path or "scenario", sorted(generated.keys(), key=str), sorted(committed.keys(), key=str))
+        for key in generated:
+            found = _scenario_mismatch(generated[key], committed[key], "{}.{}".format(path, key))
+            if found:
+                return found
+        return None
+    if isinstance(generated, list) and isinstance(committed, list):
+        if len(generated) != len(committed):
+            return "{} length {} vs {}".format(path, len(generated), len(committed))
+        for index, (gen_value, com_value) in enumerate(zip(generated, committed)):
+            found = _scenario_mismatch(gen_value, com_value, "{}[{}]".format(path, index))
+            if found:
+                return found
+        return None
+    if isinstance(generated, float) or isinstance(committed, float):
+        numeric = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (generated, committed))
+        if numeric and math.isclose(generated, committed, rel_tol=1e-12, abs_tol=1e-12):
+            return None
+    elif generated == committed and type(generated) is type(committed):
+        return None
+    return "{}: {!r} vs {!r}".format(path, generated, committed)
+
+
 def run_random_scenario_generator_tests(my_predbat):
-    """The committed scenarios are exactly what the generator makes, and none sets both iBoost conflict flags.
+    """The committed scenarios are what the generator makes, and none sets both iBoost conflict flags.
 
     The plan tests replay cases/random_scenarios.yaml, not generate_random_scenario, so a generator change
     (a dropped normalisation, a moved draw, a new probability) passes them all and only shows up at the
     next ./run_random regeneration. iboost_on_export with iboost_prevent_discharge is a misconfiguration
-    the generator clears; this fails the moment it could come back.
+    the generator clears; this fails the moment it could come back. Floats match to 1e-12, not exactly -
+    see _scenario_mismatch.
 
     my_predbat is deliberately unused - no plan is run.
     """
@@ -1625,7 +1658,12 @@ def run_random_scenario_generator_tests(my_predbat):
         if features.get("iboost_on_export") and features.get("iboost_prevent_discharge"):
             print("ERROR: generated scenario {} sets both iboost_on_export and iboost_prevent_discharge".format(scenario["id"]))
             failed = True
-    differing = [g["id"] for g, c in zip(generated, committed) if g != c]
+    differing = []
+    for gen_scenario, com_scenario in zip(generated, committed):
+        mismatch = _scenario_mismatch(gen_scenario, com_scenario)
+        if mismatch:
+            differing.append(gen_scenario["id"])
+            print("Scenario {} first differs at {}".format(gen_scenario["id"], mismatch))
     if differing:
         print("ERROR: generate_scenarios({}) differs from {} in scenario(s) {} - regenerate the fixture and the baseline with ./run_random, or restore the generator".format(len(committed), RANDOM_SCENARIOS, differing))
         failed = True
