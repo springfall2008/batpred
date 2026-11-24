@@ -822,9 +822,11 @@ class Output:
                 symbol = "?"
         return symbol
 
-    def get_html_plan_header(self, plan_debug):
+    def get_html_plan_header(self, plan_debug, show_temperature=False):
         """
         Returns the header row for the HTML plan.
+
+        show_temperature adds the debug battery temperature column (the live plan only, GH#5919).
         """
         html = ""
         html += "<tr>"
@@ -846,6 +848,8 @@ class Output:
             html += "<th><b>Load kWh</b></th>"
         if plan_debug and self.load_forecast:
             html += "<th><b>XLoad kWh</b></th>"
+        if show_temperature:
+            html += "<th><b>Batt °C (thermal)</b></th>"
         if self.num_cars > 0:
             html += "<th><b>Car kWh</b></th>"
         if self.iboost_enable:
@@ -1393,7 +1397,11 @@ class Output:
             mode += " (debug)"
         html += "<table>"
         html += "<tr>"
-        html += self.get_html_plan_header(plan_debug)
+        # The battery temperature the plan uses at each slot (with the thermal forecast in brackets while it is not used), live plan only.
+        # The JSON always carries it, as the web dashboard's own debug toggle decides whether to show it; the HTML plan shows it with plan_debug.
+        has_temperature = bool(publish and self.battery_temperature_prediction)
+        show_temperature = plan_debug and has_temperature
+        html += self.get_html_plan_header(plan_debug, show_temperature)
         # Use plan_interval_minutes instead of hardcoded 30
         minute_now_align = int(self.minutes_now / self.plan_interval_minutes) * self.plan_interval_minutes
         end_plan = min(end_record, self.forecast_minutes) + minute_now_align
@@ -1440,6 +1448,7 @@ class Output:
         raw_plan["time"] = self.midnight_utc.strftime(TIME_FORMAT)
         raw_plan["mode"] = mode
         raw_plan["plan_debug"] = plan_debug
+        raw_plan["show_temperature"] = has_temperature
         raw_plan["forecast_minutes"] = self.forecast_minutes
         raw_plan["end_record"] = end_record
         raw_plan["end_plan"] = end_plan
@@ -2050,6 +2059,13 @@ class Output:
                 html += "<td id=clip bgcolor=" + clipped_color + ">" + clipped_str + "</td>"
             if plan_debug and self.load_forecast:
                 html += "<td id=extra bgcolor=" + extra_color + ">" + str(extra_forecast) + "</td>"
+            if show_temperature:
+                battery_temperature = self.battery_temperature_prediction.get(minute_relative_start)
+                battery_temperature_thermal = self.battery_temperature_thermal.get(minute_relative_start)
+                temperature_str = "&#9866;" if battery_temperature is None else str(dp1(battery_temperature))
+                if battery_temperature_thermal is not None:
+                    temperature_str += " (%s)" % (str(dp1(battery_temperature_thermal)))
+                html += "<td id=batt_temp bgcolor=#FFFFFF>" + temperature_str + "</td>"
             if self.num_cars > 0:  # Don't display car charging data if there's no car
                 html += "<td id=car bgcolor=" + car_color + ">" + car_charging_str + "</td>"
             if self.iboost_enable:
@@ -2131,6 +2147,13 @@ class Output:
             json_row["soc_color"] = soc_color
             json_row["cost_color"] = cost_color
             json_row["clipped_color"] = clipped_color
+            if has_temperature:
+                battery_temperature = self.battery_temperature_prediction.get(minute_relative_start)
+                battery_temperature_thermal = self.battery_temperature_thermal.get(minute_relative_start)
+                if battery_temperature is not None:
+                    json_row["battery_temperature"] = dp1(battery_temperature)
+                if battery_temperature_thermal is not None:
+                    json_row["battery_temperature_thermal"] = dp1(battery_temperature_thermal)
 
             if self.load_forecast:
                 json_row["extra_load"] = raw_extra_forecast
@@ -2183,6 +2206,8 @@ class Output:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(clipped_amount_end))
         if plan_debug and self.load_forecast:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(xload_total))
+        if show_temperature:
+            html += "<td></td>"
         if self.num_cars > 0:
             html += "<td bgcolor=#FFFFFF><b>{}</b></td>".format(dp2(car_total))
         if self.iboost_enable:

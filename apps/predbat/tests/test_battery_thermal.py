@@ -558,6 +558,7 @@ def test_fetch_integration(my_predbat):
             my_predbat.log = fake_log
         failed = check(failed, any("update failed" in text for text in warned) and any("forecast failed" in text for text in warned), "faults should be logged as warnings, got {}".format(warned))
         failed = check(failed, prediction and saved_state(my_predbat.prefix + ".battery_temperature", attribute="model") == "history", "a forecast fault should fall back to the look back")
+        failed = check(failed, my_predbat.battery_temperature_thermal == {}, "a forecast fault should leave no thermal forecast for the plan column")
     finally:
         my_predbat.get_history_wrapper = saved_history
         my_predbat.get_state_wrapper = saved_state

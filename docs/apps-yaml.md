@@ -3127,6 +3127,7 @@ to decide how fast the battery can charge or discharge at each step. Watch the `
     - **heat rate**: how much it warms per kW of charging or discharging.
 - Each cycle Predbat logs both forecasts hourly for the next 24 hours (`Battery temperature forecast: ...`), with the outdoor temperature and the planned battery power the thermal forecast used,
   so the two can be compared with the temperature the battery actually reached.
+- With **Show Debug** ticked on the web interface's plan page (or `plan_debug` on for the plan in Home Assistant), the plan shows a **Batt °C** column: the temperature the plan uses at each slot, with the thermal forecast in brackets while the plan does not use it.
 - Each thermal forecast starts from the current temperature and uses the battery power of the plan from the previous cycle.
 - Until the model has a day of evidence, or without an outdoor temperature forecast, the forecast falls back to repeating yesterday's changes.
   The `model` attribute of `predbat.battery_temperature` shows which forecast the plan uses (`thermal` or `history`).

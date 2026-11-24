@@ -3061,6 +3061,8 @@ class Fetch:
             self.log("Warn: Battery thermal forecast failed, using the look back: {}".format(e))
             thermal = None
             model_attributes = {"model": "history"}
+        # Kept for the plan's debug temperature column while the plan uses the look back
+        self.battery_temperature_thermal = thermal if thermal and model_attributes["model"] != "thermal" else {}
         if model_attributes["model"] == "thermal":
             predicted_temp = thermal
             predict_timestamps = {(self.now_utc + timedelta(minutes=minute)).strftime(TIME_FORMAT): value for minute, value in thermal.items()}

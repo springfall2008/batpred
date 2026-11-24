@@ -806,6 +806,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_temperature_discharge_curve = {}
         self.battery_temperature_history = {}
         self.battery_temperature_prediction = {}
+        self.battery_temperature_thermal = {}  # the thermal forecast while the plan uses the look back, for the plan's debug column (GH#5919)
         self.battery_temperature_stuck_warned = None  # history sensor already warned as stuck at 0, so it is reported once
         self.battery_temperature_outdoor = False  # battery_temperature_outdoor: the battery follows the outdoor temperature, forecast it with the thermal model (GH#5919)
         self.battery_thermal_model = None  # the fitted thermal model (battery_thermal.thermal_fit_statistics), or None
