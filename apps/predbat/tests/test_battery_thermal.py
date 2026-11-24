@@ -14,7 +14,7 @@ from datetime import datetime, timedelta, timezone
 
 import tempfile
 
-from battery_thermal import ambient_from_results, battery_power_from_soc, plan_power_minutes, solve_linear, thermal_fit, thermal_fit_statistics, thermal_forecast, thermal_statistics, thermal_statistics_merge
+from battery_thermal import ambient_from_results, battery_power_from_soc, plan_power_minutes, solve_linear, thermal_fit, thermal_fit_statistics, thermal_forecast, thermal_statistics, thermal_statistics_merge, valid_thermal_statistics
 from const import PREDICT_STEP, TIME_FORMAT
 from fetch import BATTERY_TEMPERATURE_HISTORY_DAYS, BATTERY_THERMAL_FIT_DAYS, BATTERY_THERMAL_HALF_LIFE_DAYS, BATTERY_THERMAL_RETRY_MINUTES, BATTERY_THERMAL_STORE_KEY
 from utils import classify_log_line
@@ -123,6 +123,44 @@ def test_fit_recovers_model():
     return failed
 
 
+def fit_equations(temperature, power, ambient):
+    """The normal equations of a week of history, to check they are solvable."""
+    stats = thermal_statistics(temperature, power, ambient, 7 * 24 * 60, STEP)
+    return stats["xtx"], stats["xty"]
+
+
+def test_fit_ignores_glitches():
+    """
+    A dropped battery level reading (a huge apparent power), a 0 °C reading or a sudden jump in one step would otherwise
+    dominate the sums and stay in the stored evidence for months: they are left out, and the fit is unchanged.
+    """
+    failed = False
+    history_minutes = 7 * 24 * 60
+    temperature, soc_kwh, ambient = simulate_history(MODEL, days=7)
+    clean = thermal_fit(temperature, battery_power_from_soc(soc_kwh, history_minutes, STEP), ambient, history_minutes, STEP)
+
+    glitched_soc = dict(soc_kwh)
+    glitched_soc[3000] = 0.0
+    glitched_temperature = dict(temperature)
+    glitched_temperature[4000] = 0.0
+    glitched_temperature[5000] = temperature[5000] + 6.0
+    power = battery_power_from_soc(glitched_soc, history_minutes, STEP)
+    stats = thermal_statistics(glitched_temperature, power, ambient, history_minutes, STEP, max_power=10.0)
+    glitched = thermal_fit_statistics(stats, STEP)
+    failed = check(failed, clean is not None and glitched is not None, "both should fit")
+    if clean and glitched:
+        failed = check(failed, abs(glitched["tau_hours"] - clean["tau_hours"]) < 0.05 * clean["tau_hours"], "a glitch should not move tau, {} vs {}".format(glitched["tau_hours"], clean["tau_hours"]))
+        failed = check(failed, abs(glitched["heat_rate"] - clean["heat_rate"]) < 0.05 * clean["heat_rate"], "a glitch should not move the heat rate, {} vs {}".format(glitched["heat_rate"], clean["heat_rate"]))
+    unlimited = thermal_fit_statistics(thermal_statistics(temperature, power, ambient, history_minutes, STEP), STEP)
+    failed = check(failed, unlimited is None or abs(unlimited["tau_hours"] - clean["tau_hours"]) > 0.2 * clean["tau_hours"], "without a power limit the dropped reading should distort the fit (so the test means something), got {}".format(unlimited))
+
+    # A NaN in stored sums is not valid, so it is reseeded rather than merged into every later fit
+    nan_stats = dict(stats)
+    nan_stats["xty"] = [float("nan"), stats["xty"][1]]
+    failed = check(failed, valid_thermal_statistics(stats) and not valid_thermal_statistics(nan_stats), "stored sums holding a NaN should not be valid")
+    return failed
+
+
 def test_fit_rejects_short_or_implausible():
     """Too little history, or history no thermal model explains, gives no fit."""
     failed = False
@@ -133,8 +171,10 @@ def test_fit_rejects_short_or_implausible():
     # A battery that warms as it moves away from the outdoor temperature gives a negative a: rejected
     anti = {minute: 20.0 - 0.001 * minute for minute in range(0, 7 * 24 * 60 + 1, STEP)}
     flat_ambient = {minute: 5.0 + 0.0001 * minute for minute in range(0, 7 * 24 * 60 + 1, STEP)}
-    no_power = {minute: 0.0 for minute in range(0, 7 * 24 * 60 + 1, STEP)}
-    failed = check(failed, thermal_fit(anti, no_power, flat_ambient, 7 * 24 * 60, STEP) is None, "an implausible history should not fit")
+    # Some power, so the equations are solvable and the rejection comes from the negative a rather than a singular matrix
+    some_power = {minute: (1.0 if (minute // 60) % 3 == 0 else 0.0) for minute in range(0, 7 * 24 * 60 + 1, STEP)}
+    failed = check(failed, solve_linear(*fit_equations(anti, some_power, flat_ambient)) is not None, "the implausible history should give solvable equations")
+    failed = check(failed, thermal_fit(anti, some_power, flat_ambient, 7 * 24 * 60, STEP) is None, "an implausible history should not fit")
 
     # Missing ambient means no samples
     failed = check(failed, thermal_fit(temperature, power, {}, 7 * 24 * 60, STEP) is None, "no ambient history should not fit")
@@ -294,6 +334,8 @@ def test_fetch_integration(my_predbat):
         "battery_thermal_last_save",
         "battery_thermal_dirty",
         "battery_power_plan_best",
+        "battery_rate_max_charge",
+        "battery_rate_max_discharge",
         "max_days_previous",
         "now_utc",
         "soc_kwh_history",
@@ -326,6 +368,9 @@ def test_fetch_integration(my_predbat):
     my_predbat.log = fake_log
     my_predbat.args["battery_temperature_history"] = TEMP_SENSOR
     my_predbat.max_days_previous = 2
+    # A 6 kW battery (rates are kW per minute), so the simulated 5 kW charges are within the glitch limit
+    my_predbat.battery_rate_max_charge = 6.0 / 60.0
+    my_predbat.battery_rate_max_discharge = 6.0 / 60.0
     try:
         storage = make_test_storage(my_predbat, tmpdir + "/a")
         restart(storage)
@@ -507,6 +552,7 @@ def run_battery_thermal_tests(my_predbat=None):
     failed |= test_solve_linear()
     failed |= test_fit_recovers_model()
     failed |= test_fit_rejects_short_or_implausible()
+    failed |= test_fit_ignores_glitches()
     failed |= test_forecast_matches_simulation()
     failed |= test_ambient_from_results()
     failed |= test_plan_power_minutes()

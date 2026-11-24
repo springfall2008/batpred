@@ -25,6 +25,7 @@ long tau instead; it is forecast too cold, which errs towards a lower charge rat
 Series follow Predbat's minute conventions: history is keyed by minutes ago (0 is now) and forecasts by minutes ahead.
 """
 
+import math
 from datetime import timedelta
 
 from utils import str2time
@@ -38,6 +39,9 @@ THERMAL_PARAMETERS = 2
 # The fit needs at least a day of complete steps
 THERMAL_MIN_SAMPLES_MINUTES = 24 * 60
 # The forecast is held within the range a battery temperature sensor can sensibly report
+# A step whose temperature moves faster than this (°C per minute, 2 °C in 5 minutes; charging warmed a battery 7.3 °C in an hour)
+# is a sensor glitch, not heat, and is left out of the fit
+THERMAL_MAX_CHANGE_PER_MINUTE = 0.4
 THERMAL_TEMPERATURE_MIN = -30.0
 THERMAL_TEMPERATURE_MAX = 60.0
 
@@ -188,7 +192,7 @@ def plan_power_minutes(power_by_stamp, now_utc, forecast_minutes, step):
     return power
 
 
-def thermal_statistics(temperature, power, ambient, history_minutes, step, newest_minute=None):
+def thermal_statistics(temperature, power, ambient, history_minutes, step, newest_minute=None, max_power=None):
     """
     Least squares statistics of the thermal model over history: what thermal_fit_statistics() solves.
 
@@ -202,6 +206,7 @@ def thermal_statistics(temperature, power, ambient, history_minutes, step, newes
         history_minutes: the oldest step to use, in minutes ago
         step: step length in minutes
         newest_minute: the newest step to use, in minutes ago (default one step ago, the newest complete step)
+        max_power: the most power in kW the battery can move; a step showing more is a glitch and left out (None: no limit)
 
     Returns:
         dict of xtx (2x2), xty (2), yty, weight (the number of steps, decayed once merged) and samples (steps added)
@@ -217,6 +222,14 @@ def thermal_statistics(temperature, power, ambient, history_minutes, step, newes
         ambient_now = ambient.get(minute)
         power_now = power.get(minute)
         if temp_now is None or temp_next is None or ambient_now is None or power_now is None:
+            continue
+        if not all(math.isfinite(value) for value in (temp_now, temp_next, ambient_now, power_now)):
+            continue
+        # One glitch would dominate the sums and stay in the stored evidence for months, so implausible steps are left out:
+        # a 0 reading (how several integrations report a missing one), a jump no heat explains, or more power than the battery has
+        if temp_now == 0 or temp_next == 0 or abs(temp_next - temp_now) > THERMAL_MAX_CHANGE_PER_MINUTE * step:
+            continue
+        if max_power is not None and power_now > max_power:
             continue
         x = (ambient_now - temp_now, power_now)
         y = temp_next - temp_now
@@ -257,7 +270,11 @@ def valid_thermal_statistics(stats):
     """True when stats has the shape thermal_statistics() returns (as read back from storage; an older shape is not valid)."""
     size = THERMAL_PARAMETERS
     try:
-        return len(stats["xtx"]) == size and all(len(row) == size for row in stats["xtx"]) and len(stats["xty"]) == size and float(stats["yty"]) >= 0 and float(stats["weight"]) >= 0
+        if not (len(stats["xtx"]) == size and all(len(row) == size for row in stats["xtx"]) and len(stats["xty"]) == size and float(stats["yty"]) >= 0 and float(stats["weight"]) >= 0):
+            return False
+        # A NaN would stay in the merged sums for good and stop every fit
+        values = [float(value) for row in stats["xtx"] for value in row] + [float(value) for value in stats["xty"]] + [float(stats["yty"]), float(stats["weight"])]
+        return all(math.isfinite(value) for value in values)
     except (KeyError, TypeError, ValueError):
         return False
 

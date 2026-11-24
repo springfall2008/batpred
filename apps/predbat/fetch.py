@@ -3121,6 +3121,13 @@ class Fetch:
         except Exception as e:
             self.log("Warn: Battery thermal model update failed, continuing without it: {}".format(e))
 
+    def battery_thermal_max_power(self):
+        """
+        The most power in kW the battery can charge or discharge at, with a margin, above which a step of the battery level
+        history is a glitch (a dropped reading) rather than power, for the thermal model's fit (GH#5919).
+        """
+        return max(self.battery_rate_max_charge, self.battery_rate_max_discharge) * MINUTE_WATT / 1000.0 * 1.5
+
     def battery_thermal_load(self):
         """
         Read the thermal model's stored evidence once, until it reads back (GH#5919). A failed read is counted in
@@ -3156,7 +3163,15 @@ class Fetch:
                 self.battery_thermal_stats = stats
                 self.battery_thermal_last = last
         elif storage:
-            self.battery_thermal_load_failures.append(self.now_utc)
+            # Only the first failure's time and the count up to BATTERY_THERMAL_LOAD_ATTEMPTS matter, so the list stays short
+            failures = self.battery_thermal_load_failures
+            if len(failures) < BATTERY_THERMAL_LOAD_ATTEMPTS:
+                failures.append(self.now_utc)
+            if len(failures) >= BATTERY_THERMAL_LOAD_ATTEMPTS and (self.now_utc - failures[0]) >= timedelta(minutes=BATTERY_THERMAL_LOAD_WAIT_MINUTES):
+                # An empty store reads back as None too: after the wait, stop reading it every cycle and treat it as empty
+                self.log("Info: {}: the stored evidence has not read back for {} cycles, treating the store as empty".format(BATTERY_THERMAL_STORE_KEY, len(failures)))
+                self.battery_thermal_loaded = True
+                failures.clear()
         return storage
 
     def battery_thermal_refresh(self, soc_fresh):
@@ -3194,7 +3209,7 @@ class Fetch:
                 temperature = average_temperature_minutes([self.battery_thermal_history(entity_id, BATTERY_THERMAL_FIT_DAYS) for entity_id in entity_ids])
                 soc_kwh = self.battery_thermal_history(self.prefix + ".soc_kw_h0", BATTERY_THERMAL_FIT_DAYS, required_unit="kWh")
                 ambient, _ = self.battery_thermal_ambient(history_minutes, 0)
-                stats = thermal_statistics(temperature, battery_power_from_soc(soc_kwh, history_minutes, step), ambient, history_minutes, step)
+                stats = thermal_statistics(temperature, battery_power_from_soc(soc_kwh, history_minutes, step), ambient, history_minutes, step, max_power=self.battery_thermal_max_power())
                 if stats["samples"]:
                     self.battery_thermal_stats = stats
                     self.battery_thermal_last = self.now_utc
@@ -3207,7 +3222,7 @@ class Fetch:
             if oldest >= step:
                 ambient, _ = self.battery_thermal_ambient(oldest, 0)
                 power = battery_power_from_soc(self.soc_kwh_history, oldest, step)
-                new = thermal_statistics(self.battery_temperature_history, power, ambient, oldest, step)
+                new = thermal_statistics(self.battery_temperature_history, power, ambient, oldest, step, max_power=self.battery_thermal_max_power())
                 decay = 0.5 ** (elapsed_minutes / (24 * 60) / BATTERY_THERMAL_HALF_LIFE_DAYS)
                 self.battery_thermal_stats = thermal_statistics_merge(self.battery_thermal_stats, new, decay)
                 self.battery_thermal_last = self.now_utc
@@ -3221,14 +3236,8 @@ class Fetch:
         elif previous and not model:
             self.log("Warn: Battery thermal model no longer fits its evidence, using the history look back")
 
-        failures = self.battery_thermal_load_failures
-        store_ready = self.battery_thermal_loaded or (len(failures) >= BATTERY_THERMAL_LOAD_ATTEMPTS and (self.now_utc - failures[0]) >= timedelta(minutes=BATTERY_THERMAL_LOAD_WAIT_MINUTES))
         due = self.battery_thermal_last_save is None or (self.now_utc - self.battery_thermal_last_save) >= timedelta(minutes=BATTERY_THERMAL_SAVE_MINUTES)
-        if storage and store_ready and self.battery_thermal_dirty and due and self.battery_thermal_stats:
-            if not self.battery_thermal_loaded:
-                self.log("Info: {}: the stored evidence has not read back for {} cycles, treating the store as empty".format(BATTERY_THERMAL_STORE_KEY, len(failures)))
-                self.battery_thermal_loaded = True
-                failures.clear()
+        if storage and self.battery_thermal_loaded and self.battery_thermal_dirty and due and self.battery_thermal_stats:
             try:
                 if run_async(storage.save("predbat", BATTERY_THERMAL_STORE_KEY, {"stats": self.battery_thermal_stats, "last": self.battery_thermal_last.strftime(TIME_FORMAT), "model": model}, format="json")):
                     self.battery_thermal_last_save = self.now_utc
