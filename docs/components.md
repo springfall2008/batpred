@@ -2166,6 +2166,116 @@ For a detailed explanation of how the neural network works and comprehensive con
 | `load_ml_database_days` | Integer | No | 90 | `load_ml_database_days` | Days of history to accumulate in the on-disk database (`predbat_ml_history.npz`); set to 0 to disable the database |
 | `load_ml_retrain_interval_hours` | Integer | No | 2 | `load_ml_retrain_interval_hours` | Hours between training cycles (1–48); use 24 for daily retraining. Predictions still update every 30 minutes |
 
+#### Measured forecast accuracy and optional fallback (load_ml)
+
+With LoadML enabled, **Monitoring only** is the default. It records ML and historical
+household-load forecasts before consumption occurs and preserves the configured planning
+forecast. It works with `load_ml_source` either on or off. Choose **Off** to stop recording,
+or **Automatic fallback** to start on historical and require ML to earn selection.
+
+Open **Forecast settings** on **Charts → LoadML / LoadMLPower**, choose a guard mode
+and select **Apply mode**, or use **Config → LoadML forecast guard mode**. Both controls
+use the same saved select (`select.predbat_load_ml_guard_mode`, with your own prefix).
+The control is exposed only when LoadML is enabled. Choices are **Off**, **Monitoring only**, and **Automatic fallback**. Changes are saved
+immediately and request a new plan without restarting PredBat. They do not change
+`load_ml_source`, the separate choice of whether ML may supply battery planning.
+The immediate save is intentional: applying Automatic and restarting or installing an
+update before the next planning cycle must not revert the mode to Monitoring only.
+
+The saved mode is restored after a restart. Mode changes require no YAML edits.
+
+`sensor.predbat_load_ml_accuracy` shows the selected source, reason, recommended source,
+and seven-day energy MAE and signed bias for one-hour, eight-hour and 24-hour windows.
+For an everyday view, open **Charts → LoadML** or **Charts → LoadMLPower** in PredBat.
+An accuracy summary above the graph shows the planning source, guard mode, and which
+forecast wins across the most scored horizons. The table compares
+LoadML and Historical errors by window. Warnings appear above the table. Empty windows show that results
+are still pending; a real zero error is displayed as zero. The page refreshes with the
+existing chart refresh and flags reports more than 15 minutes old.
+Positive bias means the forecast was higher than actual load. Snapshots are taken at most once per hour and frozen;
+later retraining cannot rewrite them. Scores cover energy consumed after each snapshot,
+rather than cumulative daily totals that include already measured consumption. Overlapping
+samples are useful for monitoring but are not independent days of evidence.
+
+With **Automatic fallback** and `load_ml_source: true`, historical supplies planning
+until ML earns selection. Both the eight-hour and 24-hour checks need three recent
+completed windows issued at least 24 hours apart. In every qualifying window ML's
+absolute energy error must be at least 20% lower than historical and improve by at least
+0.25 kWh per 24 hours (about 0.083 kWh over eight hours). ML must also be within either
+3 kWh per 24 hours (1 kWh over eight hours) or 40% of actual load. A tie, one good day,
+or correct daily energy with poor eight-hour timing cannot earn selection. Initial
+qualification therefore takes at least three days of prospective 24-hour evidence.
+`load_ml_guard_error_kwh` and `load_ml_guard_error_percent` are qualification-only
+limits, not warning or fallback thresholds. The absolute limit scales with the window
+duration; meeting either the absolute or percentage limit satisfies that cap. The
+relative-improvement requirements must still be met on both horizons.
+
+After qualification, similar performance or one unusual day does not switch sources.
+Either horizon returns planning to historical after three independent windows where
+ML's error exceeds 1.10 times historical error plus 0.25 kWh per 24 hours. This also
+catches forecasts beyond the previous severe-error limits. Missing or stale comparison evidence withdraws earned
+selection. Recovery requires the same clear wins on both horizons, using only forecasts
+issued after selection was withdrawn. Retraining alone cannot grant permission.
+
+Temporary missing, unavailable, initialising, stale or short forecast data selects
+Historical immediately in Automatic mode, but retains an already earned grant for up
+to two hours. Returning with valid data within that period does not require another
+three-day qualification. The outage timer survives restarts. A prolonged outage, a hard
+validation failure, changed load definitions, stale comparison evidence or demonstrated
+poor performance still withdraws permission. Grace never qualifies an unproven model.
+Historical planning receives its normal in-day adjustment when enabled; ML planning
+continues to omit that adjustment.
+
+ML keeps forecasting and being scored while historical supplies planning. Monitoring
+can collect qualifying evidence before `load_ml_source` is enabled. Every source change
+forces a fresh battery plan. The panel reports collecting evidence, historical preferred,
+earned ML selection, or a historical fallback warning. Upgrades retain existing paired
+observations but do not treat the older policy's implicit ML preference as earned selection.
+If the classic forecast cannot be built, the accuracy guard warns rather than replacing
+an available, valid ML forecast with empty data.
+
+Optional settings in the main Predbat `apps.yaml` section:
+
+```yaml
+load_ml_guard_min_days: 3    # 2-5 independent daily windows for qualification, fallback and recovery
+load_ml_guard_error_kwh: 3.0
+load_ml_guard_error_percent: 40.0
+load_ml_guard_notify: false # optional notify_devices messages on warnings/recovery
+```
+
+Source and reason changes are logged; notifications are off by default and repeated
+identical warnings are suppressed. Inactive, invalid or stale ML data is excluded from
+accuracy comparisons. In Automatic fallback mode, those conditions also select historical
+when it is available. If guard evaluation fails, PredBat continues with its configured load
+sources and reports that the guard is unavailable. Explicit `load_forecast_only` and
+separately configured `load_forecast` sources are preserved.
+
+Both scores use the unadjusted household forecast, before in-day adjustment, manual scaling and dynamic load
+adjustments. Actuals come from the main load counter after its normal power/history fill,
+with the same measured EV and iBoost exclusions as the classic forecast. An EV outside
+the house-load measurement is not subtracted again. Missing counter coverage and
+threshold-inferred EV subtraction are not scored. This is not an independent meter audit:
+bad source readings or their existing gap filling can still affect measured actuals.
+
+The configured `base_load` minimum belongs to the Historical forecast. ML supplies its
+own forecast curve. Scores compare those configured source forecasts with genuinely
+measured consumption: the minimum is never added to actual readings. A deliberately
+conservative minimum can therefore increase Historical error at low demand; its value
+is included in the accuracy sensor's `base_load_w` attribute.
+
+When ML supplies planning, the extra Historical comparison is calculated only for an
+hourly snapshot or to establish availability. If Historical supplies the plan, it is
+built fresh each cycle and shared with the comparison. Between captures only the last
+availability result is retained, never a stale curve presented as a fresh prediction.
+
+Evidence is bounded and changed evidence is saved promptly through Storage, separately from the neural model
+and its history. Compatible evidence and fallback state survive restarts. Changing the
+load definition starts new guard evidence; no model or history file is deleted. Fresh
+measurement takes at least several days: there is no retrospective accuracy claim, and
+automatic fallback cannot prevent every bad forecast before its actual load is known.
+This feature does not fix training, tariff history or clock drift; it measures the
+consequences and can keep a persistently worse ML forecast out of planning.
+
 Note: **load_today**, **pv_today** and **car_charging_energy** `apps.yaml` configuration items are also used, but these should already be set in Predbat.
 
 #### Configuration example (load_ml)
