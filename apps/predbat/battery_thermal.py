@@ -362,9 +362,7 @@ def thermal_forecast(current_temp, model, ambient, power, forecast_minutes, step
     ambient_last = ambient.get(0)
     forecast = {}
     for minute in range(0, forecast_minutes, step):
-        # An exact 0 is looked up as a missing reading (utils.battery_temperature_index), which a forecast never is
-        value = round(temp, 2)
-        forecast[minute] = value if value != 0 else (0.01 if temp >= 0 else -0.01)
+        forecast[minute] = round(temp, 2)
         ambient_last = ambient.get(minute, ambient_last)
         target = temp if ambient_last is None else ambient_last
         temp += dt_hours * ((target - temp) / tau_hours + heat_rate * power.get(minute, 0.0))

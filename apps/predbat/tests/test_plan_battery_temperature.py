@@ -48,7 +48,12 @@ def run_test_plan_battery_temperature(my_predbat):
     charge_window_best = [{"start": my_predbat.minutes_now, "end": my_predbat.minutes_now + 60, "average": 10.0}]
     reset_rates(my_predbat, 10.0, 5.0)
     update_rates_import(my_predbat, charge_window_best)
+    my_predbat.battery_power_plan_best = {}
     my_predbat.run_prediction([0], charge_window_best, [], [], False, end_record=my_predbat.end_record, save="best")
+    # The best plan's battery power is kept for the next cycle's thermal forecast, the one link from the optimiser to it
+    if not my_predbat.battery_power_plan_best or not any(value != 0 for value in my_predbat.battery_power_plan_best.values()):
+        print("ERROR: saving the best plan should keep its battery power for the thermal forecast, got {} values".format(len(my_predbat.battery_power_plan_best)))
+        failed = True
     my_predbat.charge_limit_best = [0]
     my_predbat.export_limits_best = []
     my_predbat.charge_window_best = charge_window_best

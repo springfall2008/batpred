@@ -3101,10 +3101,11 @@ class Fetch:
         """
         Read one sensor's history for the thermal model fit, keyed by minutes ago.
 
-        The minutes before the oldest record are left out (pad=False), and a read longer than max_days_previous is not
-        tracked, so the history cache does not keep a week of the sensor afterwards.
+        The minutes before the oldest record are left out (pad=False). The read is never tracked, as for the rate grid's
+        scans: the history cache keeps the longest window ever asked for an entity, so a tracked week would stay cached for
+        sensors the live paths read only 2 days of.
         """
-        history = self.get_history_wrapper(entity_id=entity_id, days=days, required=False, tracked=days <= self.max_days_previous)
+        history = self.get_history_wrapper(entity_id=entity_id, days=days, required=False, tracked=False)
         if not history or not history[0]:
             return {}
         data, _ = minute_data(history[0], days, self.now_utc, "state", "last_updated", backwards=True, clean_increment=False, smoothing=False, divide_by=1.0, scale=1.0, required_unit=required_unit, pad=False)

@@ -130,7 +130,7 @@ def fit_equations(temperature, power, ambient):
 
 
 def test_fit_and_forecast_edges():
-    """A slightly negative heat term fits the time constant alone; a forecast at freezing is never exactly 0 (a missing reading)."""
+    """A slightly negative heat term fits the time constant alone."""
     failed = False
     step = STEP
     dt_hours = step / 60.0
@@ -148,9 +148,6 @@ def test_fit_and_forecast_edges():
     fit = thermal_fit_statistics(stats, step)
     failed = check(failed, fit is not None and fit["heat_rate"] == 0 and 5.0 < fit["tau_hours"] < 7.0, "a slightly negative heat term should fit tau alone, got {}".format(fit))
 
-    # Cooling from +1 towards -1 passes through 0: no step reads exactly 0
-    forecast = thermal_forecast(1.0, {"tau_hours": 2.0, "heat_rate": 0.0}, {0: -1.0}, {}, 24 * 60, step)
-    failed = check(failed, all(value != 0 for value in forecast.values()) and min(forecast.values()) < 0, "a forecast should never be exactly 0, got {}".format(sorted(set(forecast.values()))[:5]))
     return failed
 
 
