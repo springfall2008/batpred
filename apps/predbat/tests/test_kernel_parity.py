@@ -1724,6 +1724,97 @@ def run_window_setup_cache_tests(my_predbat, seeds=(11, 22, 33), count=36):
     return failed
 
 
+def run_batch_window_mutation_tests(my_predbat, count=12):
+    """Check a batch never reuses window arrays built for a window list before it was changed, returns True on failure.
+
+    run_prediction_kernel_batch takes each window list's start/end arrays from the identity-keyed bounds
+    cache, which outlives the batch, so the same list serves batch after batch. That is only sound while
+    every change to a window goes through set_window_start/set_window_end, which drop the cache. Here a
+    batch warms the cache, every window list is then moved through the setters, and the same list objects
+    are run again: the results must equal a fresh batch over deep copies (new lists, nothing cached for
+    them) and must differ from the first batch, or the move would not have exercised anything. Different
+    lists must also not share arrays, which the window variant tests already pin per batch.
+    """
+    print("**** Running kernel batch window mutation tests ****")
+    if not prediction_kernel.KERNEL_HAS_BATCH:
+        print("SKIP: kernel does not expose pk_run_batch")
+        return False
+
+    prediction, jobs = build_batch_jobs(my_predbat, random.Random(2468), count, window_variants=2)
+    if not prediction.kernel_handle:
+        print("ERROR: batch window mutation kernel context creation failed")
+        return True
+
+    def summary(results):
+        """The comparable part of a batch's results"""
+        return [(entry[0][:11], entry[1], entry[2]) if entry[0] is not None else None for entry in results]
+
+    before = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, 1)
+    if before is None:
+        print("ERROR: batch window mutation first batch failed")
+        return True
+    before = summary(before)
+
+    moved = set()
+    for job in jobs:
+        for windows in (job.charge_window, job.export_window):
+            if id(windows) in moved:
+                continue
+            moved.add(id(windows))
+            for window in windows[:2]:
+                prediction_kernel.set_window_start(window, window["start"] + 15)
+                prediction_kernel.set_window_end(window, window["end"] + 15)
+
+    after = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, 1)
+    if after is None:
+        print("ERROR: batch window mutation second batch failed")
+        return True
+    after = summary(after)
+
+    copies = {}
+
+    def copied(windows):
+        """A deep copy of a window list, one per original so jobs that shared a list still share"""
+        if id(windows) not in copies:
+            copies[id(windows)] = [dict(window) for window in windows]
+        return copies[id(windows)]
+
+    fresh_jobs = []
+    for job in jobs:
+        fresh = prediction_kernel.BatchJob(
+            job.charge_limit,
+            copied(job.charge_window),
+            copied(job.export_window),
+            job.export_limits,
+            job.pv_scenario,
+            job.end_record,
+            5,
+            soc_range_start_step=job.soc_range_start_step,
+            soc_range_end_step=job.soc_range_end_step,
+            want_range=job.want_range,
+            range_window=job.range_window,
+            want_export_end_soc=job.want_export_end_soc,
+        )
+        fresh_jobs.append(fresh)
+    fresh = prediction_kernel.run_prediction_kernel_batch(prediction, fresh_jobs, 1)
+    if fresh is None:
+        print("ERROR: batch window mutation fresh batch failed")
+        return True
+    fresh = summary(fresh)
+
+    failed = False
+    if after != fresh:
+        bad = [index for index in range(len(jobs)) if after[index] != fresh[index]]
+        print("ERROR: after moving the windows through the setters {} job(s) differ from a fresh batch over copies, first job {}".format(len(bad), bad[0]))
+        failed = True
+    if after == before:
+        print("ERROR: moving the windows changed no result, so the test did not exercise the cache")
+        failed = True
+    if not failed:
+        print("Batch window mutation: {} jobs after set_window_start/end match a fresh batch over copies".format(len(jobs)))
+    return failed
+
+
 def kernel_available():
     """Ensure the kernel library is built and loaded, returns (available, required_failure)"""
     if not ensure_kernel_built():
@@ -2238,6 +2329,8 @@ def run_kernel_parity_tests(my_predbat):
             failed |= run_batch_window_variant_tests(my_predbat)
         if not failed:
             failed |= run_window_setup_cache_tests(my_predbat)
+        if not failed:
+            failed |= run_batch_window_mutation_tests(my_predbat)
         if not failed:
             failed |= run_scratch_reuse_tests(my_predbat)
         if not failed:
