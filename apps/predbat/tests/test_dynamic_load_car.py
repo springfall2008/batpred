@@ -24,7 +24,7 @@ Intelligent charging built are affected - Predbat-led charging is never cancelle
 import copy
 import shutil
 import tempfile
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from tests.test_infra import run_async, MockStorageComponents, make_test_storage
 
@@ -1300,7 +1300,7 @@ def _run_short_dispatch(my_predbat):
         # Poll idle at 13:59:45; the 14:00 cycle reads the sensor at 14:00:20, after its fetch, and the car has started
         confirmed_after(one_minute, [(839, 45, "off")])
         _sensor(my_predbat, "on")
-        _cycle(my_predbat, 840, 0, slots=one_minute, read_at=_at(my_predbat, 840, 20))
+        _cycle(my_predbat, 840, 0, slots=one_minute, read_at=my_predbat.midnight_utc + timedelta(minutes=840, seconds=20))
         failed |= _check("t57k start dated at the reading", my_predbat.dynamic_load_car_charge_from[0]["from"] == my_predbat.midnight_utc + timedelta(minutes=840, seconds=20), "state {}".format(my_predbat.dynamic_load_car_charge_from))
         failed |= _check("t57k confirmed by the cycle", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
         # ...and a later poll still counts it, though the poll waited while the cycle planned
@@ -1315,6 +1315,43 @@ def _run_short_dispatch(my_predbat):
         _cycle(my_predbat, 840, 0, slots=one_minute, read_at=my_predbat.midnight_utc + timedelta(days=1, minutes=840, seconds=20))
         failed |= _check("t57k2 start unrecorded", not my_predbat.dynamic_load_car_charge_from[0]["charging"], "state {}".format(my_predbat.dynamic_load_car_charge_from))
         failed |= _check("t57k2 not confirmed", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        # ...but keeps an idle reading, dated by the earlier of the two clocks: a plan time ahead of the wall clock must
+        # not make an idle reading taken at 13:59:00 look as though it was taken after the boundary
+        confirmed_after(one_minute, [])
+        _sensor(my_predbat, "off")
+        _cycle(my_predbat, 840, 5, slots=one_minute, read_at=my_predbat.midnight_utc + timedelta(minutes=839))
+        failed |= _check("t57k2 idle dated by the earlier clock", my_predbat.dynamic_load_car_charge_from[0]["idle_at"] == my_predbat.midnight_utc + timedelta(minutes=839), "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        _sensor(my_predbat, "on")
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
+        failed |= _check(
+            "t57k2 ...so a charge 90s after it is not fresh", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods)
+        )
+
+        print("Test 57k3: a start the cycle reads after the dispatch has ended does not confirm it")
+        # Poll idle at 14:00:10; a cycle begins at 14:00:15, inside the 14:00-14:01 dispatch, but its fetch is slow and
+        # reads the car charging only at 14:02:30
+        confirmed_after(one_minute, [(840, 10, "off")])
+        _sensor(my_predbat, "on")
+        _cycle(my_predbat, 840, 15, slots=one_minute, read_at=my_predbat.midnight_utc + timedelta(minutes=842, seconds=30))
+        failed |= _check("t57k3 not confirmed", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+
+        print("Test 57k4: by default the cycle dates its readings by the wall clock")
+        confirmed_after(one_minute, [])
+        _sensor(my_predbat, "off")
+        my_predbat.now_utc_real = datetime.now(my_predbat.local_tz) - timedelta(seconds=1)
+        my_predbat.dynamic_load_car_check()
+        failed |= _check(
+            "t57k4 live cycle dated after its own clock",
+            my_predbat.dynamic_load_car_charge_from[0]["idle_at"] > my_predbat.midnight_utc + timedelta(minutes=my_predbat.dynamic_load_car_minute(my_predbat.now_utc_real)),
+            "state {}".format(my_predbat.dynamic_load_car_charge_from),
+        )
+        my_predbat.now_utc_real = datetime.now(my_predbat.local_tz) - timedelta(days=1)
+        my_predbat.dynamic_load_car_check()
+        failed |= _check(
+            "t57k4 replayed cycle dated by its own clock",
+            my_predbat.dynamic_load_car_charge_from[0]["idle_at"] == my_predbat.midnight_utc + timedelta(minutes=my_predbat.dynamic_load_car_minute(my_predbat.now_utc_real)),
+            "state {}".format(my_predbat.dynamic_load_car_charge_from),
+        )
 
         print("Test 57l: the cycle that plans on the boundary bridges the poll's pause with its idle reading")
         # Poll idle at 13:59:45; the 14:00 cycle reads idle and plans until 14:01:10 with the poll paused; the car

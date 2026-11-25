@@ -614,12 +614,13 @@ class Plan:
             elif reading and not idle_only and (state is None or not state["charging"]):
                 idle_at = state["idle_at"] if state else None
                 fresh = idle_at is not None and (idle_at >= period_start or (at - idle_at).total_seconds() <= DYNAMIC_LOAD_CAR_FRESH_GAP_SECONDS)
-                self.dynamic_load_car_charge_from[car_n] = {"entity": entity_id, "charging": True, "idle_at": idle_at, "from": at if fresh else None}
+                self.dynamic_load_car_charge_from[car_n] = {"entity": entity_id, "charging": True, "idle_at": None, "from": at if fresh else None}
 
-    def dynamic_load_car_fresh_start(self, minute):
+    def dynamic_load_car_fresh_start(self, minute, dispatch_end):
         """
-        Whether a car still reading charging was seen to start since the half hour holding minute began
-        (dynamic_load_car_note_readings()). A sensor can still read charging for a car that stopped just before
+        Whether a car still reading charging was seen to start since the half hour holding minute began, and
+        before dispatch_end (dynamic_load_car_note_readings()) - the cycle judges the dispatch on its own clock,
+        read before the fetch, so a start it reads after the dispatch has ended must not count. A sensor can still read charging for a car that stopped just before
         the boundary, which is why readings early in a half hour do not normally confirm it - but such a sensor
         does not read idle and then charging again. Any car will do, as any car charging is taken as the
         dispatch running (dynamic_load_any_car_charging_now()).
@@ -629,9 +630,10 @@ class Plan:
         not a fresh start either, so a dispatch over within 2 minutes is not confirmed by it (GH#6354).
         """
         period_start = self.midnight_utc + timedelta(minutes=minute - minute % 30)
+        ended_at = self.midnight_utc + timedelta(minutes=dispatch_end)
         for car_n, entity_id in self.dynamic_load_car_sensors.items():
             state = self.dynamic_load_car_charge_from.get(car_n)
-            if state and state["entity"] == entity_id and state["charging"] and state["from"] is not None and state["from"] >= period_start and self.car_charging_now_reading(car_n):
+            if state and state["entity"] == entity_id and state["charging"] and state["from"] is not None and period_start <= state["from"] < ended_at and self.car_charging_now_reading(car_n):
                 return True
         return False
 
@@ -884,7 +886,7 @@ class Plan:
                 # A charge the poll saw start in this half hour is not one that stopped before it, so that confirms
                 # in the first minutes too - otherwise a dispatch over by then could never confirm (GH#6354)
                 if car_n in self.dynamic_load_car_sensors or self.dynamic_load_any_car_charging_now():
-                    seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES or self.dynamic_load_car_fresh_start(minute) else None
+                    seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES or self.dynamic_load_car_fresh_start(minute, dispatch_end) else None
                 elif self.load_last_period >= self.car_charging_threshold_kw():
                     seen_minute = self.minutes_now - 1
                 else:
@@ -1113,8 +1115,8 @@ class Plan:
                 self.dynamic_load_car_note_readings(read_at)
             else:
                 # A clock of the caller's choosing (plan_once, a replay) cannot date them: only an idle reading is
-                # kept, dated early, which can only make a later start look less fresh
-                self.dynamic_load_car_note_readings(self.now_utc_real, idle_only=True)
+                # kept, dated by the earlier clock, which can only make a later start look less fresh
+                self.dynamic_load_car_note_readings(min(self.now_utc_real, read_at), idle_only=True)
         for car_n in range(self.num_cars):
             cancelled = self.dynamic_load_car_target(car_n, minute, self.now_utc_real, record=save)
             self.dynamic_load_car_effective[car_n] = cancelled
