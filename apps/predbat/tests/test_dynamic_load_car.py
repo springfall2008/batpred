@@ -91,13 +91,14 @@ def _at(my_predbat, minute, seconds=0):
     return my_predbat.now_utc_real
 
 
-def _cycle(my_predbat, minute, seconds=0, slots=None, save=True):
+def _cycle(my_predbat, minute, seconds=0, slots=None, save=True, read_at=None):
     """
-    One fetch cycle for car 0: rebuild its slots, then run the early (pre-rates) check.
+    One fetch cycle for car 0: rebuild its slots, then run the early (pre-rates) check. The sensors are read
+    at read_at, by default at the cycle's own clock rather than the wall clock.
     """
     _at(my_predbat, minute, seconds)
     my_predbat.car_charging_slots = [copy.deepcopy(slots if slots is not None else _slots())] + [[] for _ in range(my_predbat.num_cars - 1)]
-    return my_predbat.dynamic_load_car_check(save=save)
+    return my_predbat.dynamic_load_car_check(save=save, read_at=read_at if read_at is not None else my_predbat.now_utc_real)
 
 
 def _sensor(my_predbat, state):
@@ -1295,11 +1296,25 @@ def _run_short_dispatch(my_predbat):
             else:
                 my_predbat.args["clock_skew"] = saved_skew
 
-        print("Test 57k: the 5 minute cycle does not record starts - its clock was read before the fetch")
+        print("Test 57k: the cycle on the boundary confirms a start it reads, dated when it read it")
+        # Poll idle at 13:59:45; the 14:00 cycle reads the sensor at 14:00:20, after its fetch, and the car has started
         confirmed_after(one_minute, [(839, 45, "off")])
         _sensor(my_predbat, "on")
-        _cycle(my_predbat, 840, 20, slots=one_minute)
-        failed |= _check("t57k cycle left the start unrecorded", not my_predbat.dynamic_load_car_charge_from[0]["charging"], "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        _cycle(my_predbat, 840, 0, slots=one_minute, read_at=_at(my_predbat, 840, 20))
+        failed |= _check("t57k start dated at the reading", my_predbat.dynamic_load_car_charge_from[0]["from"] == my_predbat.midnight_utc + timedelta(minutes=840, seconds=20), "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        failed |= _check("t57k confirmed by the cycle", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        # ...and a later poll still counts it, though the poll waited while the cycle planned
+        _sensor(my_predbat, "on")
+        my_predbat.dynamic_load_car_confirmed_periods = {}
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 50))
+        failed |= _check("t57k ...and the first poll after the plan", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+
+        print("Test 57k2: a cycle whose clock is not the wall clock (plan_once, a replay) records no starts")
+        confirmed_after(one_minute, [(839, 45, "off")])
+        _sensor(my_predbat, "on")
+        _cycle(my_predbat, 840, 0, slots=one_minute, read_at=my_predbat.midnight_utc + timedelta(days=1, minutes=840, seconds=20))
+        failed |= _check("t57k2 start unrecorded", not my_predbat.dynamic_load_car_charge_from[0]["charging"], "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        failed |= _check("t57k2 not confirmed", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
 
         print("Test 57l: the cycle that plans on the boundary bridges the poll's pause with its idle reading")
         # Poll idle at 13:59:45; the 14:00 cycle reads idle and plans until 14:01:10 with the poll paused; the car

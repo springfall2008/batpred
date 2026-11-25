@@ -596,9 +596,9 @@ class Plan:
         has been paused - the first "charging" reading may be a sensor still showing a charge that ended before
         the boundary. "unknown"/"unavailable" changes nothing.
 
-        The 5 minute cycle calls this with idle_only: its clock was read before the fetch, so it can only date a
-        reading early. That is safe for an idle reading, and lets the cycle that starts on the boundary - the
-        poll waits while it plans - bridge the gap, but would place a start before the boundary.
+        The 5 minute cycle calls this too, as the poll waits while the cycle on the boundary plans. It passes
+        idle_only when it cannot tell when the readings were taken: an idle reading dated early is safe, a start
+        dated early could be placed before the boundary.
         """
         minute = self.dynamic_load_car_minute(now)
         at = self.midnight_utc + timedelta(minutes=minute)
@@ -1076,7 +1076,7 @@ class Plan:
             self.dynamic_load_car_warned = cars
         return cars
 
-    def dynamic_load_car_check(self, save=True):
+    def dynamic_load_car_check(self, save=True, read_at=None):
         """
         Cancel the slots of an Octopus Intelligent car that is inside one of its charging slots but not
         charging - or, with octopus_intelligent_trust_slots Off, until it is seen charging in one. Slots
@@ -1095,6 +1095,8 @@ class Plan:
         With save False (compare.py re-running the fetch for another tariff) the decision is re-derived
         for the current slot and reading, but the saved state is not advanced.
 
+        read_at is when the car_charging_now readings are taken, the wall clock by default.
+
         Returns True when a car's cancellation changed, so the plan is recomputed.
         """
         changed = False
@@ -1103,8 +1105,16 @@ class Plan:
         self.dynamic_load_car_effective = {}
         minute = self.dynamic_load_car_minute(self.now_utc_real)
         if save:
-            # An idle reading here bridges the poll's pause while this cycle plans (dynamic_load_car_note_readings())
-            self.dynamic_load_car_note_readings(self.now_utc_real, idle_only=True)
+            # The readings are dated when they are taken, not by this cycle's clock, which was read before the fetch:
+            # the poll waits while the cycle on the boundary plans, so a start only the cycle sees must count (GH#6354)
+            if read_at is None:
+                read_at = datetime.now(self.local_tz)
+            if self.now_utc_real <= read_at < self.now_utc_real + timedelta(minutes=PREDICT_STEP):
+                self.dynamic_load_car_note_readings(read_at)
+            else:
+                # A clock of the caller's choosing (plan_once, a replay) cannot date them: only an idle reading is
+                # kept, dated early, which can only make a later start look less fresh
+                self.dynamic_load_car_note_readings(self.now_utc_real, idle_only=True)
         for car_n in range(self.num_cars):
             cancelled = self.dynamic_load_car_target(car_n, minute, self.now_utc_real, record=save)
             self.dynamic_load_car_effective[car_n] = cancelled
