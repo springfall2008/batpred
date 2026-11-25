@@ -51,10 +51,8 @@ high battery charge levels when the car was charged previously (e.g. last week).
 
         This assumes **import_today** and **export_today** come from your inverter's CT clamp, as they are meant to. If yours come from a smart meter (for example a Glow or Octopus Home Mini sensor), the meter already sees the car, so it would be counted twice - use your inverter's import and export sensors instead.
 
-- **switch.predbat_car_charging_hold** - A switch that when turned On (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.
-
-If you are getting [erroneous house load predictions in your plan](faq.md#why-is-my-house-load-lower-than-expected-or-zero) then check this setting and **car_charging_energy** or **input_number.predbat_car_charging_threshold** are set correctly.
-
+- **switch.predbat_car_charging_hold** - A switch that when turned On (the default) tells Predbat to remove car charging data from your historical house load so that Predbat's battery prediction plan is not distorted by previous car charging. This switch is automatically overridden to Off when **switch.predbat_car_energy_reported_load** is Off, since the car load is not in the house load data.<BR><BR>
+If you are getting [erroneous house load predictions in your plan](faq.md#why-is-my-house-load-lower-than-expected-or-zero) then check this setting and **car_charging_energy** or **input_number.predbat_car_charging_threshold** are set correctly.<BR><BR>
 If you don't have an EV then turn **switch.predbat_car_charging_hold** Off as Predbat will by default still consider any house load in excess of **input_number.predbat_car_charging_threshold** to be car charging activity and will exclude it.
 
 - **car_charging_energy** - Set in `apps.yaml` to point to an entity which is the daily incrementing kWh data for the car charger.
@@ -66,8 +64,7 @@ your car charging energy sensor does not accurately report your car charging dat
 then this will really mess up your Predbat plan as Predbat will exclude all car_charging_energy from your load predictions and you could end up with erroneous or zero house load predictions.  Do check the entity!<BR><BR>
 *NOTE:* The car charging energy sensor must be a daily incrementing kWh sensor. Check the history of your sensor in Home Assistant, that it increments through the day when your car is charging, resets to zero at midnight,
 and does not dip down in value or reset to zero other than at midnight. Some car charger energy sensors do not behave as Predbat requires them to do; for example, they may show cumulative energy per charge, not cumulative charge energy today.<BR>
-You may need to wrap the car charger energy sensor into a daily resetting utility meter to create a sensor that increments through the day and only changes to zero at midnight.<BR><BR>
-
+You may need to wrap the car charger energy sensor into a daily resetting utility meter to create a sensor that increments through the day and only changes to zero at midnight.<BR>
 *NOTE:* A charger that reports 'unavailable' or 'unknown' when the car isn't plugged in needs no special handling. Predbat skips those readings when it loads the sensor history,
 and does not treat them as a configuration error, so the sensor can be used exactly as it is.<BR>
 Do **not** wrap such a sensor in a template that substitutes zero (for example `| float(0)`). For a daily incrementing sensor, a zero part way through the day looks exactly like the midnight reset,
@@ -95,8 +92,7 @@ Unlike **car_charging_energy** this is display only - it has no effect at all on
 What the Car is drawn as being fed from follows **switch.predbat_car_energy_reported_load**: with it on (the default) your charger sits inside the house CT clamp,
 so the Car hangs off the House and its power is subtracted from the House figure to stop the car being counted twice;
 with it off the charger is outside the clamp and was never part of your house load, so the Car hangs off the Grid instead and the House figure is left alone
-- Predbat publishes a **predbat.car_charging_power** sensor (in kW) which you can graph or use in your own automations
-
+- Predbat publishes a **predbat.car_charging_power** sensor (in kW) which you can graph or use in your own automations.<BR><BR>
 Like car_charging_energy it can be a list of sensors, one per line per car charger, if you have more than one charger - they are added together in Predbat:
 
 ```yaml
@@ -113,11 +109,25 @@ If you use one of the supported charger integrations (Ohme, myenergi Zappi, Wall
 If you do not have a suitable car charging energy kWh sensor in Home Assistant then comment the **car_charging_energy** line out of `apps.yaml` and configure **input_number.predbat_car_charging_threshold**
 
 - **input_number.predbat_car_charging_threshold** (default 6 = 6kW)- Sets the kW power threshold above which home consumption is assumed to be car charging
-and **input_number.predbat_car_charging_rate** (in kW) will be subtracted from the historical load data.
-
-Used to 'detect' EV charging if you have an EV charger but it does not have an energy today sensor that you can use.  If **car_charging_energy** is set in `apps.yaml` then **input_number.predbat_car_charging_threshold** is ignored.
-
+and **input_number.predbat_car_charging_rate** (in kW) will be subtracted from the historical load data.<BR><BR>
+Used to 'detect' EV charging if you have an EV charger but it does not have an energy today sensor that you can use.  If **car_charging_energy** is set in `apps.yaml` then **input_number.predbat_car_charging_threshold** is ignored.<BR><BR>
 If you do not have an EV charger then ensure you set **switch.predbat_car_charging_hold** to Off otherwise Predbat will assume any house load in excess of car_charging_threshold is EV charging and remove it from your house load predictions!
+
+- **car_charging_now** - Optional, but strongly recommended that you set this to a Home Assistant sensor that tells Predbat the car is charging right now (e.g. from your car charger integration).
+This can be an on/off sensor, matched against **car_charging_now_response**, or - for chargers that have no "charging" sensor - a charging power sensor in W or kW, where 200W or more counts as charging (e.g. `sensor.wallbox_portal_charging_power` for a Wallbox).<BR>
+While it reports the car charging, Predbat holds the house battery for the car ("Hold for car") so the battery does not discharge into it, unless **switch.predbat_car_charging_from_battery** is On.
+The hold starts and stops within about 15 seconds of the sensor changing, rather than at the next 5-minute plan update.
+It also counts as the car being plugged in, so Predbat-led charging will plan for the car, and for Octopus Intelligent-led charging, Predbat will use this to confirm that the car is charging, and thus you will get the cheap IOG rate.<BR>
+**car_charging_now** never adds a charging slot of its own: slots come only from the Predbat car planner or from Octopus Intelligent dispatches.
+So it does not turn on **binary_sensor.predbat_car_charging_slot**, and an automation that starts the charger from that sensor cannot keep a charge going through it.
+With Octopus Intelligent charging a car outside a dispatch does not get the cheap rate either.<BR>
+A car charging outside any charging slot is also modelled in the plan at **input_number.predbat_car_charging_rate** until the end of the current plan slot (**plan_interval_minutes**, 30 minutes by default), so no export is planned over it. With **switch.predbat_metric_dynamic_load_adjust** On its load is also taken out of the recent-load estimate, so it is not counted twice - see [Dynamic Load Adjust](customisation.md#scaling-and-weight-options).<BR>
+Leave it commented out if you have no sensor that reports the car actually drawing power.
+The Ohme (`ohme_automatic`), myenergi Zappi (`myenergi_automatic`), Wallbox (`wallbox_automatic`) and Hypervolt (`hypervolt_automatic`) integrations set it for you, unless you have set it yourself in `apps.yaml`. The [GivEnergy Gateway](#givenergy-gateway-ocpp-ev-charger) integration (`gateway_evc_automatic`) sets it too, replacing any value of your own.
+
+- **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging. Useful if you have a sensor for your car charger that isn't binary.
+The sensor's state must match one of these exactly (ignoring case). If unset it defaults to `yes`, `on`, `enable`, `true` and `charging`, which covers on/off sensors and chargers whose status reads `Charging`, such as a myenergi Zappi's plug status.
+If your charger reports something else while charging, add that value here. Otherwise Predbat never sees the car charging, and with Octopus Intelligent it [cancels the car's dispatches](#checking-intelligent-dispatches-against-the-car).
 
 ### Planned Car Charging
 
@@ -226,22 +236,6 @@ Customise for your car charger sensor if it sets sensor values that are not in t
 It is used to reset the [manual car SoC](#predbat-led-charging) when the car is unplugged, and a car with no SoC sensor needs it (with **car_charging_energy**) for its SoC to be tracked automatically.
 **car_charging_planned** is not used in its place, as many chargers turn it off when a charge finishes with the car still plugged in. As with **car_charging_planned**, use a list with one entry per car if you have more than one.
 Predbat's own Ohme, myenergi, Wallbox, Hypervolt, GivEnergy Cloud EV charger and GivEnergy Gateway components set it for you.
-
-- **car_charging_now** - Optional, can be set to a Home Assistant sensor that tells Predbat the car is charging right now (e.g. from your car charger integration).
-This can be an on/off sensor, matched against **car_charging_now_response**, or - for chargers that have no "charging" sensor - a charging power sensor in W or kW, where 200W or more counts as charging (e.g. `sensor.wallbox_portal_charging_power` for a Wallbox).<BR>
-While it reports the car charging, Predbat holds the house battery for the car ("Hold for car") so the battery does not discharge into it, unless **switch.predbat_car_charging_from_battery** is On.
-The hold starts and stops within about 15 seconds of the sensor changing, rather than at the next 5-minute plan update.
-It also counts as the car being plugged in, so Predbat-led charging will plan for the car.<BR>
-car_charging_now never adds a charging slot of its own: slots come only from the Predbat car planner or from Octopus Intelligent dispatches.
-So it does not turn on **binary_sensor.predbat_car_charging_slot**, and an automation that starts the charger from that sensor cannot keep a charge going through it.
-With Octopus Intelligent charging a charge outside a dispatch does not get the cheap rate either.<BR>
-A car charging outside any charging slot is also modelled in the plan at **input_number.predbat_car_charging_rate** until the end of the current plan slot (**plan_interval_minutes**, 30 minutes by default), so no export is planned over it. With **switch.predbat_metric_dynamic_load_adjust** On its load is also taken out of the recent-load estimate, so it is not counted twice - see [Dynamic Load Adjust](customisation.md#scaling-and-weight-options).<BR>
-Leave it commented out if you have no sensor that reports the car actually drawing power.
-The Ohme (`ohme_automatic`), myenergi Zappi (`myenergi_automatic`), Wallbox (`wallbox_automatic`) and Hypervolt (`hypervolt_automatic`) integrations set it for you, unless you have set it yourself in `apps.yaml`. The [GivEnergy Gateway](#givenergy-gateway-ocpp-ev-charger) integration (`gateway_evc_automatic`) sets it too, replacing any value of your own.
-
-- **car_charging_now_response** - Set to the range of positive responses for car_charging_now to indicate that the car is charging. Useful if you have a sensor for your car charger that isn't binary.
-The sensor's state must match one of these exactly (ignoring case). If unset it defaults to `yes`, `on`, `enable`, `true` and `charging`, which covers on/off sensors and chargers whose status reads `Charging`, such as a myenergi Zappi's plug status.
-If your charger reports something else while charging, add that value here. Otherwise Predbat never sees the car charging, and with Octopus Intelligent it [cancels the car's dispatches](#checking-intelligent-dispatches-against-the-car).
 
 To make Predbat-led car charging more accurate, additionally you can configure the following items in `apps.yaml`:
 
