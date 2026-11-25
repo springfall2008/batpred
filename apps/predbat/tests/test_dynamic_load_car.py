@@ -1322,14 +1322,21 @@ def _run_short_dispatch(my_predbat):
         my_predbat.dynamic_load_car_target(0, 840.5, _at(my_predbat, 840, 30))
         failed |= _check("t57m stopped car 1 does not confirm car 0", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
 
-        print("Test 57n: a car whose sensor has gone no longer counts")
-        two_cars_confirmed_after([(840, 0, "on", "off"), (840, 15, "on", "on")])
-        my_predbat.dynamic_load_car_confirmed_periods = {}
-        my_predbat.num_cars = 1
+        print("Test 57n: readings of a sensor the car no longer uses do not count")
+        # Car 0 is seen starting at 14:00:15 on its old sensor (no dispatch yet), then car_charging_now is changed to an
+        # entity still showing a charge that ended before 14:00, and a 14:00-14:01 dispatch is listed
+        _reset(my_predbat)
+        my_predbat.car_charging_slots = [[]]
+        _sensor(my_predbat, "off")
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 5))
         _sensor(my_predbat, "on")
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 15))
+        my_predbat.args["car_charging_now"] = SENSOR_1
+        my_predbat.ha_interface.dummy_items[SENSOR_1] = "on"
+        my_predbat.dynamic_load_car_refresh_sensors()
         my_predbat.car_charging_slots = [list(one_minute)]
         my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
-        failed |= _check("t57n removed car 1 does not confirm car 0", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        failed |= _check("t57n changed sensor not confirmed at 14:00:30", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "state {}".format(my_predbat.dynamic_load_car_charge_from))
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
             if value is None:

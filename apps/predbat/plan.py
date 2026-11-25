@@ -603,15 +603,18 @@ class Plan:
         minute = self.dynamic_load_car_minute(now)
         at = self.midnight_utc + timedelta(minutes=minute)
         period_start = self.midnight_utc + timedelta(minutes=minute - minute % 30)
-        for car_n in self.dynamic_load_car_sensors:
+        for car_n, entity_id in self.dynamic_load_car_sensors.items():
             reading = self.car_charging_now_reading(car_n)
             state = self.dynamic_load_car_charge_from.get(car_n)
+            # Readings of a sensor the car no longer uses say nothing about this one
+            if state and state["entity"] != entity_id:
+                state = None
             if reading is False:
-                self.dynamic_load_car_charge_from[car_n] = {"charging": False, "idle_at": at, "from": None}
+                self.dynamic_load_car_charge_from[car_n] = {"entity": entity_id, "charging": False, "idle_at": at, "from": None}
             elif reading and not idle_only and (state is None or not state["charging"]):
                 idle_at = state["idle_at"] if state else None
                 fresh = idle_at is not None and (idle_at >= period_start or (at - idle_at).total_seconds() <= DYNAMIC_LOAD_CAR_FRESH_GAP_SECONDS)
-                self.dynamic_load_car_charge_from[car_n] = {"charging": True, "idle_at": idle_at, "from": at if fresh else None}
+                self.dynamic_load_car_charge_from[car_n] = {"entity": entity_id, "charging": True, "idle_at": idle_at, "from": at if fresh else None}
 
     def dynamic_load_car_fresh_start(self, minute):
         """
@@ -626,9 +629,9 @@ class Plan:
         not a fresh start either, so a dispatch over within 2 minutes is not confirmed by it (GH#6354).
         """
         period_start = self.midnight_utc + timedelta(minutes=minute - minute % 30)
-        for car_n in self.dynamic_load_car_sensors:
+        for car_n, entity_id in self.dynamic_load_car_sensors.items():
             state = self.dynamic_load_car_charge_from.get(car_n)
-            if state and state["charging"] and state["from"] is not None and state["from"] >= period_start and self.car_charging_now_reading(car_n):
+            if state and state["entity"] == entity_id and state["charging"] and state["from"] is not None and state["from"] >= period_start and self.car_charging_now_reading(car_n):
                 return True
         return False
 
