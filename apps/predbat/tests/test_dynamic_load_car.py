@@ -1233,7 +1233,7 @@ def _run_short_dispatch(my_predbat):
         failed |= _check("t57 14:00-14:01 idle 14:00:10, charging 14:00:30", confirmed_after(one_minute, [(840, 10, "off"), (840, 30, "on")]))
         failed |= _check("t57 14:00-14:02 idle to 14:01:30, charging 14:01:45 (the #6354 log)", confirmed_after(two_minute, [(840, 15, "off"), (841, 30, "off"), (841, 45, "on")]))
         failed |= _check("t57 14:00-14:01 idle 13:59:45, charging 14:00:00", confirmed_after(one_minute, [(839, 45, "off"), (840, 0, "on")]))
-        failed |= _check("t57 14:00-14:03 idle 14:00:10, charging 14:01:30", confirmed_after([{"start": 840, "end": 843, "kwh": 0.3, "octopus": True}], [(840, 10, "off"), (841, 30, "on")]))
+        failed |= _check("t57 14:00-14:03 idle 14:00:10, charging 14:01:30", confirmed_after([{"start": 840, "end": 843, "kwh": 0.3, "octopus": True}], [(840, 10, "off"), (841, 15, "off"), (841, 30, "on")]))
 
         print("Test 57b: the car must be seen inside the dispatch - a reading after it ends does not confirm")
         failed |= _check("t57b 14:00-14:02 not confirmed at 14:02:30", not confirmed_after(two_minute, [(840, 15, "off"), (842, 30, "on")]))
@@ -1256,8 +1256,50 @@ def _run_short_dispatch(my_predbat):
         _reset(my_predbat)
         my_predbat.car_charging_slots = [list(two_minute)]
         failed |= _check("t57f too short before the car is seen", my_predbat.dispatch_too_short(0, 840, 842))
-        confirmed_after(two_minute, [(840, 15, "off"), (841, 45, "on")])
+        confirmed_after(two_minute, [(840, 15, "off"), (841, 30, "off"), (841, 45, "on")])
         failed |= _check("t57f cheap once seen inside it", not my_predbat.dispatch_too_short(0, 840, 842))
+
+        def two_cars_confirmed_after(readings):
+            """
+            Reset to two cars, car 0 with a 14:00-14:01 dispatch, poll at each (minute, seconds, car 0 state, car 1
+            state) in turn, and return whether car 0's 14:00-14:30 was confirmed.
+            """
+            _reset(my_predbat)
+            for minute, seconds, state_0, state_1 in readings:
+                _sensors(my_predbat, state_0, state_1)
+                my_predbat.car_charging_slots = [list(one_minute), []]
+                my_predbat.dynamic_load_car_poll(_at(my_predbat, minute, seconds))
+            return my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set())
+
+        print("Test 57g: car 1 seen starting confirms car 0's dispatch in the same poll")
+        # The dispatch's car can be on the charger Predbat calls 1 (dynamic_load_any_car_charging_now())
+        failed |= _check("t57g confirmed at car 1's first charging reading", two_cars_confirmed_after([(840, 10, "off", "off"), (840, 25, "off", "on")]))
+
+        print("Test 57h: any car seen starting will do, even with another charging since before the boundary")
+        failed |= _check("t57h car 1 charging throughout, car 0 starts at 14:00:30", two_cars_confirmed_after([(840, 10, "off", "on"), (840, 30, "on", "on")]))
+        failed |= _check("t57h car 1 charging throughout, car 0 idle: not confirmed", not two_cars_confirmed_after([(840, 10, "off", "on"), (840, 30, "off", "on")]))
+
+        print("Test 57i: after a gap in the readings, the first charging reading is not a fresh start")
+        failed |= _check("t57i idle 13:58, next reading charging 14:00:30", not confirmed_after(one_minute, [(838, 0, "off"), (840, 30, "on")]))
+
+        print("Test 57j: starts are judged on the clock-skewed clock the half hour is judged on")
+        saved_skew = my_predbat.args.get("clock_skew", None)
+        try:
+            my_predbat.args["clock_skew"] = -1
+            # Real 14:00:10 / 14:00:30 is 13:59:10 / 13:59:30 skewed: a start before the boundary
+            failed |= _check("t57j start before the skewed boundary not confirmed", not confirmed_after(one_minute, [(840, 10, "off"), (840, 30, "on"), (841, 10, "on")]))
+            failed |= _check("t57j start after the skewed boundary confirmed", confirmed_after(one_minute, [(841, 10, "off"), (841, 30, "on")]))
+        finally:
+            if saved_skew is None:
+                my_predbat.args.pop("clock_skew", None)
+            else:
+                my_predbat.args["clock_skew"] = saved_skew
+
+        print("Test 57k: the 5 minute cycle does not record starts - its clock was read before the fetch")
+        confirmed_after(one_minute, [(839, 45, "off")])
+        _sensor(my_predbat, "on")
+        _cycle(my_predbat, 840, 20, slots=one_minute)
+        failed |= _check("t57k cycle left the start unrecorded", not my_predbat.dynamic_load_car_charge_from[0]["charging"], "state {}".format(my_predbat.dynamic_load_car_charge_from))
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
             if value is None:

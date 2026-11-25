@@ -44,8 +44,11 @@ DYNAMIC_LOAD_CAR_LOAD_MINUTES = 5
 # margin below the threshold allows for a load sensor that under-reads while the battery is charging (GH#5461)
 DYNAMIC_LOAD_CAR_LOW_FACTOR = 0.85
 # A car_charging_now reading only confirms the half hour it is in (keeping that half hour cheap once the car
-# stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary
+# stops, GH#5316) from this many minutes into it: the sensor can lag a car that stopped just before the boundary.
+# A charge the 15 second poll saw start since the boundary counts at once (dynamic_load_car_fresh_start(), GH#6354)
 DYNAMIC_LOAD_CAR_CONFIRM_MINUTES = 2
+# A start only counts as fresh when the "not charging" reading before it was at most this long before it
+DYNAMIC_LOAD_CAR_FRESH_GAP_SECONDS = 60
 # How long a half hour an Octopus Intelligent planned dispatch ran in keeps the dispatch rate after it ends,
 # while waiting for Octopus to list it as a completed dispatch - seen to take 15 to 60 minutes (GH#5520)
 OCTOPUS_DISPATCH_HOLD_MINUTES = 90
