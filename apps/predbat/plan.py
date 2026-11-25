@@ -626,8 +626,8 @@ class Plan:
         dispatch running (dynamic_load_any_car_charging_now()).
 
         Not proof against a sensor late on both edges: one that reports a charge ending at 13:59:40 from
-        14:00:10 to 14:00:50 looks like a fresh start. A car that starts a few seconds before the boundary is
-        not a fresh start either, so a dispatch over within 2 minutes is not confirmed by it (GH#6354).
+        14:00:10 to 14:00:50 looks like a fresh start. A car first read charging before the boundary is not a
+        fresh start either, so a dispatch over within 2 minutes is not confirmed by it (GH#6354).
         """
         period_start = self.midnight_utc + timedelta(minutes=minute - minute % 30)
         ended_at = self.midnight_utc + timedelta(minutes=dispatch_end)

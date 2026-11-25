@@ -1366,13 +1366,20 @@ def _run_short_dispatch(my_predbat):
         failed |= _check("t57l ...but not without the cycle's idle reading", not confirmed_after(two_minute_cycle, [(839, 45, "off"), (841, 15, "on")]))
 
         print("Test 57m: a car seen starting that has since stopped no longer counts")
-        # Car 1 starts at 14:00:15 and stops by 14:00:30; car 0's sensor still shows a charge that ended before 14:00
+        # Car 1 starts at 14:00:15 and stops by 14:00:30; car 0's sensor still shows a charge that ended before 14:00.
+        # The confirmation car 1's start gave at 14:00:15 is cleared to see what the 14:00:30 poll alone decides
         two_cars_confirmed_after([(840, 0, "on", "off"), (840, 15, "on", "on")])
-        my_predbat.dynamic_load_car_confirmed_periods = {}
-        _sensors(my_predbat, "on", "off")
-        my_predbat.car_charging_slots = [list(one_minute), []]
-        my_predbat.dynamic_load_car_target(0, 840.5, _at(my_predbat, 840, 30))
-        failed |= _check("t57m stopped car 1 does not confirm car 0", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        for state_1 in ("off", "unavailable"):
+            my_predbat.dynamic_load_car_confirmed_periods = {}
+            my_predbat.dynamic_load_car_charge_from[1] = {"entity": my_predbat.dynamic_load_car_sensors[1], "charging": True, "idle_at": None, "from": my_predbat.midnight_utc + timedelta(minutes=840, seconds=15)}
+            _sensors(my_predbat, "on", state_1)
+            my_predbat.car_charging_slots = [list(one_minute), []]
+            my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
+            failed |= _check(
+                "t57m car 1 now {} does not confirm car 0".format(state_1),
+                my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()),
+                "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods),
+            )
 
         print("Test 57n: readings of a sensor the car no longer uses do not count")
         # Car 0 is seen starting at 14:00:15 on its old sensor (no dispatch yet), then car_charging_now is changed to an
