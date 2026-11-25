@@ -1345,16 +1345,6 @@ def _run_short_dispatch(my_predbat):
             my_predbat.dynamic_load_car_charge_from[0]["idle_at"] > my_predbat.midnight_utc + timedelta(minutes=my_predbat.dynamic_load_car_minute(my_predbat.now_utc_real)),
             "state {}".format(my_predbat.dynamic_load_car_charge_from),
         )
-        # A live fetch that took longer than a plan cycle says why a start was not recorded
-        logged = []
-        saved_log = my_predbat.log
-        try:
-            my_predbat.log = logged.append
-            my_predbat.now_utc_real = datetime.now(my_predbat.local_tz) - timedelta(minutes=6)
-            my_predbat.dynamic_load_car_check()
-        finally:
-            my_predbat.log = saved_log
-        failed |= _check("t57k4 slow fetch logged", any("not recorded by this plan update" in line for line in logged), "logged {}".format(logged))
         my_predbat.now_utc_real = datetime.now(my_predbat.local_tz) - timedelta(days=1)
         my_predbat.dynamic_load_car_check()
         failed |= _check(
@@ -1416,6 +1406,19 @@ def _run_short_dispatch(my_predbat):
         my_predbat.dynamic_load_car_refresh_sensors()
         my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 15))
         failed |= _check("t57n old sensor's idle reading does not count", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "state {}".format(my_predbat.dynamic_load_car_charge_from))
+
+        print("Test 57o: readings from before dynamic load was switched off do not count once it is back on")
+        confirmed_after(one_minute, [(840, 5, "off")])
+        my_predbat.octopus_intelligent_dynamic = False
+        _cycle(my_predbat, 840, 20, slots=one_minute)
+        failed |= _check("t57o switched off clears the readings", my_predbat.dynamic_load_car_charge_from == {}, "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        my_predbat.octopus_intelligent_dynamic = True
+        _sensor(my_predbat, "on")
+        my_predbat.car_charging_slots = [list(one_minute)]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 40))
+        failed |= _check(
+            "t57o charging after switching back on not a fresh start", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "state {}".format(my_predbat.dynamic_load_car_charge_from)
+        )
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
             if value is None:

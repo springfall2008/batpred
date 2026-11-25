@@ -1108,17 +1108,17 @@ class Plan:
         # the saved state, and the rates must follow the same decision as the slots
         self.dynamic_load_car_effective = {}
         minute = self.dynamic_load_car_minute(self.now_utc_real)
-        if save:
+        if save and not self.octopus_intelligent_dynamic:
+            # The poll stops reading too, so readings from before dynamic load was switched off must not count once it is on
+            self.dynamic_load_car_charge_from = {}
+        elif save:
             # The readings are dated when they are taken, not by this cycle's clock, which was read before the fetch:
             # the poll waits while the cycle on the boundary plans, so a start only the cycle sees must count (GH#6354)
-            live = read_at is None
-            if live:
+            if read_at is None:
                 read_at = datetime.now(self.local_tz)
             if self.now_utc_real <= read_at < self.now_utc_real + timedelta(minutes=PREDICT_STEP):
                 self.dynamic_load_car_note_readings(read_at)
             else:
-                if live and read_at >= self.now_utc_real:
-                    self.log("Warn: Octopus Intelligent: car_charging_now was read {} after the plan time, so a car starting to charge is not recorded by this plan update".format(read_at - self.now_utc_real))
                 # A clock of the caller's choosing (plan_once, a replay) cannot date them: only an idle reading is
                 # kept, dated by the earlier clock, which can only make a later start look less fresh
                 self.dynamic_load_car_note_readings(min(self.now_utc_real, read_at), idle_only=True)
