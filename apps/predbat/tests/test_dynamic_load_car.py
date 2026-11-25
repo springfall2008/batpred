@@ -1214,6 +1214,9 @@ def _run_short_dispatch(my_predbat):
         # stopped just before the boundary, so it does not confirm - except for a dispatch that starts and ends
         # within those minutes, which could otherwise never be confirmed (GH#6354)
         def confirmed_at(slots, minute, seconds):
+            """
+            Reset, then whether one poll at minute:seconds with car 0's sensor on confirms 14:00-14:30 for slots.
+            """
             _reset(my_predbat)
             _sensor(my_predbat, "on")
             my_predbat.car_charging_slots = [slots]
@@ -1235,6 +1238,23 @@ def _run_short_dispatch(my_predbat):
         print("Test 57d: the guard still applies to a dispatch running on from the previous half hour")
         # 13:50-14:00 and 14:00-14:01 touch, so they are one run starting at 13:50, not a dispatch starting at the boundary
         failed |= _check("t57d 13:50-14:01 not confirmed at 14:00:30", not confirmed_at([{"start": 830, "end": 840, "kwh": 1.0, "octopus": True}, {"start": 840, "end": 841, "kwh": 0.1, "octopus": True}], 840, 30))
+
+        print("Test 57e: a long dispatch whose start was trimmed to the boundary is still judged on its first start")
+        # After the 14:00 replan a 13:50-14:01 dispatch is only listed as 14:00-14:01; the run seen at 13:59 keeps its start
+        confirmed_at([{"start": 830, "end": 841, "kwh": 1.1, "octopus": True}], 839, 30)
+        my_predbat.car_charging_slots = [[{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
+        failed |= _check(
+            "t57e trimmed 13:50-14:01 not confirmed at 14:00:30", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods)
+        )
+
+        print("Test 57f: once confirmed, a 14:00-14:02 dispatch is no longer too short to be cheap (GH#6354)")
+        _reset(my_predbat)
+        _sensor(my_predbat, "on")
+        my_predbat.car_charging_slots = [[{"start": 840, "end": 842, "kwh": 0.2, "octopus": True}]]
+        failed |= _check("t57f too short before the car is seen", my_predbat.dispatch_too_short(0, 840, 842))
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 841, 45))
+        failed |= _check("t57f cheap once seen inside it", not my_predbat.dispatch_too_short(0, 840, 842))
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
             if value is None:

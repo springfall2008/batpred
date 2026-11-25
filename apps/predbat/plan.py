@@ -830,8 +830,10 @@ class Plan:
                 # either way. The load test only needs load that is not low to trust the slot, which a cooker or
                 # hot tub also gives; keeping the cheap rate needs load at the car's own charging rate.
                 # A dispatch that starts and ends inside those first minutes (GH#6354) would never confirm, so there
-                # a reading inside it counts: Octopus gives its exact times, and a dispatch running up to the boundary
-                # is merged into the same run (dynamic_load_car_dispatch()), so does not qualify
+                # a reading inside it counts, as Octopus gives its exact times. One running on from a dispatch before the
+                # boundary does not qualify: touching slots are one run (dynamic_load_car_dispatch()), and a start
+                # trimmed to the boundary keeps the run's first start (dynamic_load_car_run above). A sensor lagging a
+                # car that stopped a minute or more before the boundary can still confirm it - accepted, see GH#6354
                 if car_n in self.dynamic_load_car_sensors or self.dynamic_load_any_car_charging_now():
                     boundary_dispatch = dispatch_end <= dispatch_start - dispatch_start % 30 + DYNAMIC_LOAD_CAR_CONFIRM_MINUTES
                     seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES or boundary_dispatch else None
