@@ -1300,6 +1300,36 @@ def _run_short_dispatch(my_predbat):
         _sensor(my_predbat, "on")
         _cycle(my_predbat, 840, 20, slots=one_minute)
         failed |= _check("t57k cycle left the start unrecorded", not my_predbat.dynamic_load_car_charge_from[0]["charging"], "state {}".format(my_predbat.dynamic_load_car_charge_from))
+
+        print("Test 57l: the cycle that plans on the boundary bridges the poll's pause with its idle reading")
+        # Poll idle at 13:59:45; the 14:00 cycle reads idle and plans until 14:01:10 with the poll paused; the car
+        # started at 14:00:20 and the first poll after the plan sees it charging at 14:01:15, inside 14:00-14:02
+        two_minute_cycle = [{"start": 840, "end": 842, "kwh": 0.2, "octopus": True}]
+        confirmed_after(two_minute_cycle, [(839, 45, "off")])
+        _cycle(my_predbat, 840, 0, slots=two_minute_cycle)
+        _sensor(my_predbat, "on")
+        my_predbat.car_charging_slots = [list(two_minute_cycle)]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 841, 15))
+        failed |= _check("t57l confirmed after the plan", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        failed |= _check("t57l ...but not without the cycle's idle reading", not confirmed_after(two_minute_cycle, [(839, 45, "off"), (841, 15, "on")]))
+
+        print("Test 57m: a car seen starting that has since stopped no longer counts")
+        # Car 1 starts at 14:00:15 and stops by 14:00:30; car 0's sensor still shows a charge that ended before 14:00
+        two_cars_confirmed_after([(840, 0, "on", "off"), (840, 15, "on", "on")])
+        my_predbat.dynamic_load_car_confirmed_periods = {}
+        _sensors(my_predbat, "on", "off")
+        my_predbat.car_charging_slots = [list(one_minute), []]
+        my_predbat.dynamic_load_car_target(0, 840.5, _at(my_predbat, 840, 30))
+        failed |= _check("t57m stopped car 1 does not confirm car 0", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+
+        print("Test 57n: a car whose sensor has gone no longer counts")
+        two_cars_confirmed_after([(840, 0, "on", "off"), (840, 15, "on", "on")])
+        my_predbat.dynamic_load_car_confirmed_periods = {}
+        my_predbat.num_cars = 1
+        _sensor(my_predbat, "on")
+        my_predbat.car_charging_slots = [list(one_minute)]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
+        failed |= _check("t57n removed car 1 does not confirm car 0", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
             if value is None:
