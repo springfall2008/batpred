@@ -535,6 +535,31 @@ def test_teslemetry_automatic_config_wires_limits_without_overriding_apps_yaml()
         assert any("keeping your apps.yaml setting" in message and arg in message for message in api.log_messages), arg
 
 
+def test_teslemetry_automatic_config_binds_zero_battery_min_soc():
+    """automatic_config binds battery_min_soc to the Powerwall's 0% floor, so a set_reserve_min below Predbat's
+    4% default is not raised back to 4% - but a battery_min_soc the user set in apps.yaml wins."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_SUPPLY_METER
+    assert run_async(api.fetch_site_info()) is True
+    run_async(api.automatic_config())
+    assert api.args_set["battery_min_soc"] == [0], api.args_set.get("battery_min_soc")
+    # A constant Predbat supplies rather than a figure the device reports, so it is an entity value stand-in
+    # (as SolaX's is), not a rating - spec D14 and section 1.3
+    record = _discovery_tesla().build_discovery()["inverters"][0]
+    assert record["entities"]["battery_min_soc"] == {"value": 0, "access": "r"}, record["entities"].get("battery_min_soc")
+    assert "battery_min_soc" not in record["ratings"], record["ratings"]
+
+    api = MockTeslemetryAPI()
+    api.base.args_from_apps_yaml = {"battery_min_soc": 10}
+    api.base.apps_yaml_override_warned = set()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_SUPPLY_METER
+    assert run_async(api.fetch_site_info()) is True
+    run_async(api.automatic_config())
+    assert "battery_min_soc" not in api.args_set
+    assert any("keeping your apps.yaml setting" in message and "battery_min_soc" in message for message in api.log_messages)
+    print("  ✓ automatic_config binds battery_min_soc to 0% unless apps.yaml sets it")
+
+
 def test_teslemetry_live_status_tracks_last_soc():
     """fetch_live_status records the live SOC for the scheduler emulator."""
     api = MockTeslemetryAPI()
@@ -3834,6 +3859,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_site_info_charge_limit_per_unit_capped_at_nameplate()
     test_teslemetry_soc_max_from_gateway_energy()
     test_teslemetry_automatic_config_wires_limits_without_overriding_apps_yaml()
+    test_teslemetry_automatic_config_binds_zero_battery_min_soc()
     test_teslemetry_live_status_tracks_last_soc()
     test_teslemetry_time_to_minutes()
     test_teslemetry_in_window()

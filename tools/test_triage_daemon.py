@@ -1452,13 +1452,18 @@ class McpPermissionTests(unittest.TestCase):
                 self.assertIn("mcp__gitnexus__*", getattr(triage_daemon, name).split(","))
 
     def test_every_flow_may_use_shared_memory_but_never_delete_from_it(self):
-        """Recall and store, yes; delete and prune are denied, and deny wins over allow."""
+        """Recall, store, link and claim, yes; delete, prune and both kinds of unlinking are denied, and deny wins over allow."""
         for name in self.FLOWS:
             with self.subTest(flow=name):
                 self.assertIn("mcp__shared-memory__*", getattr(triage_daemon, name).split(","))
                 denied = getattr(triage_daemon, "DIS" + name).split(",")
                 self.assertIn("mcp__shared-memory__delete", denied)
                 self.assertIn("mcp__shared-memory__prune", denied)
+                self.assertIn("mcp__shared-memory__unrelate_memories", denied)
+                self.assertIn("mcp__shared-memory__unlink_memory", denied)
+                # Claiming and releasing stay allowed: the bot claims a ticket while it works and releases it when done.
+                self.assertNotIn("mcp__shared-memory__claim_memory", denied)
+                self.assertNotIn("mcp__shared-memory__release_claim", denied)
 
     def test_no_flow_gets_a_blanket_mcp_grant(self):
         """A blanket grant would reach the operator's Slack and Drive servers."""
@@ -1503,7 +1508,7 @@ class CleanupModelTests(unittest.TestCase):
         contributor's deliberate spelling on circular evidence (#4846), and improvising a push
         to main after a fork branch refused one."""
         source = Path(triage_daemon.__file__).read_text()
-        start = source.index("def cleanup_pr(pr_number):")
+        start = source.index("def cleanup_pr(pr_number, force=False):")
         block = source[start : source.index("\ndef ", start + 10)]
         self.assertNotIn("review_only=True", block)
 
@@ -2026,12 +2031,17 @@ class ProcessBotPrIssueTests(unittest.TestCase):
             "mark_pr_opened",
             "mark_pr_failed",
             "mark_pr_not_actionable",
+            "read_claim_blocked",
+            "mark_pr_claimed",
+            "remove_force_label",
         ]:
             patcher = patch.object(triage_daemon, name)
             self.patches[name] = patcher.start()
             self.addCleanup(patcher.stop)
         # Most tests don't exercise the actionable check; default it out of the way.
         self.patches["is_actionable"].return_value = True
+        # Nobody else holds the claim unless a test says so.
+        self.patches["read_claim_blocked"].return_value = None
 
     def test_marks_opened_when_pr_already_exists_on_entry(self):
         """A pre-existing PR (e.g. from a crashed prior run that never reached the
@@ -2067,6 +2077,32 @@ class ProcessBotPrIssueTests(unittest.TestCase):
         triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
         self.patches["mark_pr_opened"].assert_called_once_with(4720, cleanup=True, opened_by_bot=True)
         self.patches["mark_pr_failed"].assert_not_called()
+
+    def test_stops_as_claimed_when_someone_else_holds_the_issue(self):
+        """The skill found another member's claim and wrote the stop file: BOT_PR_CLAIMED, not failed."""
+        blocked = {"holder": "trefor", "until": "2026-11-23T10:00:00Z", "description": "fixing the parser"}
+        self.patches["has_existing_pr"].side_effect = [False, False]
+        self.patches["ensure_triaged"].return_value = True
+        self.patches["read_claim_blocked"].return_value = blocked
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
+        self.patches["mark_pr_claimed"].assert_called_once_with(4720, blocked)
+        self.patches["mark_pr_failed"].assert_not_called()
+        self.patches["mark_pr_opened"].assert_not_called()
+
+    def test_bot_force_forces_the_claim_and_is_removed_after_the_run(self):
+        """BOT_FORCE passes force to the skill once, then the label goes so a later run doesn't force again."""
+        self.patches["has_existing_pr"].side_effect = [False, True]
+        self.patches["ensure_triaged"].return_value = True
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [{"name": "BOT_FORCE"}], "title": "Solis TOU bit refused"})
+        self.patches["create_pr"].assert_called_once_with(4720, force=True)
+        self.patches["remove_force_label"].assert_called_once_with("issue", 4720)
+
+    def test_without_bot_force_nothing_is_forced_or_removed(self):
+        self.patches["has_existing_pr"].side_effect = [False, True]
+        self.patches["ensure_triaged"].return_value = True
+        triage_daemon.process_bot_pr_issue({"number": 4720, "labels": [], "title": "Solis TOU bit refused"})
+        self.patches["create_pr"].assert_called_once_with(4720)
+        self.patches["remove_force_label"].assert_not_called()
 
     def test_marks_failed_when_no_pr_exists_afterwards(self):
         """If no PR exists after create_pr() runs (quality gate failed), swap to BOT_PR_FAILED."""
@@ -3100,12 +3136,25 @@ class ForkHeadSkipTests(unittest.TestCase):
     def setUp(self):
         """Patch every collaborator process_bot_cleanup_pr() calls."""
         self.patches = {}
-        for name in ["sync_repo", "reset_scratch", "cleanup_pr", "unfinished_cleanup_reason", "remove_pr_cleanup_label", "mark_pr_cleanup_failed", "mark_pr_cleanup_unsupported"]:
+        for name in [
+            "sync_repo",
+            "reset_scratch",
+            "cleanup_pr",
+            "unfinished_cleanup_reason",
+            "remove_pr_cleanup_label",
+            "mark_pr_cleanup_failed",
+            "mark_pr_cleanup_unsupported",
+            "read_claim_blocked",
+            "mark_pr_cleanup_claimed",
+            "remove_force_label",
+        ]:
             patcher = patch.object(triage_daemon, name)
             self.patches[name] = patcher.start()
             self.addCleanup(patcher.stop)
         # A finished run by default - the tests that want an unfinished one say so
         self.patches["unfinished_cleanup_reason"].return_value = ""
+        # Nobody else holds the claim unless a test says so.
+        self.patches["read_claim_blocked"].return_value = None
 
     def test_a_fork_head_pr_is_never_checked_out_or_cleaned(self):
         """Nothing should run against a PR whose fixes could not be pushed back anyway."""
@@ -3127,12 +3176,25 @@ class ProcessBotCleanupPrTests(unittest.TestCase):
     def setUp(self):
         """Patch every collaborator process_bot_cleanup_pr() calls."""
         self.patches = {}
-        for name in ["sync_repo", "reset_scratch", "cleanup_pr", "unfinished_cleanup_reason", "remove_pr_cleanup_label", "mark_pr_cleanup_failed", "mark_pr_cleanup_unsupported"]:
+        for name in [
+            "sync_repo",
+            "reset_scratch",
+            "cleanup_pr",
+            "unfinished_cleanup_reason",
+            "remove_pr_cleanup_label",
+            "mark_pr_cleanup_failed",
+            "mark_pr_cleanup_unsupported",
+            "read_claim_blocked",
+            "mark_pr_cleanup_claimed",
+            "remove_force_label",
+        ]:
             patcher = patch.object(triage_daemon, name)
             self.patches[name] = patcher.start()
             self.addCleanup(patcher.stop)
         # A finished run by default - the tests that want an unfinished one say so
         self.patches["unfinished_cleanup_reason"].return_value = ""
+        # Nobody else holds the claim unless a test says so.
+        self.patches["read_claim_blocked"].return_value = None
 
     def test_cleans_up_then_removes_the_label(self):
         """A successful cleanup syncs, cleans up, then removes BOT_CLEANUP."""
@@ -3142,6 +3204,25 @@ class ProcessBotCleanupPrTests(unittest.TestCase):
         self.patches["cleanup_pr"].assert_called_once_with(4742)
         self.patches["remove_pr_cleanup_label"].assert_called_once_with(4742)
         self.patches["mark_pr_cleanup_failed"].assert_not_called()
+
+    def test_stops_as_claimed_when_someone_else_holds_the_pr(self):
+        """The skill found another member's claim on the PR's memory: BOT_CLEANUP_CLAIMED, label not just removed."""
+        blocked = {"holder": "trefor", "until": None, "description": "reworking this myself"}
+        self.patches["read_claim_blocked"].return_value = blocked
+        triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings"})
+        self.patches["mark_pr_cleanup_claimed"].assert_called_once_with(4742, blocked)
+        self.patches["remove_pr_cleanup_label"].assert_not_called()
+        self.patches["mark_pr_cleanup_failed"].assert_not_called()
+
+    def test_bot_force_on_the_pr_forces_the_cleanup_claim_once(self):
+        triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings", "labels": [{"name": "BOT_FORCE"}]})
+        self.patches["cleanup_pr"].assert_called_once_with(4742, force=True)
+        self.patches["remove_force_label"].assert_called_once_with("pr", 4742)
+
+    def test_bot_force_is_removed_even_when_the_cleanup_fails(self):
+        self.patches["cleanup_pr"].side_effect = subprocess.CalledProcessError(1, ["claude"])
+        triage_daemon.process_bot_cleanup_pr({"number": 4742, "title": "Add confirmed findings", "labels": [{"name": "BOT_FORCE"}]})
+        self.patches["remove_force_label"].assert_called_once_with("pr", 4742)
 
     def test_failed_cleanup_marks_failed_instead_of_removing_the_label(self):
         """A cleanup_pr() failure swaps to BOT_FAILED rather than retrying next poll."""
@@ -3846,3 +3927,92 @@ class FlowFailedRaisedTests(DaemonPathsTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ClaimHandlingTests(unittest.TestCase):
+    """The stop file a skill writes when another member holds the claim, and the comments and
+    label swaps that follow it."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = patch.object(triage_daemon, "SCRATCH_DIR", Path(self.tmp.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_no_stop_file_means_not_blocked(self):
+        self.assertIsNone(triage_daemon.read_claim_blocked())
+
+    def test_the_stop_file_is_read(self):
+        blocked = {"holder": "trefor", "until": "2026-11-23T10:00:00Z", "description": "fixing the parser"}
+        (Path(self.tmp.name) / "claim-blocked.json").write_text(json.dumps(blocked))
+        self.assertEqual(triage_daemon.read_claim_blocked(), blocked)
+
+    def test_an_unreadable_stop_file_still_means_blocked(self):
+        """The skill decided to stop; a malformed file must not turn that into a PR attempt or a failure."""
+        (Path(self.tmp.name) / "claim-blocked.json").write_text("not json")
+        self.assertEqual(triage_daemon.read_claim_blocked(), {"holder": "another member", "until": None, "description": ""})
+
+    def test_the_note_names_the_holder_the_end_and_how_to_take_over(self):
+        note = triage_daemon.claim_blocked_note({"holder": "trefor", "until": "2026-11-23T10:00:00Z", "description": "fixing the parser"}, "BOT_PR")
+        for part in ["trefor", "until 2026-11-23T10:00:00Z", "fixing the parser", "`BOT_FORCE`", "`BOT_PR`"]:
+            self.assertIn(part, note)
+
+    def test_an_indefinite_claim_reads_as_such_and_a_long_reason_is_cut(self):
+        note = triage_daemon.claim_blocked_note({"holder": "trefor", "until": None, "description": "x" * 500 + "\nsecond line"}, "BOT_CLEANUP")
+        self.assertIn("indefinitely", note)
+        self.assertNotIn("\n", note.split("Reason:")[-1].split("To take over")[0].strip())
+        self.assertLess(len(note), 700)
+
+    def test_force_label_detection(self):
+        self.assertTrue(triage_daemon.has_force_label([{"name": "BOT_PR"}, {"name": "BOT_FORCE"}]))
+        self.assertFalse(triage_daemon.has_force_label([{"name": "BOT_PR"}]))
+        self.assertFalse(triage_daemon.has_force_label(None))
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_claimed_comments_then_swaps_the_label(self, mock_run):
+        triage_daemon.mark_pr_claimed(4720, {"holder": "trefor", "until": None, "description": "mine"})
+        comment, edit = (c[0][0] for c in mock_run.call_args_list)
+        self.assertEqual(comment[:4], ["gh", "issue", "comment", "4720"])
+        self.assertIn("trefor", comment[comment.index("--body") + 1])
+        self.assertEqual(edit[:4], ["gh", "issue", "edit", "4720"])
+        self.assertEqual(edit[edit.index("--remove-label") + 1], "BOT_PR")
+        self.assertEqual(edit[edit.index("--add-label") + 1], "BOT_PR_CLAIMED")
+
+    @patch("triage_daemon.subprocess.run")
+    def test_mark_pr_cleanup_claimed_comments_then_swaps_the_label(self, mock_run):
+        triage_daemon.mark_pr_cleanup_claimed(4742, {"holder": "trefor", "until": None, "description": "mine"})
+        comment, edit = (c[0][0] for c in mock_run.call_args_list)
+        self.assertEqual(comment[:4], ["gh", "pr", "comment", "4742"])
+        self.assertEqual(edit[:4], ["gh", "pr", "edit", "4742"])
+        self.assertEqual(edit[edit.index("--remove-label") + 1], "BOT_CLEANUP")
+        self.assertEqual(edit[edit.index("--add-label") + 1], "BOT_CLEANUP_CLAIMED")
+
+    @patch("triage_daemon.subprocess.run")
+    def test_remove_force_label_is_best_effort(self, mock_run):
+        """Removing BOT_FORCE must never fail the flow that has already run."""
+        triage_daemon.remove_force_label("issue", 4720)
+        cmd = mock_run.call_args[0][0]
+        self.assertEqual(cmd[:4], ["gh", "issue", "edit", "4720"])
+        self.assertEqual(cmd[cmd.index("--remove-label") + 1], "BOT_FORCE")
+        self.assertFalse(mock_run.call_args.kwargs.get("check", False))
+
+
+class ForceArgumentTests(DaemonPathsTestCase):
+    """create_pr() and cleanup_pr() pass force=true to the skill only when asked."""
+
+    @patch("triage_daemon.subprocess.run")
+    def test_create_pr_passes_force_only_when_asked(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.create_pr(4720)
+        self.assertNotIn("force=true", mock_run.call_args[0][0][2])
+        triage_daemon.create_pr(4720, force=True)
+        self.assertIn("force=true", mock_run.call_args[0][0][2])
+
+    @patch("triage_daemon.subprocess.run")
+    def test_cleanup_pr_passes_force_only_when_asked(self, mock_run):
+        mock_run.return_value = MagicMock(returncode=0)
+        triage_daemon.cleanup_pr(4742)
+        self.assertNotIn("force=true", mock_run.call_args[0][0][2])
+        triage_daemon.cleanup_pr(4742, force=True)
+        self.assertIn("force=true", mock_run.call_args[0][0][2])
