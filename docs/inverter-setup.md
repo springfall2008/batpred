@@ -1805,7 +1805,7 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
 - make sure the inverter is already integrated into Home Assistant. The Predbat configuration has been developed with the [SigEnergy local modbus](https://github.com/TypQxQ/Sigenergy-Local-Modbus) integration (the Python version of the Sigenergy HA integration).
 - Copy the template [sigenergy_sigenstor.yaml](https://raw.githubusercontent.com/springfall2008/batpred/main/templates/sigenergy_sigenstor.yaml) template over your `apps.yaml`, and edit for your system.
 
-- All the Sigenergy entities referenced in `apps.yaml` need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
+- All the Sigenergy entities referenced in `apps.yaml` and in the automations below need to be enabled for Predbat to use them. The following are disabled by default and will need enabling:
 
     - sensor.sigen_plant_daily_load_consumption
     - number.sigen_plant_ess_backup_state_of_charge
@@ -1814,6 +1814,12 @@ To integrate your Sigenergy Sigenstor inverter with Predbat, you will need to fo
     - number.sigen_plant_ess_max_charging_limit
     - number.sigen_plant_ess_max_discharging_limit
     - sensor.sigen_plant_available_max_active_power
+    - select.sigen_plant_remote_ems_control_mode ("Remote EMS Control Mode")
+    - number.sigen_plant_grid_import_limitation ("Grid Import Limitation")
+
+    Without **select.sigen_plant_remote_ems_control_mode** the mode automation below can't set the plant's mode, and fails before it resets the cut-offs.
+    With Remote EMS on, the plant is left in a remote mode Predbat never asked for, which can leave the battery charging from solar while the grid supplies the house
+    (see [batpred#6357](https://github.com/springfall2008/batpred/issues/6357)). The select is only available while Remote EMS is on, so it shows as unavailable while Remote EMS is off.
 
 - Turn on **switch.sigen_plant_remote_ems_controlled_by_home_assistant** ("Remote EMS (Controlled by Home Assistant)"). While it is off the plant ignores **select.sigen_plant_remote_ems_control_mode** entirely and runs its own logic,
 so none of the mode changes made by the automations below take effect. The cut-off and limit numbers are still obeyed without it, which can make a setup look partly working.
