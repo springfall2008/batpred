@@ -583,6 +583,33 @@ class Plan:
         # required_unit: a charging power sensor is compared in watts (see car_charging_now_value())
         return self.car_charging_now_value(self.resolve_arg("car_charging_now", entity_id, default=None, required_unit="W"))
 
+    def dynamic_load_car_note_reading(self, car_n, now):
+        """
+        Track when car_n's car_charging_now last went from not charging to charging, for
+        dynamic_load_car_fresh_start(). A "not charging" reading leaves None (seen idle); the first "charging"
+        reading after it records now. No entry at all - no idle reading since Predbat started - is left alone,
+        as the charge may have begun before the boundary. "unknown"/"unavailable" changes nothing.
+        """
+        if car_n not in self.dynamic_load_car_sensors:
+            return
+        reading = self.car_charging_now_reading(car_n)
+        if reading is False:
+            self.dynamic_load_car_charge_from[car_n] = None
+        elif reading and car_n in self.dynamic_load_car_charge_from and self.dynamic_load_car_charge_from[car_n] is None:
+            self.dynamic_load_car_charge_from[car_n] = now
+
+    def dynamic_load_car_fresh_start(self, minute):
+        """
+        Whether every car whose car_charging_now reads charging at minute was seen to start charging since
+        the half hour began (dynamic_load_car_note_reading()). A sensor can still read charging for a car
+        that stopped just before the boundary, which is why readings early in a half hour do not confirm it -
+        but such a sensor never reads idle and then charging again. A car charging since before the
+        boundary, or since before Predbat started, is not a fresh start.
+        """
+        period_start = self.midnight_utc + timedelta(minutes=minute - minute % 30)
+        charging = [car_n for car_n in self.dynamic_load_car_sensors if self.car_charging_now_reading(car_n)]
+        return bool(charging) and all(self.dynamic_load_car_charge_from.get(car_n) is not None and self.dynamic_load_car_charge_from[car_n] >= period_start for car_n in charging)
+
     def dynamic_load_car_minute(self, now):
         """
         now as minutes since midnight_utc on the exact clock (clock skew added, not floored to PREDICT_STEP as
@@ -797,6 +824,8 @@ class Plan:
         active = self.dynamic_load_car_active(car_n)
         default_cancelled = active and not self.dynamic_load_car_trusted_by_default(car_n)
         cancelled = self.dynamic_load_car_cancelled.get(car_n, default_cancelled)
+        if record:
+            self.dynamic_load_car_note_reading(car_n, now)
         if self.car_force_held(car_n, now):
             if record:
                 self.dynamic_load_car_since.pop(car_n, None)
@@ -829,14 +858,10 @@ class Plan:
                 # from DYNAMIC_LOAD_CAR_CONFIRM_MINUTES into the half hour - the slot is trusted straight away
                 # either way. The load test only needs load that is not low to trust the slot, which a cooker or
                 # hot tub also gives; keeping the cheap rate needs load at the car's own charging rate.
-                # A dispatch that starts and ends inside those first minutes (GH#6354) would never confirm, so there
-                # a reading inside it counts, as Octopus gives its exact times. One running on from a dispatch before the
-                # boundary does not qualify: touching slots are one run (dynamic_load_car_dispatch()), and a start
-                # trimmed to the boundary keeps the run's first start (dynamic_load_car_run above). A sensor lagging a
-                # car that stopped a minute or more before the boundary can still confirm it - accepted, see GH#6354
+                # A charge the sensor saw start in this half hour cannot be one that stopped before it, so that
+                # confirms in the first minutes too - otherwise a dispatch over by then could never confirm (GH#6354)
                 if car_n in self.dynamic_load_car_sensors or self.dynamic_load_any_car_charging_now():
-                    boundary_dispatch = dispatch_end <= dispatch_start - dispatch_start % 30 + DYNAMIC_LOAD_CAR_CONFIRM_MINUTES
-                    seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES or boundary_dispatch else None
+                    seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES or self.dynamic_load_car_fresh_start(minute) else None
                 elif self.load_last_period >= self.car_charging_threshold_kw():
                     seen_minute = self.minutes_now - 1
                 else:

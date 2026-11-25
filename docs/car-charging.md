@@ -881,7 +881,7 @@ With **car_charging_now**, Predbat checks the sensor every 15 seconds between pl
 
 Octopus sometimes issues dispatches only a minute or two long, which the car is unlikely to charge in.
 A dispatch shorter than 5 minutes is never treated as cheap for the house, and does not use up any of the day's low-rate allowance (**octopus_slot_max**), unless Predbat sees the car charging during the half hour it falls in. Then that whole half hour is cheap.
-A **car_charging_now** reading in the first 2 minutes of a half hour normally does not count, because the sensor can still show a car that stopped just before the boundary. The exception is a dispatch that starts and ends inside those 2 minutes and does not run on from one before it: a reading taken during it counts, as no later reading could.
+A **car_charging_now** reading in the first 2 minutes of a half hour normally does not count, because the sensor can still show a car that stopped just before the boundary. The exception is a charge Predbat saw start since the half hour began - **car_charging_now** read not charging, then charging. That counts at once, so a dispatch only a minute or two long at the start of a half hour can still be confirmed. Just after a restart, before the sensor has been seen not charging, the 2 minutes apply.
 That check needs **switch.predbat_octopus_intelligent_dynamic** On. In practice it also needs a **car_charging_now** sensor, because only the 15-second check is quick enough to catch a dispatch that short.
 Without one, very short dispatches always stay at the normal rate.
 The car's own plan still includes them, priced at the normal rate.

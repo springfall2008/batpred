@@ -47,6 +47,7 @@ STATE_FIELDS = (
     "metric_dynamic_load_adjust",
     "octopus_intelligent_dynamic",
     "dynamic_load_car_run",
+    "dynamic_load_car_charge_from",
     "dynamic_load_car_confirmed",
     "dynamic_load_car_confirmed_periods",
     "octopus_slots_planned",
@@ -120,6 +121,7 @@ def _reset(my_predbat):
     my_predbat.metric_dynamic_load_adjust = False
     my_predbat.octopus_intelligent_dynamic = True
     my_predbat.dynamic_load_car_run = {}
+    my_predbat.dynamic_load_car_charge_from = {}
     my_predbat.dynamic_load_car_confirmed = {}
     my_predbat.dynamic_load_car_confirmed_periods = {}
     my_predbat.octopus_slots_planned = {}
@@ -1211,49 +1213,50 @@ def _run_short_dispatch(my_predbat):
         failed |= _check("t56 old half hour pruned", old not in my_predbat.dynamic_load_car_confirmed_periods[0], "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
 
         # A sensor reading in the first DYNAMIC_LOAD_CAR_CONFIRM_MINUTES of a half hour can still show a car that
-        # stopped just before the boundary, so it does not confirm - except for a dispatch that starts and ends
-        # within those minutes, which could otherwise never be confirmed (GH#6354)
-        def confirmed_at(slots, minute, seconds):
+        # stopped just before the boundary, so it does not confirm - unless the sensor was seen to go from idle to
+        # charging since the boundary, which a stopped car's sensor never does (GH#6354)
+        def confirmed_after(slots, readings):
             """
-            Reset, then whether one poll at minute:seconds with car 0's sensor on confirms 14:00-14:30 for slots.
+            Reset, then poll car 0 at each (minute, seconds, sensor state) in turn with slots, and return whether
+            14:00-14:30 was confirmed.
             """
             _reset(my_predbat)
-            _sensor(my_predbat, "on")
             my_predbat.car_charging_slots = [slots]
-            my_predbat.dynamic_load_car_poll(_at(my_predbat, minute, seconds))
+            for minute, seconds, state in readings:
+                _sensor(my_predbat, state)
+                my_predbat.dynamic_load_car_poll(_at(my_predbat, minute, seconds))
             return my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set())
 
-        print("Test 57: a dispatch inside the first 2 minutes of a half hour is confirmed by a reading inside it")
-        failed |= _check("t57 14:00-14:01 confirmed at 14:00:30", confirmed_at([{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}], 840, 30))
-        failed |= _check("t57 14:00-14:02 confirmed at 14:01:45", confirmed_at([{"start": 840, "end": 842, "kwh": 0.2, "octopus": True}], 841, 45))
-        failed |= _check("t57 14:01-14:02 confirmed at 14:01:15", confirmed_at([{"start": 841, "end": 842, "kwh": 0.1, "octopus": True}], 841, 15))
+        one_minute = [{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]
+        two_minute = [{"start": 840, "end": 842, "kwh": 0.2, "octopus": True}]
+        print("Test 57: a charge seen starting since the boundary confirms in the first 2 minutes")
+        failed |= _check("t57 14:00-14:01 idle 14:00:10, charging 14:00:30", confirmed_after(one_minute, [(840, 10, "off"), (840, 30, "on")]))
+        failed |= _check("t57 14:00-14:02 idle to 14:01:30, charging 14:01:45 (the #6354 log)", confirmed_after(two_minute, [(840, 15, "off"), (841, 30, "off"), (841, 45, "on")]))
+        failed |= _check("t57 14:00-14:01 idle 13:59:45, charging 14:00:00", confirmed_after(one_minute, [(839, 45, "off"), (840, 0, "on")]))
+        failed |= _check("t57 14:00-14:03 idle 14:00:10, charging 14:01:30", confirmed_after([{"start": 840, "end": 843, "kwh": 0.3, "octopus": True}], [(840, 10, "off"), (841, 30, "on")]))
 
         print("Test 57b: the car must be seen inside the dispatch - a reading after it ends does not confirm")
-        failed |= _check("t57b 14:00-14:02 not confirmed at 14:02:30", not confirmed_at([{"start": 840, "end": 842, "kwh": 0.2, "octopus": True}], 842, 30))
+        failed |= _check("t57b 14:00-14:02 not confirmed at 14:02:30", not confirmed_after(two_minute, [(840, 15, "off"), (842, 30, "on")]))
 
-        print("Test 57c: the guard still applies to a dispatch that runs past the first 2 minutes")
-        failed |= _check("t57c 14:00-14:03 not confirmed at 14:01:30", not confirmed_at([{"start": 840, "end": 843, "kwh": 0.3, "octopus": True}], 841, 30))
-        failed |= _check("t57c 14:00-14:03 confirmed at 14:02:30", confirmed_at([{"start": 840, "end": 843, "kwh": 0.3, "octopus": True}], 842, 30))
+        print("Test 57c: a sensor still showing a car that stopped before the boundary does not confirm")
+        # A separate 13:30-13:59 dispatch: the car stops at 13:59 but the sensor still reads charging at 14:00:30
+        lagging = [{"start": 810, "end": 839, "kwh": 3.0, "octopus": True}] + one_minute
+        failed |= _check("t57c charging since 13:58:30 not confirmed at 14:00:30", not confirmed_after(lagging, [(838, 0, "off"), (838, 30, "on"), (840, 30, "on")]))
+        # ...the same for a dispatch running across the boundary, whatever its slots now say
+        failed |= _check("t57c 13:50-14:01 charging since 13:50 not confirmed at 14:00:30", not confirmed_after(one_minute, [(830, 0, "off"), (830, 30, "on"), (840, 30, "on")]))
 
-        print("Test 57d: the guard still applies to a dispatch running on from the previous half hour")
-        # 13:50-14:00 and 14:00-14:01 touch, so they are one run starting at 13:50, not a dispatch starting at the boundary
-        failed |= _check("t57d 13:50-14:01 not confirmed at 14:00:30", not confirmed_at([{"start": 830, "end": 840, "kwh": 1.0, "octopus": True}, {"start": 840, "end": 841, "kwh": 0.1, "octopus": True}], 840, 30))
+        print("Test 57d: with no idle reading since Predbat started, the guard stays")
+        failed |= _check("t57d charging at the first reading not confirmed at 14:00:30", not confirmed_after(one_minute, [(840, 30, "on")]))
+        failed |= _check("t57d ...but still confirmed from 14:02", confirmed_after([{"start": 840, "end": 843, "kwh": 0.3, "octopus": True}], [(842, 15, "on")]))
 
-        print("Test 57e: a long dispatch whose start was trimmed to the boundary is still judged on its first start")
-        # After the 14:00 replan a 13:50-14:01 dispatch is only listed as 14:00-14:01; the run seen at 13:59 keeps its start
-        confirmed_at([{"start": 830, "end": 841, "kwh": 1.1, "octopus": True}], 839, 30)
-        my_predbat.car_charging_slots = [[{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]]
-        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
-        failed |= _check(
-            "t57e trimmed 13:50-14:01 not confirmed at 14:00:30", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods)
-        )
+        print("Test 57e: an unavailable reading is no evidence of the car going idle")
+        failed |= _check("t57e unavailable then charging not confirmed at 14:00:30", not confirmed_after(one_minute, [(840, 10, "unavailable"), (840, 30, "on")]))
 
         print("Test 57f: once confirmed, a 14:00-14:02 dispatch is no longer too short to be cheap (GH#6354)")
         _reset(my_predbat)
-        _sensor(my_predbat, "on")
-        my_predbat.car_charging_slots = [[{"start": 840, "end": 842, "kwh": 0.2, "octopus": True}]]
+        my_predbat.car_charging_slots = [list(two_minute)]
         failed |= _check("t57f too short before the car is seen", my_predbat.dispatch_too_short(0, 840, 842))
-        my_predbat.dynamic_load_car_poll(_at(my_predbat, 841, 45))
+        confirmed_after(two_minute, [(840, 15, "off"), (841, 45, "on")])
         failed |= _check("t57f cheap once seen inside it", not my_predbat.dispatch_too_short(0, 840, 842))
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
@@ -1273,6 +1276,7 @@ def _restart(my_predbat):
     my_predbat.dynamic_load_car_since = {}
     my_predbat.dynamic_load_car_cancelled = {}
     my_predbat.dynamic_load_car_run = {}
+    my_predbat.dynamic_load_car_charge_from = {}
     my_predbat.dynamic_load_car_saved = {}
     my_predbat.dynamic_load_car_load()
 
