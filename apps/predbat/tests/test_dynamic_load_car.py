@@ -1345,6 +1345,16 @@ def _run_short_dispatch(my_predbat):
             my_predbat.dynamic_load_car_charge_from[0]["idle_at"] > my_predbat.midnight_utc + timedelta(minutes=my_predbat.dynamic_load_car_minute(my_predbat.now_utc_real)),
             "state {}".format(my_predbat.dynamic_load_car_charge_from),
         )
+        # A live fetch that took longer than a plan cycle says why a start was not recorded
+        logged = []
+        saved_log = my_predbat.log
+        try:
+            my_predbat.log = logged.append
+            my_predbat.now_utc_real = datetime.now(my_predbat.local_tz) - timedelta(minutes=6)
+            my_predbat.dynamic_load_car_check()
+        finally:
+            my_predbat.log = saved_log
+        failed |= _check("t57k4 slow fetch logged", any("not recorded by this plan update" in line for line in logged), "logged {}".format(logged))
         my_predbat.now_utc_real = datetime.now(my_predbat.local_tz) - timedelta(days=1)
         my_predbat.dynamic_load_car_check()
         failed |= _check(
@@ -1396,6 +1406,16 @@ def _run_short_dispatch(my_predbat):
         my_predbat.car_charging_slots = [list(one_minute)]
         my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
         failed |= _check("t57n changed sensor not confirmed at 14:00:30", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        # ...nor does the old sensor's idle reading make the new one's first charging reading a start
+        _reset(my_predbat)
+        my_predbat.car_charging_slots = [list(one_minute)]
+        _sensor(my_predbat, "off")
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 5))
+        my_predbat.args["car_charging_now"] = SENSOR_1
+        my_predbat.ha_interface.dummy_items[SENSOR_1] = "on"
+        my_predbat.dynamic_load_car_refresh_sensors()
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 15))
+        failed |= _check("t57n old sensor's idle reading does not count", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "state {}".format(my_predbat.dynamic_load_car_charge_from))
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
             if value is None:

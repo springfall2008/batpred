@@ -883,7 +883,7 @@ class Plan:
                 # from DYNAMIC_LOAD_CAR_CONFIRM_MINUTES into the half hour - the slot is trusted straight away
                 # either way. The load test only needs load that is not low to trust the slot, which a cooker or
                 # hot tub also gives; keeping the cheap rate needs load at the car's own charging rate.
-                # A charge the poll saw start in this half hour is not one that stopped before it, so that confirms
+                # A charge seen to start in this half hour is not one that stopped before it, so that confirms
                 # in the first minutes too - otherwise a dispatch over by then could never confirm (GH#6354)
                 if car_n in self.dynamic_load_car_sensors or self.dynamic_load_any_car_charging_now():
                     seen_minute = minute if minute % 30 >= DYNAMIC_LOAD_CAR_CONFIRM_MINUTES or self.dynamic_load_car_fresh_start(minute, dispatch_end) else None
@@ -925,8 +925,10 @@ class Plan:
         charging since" clock is deliberately not kept: a restart is a stretch with no evidence, after which
         the running check starts the grace period afresh too (see dynamic_load_car_target()) - the car may
         have charged in it - and the clock changes with every flap of an unreliable sensor, which would
-        rewrite the store every 15 seconds. The rest (which cars have a sensor, what has been warned about,
-        this cycle's decision) is rebuilt every cycle.
+        rewrite the store every 15 seconds. Nor is when each car was seen to start charging
+        (dynamic_load_car_charge_from): an idle reading from before a restart would let a sensor still showing
+        a charge that ended before the boundary pass as a fresh start (GH#6354). The rest (which cars have a
+        sensor, what has been warned about, this cycle's decision) is rebuilt every cycle.
         """
         now_minute = self.dynamic_load_car_minute(self.now_utc_real)
         confirmed_cars = {car_n: confirmed for car_n, confirmed in self.dynamic_load_car_confirmed.items() if self.dynamic_load_car_minutes_of(confirmed) > now_minute}
@@ -1109,11 +1111,14 @@ class Plan:
         if save:
             # The readings are dated when they are taken, not by this cycle's clock, which was read before the fetch:
             # the poll waits while the cycle on the boundary plans, so a start only the cycle sees must count (GH#6354)
-            if read_at is None:
+            live = read_at is None
+            if live:
                 read_at = datetime.now(self.local_tz)
             if self.now_utc_real <= read_at < self.now_utc_real + timedelta(minutes=PREDICT_STEP):
                 self.dynamic_load_car_note_readings(read_at)
             else:
+                if live and read_at >= self.now_utc_real:
+                    self.log("Warn: Octopus Intelligent: car_charging_now was read {} after the plan time, so a car starting to charge is not recorded by this plan update".format(read_at - self.now_utc_real))
                 # A clock of the caller's choosing (plan_once, a replay) cannot date them: only an idle reading is
                 # kept, dated by the earlier clock, which can only make a later start look less fresh
                 self.dynamic_load_car_note_readings(min(self.now_utc_real, read_at), idle_only=True)
