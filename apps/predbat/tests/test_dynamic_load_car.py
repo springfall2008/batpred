@@ -69,6 +69,7 @@ STATE_FIELDS = (
     "load_minutes",
     "octopus_intelligent_trust_slots",
     "car_force_hold_until",
+    "plan_replace_forced",
 )
 
 
@@ -171,8 +172,12 @@ def _run(my_predbat):
         failed |= _check("t1 first sighting", not changed and _kwh(my_predbat) == [3.5, 3.5], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
         changed = _cycle(my_predbat, 841, 30)
         failed |= _check("t1 inside grace", not changed and _kwh(my_predbat) == [3.5, 3.5], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        # Nothing withdrawn yet, so the incumbent plan is still comparable and must compete on its metric
+        failed |= _check("t1 no forced replace inside grace", not my_predbat.plan_replace_forced, "forced {}".format(my_predbat.plan_replace_forced))
         changed = _cycle(my_predbat, 842, 10)
         failed |= _check("t1 after grace", changed and _kwh(my_predbat) == [0, 0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        # The dispatch rate has gone, so the plan made at it must not be kept on its metric (#6361)
+        failed |= _check("t1 cancel forces the next replan to take the new plan", my_predbat.plan_replace_forced, "forced {}".format(my_predbat.plan_replace_forced))
         changed = _cycle(my_predbat, 845)
         failed |= _check("t1 stays cancelled without a second replan", (not changed) and _kwh(my_predbat) == [0, 0], "changed {} kwh {}".format(changed, _kwh(my_predbat)))
 
@@ -181,6 +186,10 @@ def _run(my_predbat):
         _sensor(my_predbat, "on")
         changed = _cycle(my_predbat, 847)
         failed |= _check("t2 resume", changed and _kwh(my_predbat) == [3.5, 3.5] and not my_predbat.dynamic_load_car_cancelled.get(0, False), "changed {} kwh {}".format(changed, _kwh(my_predbat)))
+        # Resuming restores the rate, so a replan competes normally - calculate_plan() clears the flag, not the check
+        my_predbat.plan_replace_forced = False
+        _cycle(my_predbat, 848)
+        failed |= _check("t2 resumed car does not force a replace", not my_predbat.plan_replace_forced, "forced {}".format(my_predbat.plan_replace_forced))
 
         # Leaving the slots resets, even though the car is still not charging
         print("Test 3: leaving the car slots resets the cancellation")
