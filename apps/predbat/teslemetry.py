@@ -77,6 +77,9 @@ POWERWALL_1_MAX_POWER = 3500  # Per-unit nameplate power at/below this is treate
 # whatever its nameplate, ~9.8 kW with one expansion, the 11 kW nameplate with two, ~5.04 kW per Powerwall 2
 # unit - and solar charging stops at the same figure.
 POWERWALL_CHARGE_PER_UNIT_W = 5000
+# Lowest backup reserve a Powerwall accepts, on the same basis as live_status percentage_charged (the app's
+# percentage, which already hides the buffer Tesla keeps below 0%). Bound as battery_min_soc.
+TESLA_MIN_RESERVE = 0
 
 # The TESLA INVERTER_DEF row's behaviour, stated in every discovery record so the record alone rebuilds
 # the row (coordinator.inverter_definition()). A reserve set above the live SoC is met from the grid,
@@ -1128,6 +1131,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             "scheduled_discharge_enable": control("switch", "schedule_discharge_enable"),
             "schedule_write_button": control("switch", "schedule_write"),
             "battery_export_permitted": sensor("battery_export_permitted", domain="binary_sensor"),
+            # The Powerwall's fixed 0% reserve floor: a constant, not something site_info reports
+            "battery_min_soc": {"value": TESLA_MIN_RESERVE, "access": "r"},
         }
         for limit_arg in ("battery_rate_max", "inverter_limit", "inverter_limit_charge", "export_limit"):
             if self.get_state_wrapper(self.entity(limit_arg)) is not None:
@@ -1148,7 +1153,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         Ratings are the figures site_info reports (nameplate energy and power, the configured export
         limit). inverter_limit_charge is derived per battery unit and the battery_count capacity
         estimate is a guess, so neither is a rating; both stay bound as entities where automatic_config()
-        binds them.
+        binds them. battery_min_soc is a fixed constant rather than a reported figure, so it is an entity
+        value stand-in, not a rating.
 
         Never reported: the site name, address, timezone, gateway DINs and device UUIDs.
 
@@ -1217,6 +1223,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         for limit_arg in ("battery_rate_max", "inverter_limit", "inverter_limit_charge", "export_limit"):
             if self.get_state_wrapper(self.entity(limit_arg)) is not None:
                 self.set_arg_auto(limit_arg, [self.entity(limit_arg)], overwrite=False)
+        # A Powerwall's backup reserve goes down to 0% - its displayed SoC already hides the bottom buffer, as
+        # teslemetry_local.yaml notes. Left unbound, battery_min_soc defaults to 4% and refresh_config() raises a
+        # lower set_reserve_min straight back to 4%, so a user could never plan below it.
+        self.set_arg_auto("battery_min_soc", [TESLA_MIN_RESERVE], overwrite=False)
         self.set_arg("reserve", [self.entity("schedule_reserve", domain="number")])
         self.set_arg("charge_start_time", [self.entity("schedule_charge_start_time", domain="select")])
         self.set_arg("charge_end_time", [self.entity("schedule_charge_end_time", domain="select")])
