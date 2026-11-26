@@ -54,6 +54,12 @@ repos:
     entry: python -m unittest discover -s coverage/memory_benchmark_tools
     files: ^coverage/memory_benchmark_tools/
     pass_filenames: false
+  - id: board-predbat-memory-tests
+    name: board predbat-memory measurement tests
+    language: python
+    entry: python -m unittest discover -s boards/predbat-memory
+    files: ^boards/predbat-memory/
+    pass_filenames: false
   - id: owner-gate-tests
     name: owner gate workflow tests
     language: python

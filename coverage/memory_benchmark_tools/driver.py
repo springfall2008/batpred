@@ -5,12 +5,13 @@
 # -----------------------------------------------------------------------------
 """The memory benchmark's driver, run inside the container by container_run.sh.
 
-    python3 driver.py --out /out --cycles N
+    python3 driver.py --out /out --cycles N [--tracemalloc]
 
 Starts Predbat through the same path hass.py's main() takes, from the fixture in the working directory, waits for the
 dummy inverter, forecast and Octopus components to publish once, then runs N plan cycles, each forced to recompute (the
 wall clock is frozen, so a plan never ages). After each cycle it records the process's RSS; at the end VmHWM. It writes
-<out>/result.json with ok, steady_rss_mb, peak_rss_mb and plan_digest, plus diagnostics.
+<out>/result.json with ok, steady_rss_mb, peak_rss_mb and plan_digest, plus diagnostics. With --tracemalloc it also
+writes <out>/tracemalloc.txt, the largest live allocations after the last cycle, and marks the result as profiled.
 """
 
 import argparse
@@ -127,6 +128,34 @@ def read_status_kb(field, text=None):
     return int(match.group(1)) if match else None
 
 
+PROFILE_TOP_LINES = 40
+PROFILE_TOP_FILES = 25
+
+
+def finish_profile(out, result):
+    """When tracemalloc is tracing (--tracemalloc), write <out>/tracemalloc.txt and mark the result as profiled.
+
+    The report lists the largest live allocations after the last cycle, by line and by file, in MiB. A profiled run's
+    RSS includes tracemalloc's own overhead, so the result carries "tracemalloc": true and measure.py refuses it.
+    """
+    import tracemalloc
+
+    if not tracemalloc.is_tracing():
+        return
+    snapshot = tracemalloc.take_snapshot().filter_traces((tracemalloc.Filter(False, tracemalloc.__file__),))
+    traced_kb, peak_kb = (size // 1024 for size in tracemalloc.get_traced_memory())
+    lines = ["Traced now {:.1f} MiB, traced peak {:.1f} MiB".format(traced_kb / 1024.0, peak_kb / 1024.0), ""]
+    for title, key, limit in (("line", "lineno", PROFILE_TOP_LINES), ("file", "filename", PROFILE_TOP_FILES)):
+        lines.append("Top allocations by {}:".format(title))
+        for stat in snapshot.statistics(key)[:limit]:
+            frame = stat.traceback[0]
+            where = "{}:{}".format(frame.filename, frame.lineno) if key == "lineno" else frame.filename
+            lines.append("  {:8.1f} MiB  {:>8} blocks  {}".format(stat.size / 1048576.0, stat.count, where))
+        lines.append("")
+    (Path(out) / "tracemalloc.txt").write_text("\n".join(lines))
+    result["tracemalloc"] = True
+
+
 def wait_ready(predbat, names, timeout):
     """Wait until each of the named components that is enabled has succeeded once; return the names still waiting."""
     waiting = [name for name in names if predbat.components.get_component(name)]
@@ -186,17 +215,30 @@ def run(out, cycles, settle, ready_timeout):
             "problems": problems[:50],
         }
     )
+    finish_profile(out, result)
     return result
 
 
-def main(argv=None):
-    """Run the benchmark, write <out>/result.json and exit; 0 when the result was written."""
+def parse_args(argv=None):
+    """Parse the driver's command line."""
     parser = argparse.ArgumentParser(description="Memory benchmark driver (runs inside the benchmark container)")
     parser.add_argument("--out", required=True)
     parser.add_argument("--cycles", type=int, default=6)
     parser.add_argument("--settle", type=int, default=None, help="cycles left out of the steady figure (default half)")
     parser.add_argument("--ready-timeout", type=float, default=180)
-    args = parser.parse_args(argv)
+    parser.add_argument("--tracemalloc", action="store_true", help="trace allocations from before Predbat is imported and write tracemalloc.txt")
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    """Run the benchmark, write <out>/result.json and exit; 0 when the result was written."""
+    args = parse_args(argv)
+    if args.tracemalloc:
+        import tracemalloc
+
+        # Started before predbat is imported, so its modules' allocations are traced too. One frame per allocation, which
+        # is all the report reads: 25 frames made a run take over ten minutes
+        tracemalloc.start(1)
     settle = args.settle if args.settle is not None else args.cycles // 2
     try:
         result = run(Path(args.out), args.cycles, settle, args.ready_timeout)

@@ -147,6 +147,45 @@ class TestPlanDigest(unittest.TestCase):
         self.assertNotEqual(driver.plan_digest(same), driver.plan_digest(different))
 
 
+class TestProfile(unittest.TestCase):
+    """finish_profile writes the --tracemalloc report and marks the result as profiled."""
+
+    def test_finish_profile_writes_the_top_allocations_and_marks_the_result(self):
+        """While tracemalloc traces, the report lists allocations by line and by file, and the result says tracemalloc."""
+        import tempfile
+        import tracemalloc
+
+        tracemalloc.start(5)
+        try:
+            held = [bytearray(1024) for _ in range(512)]  # noqa: F841 - kept alive so the snapshot sees it
+            result = {"ok": True}
+            with tempfile.TemporaryDirectory() as out:
+                driver.finish_profile(Path(out), result)
+                report = (Path(out) / "tracemalloc.txt").read_text()
+        finally:
+            tracemalloc.stop()
+        self.assertTrue(result["tracemalloc"])
+        self.assertIn("Top allocations by line", report)
+        self.assertIn("Top allocations by file", report)
+        self.assertIn("test_driver.py", report)
+        self.assertRegex(report, r"\d+\.\d MiB")
+
+    def test_finish_profile_does_nothing_when_not_tracing(self):
+        """A normal run writes no report and is not marked as profiled."""
+        import tempfile
+
+        result = {"ok": True}
+        with tempfile.TemporaryDirectory() as out:
+            driver.finish_profile(Path(out), result)
+            self.assertFalse((Path(out) / "tracemalloc.txt").exists())
+        self.assertNotIn("tracemalloc", result)
+
+    def test_main_accepts_the_tracemalloc_flag(self):
+        """--tracemalloc is a driver option, passed in by container_run.sh."""
+        self.assertTrue(driver.parse_args(["--out", "/out", "--tracemalloc"]).tracemalloc)
+        self.assertFalse(driver.parse_args(["--out", "/out"]).tracemalloc)
+
+
 class TestStatus(unittest.TestCase):
     """read_status_kb reads a field from a /proc status file."""
 

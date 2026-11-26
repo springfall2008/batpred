@@ -877,6 +877,8 @@ python3 coverage/memory_benchmark_tools/export_fixture.py --live <add-on config 
 coverage/memory_benchmark . /tmp/memory-run
 ```
 
+To see where the memory goes, add `--tracemalloc` (`coverage/memory_benchmark --tracemalloc . /tmp/memory-run`). It also writes `tracemalloc.txt`, the largest live allocations after the last cycle by line and by file. Tracing slows the run and adds to its RSS, so its figures are not comparable: its `result.json` says `"tracemalloc": true`.
+
 See `boards/predbat-memory/README.md` for what the fixture holds, how identifiers are scrubbed, and the measured baseline. The tools' tests run with `python3 -m unittest discover -s coverage/memory_benchmark_tools`, and in pre-commit.
 
 ### Random scenario benchmarking

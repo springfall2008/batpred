@@ -47,7 +47,20 @@ class TestWrapperChecks(unittest.TestCase):
         """Usage error without both arguments: exit 2 with the usage line."""
         code, output = run_wrapper(REPO)
         self.assertEqual(code, 2)
-        self.assertIn("usage: memory_benchmark <tree> <out dir>", output)
+        self.assertIn("usage: memory_benchmark [--tracemalloc] <tree> <out dir>", output)
+
+    def test_wrapper_takes_tracemalloc_before_the_tree(self):
+        """--tracemalloc then a tree and an out dir is a valid call: it gets as far as the fixture check."""
+        with tempfile.TemporaryDirectory() as tmp:
+            code, output = run_wrapper("--tracemalloc", REPO, Path(tmp) / "out", data=Path(tmp) / "no-fixture")
+            self.assertEqual(code, 2, output)
+            self.assertIn("export_fixture.py", output)
+
+    def test_wrapper_with_tracemalloc_still_needs_two_arguments(self):
+        """--tracemalloc does not stand in for the tree or the out dir."""
+        code, output = run_wrapper("--tracemalloc", REPO)
+        self.assertEqual(code, 2)
+        self.assertIn("usage:", output)
 
 
 if __name__ == "__main__":

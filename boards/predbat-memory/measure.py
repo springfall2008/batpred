@@ -19,6 +19,7 @@ dummy inverter, a fixed run of plan cycles, in a Linux container) and writes <ou
 """
 
 import json
+import math
 import os
 import subprocess
 import sys
@@ -30,14 +31,20 @@ STEADY_CUT = 0.25  # the candidate's median steady-state RSS must be at least th
 ROUNDS = 3
 BENCHMARK = Path("coverage/memory_benchmark")
 FIELDS = {"ok": bool, "steady_rss_mb": (int, float), "peak_rss_mb": (int, float), "plan_digest": str}
+FIGURES = ("steady_rss_mb", "peak_rss_mb")
 
 
 class HarnessError(RuntimeError):
-    pass
+    """The measurement could not be made, so the candidate was never judged: main exits 2."""
 
 
 def load_result(path):
-    """Read one benchmark result.json and check it has every field with the right type."""
+    """Read one benchmark result.json and check it has every field with the right type and real, non-negative figures.
+
+    json.loads accepts the NaN and Infinity that json.dump writes by default, and every comparison in verdict is false
+    against NaN, so a figure that is not finite would pass; a run profiled with --tracemalloc carries tracemalloc's own
+    overhead in its RSS. Both are harness errors.
+    """
     try:
         data = json.loads(Path(path).read_text())
     except (OSError, ValueError) as exc:
@@ -50,11 +57,16 @@ def load_result(path):
             value = None
         if not isinstance(value, kind):
             raise HarnessError(f"{path}: field {field} is missing or not {kind}")
+    for field in FIGURES:
+        if not math.isfinite(data[field]) or data[field] < 0:
+            raise HarnessError(f"{path}: field {field} is {data[field]}, not a finite figure of zero or more")
+    if data.get("tracemalloc"):
+        raise HarnessError(f"{path} is from a --tracemalloc run, whose RSS includes tracemalloc's overhead")
     return data
 
 
 def verdict(base_runs, candidate_runs):
-    """Compare base and candidate runs. Returns (passed, report lines)."""
+    """Compare base and candidate runs. Returns (passed, report lines); raises HarnessError when the base disagrees with itself."""
     lines = []
     for name, runs in (("base", base_runs), ("candidate", candidate_runs)):
         for index, run in enumerate(runs, 1):
@@ -62,8 +74,8 @@ def verdict(base_runs, candidate_runs):
 
     base_digests = {run["plan_digest"] for run in base_runs}
     if len(base_digests) != 1:
-        lines.append("HARNESS ERROR: the base's plan_digest differs between its own runs, so the benchmark is not deterministic")
-        return False, lines
+        print("\n".join(lines))
+        raise HarnessError("the base's plan_digest differs between its own runs, so the benchmark is not deterministic")
 
     failures = []
     if not all(run["ok"] for run in base_runs + candidate_runs):
@@ -88,6 +100,7 @@ def verdict(base_runs, candidate_runs):
 
 
 def _git(*args, cwd=None):
+    """Run git and return its stripped stdout; raise HarnessError on a non-zero exit."""
     proc = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
     if proc.returncode != 0:
         raise HarnessError(f"git {' '.join(args)} failed: {proc.stderr.strip()}")
@@ -95,15 +108,20 @@ def _git(*args, cwd=None):
 
 
 def _run_benchmark(benchmark, tree, out_dir):
-    out_dir.mkdir(parents=True)
-    with (out_dir / "benchmark.log").open("w") as log:
-        proc = subprocess.run([str(benchmark), str(tree), str(out_dir)], stdout=log, stderr=subprocess.STDOUT)
+    """Run the benchmark on tree into out_dir and return its checked result; any failure to run it is a HarnessError."""
+    try:
+        out_dir.mkdir(parents=True)
+        with (out_dir / "benchmark.log").open("w") as log:
+            proc = subprocess.run([str(benchmark), str(tree), str(out_dir)], stdout=log, stderr=subprocess.STDOUT)
+    except OSError as exc:
+        raise HarnessError(f"cannot run {benchmark} for {tree}: {exc}") from exc
     if proc.returncode != 0:
         raise HarnessError(f"benchmark exited {proc.returncode} for {tree}; see {out_dir / 'benchmark.log'}")
     return load_result(out_dir / "result.json")
 
 
 def main():
+    """Measure BOARD_CANDIDATE against BOARD_BASE and return the exit code: 0 pass, 1 fail, 2 harness error."""
     candidate = os.environ.get("BOARD_CANDIDATE", "").strip()
     base = os.environ.get("BOARD_BASE", "main").strip()
     if not candidate:

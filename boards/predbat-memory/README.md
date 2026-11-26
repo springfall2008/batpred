@@ -8,7 +8,7 @@ blackboard skill from agent-memory-supabase (`runner/` and `skills/blackboard/` 
 | ------------------ | ----------------------------------------------------------------------------------- |
 | `board.toml`       | The board file: goal, done-when, rules, intent limit, models and permissions        |
 | `measure.py`       | The runner's `[measure]` command, which confirms a candidate before the board ends  |
-| `test_measure.py`  | Tests for `measure.py`: `python3 -m unittest discover -s boards/predbat-memory`     |
+| `test_measure.py`  | Tests for `measure.py` and the board file's permissions, run in pre-commit          |
 
 ## How the board runs
 
@@ -49,6 +49,14 @@ and what `measure.py` uses to judge the lead's candidate. Its design is in
       other than the token mint and the three Intelligent polls (`ALLOWED_WARNINGS`), any other unlisted warning
       (`BENIGN_WARNINGS` gives a reason for each), or a log line that looks like personal data.
     - Diagnostics: the per-cycle RSS, cycle times and the problems found.
+- **Profiling:** `coverage/memory_benchmark --tracemalloc <tree> <out dir>` also writes `<out dir>/tracemalloc.txt`, the
+  largest live allocations after the last cycle by line and by file. This is how workers map the memory, since the
+  board allows no general interpreter. Tracing slows the run and adds to its RSS, so the result says
+  `"tracemalloc": true` and `measure.py` refuses it as evidence.
+
+`measure.py` treats a measurement that could not be made as a harness error (exit 2), never as a failed candidate. That
+covers a benchmark that will not start or exits non-zero, a `result.json` with a missing, non-finite or negative
+figure, a profiled run, and a base whose `plan_digest` differs between its own runs.
 
 ### The fixture
 

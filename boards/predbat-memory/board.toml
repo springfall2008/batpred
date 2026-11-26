@@ -20,8 +20,10 @@ rules = """Rules for board predbat-memory.
 Baseline first: until the board has a confirmed baseline fact, the only intent is the baseline intent, and no saving \
 work starts. That intent records the main commit hash, measures main with the benchmark three times (every run's \
 figures and the medians, steady and peak, MB), and maps where the memory goes: the largest holders by MB from \
-tracemalloc snapshots or memray taken inside the benchmark run. Every later figure is compared with main, and the map \
-is what the lead plans from.
+`coverage/memory_benchmark --tracemalloc <worktree> <out dir>`, which writes <out dir>/tracemalloc.txt (the top \
+allocations by line and by file after the last cycle). A --tracemalloc run's RSS includes tracemalloc's own overhead, \
+so its figures are never evidence; measure.py refuses them. Every later figure is compared with main, and the map is \
+what the lead plans from.
 How to work: Each intent gets its own git worktree of ~/predbat/batpred at \
 ~/predbat/batpred/.worktrees/board-memory-<first 8 chars of the intent id>, on a new local branch \
 board/predbat-memory/<same 8 chars>. It starts from the commit the intent names. If the intent names none, start from \
@@ -40,8 +42,8 @@ rounds each, and take the median of each figure.
 binary falls back to Python and changes RSS by itself.
 - Plans must be identical: the branch's plan_digest equals main's in every run. Any difference makes the result \
 refuted, whatever the saving.
-- Before a confirmed saving: `./run_all --quick` (from coverage/, after `source setup.csh`) and `./run_pre_commit` \
-both pass on the branch.
+- Before a confirmed saving: `./run_all --quick` and `./run_pre_commit` (both from coverage/, which set up their own \
+Python environment) pass on the branch.
 Evidence: every fact about a commit starts with these lines, so other workers and the lead can see what a tree holds \
 and what it achieved:
   Commit: <hash> on board/predbat-memory/<short id>
@@ -82,6 +84,10 @@ model = "opus"
 model = "sonnet"
 
 [permissions]
+# No entry runs a general interpreter (python3 *, bash *, env * and the like): a deny matches only its own tool, so a
+# script could reach every Edit, Write and Bash deny below. Tests run through ./run_all, profiling through
+# coverage/memory_benchmark --tracemalloc. These rules stop mistakes, not a determined worker: ./run_all runs the
+# worktree's own code on the host. test_measure.py checks no general interpreter is allowed.
 allow = [
   "Read(~/predbat/**)",
   "Edit(~/predbat/batpred/.worktrees/board-memory-*/**)",
@@ -105,8 +111,6 @@ allow = [
   "Bash(git cherry-pick *)",
   "Bash(git stash*)",
   "Bash(cd *)",
-  "Bash(source *)",
-  "Bash(python3 *)",
   "Bash(bash apps/predbat/build_kernel.sh*)",
   "Bash(coverage/memory_benchmark *)",
   "Bash(*/coverage/memory_benchmark *)",

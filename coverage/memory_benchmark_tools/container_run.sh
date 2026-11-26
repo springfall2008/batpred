@@ -25,7 +25,7 @@ timeout "${BENCH_TIMEOUT:-1500}" env \
     FAKETIME_DONT_FAKE_MONOTONIC=1 \
     PREDBAT_APPS_FILE=/fixture/apps.yaml \
     PYTHONPATH=/bench/frozen_clock:/work \
-    python3 "$DRIVER" --out /out --cycles "${BENCH_CYCLES:-6}"
+    python3 "$DRIVER" --out /out --cycles "${BENCH_CYCLES:-6}" ${BENCH_TRACEMALLOC:+--tracemalloc}
 status=$?
 set -e
 if [ -f /fixture/predbat.log ]; then
