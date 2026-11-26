@@ -66,14 +66,18 @@ fi
 
 # Every run starts from a fresh copy of the fixture, since Predbat writes to its database and cache
 SCRATCH="$(mktemp -d)"
-trap 'rm -rf "$SCRATCH"' EXIT
+# The container reads a copy of the tree made for this run, never the tree itself: Docker Desktop's file sharing can
+# serve a file edited after an earlier container read it at its old length, which breaks the run with a bogus syntax error
+SOURCE="$(mktemp -d)"
+trap 'rm -rf "$SCRATCH" "$SOURCE"' EXIT
 cp -R "$DATA/." "$SCRATCH/"
 rm -f "$SCRATCH/manifest.json"
+cp -R "$TREE/apps/predbat/." "$SOURCE/"
 
 set +e
 docker run --rm --network none --cpus "$CPUS" --memory "$MEMORY" \
     -e TZ=UTC -e BENCH_T0="$T0" -e BENCH_CYCLES="$CYCLES" ${BENCH_DRIVER:+-e BENCH_DRIVER="$BENCH_DRIVER"} ${TRACEMALLOC:+-e BENCH_TRACEMALLOC=1} \
-    -v "$TREE/apps/predbat:/src:ro" -v "$TOOLS:/bench:ro" -v "$SCRATCH:/fixture" -v "$OUT:/out" \
+    -v "$SOURCE:/src:ro" -v "$TOOLS:/bench:ro" -v "$SCRATCH:/fixture" -v "$OUT:/out" \
     "$IMAGE" bash /bench/container_run.sh
 status=$?
 set -e

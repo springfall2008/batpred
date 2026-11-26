@@ -127,8 +127,9 @@ them.
 ### Pieces (all committed)
 
 1. **`coverage/memory_benchmark`**: the executable named in the contract. A shell wrapper that makes sure the pinned
-   image exists, copies the fixture DB to a scratch directory, starts the container with `--network none`, `<tree>`
-   mounted read-only, the scratch directory and the out directory mounted writable, runs the driver, and exits with the
+   image exists, copies the fixture DB to a scratch directory, starts the container with `--network none`, a copy of
+   `<tree>`'s `apps/predbat` made for that run mounted read-only (not the tree itself: Docker Desktop can serve a file
+   edited after an earlier container read it at its old length), the scratch directory and the out directory mounted writable, runs the driver, and exits with the
    driver's status. It builds the kernel for the container from `<tree>`'s sources; a build can be cached only if the
    cache key is the kernel source hash, so no branch can reuse another's binary.
 2. **The driver (Python, run in the container).** Builds `PredBat` from `<tree>` through the real startup path with the

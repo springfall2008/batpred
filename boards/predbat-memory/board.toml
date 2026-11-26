@@ -46,8 +46,16 @@ Shell commands: workers run with a fixed allow list (the [permissions] below), a
 not asked about. Run `cd <dir>` as a Bash call of its own; it carries over to later calls. Never put `cd` and `git` in \
 the same call: that chain is refused even when each part is allowed. Create a worktree from the main checkout with \
 absolute paths (`git worktree add -b <branch> <absolute worktree path> <commit>`), then `cd <worktree>` in its own \
-call, then build, commit and test there one command per call (`bash apps/predbat/build_kernel.sh`; \
-`cd <worktree>/coverage` and then `./run_all --quick`). Python is allowed for profiling and analysis (python3, or \
+call, then build and test there one command per call (`bash apps/predbat/build_kernel.sh`; \
+`cd <worktree>/coverage` and then `./run_all --quick`). Every git command that changes a branch, the index or the \
+files (add, commit, cherry-pick, merge, rebase, restore, checkout, switch, stash) must name your worktree by its \
+canonical absolute path, with no `..` and no symlink: `git -C <absolute worktree path> commit ...`. The plain form is \
+refused wherever you are, because in the main checkout, where the benchmark runs, it would move main. Write the commit \
+message to a file under /tmp/predbat-board/memory/<intent short id>/ and commit with `git -C <worktree> commit -F <file>`: \
+the permission check reads the whole command line, so a message given with -m that happens to contain a denied phrase \
+(such as `worktree remove` or `branch -d`) is refused. Reading git (status, log, diff, show, rev-parse, branch, \
+worktree list or add) works plain or with -C; deleting, moving or force-resetting a branch or a worktree does not. \
+There is no rm: leave files in place, or overwrite them. Python is allowed for profiling and analysis (python3, or \
 ~/predbat/batpred/coverage/venv/bin/python3 when a script needs Predbat's dependencies), but never use it to do what \
 the deny list refuses, and never install packages (no pip, no `python3 -m pip`). Avoid subshells `( ... )`. A refused command means that spelling is not allowed, not that the intent is blocked: retry it \
 in an allowed form (one allowed command per call is always accepted) before giving up. Whatever happens, end with a \
@@ -109,10 +117,24 @@ model = "sonnet"
 [permissions]
 # A local run on the maintainer's machine, so the workers are trusted with the tools the intents need: Python (to
 # profile with importtime, gc referrers or deeper tracemalloc), merge and rebase (to combine earlier board commits on
-# their own branch) and the everyday read-only tools. A deny entry matches only its own command, so a Python script
-# could still do what the list denies; it is there to stop mistakes, not a determined worker, as ./run_all already runs
-# the worktree's own code on the host. What it stops: anything that leaves the machine, rewriting main or another
-# intent's branch, throwing work away, and changing the shared venv. test_measure.py checks both lists.
+# their own branch) and the everyday read-only tools. The list is advisory: it stops mistakes, not a determined worker.
+# A Python one-liner can do anything it denies, and ./run_all already runs the worktree's own code on the host.
+# What it is there to catch: pushing, moving main, deleting or moving another intent's branch or worktree, an allowed
+# command that writes a file or runs a command it was not meant to, and changing the shared venv.
+# How an entry matches: from the start of the command, with `*` spanning anything, so `git -C * diff*` matches any
+# command that starts `git -C ` and has ` diff` somewhere after it, not only the diff subcommand. That shapes the list:
+# - Git that writes is allowed only as `git -C */.worktrees/board-memory-* ...`, as a plain `git merge` or `git commit`
+#   in the main checkout, where workers run the benchmark, would move main. A pattern cannot check that the path is
+#   canonical, so `<worktree>/..` is denied and the rules ask for the canonical path.
+# - Subcommands no entry allows (push, reset, clean, update-ref, fetch, pull) are refused by their absence, so they have
+#   no `git -C * ...` deny: such a deny would also match a commit message that mentions the word.
+# - The destroying forms of the subcommands that are allowed (branch, worktree, checkout, switch) are denied plain and
+#   with -C, and so are the options that let any git command write a file or run one (--output, -c, --exec).
+# - python3 is allowed, so the common pip spellings are denied; there is no rm or env entry, since no spelling-based
+#   deny catches every recursive rm (-R, --recursive, reordered flags) and env runs whatever follows it.
+# The GitNexus tools that only read the index are allowed for CLAUDE.md's impact analysis; rename, which edits code, is
+# not. test_measure.py checks real commands against both lists, and the shapes were checked under claude -p
+# --permission-mode dontAsk.
 allow = [
   "Read(~/predbat/**)",
   "Edit(~/predbat/batpred/.worktrees/board-memory-*/**)",
@@ -131,15 +153,24 @@ allow = [
   "Bash(git rev-list*)",
   "Bash(git merge-base*)",
   "Bash(git branch*)",
-  "Bash(git switch *)",
-  "Bash(git checkout *)",
-  "Bash(git add *)",
-  "Bash(git commit *)",
-  "Bash(git cherry-pick *)",
-  "Bash(git merge *)",
-  "Bash(git rebase *)",
-  "Bash(git restore *)",
-  "Bash(git stash*)",
+  "Bash(git -C * worktree *)",
+  "Bash(git -C * status*)",
+  "Bash(git -C * diff*)",
+  "Bash(git -C * log*)",
+  "Bash(git -C * show*)",
+  "Bash(git -C * rev-parse*)",
+  "Bash(git -C * rev-list*)",
+  "Bash(git -C * merge-base*)",
+  "Bash(git -C * branch*)",
+  "Bash(git -C */.worktrees/board-memory-* add *)",
+  "Bash(git -C */.worktrees/board-memory-* commit *)",
+  "Bash(git -C */.worktrees/board-memory-* cherry-pick *)",
+  "Bash(git -C */.worktrees/board-memory-* merge *)",
+  "Bash(git -C */.worktrees/board-memory-* rebase *)",
+  "Bash(git -C */.worktrees/board-memory-* restore *)",
+  "Bash(git -C */.worktrees/board-memory-* checkout *)",
+  "Bash(git -C */.worktrees/board-memory-* switch *)",
+  "Bash(git -C */.worktrees/board-memory-* stash*)",
   "Bash(cd *)",
   "Bash(bash apps/predbat/build_kernel.sh*)",
   "Bash(coverage/memory_benchmark *)",
@@ -154,7 +185,6 @@ allow = [
   "Bash(mkdir *)",
   "Bash(cp *)",
   "Bash(mv *)",
-  "Bash(rm *)",
   "Bash(touch *)",
   "Bash(ls*)",
   "Bash(cat *)",
@@ -174,33 +204,76 @@ allow = [
   "Bash(file *)",
   "Bash(stat *)",
   "Bash(which *)",
-  "Bash(env)",
   "Bash(uname*)",
   "Bash(sysctl *)",
   "Bash(docker ps*)",
   "Bash(docker info*)",
   "Bash(docker images*)",
   "Bash(date*)",
+  "mcp__gitnexus__impact",
+  "mcp__gitnexus__context",
+  "mcp__gitnexus__query",
+  "mcp__gitnexus__detect_changes",
 ]
 deny = [
   "Bash(git push*)",
-  "Bash(git reset --hard*)",
+  "Bash(git reset*)",
+  "Bash(git update-ref*)",
+  "Bash(git clean*)",
+  "Bash(git fetch*)",
+  "Bash(git pull*)",
   "Bash(git branch -f*)",
   "Bash(git branch --force*)",
   "Bash(git branch -D*)",
   "Bash(git branch -d*)",
+  "Bash(git branch --delete*)",
   "Bash(git branch -m*)",
   "Bash(git branch -M*)",
-  "Bash(git update-ref*)",
+  "Bash(git branch --move*)",
+  "Bash(git branch -c*)",
+  "Bash(git branch -C*)",
+  "Bash(git branch --copy*)",
+  "Bash(git worktree remove*)",
+  "Bash(git worktree prune*)",
+  "Bash(git worktree move*)",
   "Bash(git checkout -B*)",
   "Bash(git switch -C*)",
-  "Bash(git clean*)",
+  "Bash(git switch --force-create*)",
+  "Bash(git -C * branch -f*)",
+  "Bash(git -C * branch --force*)",
+  "Bash(git -C * branch -D*)",
+  "Bash(git -C * branch -d*)",
+  "Bash(git -C * branch --delete*)",
+  "Bash(git -C * branch -m*)",
+  "Bash(git -C * branch -M*)",
+  "Bash(git -C * branch --move*)",
+  "Bash(git -C * branch -c*)",
+  "Bash(git -C * branch -C*)",
+  "Bash(git -C * branch --copy*)",
+  "Bash(git -C * worktree remove*)",
+  "Bash(git -C * worktree prune*)",
+  "Bash(git -C * worktree move*)",
+  "Bash(git -C * checkout -B*)",
+  "Bash(git -C * switch -C*)",
+  "Bash(git -C * switch --force-create*)",
+  "Bash(git *--output*)",
+  "Bash(git -c *)",
+  "Bash(git -C * -c *)",
+  "Bash(git *--exec*)",
+  "Bash(git -C */..*)",
   "Bash(rm -rf*)",
   "Bash(rm -fr*)",
   "Bash(rm -r*)",
   "Bash(gh *)",
   "Bash(pip *)",
   "Bash(pip3 *)",
+  "Bash(python3 -m pip*)",
+  "Bash(python -m pip*)",
+  "Bash(*/coverage/venv/bin/python3 -m pip*)",
+  "Bash(*/coverage/venv/bin/python -m pip*)",
+  "Bash(*/coverage/venv/bin/pip*)",
+  "Bash(rm -R*)",
+  "Bash(rm --recursive*)",
   "Bash(docker rm*)",
   "Bash(docker rmi*)",
   "Bash(docker system*)",
@@ -210,6 +283,11 @@ deny = [
   "Write(~/predbat/batpred/coverage/**)",
   "Edit(~/predbat/batpred/boards/**)",
   "Write(~/predbat/batpred/boards/**)",
+  "mcp__gitnexus__rename",
+  "Bash(python3 -mpip*)",
+  "Bash(python -mpip*)",
+  "Bash(*/coverage/venv/bin/python3 -mpip*)",
+  "Bash(*/coverage/venv/bin/python -mpip*)",
 ]
 max_turns = 300
 worker_timeout_minutes = 90
