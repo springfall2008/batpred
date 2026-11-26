@@ -220,22 +220,27 @@ def _sha256(path):
 
 
 def export(live, out, days, t0, strip_outputs=False):
-    """Write the fixture for live into out (which must not exist) and return (stats, secrets)."""
+    """Write the fixture for live into out (which must not exist) and return (stats, secrets, tokens).
+
+    secrets are the real values known to the export and tokens the device ids read off entity names, for the leak check.
+    """
     live_args = load_live_apps_text((live / "apps.yaml").read_text())
     prefix = live_args.get("prefix", "predbat")
     (out / "cache").mkdir(parents=True)
-
-    replacements = fixture_cache.export_octopus_cache(live / "cache", out / "cache", t0)
     with tempfile.TemporaryDirectory() as snapshot_dir:
         # A consistent local copy of the live database, which the add-on keeps writing; kept outside the fixture
         snapshot = Path(snapshot_dir) / "predbat.db"
         fixture_db.snapshot_db(live / "predbat.db", snapshot)
-        return _export_from(live, out, days, t0, live_args, prefix, replacements, snapshot, strip_outputs)
+        return _export_from(live, out, days, t0, live_args, prefix, snapshot, strip_outputs)
 
 
-def _export_from(live, out, days, t0, live_args, prefix, replacements, snapshot, strip_outputs):
-    """Finish export() from a snapshot of the live database; returns (stats, secrets)."""
+def _export_from(live, out, days, t0, live_args, prefix, snapshot, strip_outputs):
+    """Finish export() from a snapshot of the live database; returns (stats, secrets, tokens)."""
     live_names = fixture_db.entity_names(snapshot)
+    # Device ids inside entity names (Solax sites and serials, chargers, Octopus devices), replaced wherever they stand as
+    # a whole token; the Octopus cache needs them first, so a device id's fake keeps the suffix its entities were renamed to
+    tokens = scrub.name_id_tokens(live_names)
+    replacements = fixture_cache.export_octopus_cache(live / "cache", out / "cache", t0, tokens=tokens)
     # Device serials, read off the entity names the live config's {geserial}-style templates match; the geserial setting
     # itself may just say "auto". Too short a value would be replaced inside unrelated text, so it is not trusted.
     serials = sorted(value for value in fixture_db.template_values(live_args, live_names) if len(value) >= MIN_SERIAL_LENGTH)
@@ -249,22 +254,24 @@ def _export_from(live, out, days, t0, live_args, prefix, replacements, snapshot,
         fake = "{}{}".format(FAKE_SERIAL, number)
         replacements[serial.lower()] = fake.lower()
         replacements[serial.upper()] = fake
+    replacements = scrub.with_case_variants(replacements)
     forecast_config, forecast_secrets = [], []
     if live_args.get("forecast_solar"):
         forecast_config, forecast_secrets = fixture_cache.export_forecast_cache(live / "cache", out / "cache", t0, live_args["forecast_solar"])
 
     forecast_entities = {fixture_db._first_entity(live_args.get(key)) for key in ("pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4")} - {None}
     remap = fixture_db.build_remap(live_args, prefix, live_names)
-    stats = fixture_db.export_db(snapshot, out / "predbat.db", t0.replace(tzinfo=None), days, remap, prefix, dropped=lambda name: name in forecast_entities, replacements=replacements, strip_outputs=strip_outputs)
+    stats = fixture_db.export_db(snapshot, out / "predbat.db", t0.replace(tzinfo=None), days, remap, prefix, dropped=lambda name: name in forecast_entities, replacements=replacements, strip_outputs=strip_outputs, tokens=tokens)
 
     apps = build_apps_yaml(load_template(), live_args, forecast_config, stats["totals"], battery_sizing(out / "predbat.db", prefix))
-    (out / "apps.yaml").write_text(yaml.safe_dump(apps, sort_keys=False))
+    apps_text = scrub.replace_tokens(scrub.replace_everywhere(yaml.safe_dump(apps, sort_keys=False), replacements), tokens)
+    (out / "apps.yaml").write_text(apps_text)
     manifest = {"t0": t0.isoformat(), "days": days, "db_sha256": _sha256(out / "predbat.db"), "tool_version": TOOL_VERSION, "entities": stats["entities"], "rows": stats["rows"]}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     secrets = [real for real in replacements if real] + forecast_secrets
     secrets += [str(live_args[key]) for key in IDENTIFYING_KEYS if isinstance(live_args.get(key), str) and live_args[key]]
-    return stats, sorted(set(secrets))
+    return stats, sorted(set(secrets)), tokens
 
 
 def main(argv=None):
@@ -290,14 +297,20 @@ def main(argv=None):
     if work.exists():
         shutil.rmtree(work)
     try:
-        stats, secrets = export(live, work, args.days, t0, args.strip_outputs)
-        leaks = scrub.find_leaks(work, secrets)
+        stats, secrets, tokens = export(live, work, args.days, t0, args.strip_outputs)
+        leaks = scrub.find_leaks(work, secrets, tokens)
+        personal = scrub.find_personal_data(work)
     except Exception:
         shutil.rmtree(work, ignore_errors=True)
         raise
     if leaks:
         shutil.rmtree(work, ignore_errors=True)
         print("Error: real identifiers survived in {} file(s): {}; no fixture written".format(len(leaks), ", ".join(leaks)))
+        return 1
+    if personal:
+        # What looks like personal data the scrub does not know of: name the file and the kind, never the value
+        shutil.rmtree(work, ignore_errors=True)
+        print("Error: possible personal data survived ({}); no fixture written".format(", ".join("{} in {}".format(kind, path) for path, kind in personal)))
         return 1
     if out.exists():
         shutil.rmtree(out)

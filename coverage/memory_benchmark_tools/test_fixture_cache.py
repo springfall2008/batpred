@@ -187,6 +187,21 @@ class TestOctopusExport(unittest.TestCase):
         self.assertIn("E-1R-INTELLI-VAR-24-10-29-A", (self.out / "octopus_user_account.yaml").read_text())
         self.assertFalse((self.out / "unrelated_thing.yaml").exists())
 
+    def test_octopus_export_device_ids_keep_the_suffix_the_entity_names_were_renamed_to(self):
+        """A device id's fake ends in the same fake its entity-name suffix got, so the component's names still match."""
+        write_live(self.live, "octopus_user_account", {"intelligent_devices": {"00000000-0000-4000-8000-0000000d1d1d": {"device_id": "00000000-0000-4000-8000-0000000d1d1d"}}})
+        replacements = fixture_cache.export_octopus_cache(self.live, self.out, T0, tokens={"0000000d1d1d": "benchid1"})
+        text = (self.out / "octopus_user_account.yaml").read_text()
+        self.assertIn("BENCH-DEVICE-benchid1", text)
+        self.assertNotIn("0000000d1d1d", text)
+        self.assertEqual(replacements["00000000-0000-4000-8000-0000000d1d1d"], "BENCH-DEVICE-benchid1")
+
+    def test_octopus_export_scrubs_lower_case_serials(self):
+        """A serial lower-cased by an integration is scrubbed too."""
+        write_live(self.live, "octopus_user_billing", {"note": "meter 21e1234567"})
+        fixture_cache.export_octopus_cache(self.live, self.out, T0)
+        self.assertNotIn("21e1234567", (self.out / "octopus_user_billing.yaml").read_text())
+
     def test_octopus_export_keeps_url_cache_entries_byte_for_byte_except_meta(self):
         """A rates entry carries no identifiers, so its data is copied unchanged and only its meta is renewed."""
         fixture_cache.export_octopus_cache(self.live, self.out, T0)

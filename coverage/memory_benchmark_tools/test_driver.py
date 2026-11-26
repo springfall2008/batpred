@@ -27,6 +27,8 @@ def plan(**overrides):
         "export_window_best": [{"start": 900, "end": 930, "average": 25.0}],
         "export_limits_best": [99.0],
         "plan_valid": True,
+        "predict_soc_best": {0: 5.0, 5: 5.1, 30: 6.0},
+        "predict_metric_best": {0: 0.0, 5: 0.1, 30: 1.25},
         "plan_last_updated": "2026-11-26 09:17:18",
         "plan_last_updated_minutes": 557,
     }
@@ -77,6 +79,21 @@ class TestCheckLog(unittest.TestCase):
         text = CLEAN + "".join("2026-11-26 09:17:20.000001: {}\n".format(line) for line in lines)
         self.assertEqual(driver.check_log(text), [])
 
+    def test_check_log_flags_an_unlisted_octopus_query(self):
+        """Only the Intelligent polls may fail offline; a failed account query means a request was not served from the cache."""
+        for line in ("Warn: OctopusAPI: Failed to connect for graphql query get-account: Cannot connect", "Warn: OctopusAPI: Failed to retrieve data from graphql query get-saving-sessions - token refresh failed"):
+            self.assertEqual(len(driver.check_log(CLEAN + "2026-11-26 09:17:20.000001: {}\n".format(line))), 1, line)
+
+    def test_check_log_flags_personal_data_by_kind(self):
+        """A log line that looks like it holds an email is a problem, reported without the value."""
+        problems = driver.check_log(CLEAN + "2026-11-26 09:17:20.000001: Info: account owner jo@example.org\n")
+        self.assertEqual(problems, ["possible personal data in the log: email"])
+
+    def test_check_log_does_not_take_a_catalogue_model_name_for_a_postcode(self):
+        """The benign catalogue note quotes vehicle and charger models, which can look like postcodes."""
+        line = "2026-11-26 09:17:20.000001: Warn: OctopusAPI: Octopus's catalogue lists charge point Tesla 'Model S P90DL' at more than one power\n"
+        self.assertEqual(driver.check_log(CLEAN + line), [])
+
     def test_benign_warnings_each_carry_a_reason(self):
         """Every benign warning says why it is harmless in the benchmark."""
         for substring, reason in driver.BENIGN_WARNINGS.items():
@@ -116,6 +133,12 @@ class TestPlanDigest(unittest.TestCase):
     def test_plan_digest_ignores_run_timestamps(self):
         """When the plan was made is not part of the plan."""
         self.assertEqual(driver.plan_digest([driver.canonical_plan(plan())]), driver.plan_digest([driver.canonical_plan(plan(plan_last_updated="2027-01-01 00:00:00", plan_last_updated_minutes=1))]))
+
+    def test_plan_digest_includes_the_predicted_soc_and_cost(self):
+        """A change to the predicted cost or SoC at a half-hour changes the digest even with the same windows."""
+        base = driver.plan_digest([driver.canonical_plan(plan())])
+        self.assertNotEqual(base, driver.plan_digest([driver.canonical_plan(plan(predict_metric_best={0: 0.0, 5: 0.1, 30: 1.26}))]))
+        self.assertNotEqual(base, driver.plan_digest([driver.canonical_plan(plan(predict_soc_best={0: 5.0, 5: 5.1, 30: 6.1}))]))
 
     def test_plan_digest_covers_every_cycle(self):
         """A difference in any one cycle changes the digest."""

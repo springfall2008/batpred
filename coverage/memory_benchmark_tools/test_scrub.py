@@ -85,5 +85,66 @@ class TestFindLeaks(unittest.TestCase):
             self.assertEqual(scrub.find_leaks(root, ["", None]), [])
 
 
+class TestPersonalData(unittest.TestCase):
+    """Personal data is scrubbed by category, and anything that still looks personal is found."""
+
+    def test_scrub_personal_attributes_replaces_location_and_contact_fields(self):
+        """Coordinates become the fake ones and contact fields are blanked, at any depth; other attributes stay."""
+        attributes = {
+            "latitude": 52.1,
+            "longitude": -1.6,
+            "friendly_name": "Home",
+            "data": {"first_name": "Jo", "surname": "X", "email": "jo@example.org", "address": "1 Road", "postcode": "AB1 2CD", "telephone_number": "07123456789", "company": "Co"},
+        }
+        result = scrub.scrub_personal_attributes(attributes)
+        self.assertEqual((result["latitude"], result["longitude"]), (scrub.FAKE_LATITUDE, scrub.FAKE_LONGITUDE))
+        self.assertEqual(result["friendly_name"], "Home")
+        self.assertEqual(result["data"]["postcode"], scrub.FAKE_POSTCODE)
+        for field in ("first_name", "surname", "email", "address", "telephone_number", "company"):
+            self.assertEqual(result["data"][field], "benchmark", field)
+        self.assertEqual(attributes["latitude"], 52.1)
+
+    def test_name_id_tokens_finds_device_ids_in_entity_names(self):
+        """Long numeric or mixed tokens in entity names are device ids; ordinary words and the fakes are not."""
+        names = [
+            "sensor.predbat_solax_1234567890123456789_h1234abcd5678_soc",
+            "sensor.predbat_wallbox_123456_power",
+            "event.octopus_energy_electricity_21e1234567_bench-mpan-1_current_day_rates",
+            "sensor.predbat_octopus_a_bench0001_free_electricity",
+            "sensor.predbat_pv_forecast_h0_uncalibrated",
+            "input_number.predbat_pv_metric10_weight",
+            "input_number.predbat_load_scaling10",
+        ]
+        found = scrub.name_id_tokens(names)
+        self.assertEqual(set(found), {"1234567890123456789", "h1234abcd5678", "123456", "21e1234567"})
+        self.assertEqual(sorted(found.values()), ["benchid1", "benchid2", "benchid3", "benchid4"])
+
+    def test_find_leaks_ignores_case(self):
+        """A real value is found whatever its case, as an integration may lower-case it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "a.txt").write_text("event.octopus_energy_electricity_21e1234567_rates")
+            self.assertEqual(scrub.find_leaks(root, ["21E1234567"]), ["a.txt"])
+
+    def test_find_personal_data_skips_the_public_vehicle_catalogue(self):
+        """Octopus's public vehicle catalogue holds model names shaped like postcodes (P90DL, S05 4WD); it is not personal data."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "cache").mkdir()
+            (root / "cache" / "octopus_vehicle_catalogue.json").write_text('{"models": ["P90DL", "S05 4WD"]}')
+            self.assertEqual(scrub.find_personal_data(root), [])
+
+    def test_find_personal_data_names_the_kind_only(self):
+        """Emails, phone numbers, postcodes other than the fake and real coordinates are reported by kind, without the value."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "clean.txt").write_text('{"latitude": 51.501, "longitude": -0.1419, "postcode": "SW1A 1AA"}')
+            (root / "email.txt").write_text("contact jo@example.org")
+            (root / "phone.txt").write_text("call 07123 456789")
+            (root / "postcode.txt").write_text("lives at AB1 2CD")
+            (root / "coords.txt").write_text('{"latitude": 52.123456}')
+            self.assertEqual(scrub.find_personal_data(root), [("coords.txt", "coordinates"), ("email.txt", "email"), ("phone.txt", "phone"), ("postcode.txt", "postcode")])
+
+
 if __name__ == "__main__":
     unittest.main()

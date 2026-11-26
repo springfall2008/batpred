@@ -43,9 +43,11 @@ and what `measure.py` uses to judge the lead's candidate. Its design is in
 - **Output:** `<out dir>/result.json` and the run's `predbat.log`:
     - `steady_rss_mb`: the median `VmRSS` (MiB) of cycles 4 to 6.
     - `peak_rss_mb`: `VmHWM` (MiB) for the whole run.
-    - `plan_digest`: a hash of each cycle's charge and export windows and limits.
-    - `ok`: false on any `Error:` line, a stale kernel binary, a forecast URL fetch, or a warning not listed in
-      `driver.py` (`ALLOWED_WARNINGS` for the Octopus offline polls, `BENIGN_WARNINGS` with a reason for each).
+    - `plan_digest`: a hash of each cycle's charge and export windows and limits, and its predicted SoC and cost every
+      half-hour.
+    - `ok`: false on any `Error:` line, a stale kernel binary, or a forecast URL fetch. Also false on any Octopus failure
+      other than the token mint and the three Intelligent polls (`ALLOWED_WARNINGS`), any other unlisted warning
+      (`BENIGN_WARNINGS` gives a reason for each), or a log line that looks like personal data.
     - Diagnostics: the per-cycle RSS, cycle times and the problems found.
 
 ### The fixture
@@ -66,9 +68,21 @@ The export reads the live `apps.yaml`, `predbat.db` (through a SQLite snapshot) 
 - a generated `apps.yaml`, from `coverage/memory_benchmark_tools/apps_template.yaml`;
 - `manifest.json`, holding T0 (the time of the export).
 
-Account numbers, meter serials and device IDs, inverter serials, keys and the home's location are replaced with fakes.
-If any known real value survives anywhere in the output, the export deletes it and fails. Predbat's own entities are
-kept, because it reads some of their history back; `--strip-outputs` leaves them out.
+Identifiers are scrubbed in three ways:
+
+- **Known values are replaced with fakes:** Octopus account numbers, MPANs and MPRNs, meter serials and device IDs,
+  inverter serials, and the forecast key and location. Each is also replaced lower-cased and with dashes as underscores.
+- **Device ids inside entity names are found by shape and renamed:** Solax sites and serials, chargers, Octopus devices
+  (`benchidN`).
+- **Personal attributes are replaced by category, at any depth:** coordinates, postcodes, names, addresses, emails,
+  phone numbers and company. This covers zones and GE Cloud's account record.
+
+The export then fails, and deletes its output, if any known real value survives in any case, or if anything still looks
+like an email, a phone number, a postcode other than the fake, or real coordinates. The public Octopus vehicle catalogue
+is not scanned. Every run's log gets the same personal-data check, so a log that looks like it holds one makes `ok`
+false.
+
+Predbat's own entities are kept, because it reads some of their history back; `--strip-outputs` leaves them out.
 
 The benchmark only runs where the fixture is. With no fixture it exits 2, which `measure.py` reports as a harness error.
 
@@ -78,6 +92,7 @@ The benchmark only runs where the fixture is. With no fixture it exits 2, which 
 | --- | --- |
 | Baseline (main plus #6369), 12 runs | steady 101.2 to 105.3 MB, median 104.6; peak 136.3 to 137.9 MB; about 25 s a run |
 | Determinism | the same `plan_digest` in all 12 runs, made over 16 minutes. The wall clock is frozen, so the time of day cannot reach the plan; a run hours later has not been made yet |
+| After the review fixes (re-scrubbed fixture, predictions in the digest), 3 runs | steady 104.3 to 105.5 MB, peak 136.0 to 136.9 MB, one digest; the same two controls give +20 MB with the same digest, and a new digest |
 | 20 MiB kept alive (control branch) | steady 124.5 MB (+19.9), peak 156.8 MB, same digest |
 | Import rates 1% higher (control branch) | a different digest |
 | `measure.py` with the same tree as base and candidate | a clean fail on the 25% target, not a harness error |

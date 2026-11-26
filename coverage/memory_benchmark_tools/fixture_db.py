@@ -5,10 +5,10 @@
 # -----------------------------------------------------------------------------
 """Export the memory benchmark's reference database from a live Predbat predbat.db.
 
-The live database is opened read-only. The export keeps the last N days up to T0 of every entity the benchmark's
-Predbat would read: Predbat's own settings, rates, cars and the rest, with the real inverter's history re-keyed onto
-the dummy inverter's sensors. Predbat's other outputs are dropped, since the run regenerates them and a stale copy
-would leak the live system's plan into the benchmark's inputs.
+The live database is read through a snapshot. The export keeps the last N days up to T0 of every entity, Predbat's own
+included (it reads some of their history back, and a db_primary install reloads them all; strip_outputs leaves them
+out), with the real inverter's history re-keyed onto the dummy inverter's sensors. Identifiers and personal attributes
+are scrubbed from every row.
 """
 
 import json
@@ -297,6 +297,25 @@ def _converted_rows(remap, rows):
     return [(when, str(round(number, 6)), attributes_json, system, keep) for when, number, system, keep in values], final
 
 
+def _scrub_text(text, replacements, tokens):
+    """Apply the known replacements and the device-id tokens to one piece of text."""
+    text = scrub.replace_everywhere(text, replacements)
+    return scrub.replace_tokens(text, tokens) if tokens and isinstance(text, str) else text
+
+
+def _scrub_row(row, replacements, tokens):
+    """Scrub one (datetime, state, attributes json, system, keep) row: identifiers, then personal attributes by category."""
+    when, state, attributes, system, keep = row
+    attributes = _scrub_text(attributes, replacements, tokens)
+    try:
+        parsed = json.loads(attributes) if attributes else None
+    except (TypeError, json.JSONDecodeError):
+        parsed = None
+    if isinstance(parsed, dict):
+        attributes = json.dumps(scrub.scrub_personal_attributes(parsed))
+    return (when, _scrub_text(state, replacements, tokens), attributes, system, keep)
+
+
 class _EngineBase:
     """Just enough of PredBat for DatabaseEngine to create an empty database with its own schema."""
 
@@ -313,14 +332,17 @@ def _create_empty_db(out_db):
         shutil.copyfile(Path(tmp) / "predbat.db", out_db)
 
 
-def export_db(live_db, out_db, t0, days, remap, prefix, dropped, replacements, strip_outputs=False):
+def export_db(live_db, out_db, t0, days, remap, prefix, dropped, replacements, strip_outputs=False, tokens=None):
     """Write out_db from live_db: the last days days up to t0 of every exported entity, and their latest states.
 
     t0 is naive UTC, as the database stores times. Exported are the entities that dropped() does not reject and that
     are not remapped real inverter entities, including Predbat's own (it reads some of their history back, and a
     db_primary install reloads them all); strip_outputs leaves out Predbat's outputs, keeping its settings; the remapped entities' history is
-    written under the dummy's sensor names instead. replacements are applied to every name, state and attribute.
-    Returns {"entities", "rows", "totals" (the dummy's starting lifetime totals), "dropped"}.
+    written under the dummy's sensor names instead. replacements (real value: fake) and tokens (device id read off entity
+    names: fake, matched as whole tokens) are applied to every name, state and attribute, and personal attributes
+    (coordinates, postcodes, contact details) are replaced by category.
+    Returns {"entities", "rows", "totals" (the dummy's starting lifetime totals), "dropped", "merged"}, merged counting the
+    entities left out because another had already scrubbed to the same name.
     """
     out_db = Path(out_db)
     if out_db.exists():
@@ -333,7 +355,8 @@ def export_db(live_db, out_db, t0, days, remap, prefix, dropped, replacements, s
 
     live = sqlite3.connect("file:{}?mode=ro".format(Path(live_db).resolve()), uri=True)
     out = sqlite3.connect(str(out_db))
-    stats = {"entities": 0, "rows": 0, "totals": {"pv": 0.0, "load": 0.0, "import": 0.0, "export": 0.0}, "dropped": 0}
+    stats = {"entities": 0, "rows": 0, "totals": {"pv": 0.0, "load": 0.0, "import": 0.0, "export": 0.0}, "dropped": 0, "merged": 0}
+    exported = set()
     try:
         entities = live.execute("SELECT entity_index, entity_name FROM entities ORDER BY entity_index").fetchall()
         for entity_index, name in entities:
@@ -361,11 +384,16 @@ def export_db(live_db, out_db, t0, days, remap, prefix, dropped, replacements, s
                     before = live.execute("SELECT datetime, state, attributes, system, keep FROM states WHERE entity_index = ? AND datetime < ? ORDER BY datetime DESC LIMIT 1", (entity_index, start)).fetchone()
                     if before is not None:
                         rows = [(start,) + tuple(before[1:])] + list(rows)
-                name = scrub.replace_everywhere(name, replacements)
-                rows = [scrub.replace_everywhere(row, replacements) for row in rows]
-                latest = scrub.replace_everywhere(latest, replacements) if latest else None
+                name = _scrub_text(name, replacements, tokens)
+                rows = [_scrub_row(row, replacements, tokens) for row in rows]
+                latest = _scrub_row(latest, replacements, tokens) if latest else None
             if not rows and latest is None:
                 continue
+            if name in exported:
+                # Another entity scrubbed to the same name (two spellings of one serial): keep the first
+                stats["merged"] += 1
+                continue
+            exported.add(name)
             cursor = out.execute("INSERT INTO entities (entity_name) VALUES (?)", (name,))
             new_index = cursor.lastrowid
             out.executemany("INSERT INTO states (datetime, entity_index, state, attributes, system, keep) VALUES (?, ?, ?, ?, ?, ?)", [(when, new_index, state, attributes, system, keep) for when, state, attributes, system, keep in rows])

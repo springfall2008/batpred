@@ -61,6 +61,7 @@ def make_live_db(path):
         ("predbat.plan_history", T0 - timedelta(hours=1), "x", {"history": "big"}),
         ("sensor.predbat_cost_today", T0 - timedelta(hours=1), "1.23", {}),
         ("sensor.octopus_rates", T0 - timedelta(hours=4), "12.5", {"account": "A-1234"}),
+        ("zone.home", T0 - timedelta(hours=4), "0", {"latitude": 52.1, "longitude": -1.6, "friendly_name": "Home"}),
     ]
     for entity_id, when, state, attributes in rows:
         engine._set_state_db(entity_id, state, attributes, when)
@@ -272,6 +273,36 @@ class TestExportDb(unittest.TestCase):
         before = (self.live.read_bytes(), os.stat(self.live).st_mtime_ns)
         self.export()
         self.assertEqual((self.live.read_bytes(), os.stat(self.live).st_mtime_ns), before)
+
+
+class TestPersonalAttributes(unittest.TestCase):
+    """export_db scrubs personal attributes in every exported row."""
+
+    def test_export_db_merges_entities_that_scrub_to_the_same_name(self):
+        """Two entities whose names differ only in a serial's case become one, rather than failing the export."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            engine = DatabaseEngine(StubBase(root), 30)
+            engine._set_state_db("sensor.solax_AB12345678_soc", "40", {}, T0 - timedelta(hours=2))
+            engine._set_state_db("sensor.solax_ab12345678_soc", "41", {}, T0 - timedelta(hours=1))
+            engine._close()
+            out = root / "out.db"
+            stats = fixture_db.export_db(root / "predbat.db", out, T0, 7, [], "predbat", dropped=lambda name: False, replacements={}, tokens={"ab12345678": "benchid1"})
+            self.assertEqual(query(out, "SELECT entity_name FROM entities WHERE entity_name LIKE 'sensor.solax_%'"), [("sensor.solax_benchid1_soc",)])
+            self.assertEqual(stats["merged"], 1)
+
+    def test_export_db_scrubs_coordinates_in_history_and_latest(self):
+        """zone.home's real coordinates are the fake ones in both its history and its latest state."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "live").mkdir()
+            live = make_live_db(root / "live")
+            out = root / "predbat.db"
+            fixture_db.export_db(live, out, T0, 7, [], "predbat", dropped=lambda name: False, replacements={})
+            rows = query(out, "SELECT s.attributes FROM states s JOIN entities e USING(entity_index) WHERE e.entity_name = 'zone.home' UNION ALL SELECT l.attributes FROM latest l JOIN entities e USING(entity_index) WHERE e.entity_name = 'zone.home'")
+            self.assertEqual(len(rows), 2)
+            for (attributes,) in rows:
+                self.assertEqual((json.loads(attributes)["latitude"], json.loads(attributes)["longitude"]), (51.501, -0.1419))
 
 
 if __name__ == "__main__":

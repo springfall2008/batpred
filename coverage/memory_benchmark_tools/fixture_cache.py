@@ -213,12 +213,17 @@ def export_forecast_cache(live_cache, out_cache, t0, live_config):
     return neutral, sorted(set(secret for secret in secrets if secret))
 
 
-def export_octopus_cache(live_cache, out_cache, t0):
+def export_octopus_cache(live_cache, out_cache, t0, tokens=None):
     """Copy the Octopus (and Predbat's own Octopus and future-rate) cache entries with identifiers scrubbed.
 
     The account entry loses its Kraken token and has its fetch times set to t0, so the component treats its account and
     tariffs as fresh; every copied entry's meta is created at t0. Returns {real value: fake value}, the token included
     (mapped to ""), for the caller's leak check and database export.
+
+    tokens are the device ids read off entity names (see scrub.name_id_tokens), applied to every copied entry. A device id
+    whose last segment is one of them gets a fake ending in that token's fake, because the component names a device's
+    entities after that segment and the database's names were renamed with it. Every value is also scrubbed lower-cased
+    and with dashes as underscores, as integrations rewrite them.
     """
     live_cache, out_cache = Path(live_cache), Path(out_cache)
     replacements = {}
@@ -226,13 +231,21 @@ def export_octopus_cache(live_cache, out_cache, t0):
     if account_path.exists():
         account = yaml.safe_load(account_path.read_text()) or {}
         replacements = scrub.collect_sensitive(account)
+        for real, fake in list(replacements.items()):
+            segment = real.rsplit("-", 1)[-1].lower()
+            if fake.startswith("BENCH-DEVICE") and "-" in real and tokens and segment in tokens:
+                replacements[real] = "BENCH-DEVICE-" + tokens[segment]
         if account.get("kraken_token"):
             replacements[account["kraken_token"]] = ""
+        replacements = scrub.with_case_variants(replacements)
         account = scrub.replace_everywhere(account, replacements)
         account["kraken_token"] = None
         account["tariff_fetched_at"] = t0.replace(tzinfo=None)
         account["device_fetched_at"] = t0.replace(tzinfo=None)
         write_entry(out_cache, "octopus_user", "account", account, "yaml", t0)
+        if tokens:
+            path = out_cache / "{}.yaml".format(ACCOUNT_STEM)
+            path.write_text(scrub.replace_tokens(path.read_text(), tokens))
 
     ordered = sorted(((real, fake) for real, fake in replacements.items() if real), key=lambda pair: len(pair[0]), reverse=True)
     for meta_path in sorted(live_cache.glob("*.meta")):
@@ -247,6 +260,8 @@ def export_octopus_cache(live_cache, out_cache, t0):
         text = data_path.read_text()
         for real, fake in ordered:
             text = text.replace(real, fake)
+        if tokens:
+            text = scrub.replace_tokens(text, tokens)
         (out_cache / data_path.name).write_text(text)
         _write_meta(out_cache / meta_path.name, fmt, meta.get("module", stem.split("_")[0]), t0)
     return replacements

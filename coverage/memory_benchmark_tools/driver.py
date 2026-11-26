@@ -24,14 +24,22 @@ import time
 import traceback
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import scrub  # noqa: E402
+
 # Warnings the Octopus component logs when its token mint and dispatch poll fail with no network. A failed poll keeps
 # what the component has (octopus.py async_update_intelligent_devices), so these are expected in every run.
+# Only the token mint and the Intelligent polls may fail: a failed account, tariff, saving-session or catalogue query
+# means a request the seeded cache should have answered went to the network, so it is a problem.
+INTELLIGENT_QUERY = r"graphql query get-intelligent-(?:devices|dispatches|settings)\b"
 ALLOWED_WARNINGS = (
-    "OctopusAPI: Failed to retrieve auth token",
-    "OctopusAPI: Failed to connect",
-    "OctopusAPI: Failed to retrieve data from graphql query",
-    "OctopusAPI: Could not list intelligent devices, refreshing the",
-    "OctopusAPI: Settings fetch failed for intelligent device",
+    r"OctopusAPI: Failed to retrieve auth token",
+    r"OctopusAPI: Failed to connect to mint a token",
+    r"OctopusAPI: Failed to connect for " + INTELLIGENT_QUERY,
+    r"OctopusAPI: Failed to retrieve data from " + INTELLIGENT_QUERY,
+    r"OctopusAPI: Could not list intelligent devices, refreshing the",
+    r"OctopusAPI: Settings fetch failed for intelligent device",
 )
 
 # Other warnings a clean benchmark run is known to log, each with the reason it is harmless here
@@ -52,21 +60,30 @@ ERROR_RE = re.compile(r"(^|: )Error:")
 def check_log(text, allowed_warnings=ALLOWED_WARNINGS, benign_warnings=BENIGN_WARNINGS):
     """Return the problems in a predbat.log, as messages without their timestamps; empty when the run is clean.
 
-    An Error line (also a component's "X: Error:"), a stale kernel binary or Python engine fallback, a forecast URL
+    allowed_warnings are regular expressions; benign_warnings are substrings with the reason each is harmless. A line that
+    looks like it holds personal data (an email, a phone number, a postcode other than the fake, real coordinates) is a
+    problem whatever else it is, reported by kind only. An Error line (also a component's "X: Error:"), a stale kernel binary or Python engine fallback, a forecast URL
     fetch (a request not served from the seeded cache; the "Fetching dual-plane ..." progress line is not one) and any warning not listed as allowed or benign are problems.
     """
     problems = []
+    allowed = [re.compile(pattern) for pattern in allowed_warnings]
+    personal = set()
     for line in text.splitlines():
         match = LOG_LINE_RE.match(line)
         message = match.group(1) if match else line
+        if "catalogue" not in message:
+            # (the catalogue note quotes public vehicle and charger models, some shaped like postcodes)
+            personal.update(scrub.personal_data_kinds(message.encode(errors="replace")))
         if ERROR_RE.search(message):
             problems.append(message)
         elif "stale binary" in message or "using Python engine" in message:
             problems.append(message)
         elif "SolarAPI: Fetching http" in message:
             problems.append(message)
-        elif "Warn:" in message and not any(allowed in message for allowed in tuple(allowed_warnings) + tuple(benign_warnings)):
+        elif "Warn:" in message and not any(pattern.search(message) for pattern in allowed) and not any(benign in message for benign in benign_warnings):
             problems.append(message)
+    # By kind only, so the problem list (which may be quoted) never carries the value
+    problems += ["possible personal data in the log: {}".format(kind) for kind in sorted(personal)]
     return problems
 
 
@@ -77,7 +94,7 @@ def summarise_rss(samples_kb, hwm_kb, settle):
 
 
 def canonical_plan(predbat):
-    """Return what a cycle decided, in the form the debug-replay goldens compare: the windows, the limits, and validity."""
+    """Return what a cycle decided: the windows, limits and validity the debug-replay goldens compare, and the predicted SoC and cost."""
     from utils import export_limit_sort_key
 
     return {
@@ -86,7 +103,15 @@ def canonical_plan(predbat):
         "export_window_best": predbat.export_window_best,
         "export_limits_best": [float(export_limit_sort_key(limit)) for limit in predbat.export_limits_best],
         "plan_valid": bool(predbat.plan_valid),
+        # What the plan predicts, so a saving that changes predictions with the same windows is caught; every half-hour
+        "predict_soc_best": _half_hourly(getattr(predbat, "predict_soc_best", {})),
+        "predict_metric_best": _half_hourly(getattr(predbat, "predict_metric_best", {})),
     }
+
+
+def _half_hourly(series):
+    """Return a minute-keyed prediction sampled every 30 minutes, with string keys, as the digest's JSON holds it."""
+    return {str(minute): value for minute, value in sorted((series or {}).items()) if minute % 30 == 0}
 
 
 def plan_digest(plans):

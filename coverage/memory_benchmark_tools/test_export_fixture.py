@@ -88,6 +88,9 @@ def make_live(root, plant_leak=False):
     engine._set_state_db("sensor.real_load_today", "3.0", {"unit_of_measurement": "kWh"}, when)
     engine._set_state_db("sensor.car_plugged", "on", {"serial": "XX1234Y567"}, when)
     engine._set_state_db("binary_sensor.predbat_octopus_a_1234abcd_saving_session", "off", {"account": "A-1234ABCD"}, when)
+    engine._set_state_db("event.octopus_energy_electricity_21e1234567_rates", "on", {}, when)
+    engine._set_state_db("sensor.predbat_solax_1234567890123456789_soc", "50", {}, when)
+    engine._set_state_db("zone.home", "0", {"latitude": 52.987654, "longitude": -1.234567}, when)
     engine._set_state_db("sensor.weather", "sunny", {"note": "QQ1 1QQ" if plant_leak else "fine"}, when)
     engine._close()
     source = fixture_cache.solcast_source()
@@ -166,7 +169,8 @@ class TestExportFixtureCli(unittest.TestCase):
             apps = yaml.safe_load((out / "apps.yaml").read_text())["pred_bat"]
             self.assertEqual(apps["dummy_inverter"]["battery_size"], 9.5)
             self.assertEqual(apps["dummy_inverter"]["soc_initial"], 50.0)
-            self.assertEqual(scrub.find_leaks(out, ["A-9876", "1900000000001", "XX1234Y567", "xx1234y567", "real-forecast-key", "Real Place", "a_1234abcd", "A-1234ABCD"]), [])
+            self.assertEqual(scrub.find_leaks(out, ["A-9876", "1900000000001", "XX1234Y567", "xx1234y567", "real-forecast-key", "Real Place", "a_1234abcd", "A-1234ABCD", "21e1234567", "1234567890123456789", "52.987654"]), [])
+            self.assertEqual(scrub.find_personal_data(out), [])
             self.assertIn(b"binary_sensor.predbat_octopus_a_bench0001_saving_session", (out / "predbat.db").read_bytes())
 
     def test_export_fixture_cli_refuses_a_leak_and_removes_its_output(self):
@@ -187,6 +191,21 @@ class TestExportFixtureCli(unittest.TestCase):
             (out / "precious.txt").write_text("keep me")
             self.assertNotEqual(export_fixture.main(["--live", str(live), "--out", str(out), "--t0", T0.isoformat()]), 0)
             self.assertEqual((out / "precious.txt").read_text(), "keep me")
+
+
+class TestExportPersonalDataCheck(unittest.TestCase):
+    """The export refuses to leave a fixture that still looks like it holds personal data."""
+
+    def test_export_fixture_cli_refuses_an_email_it_cannot_scrub(self):
+        """An email inside a free-text attribute is found by its shape, and the export fails and removes its output."""
+        with tempfile.TemporaryDirectory() as tmp:
+            live = make_live(tmp)
+            engine = DatabaseEngine(StubBase(live), 30)
+            engine._set_state_db("sensor.note", "x", {"note": "contact jo@example.org"}, T0.replace(tzinfo=None) - timedelta(hours=1))
+            engine._close()
+            out = Path(tmp) / "fixture"
+            self.assertNotEqual(export_fixture.main(["--live", str(live), "--out", str(out), "--t0", T0.isoformat()]), 0)
+            self.assertFalse(out.exists())
 
 
 if __name__ == "__main__":
