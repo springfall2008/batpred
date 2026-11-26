@@ -32,6 +32,11 @@ constant or an hourly profile. Every setting lives in one apps.yaml block:
       pv_peak: 4.0              # kW, clear-sky curve peak when there is no forecast
       pv_scaling: 1.0           # applied to the forecast or curve
       load: 0.4                 # kW constant, or a list of kW values spread evenly across the day (e.g. 24 hourly)
+      totals:                   # optional, kWh the lifetime sensors start from (default 0), e.g. to continue a history
+        load: 0
+        pv: 0
+        import: 0
+        export: 0
 
 The model is deliberately independent of Predbat's prediction engine, so it can catch a prediction that
 disagrees with what an inverter would actually do.
@@ -58,6 +63,9 @@ DUMMY_DEFAULTS = {
     "sunset": 18.5,
     "load": 0.4,
 }
+
+# Lifetime counters an apps.yaml totals block may seed, in kWh (see the module docstring)
+DUMMY_TOTALS_SEEDED = ("pv", "load", "import", "export")
 
 DUMMY_OPTIONS_TIME = [(datetime(2000, 1, 1) + timedelta(minutes=minute)).strftime("%H:%M:%S") for minute in range(0, 24 * 60)]
 
@@ -220,6 +228,15 @@ class DummyInverter(ComponentBase):
         self.automatic = automatic
         self.soc_kwh = self.params["battery_size"] * self.params["soc_initial"] / 100.0
         self.totals = {"pv": 0.0, "load": 0.0, "import": 0.0, "export": 0.0, "clipped": 0.0}
+        seed = config.get("totals") if isinstance(config, dict) else None
+        if isinstance(seed, dict):
+            for key in DUMMY_TOTALS_SEEDED:
+                try:
+                    value = float(seed.get(key))
+                except (TypeError, ValueError):
+                    continue
+                if value >= 0:
+                    self.totals[key] = value
         self.flows = {"battery": 0.0, "grid": 0.0, "pv": 0.0, "load": 0.0, "clipped": 0.0}
         self.last_minute = None
         rate_w = self.params["battery_rate_max"]

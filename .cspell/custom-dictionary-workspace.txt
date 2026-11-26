@@ -70,6 +70,7 @@ batteri
 batteryb
 batusecap
 beforeunload
+benchid
 bierner
 bisectable
 Bitwarden
@@ -185,6 +186,7 @@ dlimit
 dlopen
 dnoregion
 docstrings
+DONT
 dschg
 dstamp
 dstart
@@ -203,6 +205,7 @@ edfenergy
 edfgb
 edgecolor
 efgh
+EINVAL
 elif
 elinter
 eload
@@ -248,11 +251,13 @@ EVDC
 evergen
 evilspringfall
 evse
+executemany
 exog
 expmsg
 exportlimit
 exportvalue
 facecolor
+faketime
 fdpwr
 fdsoc
 feedin
@@ -406,8 +411,10 @@ labelnames
 ladybugdb
 Lanmate
 larr
+lastrowid
 libbi
 libc
+libfaketime
 libyaml
 LIFEPO
 linebreak
@@ -442,6 +449,7 @@ mdi
 mdlrc
 measurand
 measurands
+memray
 Meteo
 Meteoalarm
 meterpoint
@@ -467,6 +475,7 @@ misdetection
 mispairing
 Mixergy
 mkdocs
+mktemp
 mlugg
 Modbus
 mogons
@@ -487,6 +496,7 @@ myaccount
 myenergi
 mypy
 nanmean
+nanosleep
 nanstd
 nattribute
 nbytes
@@ -560,6 +570,7 @@ percnt
 peterhaban
 pgrid
 photovoltaics
+pipefail
 pitem
 pkwh
 plenticore
@@ -585,6 +596,7 @@ predheat
 preseed
 preseeded
 prevs
+procps
 protobuf
 pseudonymisation
 pseudonymise
@@ -609,6 +621,7 @@ pypi
 pyproject
 pytest
 pythonhashseed
+PYTHONPATH
 pytz
 Quattro
 Qwen
@@ -677,6 +690,7 @@ sigen
 sigencloud
 sigenergy
 sigenstor
+sitecustomize
 sizeof
 skynet
 Slee
@@ -717,6 +731,7 @@ stdlib
 stepline
 stevekirtley
 Storion
+strftime
 Stromligning
 strptime
 strtod
@@ -771,6 +786,7 @@ tmrw
 tojson
 topbar
 tottime
+tracemalloc
 trapezoidally
 trapz
 Trefor
@@ -841,6 +857,7 @@ workmode
 workstream
 workstreams
 worktree
+worktrees
 writeonly
 wrongsha
 WRONLY
