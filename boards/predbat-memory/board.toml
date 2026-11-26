@@ -71,6 +71,9 @@ timeout_minutes = 60
 [lead]
 model = "opus"
 round_every_minutes = 20
+# When the lead is stuck for ideas it asks a sub-agent on this model. Needs the runner from agent-memory-supabase
+# PR #17 or later: an older runner rejects the key.
+ideas_model = "fable"
 
 [[worker]]
 model = "opus"
