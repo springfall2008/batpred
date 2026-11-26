@@ -6,6 +6,7 @@
 """Tests for the predbat-memory measurement and board file. Run: python3 -m unittest discover -s boards/predbat-memory"""
 
 import ast
+import fnmatch
 import json
 import os
 import subprocess
@@ -205,7 +206,7 @@ NEEDED = (
 DANGEROUS = (
     "Bash(git push*)",
     "Bash(gh *)",
-    "Bash(git reset --hard*)",
+    "Bash(git reset*)",
     "Bash(git branch -D*)",
     "Bash(git branch -f*)",
     "Bash(git update-ref*)",
@@ -221,6 +222,10 @@ DANGEROUS = (
 
 # git subcommands that change a branch, the index or the working tree: in the main checkout they would land on main,
 # which is the base measure.py measures, so they are allowed only as `git -C <a board worktree> ...`
+GIT_READS = ("status", "diff", "log", "show", "rev-parse", "rev-list", "merge-base", "branch", "worktree")
+MAIN = "/Users/someone/predbat/batpred"
+WT = "git -C " + MAIN + "/.worktrees/board-memory-1a2b3c4d"
+
 GIT_WRITES = ("add", "commit", "merge", "rebase", "cherry-pick", "restore", "checkout", "switch", "stash", "reset", "revert", "am", "apply", "pull", "fetch", "push", "tag")
 
 
@@ -242,24 +247,73 @@ class TestBoardFile(unittest.TestCase):
             self.assertIn(entry, self.board["permissions"]["deny"])
             self.assertNotIn(entry, self.board["permissions"]["allow"])
 
-    def test_every_git_deny_also_denies_its_git_dash_c_form(self):
-        """Bash(git -C *) is allowed, and a rule matches the command's start, so `git -C <dir> push` would slip past Bash(git push*)."""
-        deny = self.board["permissions"]["deny"]
-        for entry in deny:
-            if entry.startswith("Bash(git ") and not entry.startswith("Bash(git -C "):
-                self.assertIn("Bash(git -C * " + entry[len("Bash(git ") :], deny, entry)
+    def permitted(self, command):
+        """Whether a worker may run command: an allow entry matches it and no deny entry does.
 
-    def test_git_writes_are_allowed_only_in_a_board_worktree(self):
-        """Workers run the benchmark from the main checkout, where a plain `git merge` or `git commit` would move main."""
+        This models what the dontAsk check was seen to do: an entry matches from the start of the command, `*` matches
+        any run of characters (spaces and slashes included), and a deny beats an allow.
+        """
+
+        def matches(entry):
+            """Whether one Bash(...) entry matches command."""
+            return entry.startswith("Bash(") and fnmatch.fnmatchcase(command, entry[len("Bash(") : -1])
+
+        return any(matches(e) for e in self.board["permissions"]["allow"]) and not any(matches(e) for e in self.board["permissions"]["deny"])
+
+    def test_git_allow_entries_are_reads_or_scoped_writes(self):
+        """Every git allow entry is a known read, plain or -C, or a write that names a board worktree; nothing broader."""
         for entry in self.board["permissions"]["allow"]:
-            if not entry.startswith("Bash(git "):
-                continue
-            words = entry[len("Bash(") : -1].split()
-            command = words[3] if words[1] == "-C" else words[1]
-            if command.rstrip("*") in GIT_WRITES:
-                self.assertTrue(entry.startswith(WORKTREE_GIT), entry)
-            # a bare `git -C *` would let any write through with any path
-            self.assertNotEqual(entry, "Bash(git -C *)")
+            if entry.startswith("Bash(git "):
+                body = entry[len("Bash(git ") : -1]
+                read = body.removeprefix("-C * ").split(" ")[0].rstrip("*") in GIT_READS
+                self.assertTrue(read or entry.startswith(WORKTREE_GIT), entry)
+
+    def test_the_commands_workers_need_are_permitted(self):
+        """The everyday commands, including a commit whose message mentions words the deny list names."""
+        for command in (
+            WT + " commit -m 'board(predbat-memory 1a2b3c4d): clean up the module list and push the cache into a helper'",
+            WT + " commit -F /tmp/predbat-board/memory/1a2b3c4d/message.txt",
+            WT + " cherry-pick -x 610f6151",
+            WT + " checkout -- apps/predbat/web.py",
+            WT + " log --oneline main..HEAD",
+            "git -C " + MAIN + " rev-parse --short main",
+            "git -C " + MAIN + " worktree add -b board/predbat-memory/1a2b3c4d " + MAIN + "/.worktrees/board-memory-1a2b3c4d main",
+            "git log --oneline main..board/predbat-memory/7e4d2dbd",
+            "git worktree add -b board/predbat-memory/1a2b3c4d " + MAIN + "/.worktrees/board-memory-1a2b3c4d main",
+            "python3 -X importtime -c 'import predbat'",
+        ):
+            self.assertTrue(self.permitted(command), command)
+
+    def test_the_mistakes_the_list_is_there_to_stop_are_refused(self):
+        """Moving main, pushing, deleting another intent's branch or worktree, a read that writes or runs, and pip."""
+        for command in (
+            "git commit -m x",
+            "git merge board/predbat-memory/7e4d2dbd",
+            "git -C " + MAIN + " commit -m x",
+            "git -C " + MAIN + " merge board/predbat-memory/7e4d2dbd",
+            WT + "/../.. commit -m x",
+            "git push",
+            WT + " push",
+            WT + " reset --hard HEAD~1",
+            WT + " clean -fdx",
+            "git branch -D board/predbat-memory/7e4d2dbd",
+            "git branch --delete board/predbat-memory/7e4d2dbd",
+            "git -C " + MAIN + " branch --delete --force board/predbat-memory/7e4d2dbd",
+            "git -C " + MAIN + " branch --move board/predbat-memory/7e4d2dbd elsewhere",
+            WT + " checkout -B board/predbat-memory/7e4d2dbd",
+            "git worktree remove --force " + MAIN + "/.worktrees/board-memory-7e4d2dbd",
+            "git -C " + MAIN + " worktree remove --force .worktrees/board-memory-7e4d2dbd",
+            "git -C " + MAIN + " worktree prune",
+            "git -C " + MAIN + " diff --stat --output=apps/predbat/predbat.py",
+            "git diff --output=apps/predbat/predbat.py",
+            "git -C " + MAIN + " -c core.fsmonitor=touch status",
+            WT + " rebase --exec 'make' main",
+            "python3 -m pip install requests",
+            "python3 -mpip install requests",
+            MAIN + "/coverage/venv/bin/python3 -mpip install requests",
+            "rm -R /tmp/predbat-board",
+        ):
+            self.assertFalse(self.permitted(command), command)
 
     def test_no_allow_entry_is_a_catch_all(self):
         """Bash(rm *) cannot be made safe by spelling-based denies (rm -R, --recursive, reordered flags), and Bash(env) runs anything after it."""
