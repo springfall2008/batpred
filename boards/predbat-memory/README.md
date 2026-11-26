@@ -10,6 +10,22 @@ blackboard skill from agent-memory-supabase (`runner/` and `skills/blackboard/` 
 | `measure.py`       | The runner's `[measure]` command, which confirms a candidate before the board ends  |
 | `test_measure.py`  | Tests for `measure.py`: `python3 -m unittest discover -s boards/predbat-memory`     |
 
+## How the board runs
+
+1. **Baseline.** The lead's first round writes one intent only. Its worker records main's commit, measures main three
+   times with the benchmark, and maps the largest memory holders. No saving work starts until that fact is confirmed.
+2. **Savings.** The lead plans intents from the map, two open at a time. Each worker makes its own worktree and branch
+   (`board/predbat-memory/<intent short id>`) and makes one commit per change. It starts from main, from the commit the
+   intent names, or from any earlier board commit with a confirmed fact. To combine savings it cherry-picks them. All
+   the worktrees share one repository, so every board commit is visible to every worker.
+3. **Knowing what is in a tree.** Every board commit message starts `board(predbat-memory <intent short id>): <what it
+   saves>`, so `git log --oneline main..<commit>` lists the savings in a tree. Every fact about a commit starts with
+   `Commit:`, `Built on:`, `Tree contains:` (each saving with the fact that measured it) and the steady and peak
+   medians against main.
+4. **Finishing.** When a commit's facts meet the done-when, the lead proposes it, and the runner runs `measure.py`
+   against main. A pass ends the board. A fail goes back to the lead to plan from. The board also stops at 20 intents,
+   and can be resumed with a higher limit.
+
 ## Before the first run: the benchmark
 
 The board needs `coverage/memory_benchmark`, which does not exist yet. Workers use it to find and check savings, and
