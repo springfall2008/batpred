@@ -353,10 +353,7 @@ class Compare:
 
         # Find discharging windows
         if pb.rate_export:
-            pb.high_export_rates, export_lowest, export_highest = pb.rate_scan_window(pb.rate_export, 5, pb.rate_export_cost_threshold, True)
-            # Update threshold automatically
-            if pb.rate_high_threshold == 0 and export_lowest <= pb.rate_export_max:
-                pb.rate_export_cost_threshold = export_lowest
+            pb.scan_export_windows()
 
         # Find charging windows
         if pb.rate_import:

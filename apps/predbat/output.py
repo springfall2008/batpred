@@ -402,9 +402,9 @@ class Output:
         Publish the export rates
         """
         window_str = ""
-        if self.high_export_rates:
+        if self.high_export_rates_tariff:
             window_n = 0
-            for window in self.high_export_rates:
+            for window in self.high_export_rates_tariff:
                 rate_high_start = window["start"]
                 rate_high_end = window["end"]
                 rate_high_average = window["average"]
@@ -508,7 +508,7 @@ class Output:
             self.log("High export rate windows [{}]".format(window_str))
 
         # Clear rates that aren't available
-        if not self.high_export_rates:
+        if not self.high_export_rates_tariff:
             self.log("No high rate period found")
             self.dashboard_item(
                 self.prefix + ".high_rate_export_start",
@@ -554,7 +554,7 @@ class Output:
                 state=0,
                 attributes={"friendly_name": "Next high export rate duration", "state_class": "measurement", "unit_of_measurement": "minutes", "icon": "mdi:table-clock"},
             )
-        if len(self.high_export_rates) < 2:
+        if len(self.high_export_rates_tariff) < 2:
             self.dashboard_item(
                 self.prefix + ".high_rate_export_start_2",
                 state="undefined",
