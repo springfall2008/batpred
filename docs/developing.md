@@ -866,6 +866,19 @@ dummy_inverter:
 
 Every setting is optional. `totals` lets the `_lifetime` sensors continue an existing history instead of starting from zero, which the memory benchmark uses so its recorded load and PV history meet the simulated counters without a jump. The model steps once a minute: the battery charges and discharges within its rate and losses, PV and battery share the inverter limit with PV first, export is capped at the export limit, and PV with nowhere to go is clipped (published as `sensor.predbat_dummy_clipped_power` and `_clipped_lifetime`). Predbat's charge and export windows are obeyed, a zero-rate window freezes the battery, and outside a window it runs self-consumption. PV comes from Predbat's forecast when one is configured. The simulation state is not saved, so a restart starts again from `soc_initial`.
 
+### Memory benchmark
+
+`coverage/memory_benchmark <tree> <out dir>` measures how much memory Predbat from `<tree>` uses. It runs Predbat standalone in a Linux container with no network: the database is the only data source, the dummy inverter replaces the real one, and the forecast and Octopus components are served from seeded caches. The wall clock is frozen, and the run makes 6 plan cycles. It writes `result.json` with the steady and peak RSS and a digest of the plans, which must not change when memory use does. The `predbat-memory` board (`boards/predbat-memory/`) uses it to find savings.
+
+Its input is a local fixture, built from a live Predbat add-on config directory and never committed:
+
+```bash
+python3 coverage/memory_benchmark_tools/export_fixture.py --live <add-on config dir> --out coverage/memory_benchmark_data
+coverage/memory_benchmark . /tmp/memory-run
+```
+
+See `boards/predbat-memory/README.md` for what the fixture holds, how identifiers are scrubbed, and the measured baseline. The tools' tests run with `python3 -m unittest discover -s coverage/memory_benchmark_tools`, and in pre-commit.
+
 ### Random scenario benchmarking
 
 Predbat can generate reproducible random scenarios, run them through the optimiser, and compare two runs. This is useful to check that a change to the optimiser

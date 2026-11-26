@@ -26,36 +26,70 @@ blackboard skill from agent-memory-supabase (`runner/` and `skills/blackboard/` 
    against main. A pass ends the board. A fail goes back to the lead to plan from. The board also stops at 20 intents,
    and can be resumed with a higher limit.
 
-## Before the first run: the benchmark
+## The benchmark
 
-The board needs `coverage/memory_benchmark`, which does not exist yet. Workers use it to find and check savings, and
-`measure.py` uses it to judge the lead's candidate. Until it exists, `measure.py` exits 2 with `HARNESS ERROR`.
+`coverage/memory_benchmark <tree> <out dir>`, run from the main checkout, is what workers use to find and check savings
+and what `measure.py` uses to judge the lead's candidate. Its design is in
+`docs/superpowers/specs/2026-11-26-memory-benchmark-design.md`.
 
-What it must do:
+- **The run:** Predbat from `<tree>`'s `apps/predbat/`, started as `hass.py` starts it, with `db_primary: true`, the
+  dummy inverter in place of the real one, and no Home Assistant. The forecast (forecast.solar) and Octopus components
+  run, served from their seeded caches. MCP, Load ML and GivTCP are off. After every component has published once,
+  the driver runs 6 plan cycles, each forced to recompute.
+- **Where:** a Linux container on a pinned image (`coverage/memory_benchmark_tools/Dockerfile`), with `--network none`,
+  4 CPUs and 3 GB. The kernel is built inside from `<tree>`, so a branch never runs a stale binary. The wall clock is
+  frozen at the fixture's T0 with libfaketime (monotonic time keeps running), so every run plans at the same instant
+  whenever it is made.
+- **Output:** `<out dir>/result.json` and the run's `predbat.log`:
+    - `steady_rss_mb`: the median `VmRSS` (MiB) of cycles 4 to 6.
+    - `peak_rss_mb`: `VmHWM` (MiB) for the whole run.
+    - `plan_digest`: a hash of each cycle's charge and export windows and limits.
+    - `ok`: false on any `Error:` line, a stale kernel binary, a forecast URL fetch, or a warning not listed in
+      `driver.py` (`ALLOWED_WARNINGS` for the Octopus offline polls, `BENIGN_WARNINGS` with a reason for each).
+    - Diagnostics: the per-cycle RSS, cycle times and the problems found.
 
-- **Command line:** `coverage/memory_benchmark <tree> <out dir>`, run from the main checkout. `<tree>` is any batpred
-  checkout (a worktree for main or for a board branch). The exit code is 0 when the run completed.
-- **The run:** Predbat standalone from `<tree>`'s `apps/predbat/`, with `db_primary: true`, the dummy inverter
-  (`dummy_inverter:` block, see `apps/predbat/dummy_inverter.py`) and no Home Assistant. It runs a fixed number of plan
-  cycles, with the clock and every input fixed, so two runs of the same tree give the same plans.
-- **Where:** inside a Linux container, on the same image every time, since macOS RSS is not usable for memory work.
-  The kernel is built for the container's architecture from `<tree>`, so a board branch never runs a stale binary.
-- **Output:** `<out dir>/result.json`, plus the run's `predbat.log` in `<out dir>`:
+### The fixture
 
-  ```json
-  { "ok": true, "steady_rss_mb": 120.5, "peak_rss_mb": 150.2, "plan_digest": "<hex>" }
-  ```
+The benchmark's input is a local fixture in `coverage/memory_benchmark_data/`. It is gitignored and never committed,
+because it is built from a real install. Build or rebuild it from the live Predbat add-on config directory with:
 
-    - `steady_rss_mb`: RSS once the run has settled, after the first cycles. The benchmark chooses how, and keeps it fixed.
-    - `peak_rss_mb`: VmHWM for the whole run.
-    - `plan_digest`: a hash of every cycle's plan, which must not change when memory use does.
-    - `ok`: false when the log shows an error, or the kernel fell back to Python ("stale binary").
+```sh
+python3 coverage/memory_benchmark_tools/export_fixture.py --live <add-on config dir> --out coverage/memory_benchmark_data
+```
 
-Two runs of main must give the same `plan_digest`: `measure.py` treats a base that disagrees with itself as a harness
-error.
+The export reads the live `apps.yaml`, `predbat.db` (through a SQLite snapshot) and `cache/` read-only, and never reads
+`secrets.yaml`. It writes:
 
-Once it exists, measure main a few times and check that the 25% target in `board.toml` (goal, done-when) and
-`measure.py` (`STEADY_CUT`) is still the right one.
+- the last 7 days of history up to T0, with the real inverter's history re-keyed onto the dummy inverter's sensors and
+  their starting totals;
+- the Octopus and forecast cache entries, made fresh at T0;
+- a generated `apps.yaml`, from `coverage/memory_benchmark_tools/apps_template.yaml`;
+- `manifest.json`, holding T0 (the time of the export).
+
+Account numbers, meter serials and device IDs, inverter serials, keys and the home's location are replaced with fakes.
+If any known real value survives anywhere in the output, the export deletes it and fails. Predbat's own entities are
+kept, because it reads some of their history back; `--strip-outputs` leaves them out.
+
+The benchmark only runs where the fixture is. With no fixture it exits 2, which `measure.py` reports as a harness error.
+
+### Measured (26 Nov 2026, Apple M4 Max, Docker aarch64)
+
+| What | Result |
+| --- | --- |
+| Baseline (main plus #6369), 12 runs | steady 101.2 to 105.3 MB, median 104.6; peak 136.3 to 137.9 MB; about 25 s a run |
+| Determinism | the same `plan_digest` in all 12 runs, made over 16 minutes. The wall clock is frozen, so the time of day cannot reach the plan; a run hours later has not been made yet |
+| 20 MiB kept alive (control branch) | steady 124.5 MB (+19.9), peak 156.8 MB, same digest |
+| Import rates 1% higher (control branch) | a different digest |
+| `measure.py` with the same tree as base and candidate | a clean fail on the 25% target, not a harness error |
+
+The 25% target in `board.toml` and `measure.py` (`STEADY_CUT`) means a candidate's steady RSS must come down to about
+78 MB. Startup alone is about 74 MB, so most of the saving has to come from what the plan cycles hold.
+
+Noise is about 4 MB on steady and about 1 MB on the median peak, between identical trees. The done-when's "median peak
+no higher than main's" can therefore fail a candidate whose peak is unchanged.
+
+The Octopus component needs #6369 (its token mint and GraphQL query catching connection errors) to run offline. Until
+that is on main, a base of main fails every cycle.
 
 ## Running it
 
