@@ -1,0 +1,85 @@
+#!/bin/bash
+# -----------------------------------------------------------------------------
+# Predbat Home Battery System
+# Copyright Trefor Southwell 2026 - All Rights Reserved
+# This application maybe used for personal use only and not for commercial use
+# -----------------------------------------------------------------------------
+# Memory benchmark for the predbat-memory board (boards/predbat-memory/README.md).
+#
+#   coverage/memory_benchmark [--tracemalloc] <tree> <out dir>
+#
+# Runs Predbat from <tree>'s apps/predbat standalone - db_primary, the dummy inverter, the forecast and Octopus
+# components served from their seeded caches - in a Linux container with no network and the wall clock frozen at the
+# fixture's T0, for a fixed number of plan cycles. Writes <out dir>/result.json (ok, steady_rss_mb, peak_rss_mb,
+# plan_digest), <out dir>/modules.txt (the loaded modules by package) and <out dir>/predbat.log, and exits 0 when
+# result.json was written.
+#
+# --tracemalloc also writes <out dir>/tracemalloc.txt, the largest live allocations after the last cycle. Tracing
+# inflates RSS, so that run's figures are not evidence: its result.json says "tracemalloc": true and measure.py refuses it.
+#
+# Needs the local fixture, built by coverage/memory_benchmark_tools/export_fixture.py into
+# coverage/memory_benchmark_data (or $MEMORY_BENCHMARK_DATA). Builds its pinned image on first use.
+set -euo pipefail
+
+HERE="$(cd "$(dirname "$0")" && pwd)"
+TOOLS="$HERE/memory_benchmark_tools"
+DATA="${MEMORY_BENCHMARK_DATA:-$HERE/memory_benchmark_data}"
+CYCLES="${MEMORY_BENCHMARK_CYCLES:-6}"
+CPUS="${MEMORY_BENCHMARK_CPUS:-4}"
+MEMORY="${MEMORY_BENCHMARK_MEMORY:-3g}"
+
+TRACEMALLOC=""
+if [ "${1:-}" = "--tracemalloc" ]; then
+    TRACEMALLOC=1
+    shift
+fi
+if [ $# -ne 2 ]; then
+    echo "usage: memory_benchmark [--tracemalloc] <tree> <out dir>"
+    exit 2
+fi
+if [ ! -f "$1/apps/predbat/predbat.py" ]; then
+    echo "Error: $1 is not a batpred checkout (no apps/predbat/predbat.py)"
+    exit 2
+fi
+TREE="$(cd "$1" && pwd)"
+if [ ! -f "$DATA/manifest.json" ]; then
+    echo "Error: no benchmark fixture at $DATA (no manifest.json). Build it from the live Predbat add-on config with:"
+    echo "  python3 coverage/memory_benchmark_tools/export_fixture.py --live <add-on config dir> --out coverage/memory_benchmark_data"
+    exit 2
+fi
+mkdir -p "$2"
+OUT="$(cd "$2" && pwd)"
+# Every output the driver writes, so a run that dies early never leaves an earlier run's figures or reports behind
+rm -f "$OUT/result.json" "$OUT/modules.txt" "$OUT/tracemalloc.txt"
+
+# The frozen clock: the fixture's T0 in UTC, in the absolute form libfaketime freezes at (no "@", which would tick)
+T0="$(python3 -c 'import json, sys; from datetime import datetime, timezone; t = datetime.fromisoformat(json.load(open(sys.argv[1]))["t0"]); print(t.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))' "$DATA/manifest.json")"
+
+# The image is named after its Dockerfile and the tree's requirements, so a branch that changes them gets its own
+IMAGE="predbat-memory-bench:$(cat "$TOOLS/Dockerfile" "$TREE/requirements.txt" | shasum -a 256 | cut -c1-12)"
+if ! docker image inspect "$IMAGE" > /dev/null 2>&1; then
+    CONTEXT="$(mktemp -d)"
+    cp "$TOOLS/Dockerfile" "$TREE/requirements.txt" "$CONTEXT/"
+    docker build -q -t "$IMAGE" "$CONTEXT" > /dev/null
+    rm -rf "$CONTEXT"
+fi
+
+# Every run starts from a fresh copy of the fixture, since Predbat writes to its database and cache
+SCRATCH="$(mktemp -d)"
+trap 'rm -rf "$SCRATCH"' EXIT
+cp -R "$DATA/." "$SCRATCH/"
+rm -f "$SCRATCH/manifest.json"
+
+set +e
+docker run --rm --network none --cpus "$CPUS" --memory "$MEMORY" \
+    -e TZ=UTC -e BENCH_T0="$T0" -e BENCH_CYCLES="$CYCLES" ${BENCH_DRIVER:+-e BENCH_DRIVER="$BENCH_DRIVER"} ${TRACEMALLOC:+-e BENCH_TRACEMALLOC=1} \
+    -v "$TREE/apps/predbat:/src:ro" -v "$TOOLS:/bench:ro" -v "$SCRATCH:/fixture" -v "$OUT:/out" \
+    "$IMAGE" bash /bench/container_run.sh
+status=$?
+set -e
+
+if [ ! -f "$OUT/result.json" ]; then
+    echo "Error: the run wrote no result.json (container exit $status); see $OUT/predbat.log and $OUT/kernel_build.log"
+    exit 1
+fi
+exit 0

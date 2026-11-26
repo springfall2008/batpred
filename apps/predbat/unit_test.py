@@ -377,6 +377,8 @@ from tests.test_random_scenarios import (
     run_random_scenario_tests,
     run_random_scenario_reapply_tests,
     run_random_scenario_metric_tests,
+    run_random_scenario_dawn_surplus_tests,
+    run_random_scenario_axle_precharge_tests,
     run_random_scenario_generator_tests,
 )
 from tests import network_guard
@@ -474,6 +476,8 @@ from tests.test_annual_export_sweep import (
     test_annual_export_sweep_tariff_threading,
 )
 from tests.test_debug_history import test_debug_history
+from tests.select_tests import choose_tests
+from tests.test_select_tests import test_select_tests
 from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment, test_debug_history_count_range
 
 # Mock the components and plugin system
@@ -611,6 +615,7 @@ def main():
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
+        ("select_tests", test_select_tests, "--test and -k test selection accepts function names and a test_ prefix", False),
         ("env_config", run_env_config_tests, "Per-instance PREDBAT_APPS_FILE / PREDBAT_SECRETS_FILE config tests", False),
         ("export_encoding", run_export_encoding_tests, "Packed export limit encoding accessor tests", False),
         ("export_more_solar_warning", run_export_more_solar_warning_tests, "export_more_solar / set_export_freeze dependency warning tests", False),
@@ -1101,6 +1106,8 @@ def main():
         ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
         ("random_reapply", run_random_scenario_reapply_tests, "Running a random scenario leaves it unchanged, so a re-run plans identically", False),
         ("random_metric", run_random_scenario_metric_tests, "The random scenario harness records the planner's own metric for the final plan", False),
+        ("random_dawn_surplus", run_random_scenario_dawn_surplus_tests, "A battery holding energy at dawn before a clipped solar day exports it at the night rate", False),
+        ("random_axle_precharge", run_random_scenario_axle_precharge_tests, "Charging at the peak rate ahead of an Axle event does not make the peak a published low rate", False),
         ("random_generator", run_random_scenario_generator_tests, "The committed random scenarios are what the generator makes, with no iBoost conflict", False),
         ("gecloud_budget_harness", run_gecloud_budget_harness_tests, "GE Cloud API budget harness unit tests", False),
         ("gecloud_api_budget", run_gecloud_api_budget, "GE Cloud API calls over a simulated day (baseline measurement)", True),
@@ -1122,8 +1129,8 @@ def main():
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
     parser.add_argument("--compare", action="store_true", help="Run compare")
-    parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
-    parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
+    parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name or test function name (can be used multiple times, use --list to see available tests)")
+    parser.add_argument("--keyword", "-k", action="store", help="Run tests whose name or function name contains the keyword (e.g., -k carbon_ runs all carbon tests; a leading test_ is ignored)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
     # Named from the registry rather than hard-coded: the previous literal list had drifted to
     # name three tests that are not marked slow at all, while the four that are went unmentioned.
@@ -1242,31 +1249,12 @@ def main():
         run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo, overrides=overrides)
         sys.exit(0)
 
-    # Collect tests to run based on arguments
-    tests_to_run = []
-
-    if args.keyword:
-        # Run tests matching keyword pattern
-        keyword = args.keyword
-        tests_to_run = [(name, func, desc, slow) for name, func, desc, slow in TEST_REGISTRY if keyword in name]
-        if not tests_to_run:
-            print(f"ERROR: No tests found matching keyword '{keyword}'")
-            sys.exit(1)
-    elif args.test:
-        # Run specific tests by name
-        for test_name in args.test:
-            test_found = False
-            for name, func, desc, slow in TEST_REGISTRY:
-                if name == test_name:
-                    tests_to_run.append((name, func, desc, slow))
-                    test_found = True
-                    break
-            if not test_found:
-                print(f"ERROR: Test '{test_name}' not found. Use --list to see available tests.")
-                sys.exit(1)
-    else:
-        # Run all tests from the registry
-        tests_to_run = TEST_REGISTRY
+    # Collect tests to run based on arguments: -k, then --test, else everything. Both accept the registry name, the test function name, or a
+    # registry name typed with "test_" in front
+    tests_to_run, error = choose_tests(TEST_REGISTRY, keyword=args.keyword, test_names=args.test)
+    if error:
+        print(error)
+        sys.exit(1)
 
     if args.shuffle:
         shuffle_seed = args.shuffle_seed if args.shuffle_seed is not None else random.randrange(2**32)
