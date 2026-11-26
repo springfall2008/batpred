@@ -1246,6 +1246,8 @@ def _restart(my_predbat):
     my_predbat.dynamic_load_car_cancelled = {}
     my_predbat.dynamic_load_car_run = {}
     my_predbat.dynamic_load_car_saved = {}
+    # reset() clears it at start-up, before the state is restored
+    my_predbat.plan_replace_forced = False
     my_predbat.dynamic_load_car_load()
 
 
@@ -1288,6 +1290,7 @@ def _run_persistence(my_predbat):
         failed |= _check("t49 grace clock not restored", my_predbat.dynamic_load_car_since.get(0) is None, "since {}".format(my_predbat.dynamic_load_car_since))
         failed |= _check("t49 run restored", my_predbat.dynamic_load_car_run.get(0) == {"start": 390, "end": 450}, "run {}".format(my_predbat.dynamic_load_car_run))
         failed |= _check("t49 still trusted", my_predbat.dynamic_load_car_cancelled.get(0) is False, "cancelled {}".format(my_predbat.dynamic_load_car_cancelled))
+        failed |= _check("t49 a trusted dispatch does not force a replan", my_predbat.plan_replace_forced is False, "forced {}".format(my_predbat.plan_replace_forced))
         # The car may have charged while Predbat was down, so the grace runs from the first reading after the restart
         changed = _cycle(my_predbat, 404, 30, slots=slots)
         failed |= _check("t49 not cancelled on the old clock", not changed and not my_predbat.dynamic_load_car_cancelled.get(0), "changed {}".format(changed))
@@ -1300,8 +1303,13 @@ def _run_persistence(my_predbat):
         _at(my_predbat, 407)
         _restart(my_predbat)
         failed |= _check("t50 cancelled restored", my_predbat.dynamic_load_car_cancelled.get(0) is True, "cancelled {}".format(my_predbat.dynamic_load_car_cancelled))
+        # The restored plan may have been made at the dispatch rate before the cancellation was acted on, and the
+        # check sees no transition after the restart to arm the replan itself (#6363 review)
+        failed |= _check("t50 a restored cancellation forces the next replan", my_predbat.plan_replace_forced is True, "forced {}".format(my_predbat.plan_replace_forced))
+        my_predbat.plan_replace_forced = False
         _cycle(my_predbat, 408, slots=slots)
         failed |= _check("t50 still cancelled", my_predbat.dynamic_load_car_cancelled.get(0) and _kwh(my_predbat) == [0], "kwh {}".format(_kwh(my_predbat)))
+        failed |= _check("t50 a cancellation carried on is not re-armed every cycle", my_predbat.plan_replace_forced is False, "forced {}".format(my_predbat.plan_replace_forced))
 
         print("Test 51: state is only written when it changes - not for a sensor flapping between unavailable and off")
         count = len(saves)
@@ -1324,6 +1332,7 @@ def _run_persistence(my_predbat):
             not my_predbat.dynamic_load_car_confirmed and not my_predbat.dynamic_load_car_cancelled and not my_predbat.dynamic_load_car_run and not my_predbat.dynamic_load_car_since,
             "confirmed {} cancelled {} run {}".format(my_predbat.dynamic_load_car_confirmed, my_predbat.dynamic_load_car_cancelled, my_predbat.dynamic_load_car_run),
         )
+        failed |= _check("t52 a cancellation from a dispatch that is over does not force a replan", my_predbat.plan_replace_forced is False, "forced {}".format(my_predbat.plan_replace_forced))
 
         print("Test 53: what is still current is judged on the clock_skew clock the times were recorded on")
         saved_skew = my_predbat.args.get("clock_skew", None)

@@ -7,7 +7,7 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
-"""Tests that a plan made by another Predbat version is always replaced on the next recompute.
+"""Tests that a plan made by another Predbat version, or before an Intelligent dispatch was cancelled, is replaced on the next recompute.
 
 Plan selection keeps the incumbent unless the new plan beats it by metric_min_improvement_plan, and it scores
 both on their pre-clip snapshots. An incumbent restored after an upgrade was clipped and pruned by the old
@@ -85,7 +85,30 @@ def run_plan_version_replace_tests(my_predbat):
             if my_predbat.plan_made_by_version != my_predbat.running_version:
                 print("ERROR: the new plan should be marked as made by {}, got {}".format(my_predbat.running_version, my_predbat.plan_made_by_version))
                 failed = True
+
+        # A cancelled Intelligent dispatch (plan_replace_forced) replaces a tying incumbent from this version once,
+        # then the flag is spent so the next recompute competes on its metric again (#6361)
+        lines.clear()
+        plant_incumbent(my_predbat, preclip, my_predbat.running_version)
+        my_predbat.plan_replace_forced = True
+        my_predbat.calculate_plan(recompute=True)
+        if not my_predbat.charge_window_best:
+            print("ERROR: a forced replan after a cancelled dispatch should replace the incumbent, but it was kept")
+            failed = True
+        if not any(line.startswith("Octopus Intelligent dispatch was cancelled") for line in lines):
+            print("ERROR: a forced replan should log why the incumbent was replaced")
+            failed = True
+        if my_predbat.plan_replace_forced:
+            print("ERROR: plan_replace_forced should be spent by the recompute that used it")
+            failed = True
+        lines.clear()
+        plant_incumbent(my_predbat, preclip, my_predbat.running_version)
+        my_predbat.calculate_plan(recompute=True)
+        if my_predbat.charge_window_best:
+            print("ERROR: once spent, a tying incumbent should be kept again, got charge windows {}".format(my_predbat.charge_window_best))
+            failed = True
     finally:
+        my_predbat.plan_replace_forced = False
         my_predbat.log = real_log
 
     if not failed:

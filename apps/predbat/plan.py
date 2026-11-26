@@ -965,10 +965,15 @@ class Plan:
                 # Whole minutes stay ints, as the slots they are compared with are
                 self.dynamic_load_car_run[car_n] = {name: int(value) if value == int(value) else value for name, value in run.items()}
                 self.dynamic_load_car_cancelled[car_n] = bool(car.get("cancelled", False))
+                if self.dynamic_load_car_cancelled[car_n]:
+                    # The restored cancellation is no transition, so dynamic_load_car_check() will not arm the forced
+                    # replan, and the restored plan may predate it - made at the withdrawn rate (#6361). Re-arm it: if the
+                    # plan was already remade after the cancellation, this only costs one replan on the same rates
+                    self.plan_replace_forced = True
             if confirmed_current or run_current or periods:
                 restored.append(car_n)
         if restored:
-            self.log("Octopus Intelligent: restored the dispatch state of car(s) {} from storage".format(restored))
+            self.log("Octopus Intelligent: restored the dispatch state of car(s) {} from storage{}".format(restored, ", the next plan replaces the saved one as a dispatch is cancelled" if self.plan_replace_forced else ""))
 
     def dynamic_load_car_refresh_sensors(self):
         """
