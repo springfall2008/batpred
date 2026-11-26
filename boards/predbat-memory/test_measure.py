@@ -32,8 +32,8 @@ BASE = [run(100, 150), run(102, 151), run(101, 149)]
 class TestVerdict(unittest.TestCase):
     """verdict compares the base's and the candidate's runs against the goal."""
 
-    def test_passes_at_a_quarter_cut_with_same_plans_and_lower_peak(self):
-        """A 25% steady cut, the same digest and a lower peak pass."""
+    def test_passes_at_a_quarter_cut_with_same_plans(self):
+        """A 25% steady cut with the same digest passes."""
         passed, lines = measure.verdict(BASE, [run(75, 140), run(76, 141), run(74, 139)])
         self.assertTrue(passed, lines)
         self.assertEqual(lines[-1], "RESULT: pass")
@@ -50,11 +50,11 @@ class TestVerdict(unittest.TestCase):
         self.assertFalse(passed)
         self.assertIn("plans changed", lines[-1])
 
-    def test_fails_when_peak_rises(self):
-        """A higher median peak fails."""
+    def test_a_higher_peak_does_not_fail_but_is_reported(self):
+        """The goal is steady memory: a higher median peak passes, and the report still shows both peaks."""
         passed, lines = measure.verdict(BASE, [run(70, 160)] * 3)
-        self.assertFalse(passed)
-        self.assertIn("peak", lines[-1])
+        self.assertTrue(passed, lines)
+        self.assertIn("median peak: base 150.0 MB, candidate 160.0 MB", lines)
 
     def test_fails_when_a_run_is_not_ok(self):
         """A run that reported ok false fails the candidate."""
@@ -193,6 +193,15 @@ class TestBoardFile(unittest.TestCase):
         """Workers profile with coverage/memory_benchmark --tracemalloc, which the benchmark's own entry covers."""
         self.assertIn("Bash(coverage/memory_benchmark *)", self.board["permissions"]["allow"])
         self.assertIn("--tracemalloc", self.board["rules"])
+
+    def test_the_rules_point_workers_at_the_loaded_libraries(self):
+        """Cutting imported libraries is in scope, and modules.txt is where a worker sees what is loaded."""
+        self.assertIn("modules.txt", self.board["rules"])
+        self.assertIn("libraries", self.board["goal"])
+
+    def test_peak_is_not_part_of_done_when(self):
+        """The board judges steady-state RSS only; measure.py reports the peak without judging it."""
+        self.assertNotIn("peak", self.board["done_when"])
 
 
 class TestDocstrings(unittest.TestCase):

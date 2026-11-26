@@ -283,6 +283,7 @@ freephase
 frombuffer
 fromisoformat
 fronius
+frozenlist
 funcs
 futurerate
 gaierror
@@ -492,6 +493,7 @@ mqtt
 mtok
 mult
 multiarray
+multidict
 myaccount
 myenergi
 mypy
@@ -597,6 +599,7 @@ preseed
 preseeded
 prevs
 procps
+propcache
 protobuf
 pseudonymisation
 pseudonymise
@@ -873,6 +876,7 @@ xtest
 xticks
 xxabcdefyy
 yanchor
+yarl
 yaxis
 yaxistooltip
 yday

@@ -186,6 +186,57 @@ class TestProfile(unittest.TestCase):
         self.assertFalse(driver.parse_args(["--out", "/out"]).tracemalloc)
 
 
+class TestModuleReport(unittest.TestCase):
+    """write_module_report lists the loaded modules by top-level package, so workers can see which libraries are loaded."""
+
+    def make_modules(self, root):
+        """Fake sys.modules: a two-module third-party package, a stdlib module, a Predbat module, a built-in and a None entry."""
+        site = Path(root) / "lib" / "site-packages"
+        stdlib = Path(root) / "lib" / "python3"
+        tree = Path(root) / "apps" / "predbat"
+        for directory in (site / "heavy" / "__pycache__", stdlib / "__pycache__", tree):
+            directory.mkdir(parents=True)
+
+        def module(name, source, cached=None, cached_bytes=0):
+            """A module whose compiled file holds cached_bytes."""
+            source.write_text("x = 1\n")
+            if cached:
+                cached.write_bytes(b"\0" * cached_bytes)
+            return SimpleNamespace(__name__=name, __file__=str(source), __cached__=str(cached) if cached else None)
+
+        return {
+            "heavy": module("heavy", site / "heavy" / "__init__.py", site / "heavy" / "__pycache__" / "a.pyc", 300 * 1024),
+            "heavy.sub": module("heavy.sub", site / "heavy" / "sub.py", site / "heavy" / "__pycache__" / "b.pyc", 200 * 1024),
+            "json": module("json", stdlib / "json.py", stdlib / "__pycache__" / "json.pyc", 100 * 1024),
+            # No compiled file (a read-only tree): the source's size stands in
+            "fetch": module("fetch", tree / "fetch.py"),
+            "sys": SimpleNamespace(__name__="sys"),
+            "gone": None,
+            # A namespace package has no __file__ of its own (ruamel.yaml); its submodules say where it comes from
+            "nested": SimpleNamespace(__name__="nested"),
+            "nested.inner": module("nested.inner", site / "nested_inner.py", site / "heavy" / "__pycache__" / "c.pyc", 50 * 1024),
+        }, str(stdlib)
+
+    def test_groups_by_package_largest_first_and_counts_the_modules(self):
+        """Each top-level package is one line with its module count, compiled KiB and where it comes from; the result gets the count."""
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as root:
+            modules, stdlib = self.make_modules(root)
+            result = {"ok": True}
+            driver.write_module_report(Path(root), result, modules=modules, stdlib=stdlib)
+            report = (Path(root) / "modules.txt").read_text()
+        self.assertEqual(result["modules_loaded"], 7)
+        self.assertIn("7 modules loaded", report)
+        rows = [line.split() for line in report.splitlines() if line.startswith("  ")]
+        self.assertEqual([row[-1] for row in rows], ["heavy", "json", "nested", "fetch", "sys"])
+        self.assertEqual(rows[0][:4], ["500", "KiB", "2", "third-party"])
+        self.assertEqual(rows[1][:4], ["100", "KiB", "1", "stdlib"])
+        self.assertEqual(rows[2][:4], ["50", "KiB", "2", "third-party"])
+        self.assertEqual(rows[3][2:4], ["1", "local"])
+        self.assertEqual(rows[4][:4], ["0", "KiB", "1", "built-in"])
+
+
 class TestStatus(unittest.TestCase):
     """read_status_kb reads a field from a /proc status file."""
 
