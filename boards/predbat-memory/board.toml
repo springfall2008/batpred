@@ -39,8 +39,19 @@ How to work: Each intent gets its own git worktree of ~/predbat/batpred at \
 ~/predbat/batpred/.worktrees/board-memory-<first 8 chars of the intent id>, on a new local branch \
 board/predbat-memory/<same 8 chars>. It starts from the commit the intent names. If the intent names none, start from \
 main, or from any earlier board commit whose fact is confirmed, and say which in the fact. To combine savings, \
-cherry-pick board commits onto the branch. Build the kernel in that worktree with `bash apps/predbat/build_kernel.sh`. \
+cherry-pick, merge or rebase board commits onto the branch. Use merge and rebase only on your own intent's branch, in \
+your own worktree: never on main or another intent's branch, which other facts cite by commit. Build the kernel in that worktree with `bash apps/predbat/build_kernel.sh`. \
 Find what holds the memory before changing code, naming the objects and their MB.
+Shell commands: workers run with a fixed allow list (the [permissions] below), and a command outside it is refused, \
+not asked about. Run `cd <dir>` as a Bash call of its own; it carries over to later calls. Never put `cd` and `git` in \
+the same call: that chain is refused even when each part is allowed. Create a worktree from the main checkout with \
+absolute paths (`git worktree add -b <branch> <absolute worktree path> <commit>`), then `cd <worktree>` in its own \
+call, then build, commit and test there one command per call (`bash apps/predbat/build_kernel.sh`; \
+`cd <worktree>/coverage` and then `./run_all --quick`). Python is allowed for profiling and analysis (python3, or \
+~/predbat/batpred/coverage/venv/bin/python3 when a script needs Predbat's dependencies), but never use it to do what \
+the deny list refuses, and never install packages (no pip, no `python3 -m pip`). Avoid subshells `( ... )`. A refused command means that spelling is not allowed, not that the intent is blocked: retry it \
+in an allowed form (one allowed command per call is always accepted) before giving up. Whatever happens, end with a \
+BOARD-WORK line; a run that ends without one is counted as lost.
 Commits: each change is one commit whose message starts `board(predbat-memory <intent short id>): <what it saves>`, \
 so `git log --oneline main..<commit>` lists every saving in a tree. Run that before building on a commit, to see what \
 it already contains.
@@ -96,10 +107,12 @@ model = "opus"
 model = "sonnet"
 
 [permissions]
-# No entry runs a general interpreter (python3 *, bash *, env * and the like): a deny matches only its own tool, so a
-# script could reach every Edit, Write and Bash deny below. Tests run through ./run_all, profiling through
-# coverage/memory_benchmark --tracemalloc. These rules stop mistakes, not a determined worker: ./run_all runs the
-# worktree's own code on the host. test_measure.py checks no general interpreter is allowed.
+# A local run on the maintainer's machine, so the workers are trusted with the tools the intents need: Python (to
+# profile with importtime, gc referrers or deeper tracemalloc), merge and rebase (to combine earlier board commits on
+# their own branch) and the everyday read-only tools. A deny entry matches only its own command, so a Python script
+# could still do what the list denies; it is there to stop mistakes, not a determined worker, as ./run_all already runs
+# the worktree's own code on the host. What it stops: anything that leaves the machine, rewriting main or another
+# intent's branch, throwing work away, and changing the shared venv. test_measure.py checks both lists.
 allow = [
   "Read(~/predbat/**)",
   "Edit(~/predbat/batpred/.worktrees/board-memory-*/**)",
@@ -115,12 +128,17 @@ allow = [
   "Bash(git log*)",
   "Bash(git show*)",
   "Bash(git rev-parse*)",
+  "Bash(git rev-list*)",
+  "Bash(git merge-base*)",
   "Bash(git branch*)",
   "Bash(git switch *)",
   "Bash(git checkout *)",
   "Bash(git add *)",
   "Bash(git commit *)",
   "Bash(git cherry-pick *)",
+  "Bash(git merge *)",
+  "Bash(git rebase *)",
+  "Bash(git restore *)",
   "Bash(git stash*)",
   "Bash(cd *)",
   "Bash(bash apps/predbat/build_kernel.sh*)",
@@ -129,18 +147,43 @@ allow = [
   "Bash(./memory_benchmark *)",
   "Bash(./run_all*)",
   "Bash(./run_pre_commit*)",
+  "Bash(python3 *)",
+  "Bash(python *)",
+  "Bash(*/coverage/venv/bin/python3 *)",
+  "Bash(*/coverage/venv/bin/python *)",
   "Bash(mkdir *)",
+  "Bash(cp *)",
+  "Bash(mv *)",
+  "Bash(rm *)",
+  "Bash(touch *)",
   "Bash(ls*)",
   "Bash(cat *)",
   "Bash(head *)",
   "Bash(tail *)",
   "Bash(wc *)",
   "Bash(grep *)",
+  "Bash(find *)",
+  "Bash(sort *)",
+  "Bash(uniq *)",
+  "Bash(cut *)",
+  "Bash(tr *)",
+  "Bash(awk *)",
+  "Bash(sed *)",
+  "Bash(diff *)",
+  "Bash(du *)",
+  "Bash(file *)",
+  "Bash(stat *)",
+  "Bash(which *)",
+  "Bash(env)",
+  "Bash(uname*)",
+  "Bash(sysctl *)",
+  "Bash(docker ps*)",
+  "Bash(docker info*)",
+  "Bash(docker images*)",
   "Bash(date*)",
 ]
 deny = [
-  "Bash(git merge*)",
-  "Bash(git rebase*)",
+  "Bash(git push*)",
   "Bash(git reset --hard*)",
   "Bash(git branch -f*)",
   "Bash(git branch --force*)",
@@ -151,9 +194,16 @@ deny = [
   "Bash(git update-ref*)",
   "Bash(git checkout -B*)",
   "Bash(git switch -C*)",
+  "Bash(git clean*)",
   "Bash(rm -rf*)",
+  "Bash(rm -fr*)",
+  "Bash(rm -r*)",
   "Bash(gh *)",
   "Bash(pip *)",
+  "Bash(pip3 *)",
+  "Bash(docker rm*)",
+  "Bash(docker rmi*)",
+  "Bash(docker system*)",
   "Edit(~/predbat/batpred/apps/**)",
   "Write(~/predbat/batpred/apps/**)",
   "Edit(~/predbat/batpred/coverage/**)",
