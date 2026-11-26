@@ -245,6 +245,11 @@ class Prediction(PredictionBatch):
         """
         return list(charge_limit), list(export_limits)
 
+    def _prepare_single_queued(self, charge_limit, export_limits):
+        """_prepare_single for a queued trial: copied once per batch and shared by the trial's scenarios (see shared_trial)"""
+        key = ("single", id(charge_limit), id(export_limits))
+        return self.shared_trial(key, (charge_limit, export_limits), lambda: self._prepare_single(charge_limit, export_limits))
+
     def _prepare_charge(self, try_soc, window_n, charge_limit, all_n):
         """Build the trial charge limits - shared by thread_run_prediction_charge/_charge_min_max and the batch path"""
         try_charge_limit = charge_limit.copy()
@@ -301,7 +306,7 @@ class Prediction(PredictionBatch):
         The window lists and dicts are read at flush time, not now, so the caller must not mutate
         anything it passed in before calling get() on the returned handle.
         """
-        charge_limit, export_limits = self._prepare_single(charge_limit, export_limits)
+        charge_limit, export_limits = self._prepare_single_queued(charge_limit, export_limits)
         return self.enqueue_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, self.prediction_cache_enable)
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):

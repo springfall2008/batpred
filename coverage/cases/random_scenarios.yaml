@@ -41000,7 +41000,7 @@ scenarios:
       iboost_max_energy: 8.38
       iboost_max_power_kw: 1.64
       iboost_on_export: true
-      iboost_prevent_discharge: true
+      iboost_prevent_discharge: false
       iboost_smart: false
       iboost_solar: false
       iboost_today: 0.63
@@ -52783,7 +52783,7 @@ scenarios:
       iboost_max_energy: 7.64
       iboost_max_power_kw: 1.07
       iboost_on_export: true
-      iboost_prevent_discharge: true
+      iboost_prevent_discharge: false
       iboost_smart: true
       iboost_solar: false
       iboost_today: 1.86

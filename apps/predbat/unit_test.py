@@ -37,6 +37,7 @@ from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_t
 from tests.test_prediction_batch import run_prediction_batch_tests
 from tests.test_kernel_static_cache import run_kernel_static_cache_tests
 from tests.test_execute import run_execute_tests
+from tests.test_inverter_rate_no_entity import run_inverter_rate_no_entity_tests, run_inverter_rate_no_entity_execute_tests, run_inverter_rate_no_entity_execute_10kw_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
 from tests.test_predheat import (
@@ -55,6 +56,8 @@ from tests.test_temperature_units import test_temperature_unit_conversion
 from tests.test_charge_hold import run_charge_hold_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
 from tests.test_multi_car_iog import run_multi_car_iog_tests
+from tests.test_octopus_smart_control import run_octopus_smart_control_tests
+from tests.test_octopus_smart_control_switch import test_octopus_smart_control_switch
 from tests.test_car_manual_soc import run_car_manual_soc_tests
 from tests.test_car_max_rate import run_car_max_rate_tests
 from tests.test_fetch_config_options import test_fetch_config_options, test_save_restore_options_are_per_engine
@@ -216,6 +219,7 @@ from tests.test_trial_memo import run_trial_memo_tests
 from tests.test_batch_job_packing import run_batch_job_packing_tests
 from tests.test_kernel_rounding import run_kernel_rounding_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
+from tests.test_levels_block_replay import run_levels_block_replay_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_export_encoding import run_export_encoding_tests
 from tests.test_export_more_solar_warning import run_export_more_solar_warning_tests
@@ -364,7 +368,17 @@ from tests.test_find_charge_window import test_find_charge_window
 from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
 from tests.test_fetch_no_load_source import test_fetch_no_load_source
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
-from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests, run_random_scenario_reapply_tests
+from tests.test_random_scenarios import (
+    generate_scenarios,
+    save_scenarios,
+    run_scenarios_from_file,
+    compare_results,
+    profile_scenario,
+    run_random_scenario_tests,
+    run_random_scenario_reapply_tests,
+    run_random_scenario_metric_tests,
+    run_random_scenario_generator_tests,
+)
 from tests import network_guard
 from tests.test_network_guard import test_network_guard
 from tests.test_debug_yaml_cache import test_debug_yaml_cache
@@ -611,6 +625,9 @@ def main():
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
+        ("inverter_rate_no_entity", run_inverter_rate_no_entity_tests, "Rate read-back for an inverter with no rate entity, sent as {power} (#3311)", False),
+        ("inverter_rate_no_entity_execute", run_inverter_rate_no_entity_execute_tests, "execute_plan() sends this cycle's rate as {power} to a script-driven inverter (#3311, #5252)", False),
+        ("inverter_rate_no_entity_execute_10kw", run_inverter_rate_no_entity_execute_10kw_tests, "As inverter_rate_no_entity_execute at 10kW: a low power charge after an export is not held at 0", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),
@@ -782,6 +799,8 @@ def main():
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("octopus_slot_max_default", run_octopus_slot_max_default_tests, "Octopus slot max auto-detection from IOG-SMB tariff code", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
+        ("octopus_smart_control_switch", test_octopus_smart_control_switch, "Built-in Octopus component Smart Control switch: state, SUSPEND/UNSUSPEND commands, rollback, wiring", False),
+        ("octopus_smart_control", run_octopus_smart_control_tests, "Planned Octopus dispatches are ignored while Smart Control is off", False),
         ("car_manual_soc", run_car_manual_soc_tests, "Manual car SoC: automatic enable, reset on unplug, energy-sensor tracking", False),
         ("car_max_rate", run_car_max_rate_tests, "car_charging_max_rate caps each car's charge rate, per car, held through sensor drop-outs, and against the Octopus raise", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
@@ -882,6 +901,7 @@ def main():
         ("batch_job_packing", run_batch_job_packing_tests_isolated, "Kernel batch jobs packed with struct match the per-field fill", False),
         ("kernel_rounding", run_kernel_rounding_tests_isolated, "Kernel returns its scalar results already rounded to 4dp", False),
         ("hit_charge_cache", run_hit_charge_cache_tests, "Hit charge window cache tests", False),
+        ("levels_block_replay", run_levels_block_replay_tests, "Levels pass block replay matches a full rebuild", False),
         ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
         ("kernel_static_cache", run_kernel_static_cache_tests, "Kernel static context cache tests", False),
         ("optimise_export_copy", run_optimise_export_copy_tests, "Optimise export window copying tests", False),
@@ -1080,6 +1100,8 @@ def main():
         ("ml_training_perf", run_ml_training_perf_tests, "ML training performance tests", True),
         ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
         ("random_reapply", run_random_scenario_reapply_tests, "Running a random scenario leaves it unchanged, so a re-run plans identically", False),
+        ("random_metric", run_random_scenario_metric_tests, "The random scenario harness records the planner's own metric for the final plan", False),
+        ("random_generator", run_random_scenario_generator_tests, "The committed random scenarios are what the generator makes, with no iBoost conflict", False),
         ("gecloud_budget_harness", run_gecloud_budget_harness_tests, "GE Cloud API budget harness unit tests", False),
         ("gecloud_api_budget", run_gecloud_api_budget, "GE Cloud API calls over a simulated day (baseline measurement)", True),
         ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),

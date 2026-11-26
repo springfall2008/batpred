@@ -36,7 +36,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.9.0"
+THIS_VERSION = "v9.10.0"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -596,6 +596,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
+        # The record of the time no car charged in (octopus_cap_record()), as last saved, and its latest reading
+        self.octopus_cap_runs = []
+        self.octopus_cap_saved = None
+        self.octopus_cap_last = None
+        self.octopus_cap_published = False  # Whether predbat.octopus_cap_used has been published, so it is cleared once
+        # The past minutes no car charged in, read each cycle, and why there are none, as last logged (octopus_cap_idle_load())
+        self.octopus_cap_idle = None
+        self.octopus_cap_idle_midnight = None
+        self.octopus_cap_idle_reason = None
         # Which component's automatic_config() owns octopus_ready_time/octopus_charge_limit.
         # Both OctopusAPI and OhmeAPI can wire them, and Octopus re-runs its automatic_config
         # whenever the tariff or intelligent device set moves - without a claim it silently takes the
@@ -784,6 +793,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.low_rates_tariff = []
         self.high_export_rates = []
         self.octopus_slots = [[] for _ in range(8)]
+        self.octopus_smart_control_off_logged = {}
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.import_today = {}
@@ -2616,6 +2626,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.load_plan()
             # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
             self.dynamic_load_car_load()
+            # And the record of the time no car charged in, which the Octopus Intelligent daily cap is counted from
+            self.octopus_cap_load()
             # And the half hours Octopus Intelligent dispatches ran in, so they keep the dispatch rate
             self.octopus_held_load()
             # And the half hours a dispatch was seen covering, so a stale rate feed is still checked after a restart
@@ -2687,6 +2699,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.dynamic_load_car_poll()
             # A car starting or stopping charging - apply or release "Hold for car" now, not in 5 minutes
             self.car_charging_now_poll()
+            # The time no car charged in, which uses none of the Octopus Intelligent daily cap
+            self.octopus_cap_poll()
         if self.update_pending and not self.prediction_started:
             # Full update required
             self.update_pending = False
