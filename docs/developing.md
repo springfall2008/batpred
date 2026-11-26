@@ -857,9 +857,14 @@ dummy_inverter:
   soc_initial: 50           # %
   pv_peak: 4.0              # kW, clear-sky curve used when there is no PV forecast
   load: 0.4                 # kW, or a list of 24 hourly values
+  totals:                   # kWh the lifetime sensors start from (default 0)
+    load: 0
+    pv: 0
+    import: 0
+    export: 0
 ```
 
-Every setting is optional. The model steps once a minute: the battery charges and discharges within its rate and losses, PV and battery share the inverter limit with PV first, export is capped at the export limit, and PV with nowhere to go is clipped (published as `sensor.predbat_dummy_clipped_power` and `_clipped_lifetime`). Predbat's charge and export windows are obeyed, a zero-rate window freezes the battery, and outside a window it runs self-consumption. PV comes from Predbat's forecast when one is configured. The simulation state is not saved, so a restart starts again from `soc_initial`.
+Every setting is optional. `totals` lets the `_lifetime` sensors continue an existing history instead of starting from zero, which the memory benchmark uses so its recorded load and PV history meet the simulated counters without a jump. The model steps once a minute: the battery charges and discharges within its rate and losses, PV and battery share the inverter limit with PV first, export is capped at the export limit, and PV with nowhere to go is clipped (published as `sensor.predbat_dummy_clipped_power` and `_clipped_lifetime`). Predbat's charge and export windows are obeyed, a zero-rate window freezes the battery, and outside a window it runs self-consumption. PV comes from Predbat's forecast when one is configured. The simulation state is not saved, so a restart starts again from `soc_initial`.
 
 ### Random scenario benchmarking
 
