@@ -11,7 +11,8 @@
 # Runs Predbat from <tree>'s apps/predbat standalone - db_primary, the dummy inverter, the forecast and Octopus
 # components served from their seeded caches - in a Linux container with no network and the wall clock frozen at the
 # fixture's T0, for a fixed number of plan cycles. Writes <out dir>/result.json (ok, steady_rss_mb, peak_rss_mb,
-# plan_digest) and <out dir>/predbat.log, and exits 0 when result.json was written.
+# plan_digest), <out dir>/modules.txt (the loaded modules by package) and <out dir>/predbat.log, and exits 0 when
+# result.json was written.
 #
 # --tracemalloc also writes <out dir>/tracemalloc.txt, the largest live allocations after the last cycle. Tracing
 # inflates RSS, so that run's figures are not evidence: its result.json says "tracemalloc": true and measure.py refuses it.
@@ -48,7 +49,8 @@ if [ ! -f "$DATA/manifest.json" ]; then
 fi
 mkdir -p "$2"
 OUT="$(cd "$2" && pwd)"
-rm -f "$OUT/result.json"
+# Every output the driver writes, so a run that dies early never leaves an earlier run's figures or reports behind
+rm -f "$OUT/result.json" "$OUT/modules.txt" "$OUT/tracemalloc.txt"
 
 # The frozen clock: the fixture's T0 in UTC, in the absolute form libfaketime freezes at (no "@", which would tick)
 T0="$(python3 -c 'import json, sys; from datetime import datetime, timezone; t = datetime.fromisoformat(json.load(open(sys.argv[1]))["t0"]); print(t.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))' "$DATA/manifest.json")"

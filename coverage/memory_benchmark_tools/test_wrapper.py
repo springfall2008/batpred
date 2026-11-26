@@ -15,11 +15,13 @@ WRAPPER = Path(__file__).resolve().parent.parent / "memory_benchmark"
 REPO = WRAPPER.parent.parent
 
 
-def run_wrapper(*args, data=None):
-    """Run the wrapper with the fixture directory overridden; return (exit code, output)."""
+def run_wrapper(*args, data=None, bin_dir=None):
+    """Run the wrapper with the fixture directory overridden, and bin_dir first on PATH; return (exit code, output)."""
     env = dict(os.environ)
     if data is not None:
         env["MEMORY_BENCHMARK_DATA"] = str(data)
+    if bin_dir is not None:
+        env["PATH"] = "{}{}{}".format(bin_dir, os.pathsep, env.get("PATH", ""))
     proc = subprocess.run(["bash", str(WRAPPER), *map(str, args)], capture_output=True, text=True, env=env)
     return proc.returncode, proc.stdout + proc.stderr
 
@@ -55,6 +57,27 @@ class TestWrapperChecks(unittest.TestCase):
             code, output = run_wrapper("--tracemalloc", REPO, Path(tmp) / "out", data=Path(tmp) / "no-fixture")
             self.assertEqual(code, 2, output)
             self.assertIn("export_fixture.py", output)
+
+    def test_wrapper_clears_every_output_of_an_earlier_run(self):
+        """A run that dies before the driver writes leaves no earlier result.json, modules.txt or tracemalloc.txt behind."""
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "fixture"
+            data.mkdir()
+            (data / "manifest.json").write_text('{"t0": "2026-11-26T10:56:00+00:00"}')
+            bin_dir = Path(tmp) / "bin"
+            bin_dir.mkdir()
+            docker = bin_dir / "docker"
+            docker.write_text("#!/bin/sh\nexit 1\n")  # every docker call fails, so the run dies before any container starts
+            docker.chmod(0o755)
+            out = Path(tmp) / "out"
+            out.mkdir()
+            stale = ("result.json", "modules.txt", "tracemalloc.txt")
+            for name in stale:
+                (out / name).write_text("from an earlier run")
+            code, output = run_wrapper(REPO, out, data=data, bin_dir=bin_dir)
+            self.assertNotEqual(code, 0, output)
+            for name in stale:
+                self.assertFalse((out / name).exists(), name)
 
     def test_wrapper_with_tracemalloc_still_needs_two_arguments(self):
         """--tracemalloc does not stand in for the tree or the out dir."""

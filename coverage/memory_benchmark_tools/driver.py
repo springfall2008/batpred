@@ -10,7 +10,8 @@
 Starts Predbat through the same path hass.py's main() takes, from the fixture in the working directory, waits for the
 dummy inverter, forecast and Octopus components to publish once, then runs N plan cycles, each forced to recompute (the
 wall clock is frozen, so a plan never ages). After each cycle it records the process's RSS; at the end VmHWM. It writes
-<out>/result.json with ok, steady_rss_mb, peak_rss_mb and plan_digest, plus diagnostics. With --tracemalloc it also
+<out>/result.json with ok, steady_rss_mb, peak_rss_mb and plan_digest, plus diagnostics, and <out>/modules.txt, the
+loaded modules by top-level package. With --tracemalloc it also
 writes <out>/tracemalloc.txt, the largest live allocations after the last cycle, and marks the result as profiled.
 """
 
@@ -156,6 +157,58 @@ def finish_profile(out, result):
     result["tracemalloc"] = True
 
 
+def _module_origin(path, stdlib):
+    """Return where a module file comes from: third-party (site- or dist-packages), stdlib, or local (Predbat and the benchmark)."""
+    if "site-packages" in path or "dist-packages" in path:
+        return "third-party"
+    if path.startswith(stdlib):
+        return "stdlib"
+    return "local"
+
+
+def _compiled_bytes(module):
+    """Return the size of a module's compiled file (its .pyc, or the file itself for an extension), or of its source when not compiled."""
+    for path in (getattr(module, "__cached__", None), getattr(module, "__file__", None)):
+        if path:
+            try:
+                return os.path.getsize(path)
+            except OSError:
+                continue
+    return 0
+
+
+def write_module_report(out, result, modules=None, stdlib=None):
+    """Write <out>/modules.txt, the loaded modules grouped by top-level package, and put their count in the result.
+
+    Each line is one package: the compiled size of its loaded modules on disk (KiB, a proxy for the code the import
+    holds, not its RSS), how many of its modules are loaded, where it comes from and its name, largest first. A
+    tracemalloc report puts the cost of importing under importlib, not under the library that was imported, so this is
+    how a worker sees which libraries are loaded at all.
+    """
+    import sysconfig
+
+    modules = sys.modules if modules is None else modules
+    stdlib = stdlib or sysconfig.get_paths()["stdlib"]
+    packages = {}
+    for name, module in list(modules.items()):
+        if module is None:
+            continue
+        path = getattr(module, "__file__", None)
+        origin = _module_origin(path, stdlib) if path else "built-in"
+        entry = packages.setdefault(name.split(".")[0], {"bytes": 0, "count": 0, "origin": origin})
+        if entry["origin"] == "built-in":
+            # A namespace package has no file of its own; the first submodule with one says where the package lives
+            entry["origin"] = origin
+        entry["bytes"] += _compiled_bytes(module)
+        entry["count"] += 1
+    count = sum(entry["count"] for entry in packages.values())
+    lines = ["{} modules loaded in {} top-level packages after the last cycle".format(count, len(packages)), "", "compiled    modules  from         package"]
+    for package, entry in sorted(packages.items(), key=lambda item: (-item[1]["bytes"], item[0])):
+        lines.append("  {:>6} KiB  {:>5}  {:<11}  {}".format(round(entry["bytes"] / 1024), entry["count"], entry["origin"], package))
+    (Path(out) / "modules.txt").write_text("\n".join(lines) + "\n")
+    result["modules_loaded"] = count
+
+
 def wait_ready(predbat, names, timeout):
     """Wait until each of the named components that is enabled has succeeded once; return the names still waiting."""
     waiting = [name for name in names if predbat.components.get_component(name)]
@@ -215,6 +268,7 @@ def run(out, cycles, settle, ready_timeout):
             "problems": problems[:50],
         }
     )
+    write_module_report(out, result)
     finish_profile(out, result)
     return result
 

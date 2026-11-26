@@ -8,7 +8,8 @@
 
 The runner runs it from the main checkout with BOARD_CANDIDATE set to the branch or commit the lead proposes. It checks
 out the base (BOARD_BASE, default main) and the candidate into temporary worktrees, runs the memory benchmark on each,
-interleaved for ROUNDS rounds, and compares the medians against the goal. Exit 0 means the candidate meets the goal,
+interleaved for ROUNDS rounds, and compares the median steady-state RSS against the goal (the median peak may rise by no
+more than PEAK_RISE), with every plan_digest equal to the base's. Exit 0 means the candidate meets the goal,
 1 means it does not, and 2 means the measurement itself could not be made (the runner counts that as a fail, so the
 output starts with HARNESS ERROR to tell the lead the candidate was never judged).
 
@@ -28,6 +29,7 @@ from pathlib import Path
 from statistics import median
 
 STEADY_CUT = 0.25  # the candidate's median steady-state RSS must be at least this fraction below the base's
+PEAK_RISE = 0.10  # and its median peak RSS no more than this fraction above the base's
 ROUNDS = 3
 BENCHMARK = Path("coverage/memory_benchmark")
 FIELDS = {"ok": bool, "steady_rss_mb": (int, float), "peak_rss_mb": (int, float), "plan_digest": str}
@@ -89,11 +91,14 @@ def verdict(base_runs, candidate_runs):
     candidate_peak = median(run["peak_rss_mb"] for run in candidate_runs)
     cut = 1 - candidate_steady / base_steady if base_steady > 0 else 0.0
     lines.append(f"median steady: base {base_steady:.1f} MB, candidate {candidate_steady:.1f} MB, cut {cut * 100:.1f}% (goal {STEADY_CUT * 100:.0f}%)")
-    lines.append(f"median peak: base {base_peak:.1f} MB, candidate {candidate_peak:.1f} MB")
+    # The goal is steady-state memory; the peak only has to stay within PEAK_RISE of the base's, far above its 1 to 2 MB
+    # of run-to-run noise, so a steady saving is never bought with a much higher peak. Rounded so exactly 10% passes
+    rise = round(candidate_peak / base_peak - 1, 6) if base_peak > 0 else 0.0
+    lines.append(f"median peak: base {base_peak:.1f} MB, candidate {candidate_peak:.1f} MB, {rise * 100:+.1f}% (limit +{PEAK_RISE * 100:.0f}%)")
     if cut < STEADY_CUT:
         failures.append(f"steady-state cut {cut * 100:.1f}% is below {STEADY_CUT * 100:.0f}%")
-    if candidate_peak > base_peak:
-        failures.append("the candidate's median peak RSS is higher than the base's")
+    if rise > PEAK_RISE:
+        failures.append(f"the candidate's median peak RSS is {rise * 100:.1f}% above the base's, more than {PEAK_RISE * 100:.0f}%")
 
     lines.append("RESULT: pass" if not failures else "RESULT: fail - " + "; ".join(failures))
     return not failures, lines

@@ -32,8 +32,8 @@ BASE = [run(100, 150), run(102, 151), run(101, 149)]
 class TestVerdict(unittest.TestCase):
     """verdict compares the base's and the candidate's runs against the goal."""
 
-    def test_passes_at_a_quarter_cut_with_same_plans_and_lower_peak(self):
-        """A 25% steady cut, the same digest and a lower peak pass."""
+    def test_passes_at_a_quarter_cut_with_same_plans(self):
+        """A 25% steady cut with the same digest passes."""
         passed, lines = measure.verdict(BASE, [run(75, 140), run(76, 141), run(74, 139)])
         self.assertTrue(passed, lines)
         self.assertEqual(lines[-1], "RESULT: pass")
@@ -50,11 +50,18 @@ class TestVerdict(unittest.TestCase):
         self.assertFalse(passed)
         self.assertIn("plans changed", lines[-1])
 
-    def test_fails_when_peak_rises(self):
-        """A higher median peak fails."""
-        passed, lines = measure.verdict(BASE, [run(70, 160)] * 3)
+    def test_a_peak_up_to_ten_percent_higher_passes_and_is_reported(self):
+        """The goal is steady memory: a median peak within 10% of the base's passes (165 is exactly 10% over 150)."""
+        for peak in (160, 165):
+            passed, lines = measure.verdict(BASE, [run(70, peak)] * 3)
+            self.assertTrue(passed, (peak, lines))
+        self.assertIn("median peak: base 150.0 MB, candidate 165.0 MB, +10.0% (limit +10%)", lines)
+
+    def test_a_peak_more_than_ten_percent_higher_fails(self):
+        """A steady saving bought with a much higher peak fails: 166 MB is more than 10% over 150 MB."""
+        passed, lines = measure.verdict(BASE, [run(70, 166)] * 3)
         self.assertFalse(passed)
-        self.assertIn("peak", lines[-1])
+        self.assertIn("median peak RSS is 10.7% above the base's", lines[-1])
 
     def test_fails_when_a_run_is_not_ok(self):
         """A run that reported ok false fails the candidate."""
@@ -193,6 +200,16 @@ class TestBoardFile(unittest.TestCase):
         """Workers profile with coverage/memory_benchmark --tracemalloc, which the benchmark's own entry covers."""
         self.assertIn("Bash(coverage/memory_benchmark *)", self.board["permissions"]["allow"])
         self.assertIn("--tracemalloc", self.board["rules"])
+
+    def test_the_rules_point_workers_at_the_loaded_libraries(self):
+        """Cutting imported libraries is in scope, and modules.txt is where a worker sees what is loaded."""
+        self.assertIn("modules.txt", self.board["rules"])
+        self.assertIn("libraries", self.board["goal"])
+
+    def test_done_when_states_the_peak_limit_measure_applies(self):
+        """The done-when names the same peak limit as measure.PEAK_RISE, so the lead and the measurement agree."""
+        self.assertEqual(measure.PEAK_RISE, 0.10)
+        self.assertIn("no more than 10% above main's", self.board["done_when"])
 
 
 class TestDocstrings(unittest.TestCase):

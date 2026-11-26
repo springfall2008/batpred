@@ -40,15 +40,20 @@ and what `measure.py` uses to judge the lead's candidate. Its design is in
   4 CPUs and 3 GB. The kernel is built inside from `<tree>`, so a branch never runs a stale binary. The wall clock is
   frozen at the fixture's T0 with libfaketime (monotonic time keeps running), so every run plans at the same instant
   whenever it is made.
-- **Output:** `<out dir>/result.json` and the run's `predbat.log`:
+- **Output:** `<out dir>/result.json`, `<out dir>/modules.txt` and the run's `predbat.log`:
     - `steady_rss_mb`: the median `VmRSS` (MiB) of cycles 4 to 6.
-    - `peak_rss_mb`: `VmHWM` (MiB) for the whole run.
+    - `peak_rss_mb`: `VmHWM` (MiB) for the whole run. The board's goal is steady-state memory, so `measure.py` only
+      checks that the candidate's median peak is no more than 10% above main's (`PEAK_RISE`).
     - `plan_digest`: a hash of each cycle's charge and export windows and limits, and its predicted SoC and cost every
       half-hour.
     - `ok`: false on any `Error:` line, a stale kernel binary, or a forecast URL fetch. Also false on any Octopus failure
       other than the token mint and the three Intelligent polls (`ALLOWED_WARNINGS`), any other unlisted warning
       (`BENIGN_WARNINGS` gives a reason for each), or a log line that looks like personal data.
-    - Diagnostics: the per-cycle RSS, cycle times and the problems found.
+    - Diagnostics: the per-cycle RSS, cycle times, `modules_loaded` and the problems found.
+    - `modules.txt`: the modules loaded after the last cycle, one line per top-level package, largest first. Each line
+      gives the compiled size on disk (a proxy for the code the import holds, not its RSS), the number of modules, and
+      whether the package is third-party, stdlib, local (Predbat and the benchmark) or built-in. The tracemalloc report
+      puts import costs under importlib, so this list is how a worker sees which libraries are worth cutting.
 - **Profiling:** `coverage/memory_benchmark --tracemalloc <tree> <out dir>` also writes `<out dir>/tracemalloc.txt`, the
   largest live allocations after the last cycle by line and by file. This is how workers map the memory, since the
   board allows no general interpreter. Tracing slows the run and adds to its RSS, so the result says
@@ -106,10 +111,14 @@ The benchmark only runs where the fixture is. With no fixture it exits 2, which 
 | `measure.py` with the same tree as base and candidate | a clean fail on the 25% target, not a harness error |
 
 The 25% target in `board.toml` and `measure.py` (`STEADY_CUT`) means a candidate's steady RSS must come down to about
-78 MB. Startup alone is about 74 MB, so most of the saving has to come from what the plan cycles hold.
+78 MB. Startup alone is about 74 MB, so the saving has to come both from what the plan cycles hold and from what
+startup loads, the Python libraries included. On main at 7b86c544 the run loads 507 modules; the largest third-party
+packages by compiled size are aiohttp (7.3 MiB with its multidict, propcache, frozenlist, yarl and attrs helpers taking
+another 3.8 MiB), PyYAML (2.9 MiB) and ruamel.yaml (0.6 MiB), so two YAML libraries are loaded.
 
-Noise is about 4 MB on steady and about 1 MB on the median peak, between identical trees. The done-when's "median peak
-no higher than main's" can therefore fail a candidate whose peak is unchanged.
+Noise is about 4 MB on steady between identical trees. The peak's own noise is 1 to 2 MB, so a strict "no higher than
+main's" would fail unchanged peaks. The 10% limit (about 14 MB on main's 137 MB) is well clear of that noise, and still
+stops a steady saving being bought with a much higher peak, which a memory-limited add-on runs out of.
 
 The Octopus component needs #6369 (its token mint and GraphQL query catching connection errors) to run offline. Until
 that is on main, a base of main fails every cycle.

@@ -870,7 +870,7 @@ Every setting is optional. `totals` lets the `_lifetime` sensors continue an exi
 
 ### Memory benchmark
 
-`coverage/memory_benchmark <tree> <out dir>` measures how much memory Predbat from `<tree>` uses. It runs Predbat standalone in a Linux container with no network: the database is the only data source, the dummy inverter replaces the real one, and the forecast and Octopus components are served from seeded caches. The wall clock is frozen, and the run makes 6 plan cycles. It writes `result.json` with the steady and peak RSS and a digest of the plans, which must not change when memory use does. The `predbat-memory` board (`boards/predbat-memory/`) uses it to find savings.
+`coverage/memory_benchmark <tree> <out dir>` measures how much memory Predbat from `<tree>` uses. It runs Predbat standalone in a Linux container with no network: the database is the only data source, the dummy inverter replaces the real one, and the forecast and Octopus components are served from seeded caches. The wall clock is frozen, and the run makes 6 plan cycles. It writes `result.json` with the steady and peak RSS and a digest of the plans, which must not change when memory use does, and `modules.txt`, the modules loaded after the last cycle grouped by top-level package with their compiled size, so you can see which libraries a run pulls in. The `predbat-memory` board (`boards/predbat-memory/`) uses it to find savings.
 
 Its input is a local fixture, built from a live Predbat add-on config directory and never committed:
 
