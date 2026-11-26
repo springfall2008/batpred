@@ -62,6 +62,7 @@ import asyncio
 import base64
 import json
 import math
+import random
 import ssl
 import tempfile
 import traceback
@@ -143,6 +144,12 @@ SIGENERGY_MQTT_FRESH_SECONDS = 450
 SIGENERGY_VPP_RECLAIM_INTERVAL = 60   # re-assert VPP ownership every minute (see _manage_vpp_registration)
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
+# Seconds before the login endpoint is tried again after it rejects the key (1201 Access restriction,
+# 2036 requested too frequently, bad credentials). Every request, MQTT command and broker login needs a
+# token, so without this each one re-posted the login at once - several times a minute per client, which
+# keeps a throttled key throttled. Escalates per consecutive rejection, capped at the last step.
+SIGENERGY_AUTH_REJECT_BACKOFF = [60, 120, 300]  # the cap bounds how long control stays lost after the key is accepted again
+SIGENERGY_AUTH_REJECT_JITTER = 0.2  # up to this fraction added to each cooldown so many clients do not retry in lockstep
 SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used to convert ratedEnergy (Ah) → kWh
 SIGENERGY_RATED_ENERGY_AH_THRESHOLD = 100.0  # a ratedEnergy above this is Ah (e.g. 314), below it kWh (e.g. 9.04) - see _get_battery_capacity_kwh
 SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
@@ -569,6 +576,11 @@ class SigenergyAPI(ComponentBase):
         # Rate-limit tracking
         self._last_request_time = 0.0
 
+        # Login cooldown after the auth endpoint rejects the key (see SIGENERGY_AUTH_REJECT_BACKOFF)
+        self._auth_retry_at = 0.0  # monotonic time before which no login is attempted
+        self._auth_failures = 0  # consecutive rejections, indexes the backoff schedule
+        self._auth_lock = asyncio.Lock()  # one login in flight at a time
+
         # Delay between mode-switch and battery command (seconds); set to 0 in tests
         self._command_delay = 1.0
 
@@ -595,8 +607,11 @@ class SigenergyAPI(ComponentBase):
         of expiry (default 12 h lifetime).
 
         Transient network errors (timeout, connection error, bad HTTP status)
-        are retried up to SIGENERGY_MAX_RETRIES times.  API-level rejections
-        (wrong credentials, code != 0) are not retried as they are permanent.
+        are retried up to SIGENERGY_MAX_RETRIES times.  An API-level rejection
+        (code != 0, e.g. 1201 Access restriction or wrong credentials) is not
+        retried in-call; instead no login is attempted again until a cooldown
+        from SIGENERGY_AUTH_REJECT_BACKOFF has passed, and calls made in the
+        meantime return None without touching the network.
 
         Returns:
             Access token string on success, None on failure.
@@ -604,8 +619,22 @@ class SigenergyAPI(ComponentBase):
         now = self.monotonic()
         if self.access_token and now < self.token_expires_at - SIGENERGY_TOKEN_EXPIRY_BUFFER:
             return self.access_token
+        if now < self._auth_retry_at:
+            return None
 
-        raw_key = "{}:{}".format(self.app_key, self.app_secret)
+        # Single-flight: the MQTT listener and the REST paths run as separate tasks, so without the
+        # lock both could post a login when the token lapses and double-count one rejection.
+        async with self._auth_lock:
+            now = self.monotonic()
+            if self.access_token and now < self.token_expires_at - SIGENERGY_TOKEN_EXPIRY_BUFFER:
+                return self.access_token
+            if now < self._auth_retry_at:
+                return None
+            return await self._login_with_key(now)
+
+    async def _login_with_key(self, now):
+        """POST the key to the login endpoint and cache the token; the retry loop for get_access_token."""
+        raw_key ="{}:{}".format(self.app_key, self.app_secret)
         encoded_key = base64.b64encode(raw_key.encode()).decode()
         url = "{}/openapi/auth/login/key".format(self.base_url)
         payload = {"key": encoded_key}
@@ -634,8 +663,12 @@ class SigenergyAPI(ComponentBase):
 
                 code = data.get("code", -1)
                 if code != 0:
-                    # Permanent API-level failure (e.g. wrong credentials) — do not retry
-                    self.log("Warn: SigenergyAPI: Auth failed, code={}, msg={}".format(code, data.get("msg", "unknown")))
+                    # API-level rejection — do not retry now; hold off further logins on an escalating cooldown
+                    self._auth_failures += 1
+                    wait = SIGENERGY_AUTH_REJECT_BACKOFF[min(self._auth_failures, len(SIGENERGY_AUTH_REJECT_BACKOFF)) - 1]
+                    wait += wait * SIGENERGY_AUTH_REJECT_JITTER * random.random()
+                    self._auth_retry_at = self.monotonic() + wait
+                    self.log("Warn: SigenergyAPI: Auth failed, code={}, msg={} - next login attempt in {:.0f}s".format(code, data.get("msg", "unknown"), wait))
                     self.access_token = None
                     return None
 
@@ -649,6 +682,7 @@ class SigenergyAPI(ComponentBase):
                 self.access_token = token_data.get("accessToken")
                 expires_in = _safe_int(token_data.get("expiresIn", 43200), 43200)
                 self.token_expires_at = now + expires_in
+                self._auth_failures = 0
                 self.log("SigenergyAPI: Token obtained, expires in {} s".format(expires_in))
                 return self.access_token
 
@@ -2264,8 +2298,10 @@ class SigenergyAPI(ComponentBase):
             try:
                 token = await self.get_access_token()
                 if not token:
-                    self.log("Warn: SigenergyAPI: MQTT token refresh failed; retrying in {}s".format(reconnect_delay))
-                    await self.sleep(reconnect_delay)
+                    # Wait out any login cooldown rather than re-asking every few seconds for a token that cannot come yet
+                    wait = max(reconnect_delay, self._auth_retry_at - self.monotonic())
+                    self.log("Warn: SigenergyAPI: MQTT token refresh failed; retrying in {:.0f}s".format(wait))
+                    await self.sleep(wait)
                     continue
 
                 # Refresh system list for subscription if not yet known
