@@ -41,6 +41,15 @@ board/predbat-memory/<same 8 chars>. It starts from the commit the intent names.
 main, or from any earlier board commit whose fact is confirmed, and say which in the fact. To combine savings, \
 cherry-pick board commits onto the branch. Build the kernel in that worktree with `bash apps/predbat/build_kernel.sh`. \
 Find what holds the memory before changing code, naming the objects and their MB.
+Shell commands: workers run with a fixed allow list (the [permissions] below), and a command outside it is refused, \
+not asked about. Run `cd <dir>` as a Bash call of its own; it carries over to later calls. Never put `cd` and `git` in \
+the same call: that chain is refused even when each part is allowed. Create a worktree from the main checkout with \
+absolute paths (`git worktree add -b <branch> <absolute worktree path> <commit>`), then `cd <worktree>` in its own \
+call, then build, commit and test there one command per call (`bash apps/predbat/build_kernel.sh`; \
+`cd <worktree>/coverage` and then `./run_all --quick`). Use only allowed commands: no subshells `( ... )`, and no \
+docker, uname or sysctl. A refused command means that spelling is not allowed, not that the intent is blocked: retry it \
+in an allowed form (one allowed command per call is always accepted) before giving up. Whatever happens, end with a \
+BOARD-WORK line; a run that ends without one is counted as lost.
 Commits: each change is one commit whose message starts `board(predbat-memory <intent short id>): <what it saves>`, \
 so `git log --oneline main..<commit>` lists every saving in a tree. Run that before building on a commit, to see what \
 it already contains.

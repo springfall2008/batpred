@@ -201,6 +201,11 @@ class TestBoardFile(unittest.TestCase):
         self.assertIn("Bash(coverage/memory_benchmark *)", self.board["permissions"]["allow"])
         self.assertIn("--tracemalloc", self.board["rules"])
 
+    def test_the_rules_tell_workers_how_to_spell_shell_commands(self):
+        """Workers are told the cd-and-git chain is refused and to end with a BOARD-WORK line, the two ways they got lost."""
+        self.assertIn("Never put `cd` and `git` in the same call", self.board["rules"])
+        self.assertIn("end with a BOARD-WORK line", self.board["rules"])
+
     def test_the_rules_point_workers_at_the_loaded_libraries(self):
         """Cutting imported libraries is in scope, and modules.txt is where a worker sees what is loaded."""
         self.assertIn("modules.txt", self.board["rules"])
