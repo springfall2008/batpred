@@ -185,6 +185,7 @@ dlimit
 dlopen
 dnoregion
 docstrings
+DONT
 dschg
 dstamp
 dstart
@@ -203,6 +204,7 @@ edfenergy
 edfgb
 edgecolor
 efgh
+EINVAL
 elif
 elinter
 eload
@@ -254,6 +256,7 @@ expmsg
 exportlimit
 exportvalue
 facecolor
+faketime
 fdpwr
 fdsoc
 feedin
@@ -410,6 +413,7 @@ larr
 lastrowid
 libbi
 libc
+libfaketime
 libyaml
 LIFEPO
 linebreak
@@ -470,6 +474,7 @@ misdetection
 mispairing
 Mixergy
 mkdocs
+mktemp
 mlugg
 Modbus
 mogons
@@ -490,6 +495,7 @@ myaccount
 myenergi
 mypy
 nanmean
+nanosleep
 nanstd
 nattribute
 nbytes
@@ -563,6 +569,7 @@ percnt
 peterhaban
 pgrid
 photovoltaics
+pipefail
 pitem
 pkwh
 plenticore
@@ -588,6 +595,7 @@ predheat
 preseed
 preseeded
 prevs
+procps
 protobuf
 pseudonymisation
 pseudonymise
@@ -612,6 +620,7 @@ pypi
 pyproject
 pytest
 pythonhashseed
+PYTHONPATH
 pytz
 Quattro
 Qwen
@@ -680,6 +689,7 @@ sigen
 sigencloud
 sigenergy
 sigenstor
+sitecustomize
 sizeof
 skynet
 Slee
@@ -720,6 +730,7 @@ stdlib
 stepline
 stevekirtley
 Storion
+strftime
 Stromligning
 strptime
 strtod
