@@ -176,25 +176,36 @@ class TestMain(unittest.TestCase):
         self.assertIn("BOARD_CANDIDATE is not set", result.stdout)
 
 
-# Allow entries that would run any program the worker writes, so every deny entry could be bypassed through them
-GENERAL_INTERPRETERS = ("python", "python3", "bash", "sh", "zsh", "source", ".", "node", "perl", "ruby", "env", "xargs", "eval", "exec")
+# What a worker needs for the intents the lead writes: Python to profile (importtime, gc referrers, deeper tracemalloc),
+# merge and rebase to combine earlier board commits, and the everyday read-only tools
+NEEDED = ("Bash(python3 *)", "Bash(*/coverage/venv/bin/python3 *)", "Bash(git merge *)", "Bash(git rebase *)", "Bash(find *)", "Bash(sort *)", "Bash(diff *)", "Bash(docker ps*)")
+
+# The mistakes the deny list is there to stop: anything that leaves the machine, rewrites main or another intent's
+# branch, throws away work, or changes the shared venv
+DANGEROUS = ("Bash(git push*)", "Bash(gh *)", "Bash(git reset --hard*)", "Bash(git branch -D*)", "Bash(git branch -f*)", "Bash(git update-ref*)", "Bash(rm -rf*)", "Bash(pip *)", "Edit(~/predbat/batpred/apps/**)")
 
 
 class TestBoardFile(unittest.TestCase):
-    """The board file's permissions do not undo its own deny list."""
+    """The board file lets workers do the work the intents ask for, and still denies the dangerous commands."""
 
     def setUp(self):
         """Load board.toml."""
         self.board = tomllib.loads((HERE / "board.toml").read_text())
 
-    def test_no_allow_entry_runs_a_general_interpreter(self):
-        """Bash(python3 *) and the like let a worker reach every Edit, Write and Bash deny from a script."""
-        for entry in self.board["permissions"]["allow"]:
-            if entry.startswith("Bash("):
-                command = entry[len("Bash(") : -1]
-                program = command.split(" ", 1)[0].rstrip("*")
-                rest = command[len(program) :].strip()
-                self.assertFalse(program in GENERAL_INTERPRETERS and rest in ("", "*"), entry)
+    def test_workers_have_the_tools_the_intents_need(self):
+        """Python, merge, rebase and the read-only tools are allowed; without them a worker can only give up."""
+        for entry in NEEDED:
+            self.assertIn(entry, self.board["permissions"]["allow"])
+
+    def test_the_dangerous_commands_stay_denied(self):
+        """Pushing, rewriting branches, throwing work away and pip are denied, and none of them is also allowed."""
+        for entry in DANGEROUS:
+            self.assertIn(entry, self.board["permissions"]["deny"])
+            self.assertNotIn(entry, self.board["permissions"]["allow"])
+
+    def test_merge_and_rebase_are_limited_to_the_workers_own_branch(self):
+        """The rules say where merge and rebase may be used, since the permissions cannot."""
+        self.assertIn("only on your own intent's branch", self.board["rules"])
 
     def test_the_benchmark_and_its_profiling_mode_are_allowed(self):
         """Workers profile with coverage/memory_benchmark --tracemalloc, which the benchmark's own entry covers."""

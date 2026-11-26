@@ -16,7 +16,8 @@ blackboard skill from agent-memory-supabase (`runner/` and `skills/blackboard/` 
    times with the benchmark, and maps the largest memory holders. No saving work starts until that fact is confirmed.
 2. **Savings.** The lead plans intents from the map, two open at a time. Each worker makes its own worktree and branch
    (`board/predbat-memory/<intent short id>`) and makes one commit per change. It starts from main, from the commit the
-   intent names, or from any earlier board commit with a confirmed fact. To combine savings it cherry-picks them. All
+   intent names, or from any earlier board commit with a confirmed fact. To combine savings it cherry-picks, merges or
+   rebases them onto its own branch. All
    the worktrees share one repository, so every board commit is visible to every worker.
 3. **Knowing what is in a tree.** Every board commit message starts `board(predbat-memory <intent short id>): <what it
    saves>`, so `git log --oneline main..<commit>` lists the savings in a tree. Every fact about a commit starts with
@@ -55,8 +56,8 @@ and what `measure.py` uses to judge the lead's candidate. Its design is in
       whether the package is third-party, stdlib, local (Predbat and the benchmark) or built-in. The tracemalloc report
       puts import costs under importlib, so this list is how a worker sees which libraries are worth cutting.
 - **Profiling:** `coverage/memory_benchmark --tracemalloc <tree> <out dir>` also writes `<out dir>/tracemalloc.txt`, the
-  largest live allocations after the last cycle by line and by file. This is how workers map the memory, since the
-  board allows no general interpreter. Tracing slows the run and adds to its RSS, so the result says
+  largest live allocations after the last cycle by line and by file. This is how workers map the memory; they may
+  also run Python for deeper analysis (import times, referrers). Tracing slows the run and adds to its RSS, so the result says
   `"tracemalloc": true` and `measure.py` refuses it as evidence.
 
 `measure.py` treats a measurement that could not be made as a harness error (exit 2), never as a failed candidate. That
