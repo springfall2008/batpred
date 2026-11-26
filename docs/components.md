@@ -1647,7 +1647,8 @@ Supports real-time monitoring (SOC, power flows, operational mode) and full char
 | Option | Type | Required | Default | Config Key | Description |
 | ------ | ---- | -------- | ------- | ---------- | ----------- |
 | `app_key` | String | Yes | - | `sigenergy_app_key` | Your Sigenergy Application Key from the Developer Portal |
-| `app_secret` | String | Yes | - | `sigenergy_app_secret` | Your Sigenergy Application Secret |
+| `app_secret` | String | Yes, with `api_key` | - | `sigenergy_app_secret` | Your Sigenergy Application Secret. Not used with `auth_method: oauth` |
+| `auth_method` | String | No | api_key | `sigenergy_auth_method` | `api_key` logs in with the app key and secret. `oauth` never logs in: the access token comes from an OAuth refresh service, which can share one token between many installations of the same app key. The first token is fetched on first use |
 | `ca_cert` | String | No | System CAs | `sigenergy_ca_pem` | PEM text of the CA certificate for TLS verification |
 | `client_cert` | String | No | - | `sigenergy_client_pem` | PEM text of the client certificate for mutual TLS |
 | `client_key` | String | No | - | `sigenergy_client_key` | PEM text of the client private key for mutual TLS |

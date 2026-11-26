@@ -1485,6 +1485,231 @@ def test_sigenergy_auth_concurrent_callers_single_login(my_predbat):
     return failed
 
 
+def _oauth_sigenergy_api(answers):
+    """A SigenergyAPI in oauth mode whose refresh service answers from the list in turn; records each call."""
+    api = MockSigenergyAPI()
+    api.initialize(app_key="test_app_key", auth_method="oauth", mqtt_host="mqtt.invalid")
+    api._command_delay = 0
+    calls = []
+
+    async def refresh_provider(instance_id, provider, token_hash, **kwargs):
+        calls.append({"provider": provider, "token_hash": token_hash, **kwargs})
+        return answers[min(len(calls), len(answers)) - 1]
+
+    api.base.oauth_refresh_provider = refresh_provider
+    return api, calls
+
+
+def _oauth_answer(token, token_hash, hours=6):
+    """A successful oauth-refresh reply for token, expiring in hours."""
+    expires = datetime.now(timezone.utc) + timedelta(hours=hours)
+    return {"success": True, "access_token": token, "expires_at": expires.isoformat(), "token_hash": token_hash}
+
+
+def _no_login_session(*args, **kwargs):
+    """ClientSession stand-in for oauth mode: any HTTP use at all is a failure."""
+    raise AssertionError("oauth mode must not call the Sigenergy login endpoint")
+
+
+def test_sigenergy_oauth_token_from_refresh_service(my_predbat):
+    """In oauth mode the token comes from the refresh service, is cached until near expiry, and no login is posted."""
+    failed = False
+    api, calls = _oauth_sigenergy_api([_oauth_answer("shared", "h1")])
+    clock = VirtualClock()
+    assert api.app_secret is None, "no app secret is needed"
+    with _api_clock(api, clock), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
+        assert run_async_real(api.get_access_token()) == "shared"
+        assert run_async_real(api.get_access_token()) == "shared"
+    assert len(calls) == 1, "one refresh for two token reads, got {}".format(len(calls))
+    assert calls[0]["provider"] == "sigenergy" and "force" not in calls[0], "a routine refresh is not forced: {}".format(calls[0])
+    assert api.token_hash == "h1", "the service's token hash is kept to echo back"
+    return failed
+
+
+def test_sigenergy_oauth_no_token_holds_off(my_predbat):
+    """A refresh that gives no token (rate_limited) is not asked again until the cooldown has passed."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    api, calls = _oauth_sigenergy_api([{"success": False, "error": "rate_limited", "retry_after": 60}, _oauth_answer("shared", "h1")])
+    clock = VirtualClock()
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
+        assert run_async_real(api.get_access_token()) is None
+        for _ in range(5):
+            assert run_async_real(api.get_access_token()) is None, "no token inside the cooldown"
+        assert len(calls) == 1, "the service is not polled inside the cooldown, got {} calls".format(len(calls))
+        clock.mono += backoff[0]
+        assert run_async_real(api.get_access_token()) == "shared", "asked again once the cooldown passed"
+    assert len(calls) == 2
+    assert not api.oauth_failed, "rate_limited must never latch oauth_failed"
+    return failed
+
+
+def _sequenced_get_session(statuses_and_bodies, seen_auth):
+    """ClientSession factory whose GETs answer in turn, recording each Authorization header."""
+    state = {"n": 0}
+
+    def factory(*args, **kwargs):
+        status, body = statuses_and_bodies[min(state["n"], len(statuses_and_bodies) - 1)]
+        state["n"] += 1
+        session = _make_mock_session(_make_mock_response(status=status, json_data=body))
+        inner_get = session.get
+
+        def get(url, headers=None, params=None):
+            seen_auth.append(headers.get("Authorization"))
+            return inner_get(url, headers=headers, params=params)
+
+        session.get = get
+        return session
+
+    return factory
+
+
+def test_sigenergy_oauth_401_forces_refresh_and_retries(my_predbat):
+    """A 401 in oauth mode forces one refresh naming the rejected token, then retries with the new token."""
+    failed = False
+    api, calls = _oauth_sigenergy_api([_oauth_answer("old", "h-old"), _oauth_answer("new", "h-new")])
+    clock = VirtualClock()
+    seen = []
+    factory = _sequenced_get_session([(401, {}), (200, {"code": 0, "data": {"ok": 1}})], seen)
+    with _api_clock(api, clock), patch("sigenergy.aiohttp.ClientSession", factory):
+        result = run_async_real(api._request("GET", "/openapi/test"))
+    assert result == {"ok": 1}, "request retried after the refresh, got {}".format(result)
+    assert seen == ["Bearer old", "Bearer new"], "retried with the new token: {}".format(seen)
+    assert len(calls) == 2 and calls[1].get("force") is True and calls[1].get("reason") == "401", "second refresh forced: {}".format(calls)
+    assert calls[1]["token_hash"] == "h-old", "the forced refresh names the rejected token"
+    return failed
+
+
+def test_sigenergy_oauth_401_after_another_task_refreshed(my_predbat):
+    """A 401 on a token another task has already replaced retries with the replacement, without forcing again."""
+    failed = False
+    api, calls = _oauth_sigenergy_api([_oauth_answer("new", "h-new")])
+    api.access_token = "new"
+    api.token_hash = "h-new"
+    api.token_expires_at = time.time() + 6 * 3600
+    clock = VirtualClock()
+    with _api_clock(api, clock):
+        token = run_async_real(api._oauth_after_401("old"))
+    assert token == "new", "the replacement token is used"
+    assert calls == [], "no forced refresh for a token that is no longer held, got {}".format(calls)
+    api._oauth_rejected_token = "new"
+    with _api_clock(api, clock):
+        assert run_async_real(api._oauth_after_401("old")) is None, "a replacement that was itself refused is not handed out"
+    assert calls == []
+    return failed
+
+
+def test_sigenergy_oauth_failed_forced_refresh_holds_off(my_predbat):
+    """A 401 whose forced refresh fails drops the rejected token and sends nothing until the cooldown has passed."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    limited = {"success": False, "error": "rate_limited", "retry_after": 60}
+    api, calls = _oauth_sigenergy_api([_oauth_answer("old", "h-old"), limited, limited, _oauth_answer("new", "h-new")])
+    clock = VirtualClock()
+    seen = []
+    factory = _sequenced_get_session([(401, {}), (200, {"code": 0, "data": {"ok": 1}})], seen)
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", factory):
+        assert run_async_real(api._request("GET", "/openapi/test")) is None, "no retry without a new token"
+        for _ in range(3):
+            assert run_async_real(api._request("GET", "/openapi/test")) is None
+        assert seen == ["Bearer old"], "the rejected token is not sent again, got {}".format(seen)
+        assert len(calls) == 2, "no refresh inside the cooldown, got {}".format(calls)
+        clock.mono += backoff[0]
+        assert run_async_real(api._request("GET", "/openapi/test")) is None, "still throttled"
+        assert len(calls) == 3 and calls[2].get("force") is True and calls[2]["token_hash"] == "h-old", "one forced refresh after the cooldown, still naming the refused token: {}".format(calls)
+        clock.mono += backoff[0]
+        assert run_async_real(api._request("GET", "/openapi/test")) == {"ok": 1}
+    assert seen == ["Bearer old", "Bearer new"], "recovered with the new token: {}".format(seen)
+    return failed
+
+
+def test_sigenergy_oauth_forced_refresh_same_token_keeps_asking(my_predbat):
+    """A forced refresh that hands back the refused token is not used, and is asked again once per cooldown until a new token comes."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    old = _oauth_answer("old", "h-old")
+    api, calls = _oauth_sigenergy_api([old, old, old, _oauth_answer("new", "h-new")])
+    clock = VirtualClock()
+    seen = []
+    factory = _sequenced_get_session([(401, {}), (200, {"code": 0, "data": {"ok": 1}})], seen)
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", factory):
+        assert run_async_real(api._request("GET", "/openapi/test")) is None
+        assert run_async_real(api.get_access_token()) is None, "the refused token is never handed out"
+        assert len(calls) == 2
+        clock.mono += backoff[0]
+        clock.wall += backoff[0]
+        assert run_async_real(api.get_access_token()) is None, "same token again: still refused"
+        assert len(calls) == 3 and calls[2].get("force") is True
+        clock.mono += backoff[0]
+        clock.wall += backoff[0]
+        assert run_async_real(api.get_access_token()) == "new", "recovers once the service has a new token"
+        assert run_async_real(api._request("GET", "/openapi/test")) == {"ok": 1}
+    assert len(calls) == 4, "one refresh per cooldown, got {}".format(len(calls))
+    assert seen == ["Bearer old", "Bearer new"], "the refused token is never sent again: {}".format(seen)
+    return failed
+
+
+def test_sigenergy_oauth_throttled_renewal_keeps_held_token(my_predbat):
+    """A held token inside the refresh window is still used while renewal is throttled, and the service is asked once per cooldown."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    api, calls = _oauth_sigenergy_api([{"success": False, "error": "rate_limited", "retry_after": 60}])
+    api.access_token = "held"
+    api.token_expires_at = time.time() + 10 * 60
+    clock = VirtualClock()
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
+        for _ in range(6):
+            assert run_async_real(api.get_access_token()) == "held"
+        assert len(calls) == 1, "one refresh per cooldown, got {}".format(len(calls))
+        clock.mono += backoff[0]
+        assert run_async_real(api.get_access_token()) == "held"
+    assert len(calls) == 2
+    return failed
+
+
+def test_sigenergy_oauth_near_expiry_answer_holds_off(my_predbat):
+    """A refresh answered with a token already inside the refresh window is used, and not asked again until the cooldown has passed."""
+    failed = False
+    api, calls = _oauth_sigenergy_api([_oauth_answer("short", "h-short", hours=0.2)])
+    clock = VirtualClock()
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
+        for _ in range(5):
+            assert run_async_real(api.get_access_token()) == "short"
+    assert len(calls) == 1, "one refresh per cooldown, got {}".format(len(calls))
+    return failed
+
+
+def test_sigenergy_oauth_expired_held_token_not_used(my_predbat):
+    """A held token past its expiry is never handed out while the renewal is throttled."""
+    failed = False
+    api, calls = _oauth_sigenergy_api([{"success": False, "error": "rate_limited", "retry_after": 60}])
+    api.access_token = "expired"
+    api.token_expires_at = time.time() - 1
+    clock = VirtualClock()
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0):
+        assert run_async_real(api.get_access_token()) is None
+        assert run_async_real(api.get_access_token()) is None
+    assert len(calls) == 1
+    return failed
+
+
+def test_sigenergy_app_secret_optional_in_component_args(my_predbat):
+    """The component registry must start Sigenergy without an app secret, which oauth mode does not use."""
+    failed = False
+    from components import COMPONENT_LIST
+
+    args = COMPONENT_LIST["sigenergy"]["args"]
+    assert args["app_secret"]["required"] is False
+    assert args["auth_method"]["config"] == "sigenergy_auth_method" and args["auth_method"]["default"] == "api_key"
+    api = MockSigenergyAPI()
+    assert api.auth_method == "api_key" and api.token_expires_at == 0.0, "api_key mode keeps the monotonic expiry"
+    return failed
+
+
 def test_sigenergy_auth_rejection_cooldown_is_jittered(my_predbat):
     """The cooldown carries up to SIGENERGY_AUTH_REJECT_JITTER extra so many clients do not retry in lockstep."""
     failed = False
@@ -6475,6 +6700,16 @@ def run_sigenergy_tests(my_predbat):
         ("auth_rejection_backoff_escalates_and_resets", test_sigenergy_auth_rejection_backoff_escalates_and_resets),
         ("auth_rejection_cooldown_is_jittered", test_sigenergy_auth_rejection_cooldown_is_jittered),
         ("auth_concurrent_callers_single_login", test_sigenergy_auth_concurrent_callers_single_login),
+        ("oauth_token_from_refresh_service", test_sigenergy_oauth_token_from_refresh_service),
+        ("oauth_no_token_holds_off", test_sigenergy_oauth_no_token_holds_off),
+        ("oauth_401_forces_refresh_and_retries", test_sigenergy_oauth_401_forces_refresh_and_retries),
+        ("oauth_401_after_another_task_refreshed", test_sigenergy_oauth_401_after_another_task_refreshed),
+        ("oauth_failed_forced_refresh_holds_off", test_sigenergy_oauth_failed_forced_refresh_holds_off),
+        ("oauth_forced_refresh_same_token_keeps_asking", test_sigenergy_oauth_forced_refresh_same_token_keeps_asking),
+        ("oauth_throttled_renewal_keeps_held_token", test_sigenergy_oauth_throttled_renewal_keeps_held_token),
+        ("oauth_expired_held_token_not_used", test_sigenergy_oauth_expired_held_token_not_used),
+        ("oauth_near_expiry_answer_holds_off", test_sigenergy_oauth_near_expiry_answer_holds_off),
+        ("app_secret_optional_in_component_args", test_sigenergy_app_secret_optional_in_component_args),
         ("listener_waits_out_login_cooldown", test_sigenergy_listener_waits_out_login_cooldown),
         ("fetch_system_list", test_sigenergy_fetch_system_list),
         ("fetch_system_list_with_filter", test_sigenergy_fetch_system_list_with_filter),
