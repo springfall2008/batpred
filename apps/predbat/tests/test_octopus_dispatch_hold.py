@@ -20,7 +20,7 @@ until a completed dispatch covers it or OCTOPUS_DISPATCH_HOLD_MINUTES have passe
 import copy
 from datetime import timedelta
 
-from const import DYNAMIC_LOAD_CAR_START_MINUTES, OCTOPUS_DISPATCH_HOLD_MINUTES, OCTOPUS_DISPATCH_TAIL_MINUTES
+from const import DISPATCH_SOURCE_CHARGER_SCHEDULE, DYNAMIC_LOAD_CAR_START_MINUTES, OCTOPUS_DISPATCH_HOLD_MINUTES, OCTOPUS_DISPATCH_TAIL_MINUTES
 
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 RATE_LOW = 6.57
@@ -86,6 +86,15 @@ def _dispatch(my_predbat, start_minute, end_minute, kwh=2.0, source="smart-charg
     start = my_predbat.midnight_utc + timedelta(minutes=start_minute)
     end = my_predbat.midnight_utc + timedelta(minutes=end_minute)
     return {"start": start.strftime(TIME_FORMAT), "end": end.strftime(TIME_FORMAT), "charge_in_kwh": kwh, "source": source, "location": location}
+
+
+def _untagged(my_predbat, start_minute, end_minute):
+    """
+    A dispatch from a charger's own sensor (octopus_intelligent_planned_slot), which carries no source.
+    """
+    slot = _dispatch(my_predbat, start_minute, end_minute)
+    del slot["source"]
+    return slot
 
 
 def _reset(my_predbat):
@@ -303,6 +312,52 @@ def _run(my_predbat):
     failed |= _check("t12 entry ended since minutes_now not recorded", not my_predbat.octopus_slots_held.get(0), "held {}".format(my_predbat.octopus_slots_held))
     rates = _cycle(my_predbat, 1100)
     failed |= _check("t12 day rate once the entry has gone", _day(rates, 1080, 1110), "rate {}".format(rates[1080]))
+
+    print("Test 12b: Smart Control off - a charger's own slots, re-tagged as its schedule, do not end a hold (#5339)")
+    _reset(my_predbat)
+    # 18:10, Smart Control on: the charger's sensor (octopus_intelligent_planned_slot) follows Octopus's dispatch
+    _cycle(my_predbat, 1090, planned=[_untagged(my_predbat, 1080, 1200)])
+    failed |= _check("t12b half hour recorded", 0 in my_predbat.octopus_slots_held and len(my_predbat.octopus_slots_held[0]) == 1, "held {}".format(my_predbat.octopus_slots_held))
+    # 18:25, Smart Control off: the charger's plan and what it has seen finish are kept, re-tagged at the normal rate
+    planned = my_predbat.smart_control_off_slots([_untagged(my_predbat, 1103, 1170)], True)
+    completed = my_predbat.smart_control_off_slots([_untagged(my_predbat, 1080, 1103)], True)
+    rates = _cycle(my_predbat, 1105, planned=planned, completed=completed)
+    failed |= _check("t12b half hour Octopus dispatched still cheap", _low(rates, 1080, 1105), "rate {}".format(rates[1080]))
+    failed |= _check("t12b held", len(_held(my_predbat)) == 1, "held {}".format(_held(my_predbat)))
+    failed |= _check("t12b charger's plan at the day rate", _day(rates, 1110, 1170), "rate {}".format(rates[1110]))
+    # Octopus lists the dispatch as completed: that is the record, so the hold ends
+    # The slot sensor's own completed list goes in ahead of what the charger's sensor has seen finish
+    completed = [_dispatch(my_predbat, 1080, 1103, kwh=2.5)] + completed
+    rates = _cycle(my_predbat, 1125, planned=planned, completed=completed)
+    failed |= _check("t12b hold ends once the completed list has it", _held(my_predbat) == [], "held {}".format(_held(my_predbat)))
+    failed |= _check("t12b completed dispatch cheap", _low(rates, 1080, 1110), "rate {}".format(rates[1080]))
+
+    print("Test 12c: Smart Control off - a held half hour does not stop a charger's running slot counting only what is left (#5339)")
+    _reset(my_predbat)
+    # An Ohme slot keeps its real start while it runs: 18:00-19:30, 9 kWh
+    _cycle(my_predbat, 1090, planned=[_untagged(my_predbat, 1080, 1170)])
+    slot = _untagged(my_predbat, 1080, 1170)
+    slot["charge_in_kwh"] = 9.0
+    planned = my_predbat.smart_control_off_slots([slot], True)
+    rates = _cycle(my_predbat, 1105, planned=planned)
+    failed |= _check("t12c held", len(_held(my_predbat)) == 1, "held {}".format(_held(my_predbat)))
+    failed |= _check("t12c half hour Octopus dispatched still cheap", _low(rates, 1080, 1105), "rate {}".format(rates[1080]))
+    car_slots = my_predbat.load_octopus_slots(0, my_predbat.octopus_slots[0], True)
+    future_kwh = sum(car_slot["kwh"] for car_slot in car_slots if car_slot["end"] > my_predbat.minutes_now)
+    failed |= _check("t12c only the 65 minutes left of the slot are car load", abs(future_kwh - 6.5) < 0.01, "kWh {} slots {}".format(future_kwh, car_slots))
+
+    print("Test 12d: a held half hour still trims an overlapping slot that is not a charger's own schedule (#5339)")
+    # octopus_held_dispatches() leaves a held half hour out wherever an Octopus dispatch reaches it, so only a charger's
+    # own schedule should ever overlap one. Should anything else, it is trimmed as before, so its energy is not counted
+    # twice against the held half hour and its minutes are not taken twice from the daily cap
+    _reset(my_predbat)
+    my_predbat.minutes_now = 1105
+    held = dict(_dispatch(my_predbat, 1080, 1105), held=True)
+    held.pop("charge_in_kwh")
+    for source, expect_start in (("smart-charge", 1105), (DISPATCH_SOURCE_CHARGER_SCHEDULE, 1080)):
+        segments = my_predbat.octopus_slot_segments(0, [held, _dispatch(my_predbat, 1080, 1170, kwh=9.0, source=source)])
+        starts = [segment[0] for segment in segments if not segment[7]]
+        failed |= _check("t12d {} slot starts at {}".format(source, expect_start), starts == [expect_start], "segments {}".format(segments))
 
     print("Test 13: a held half hour only minutes in is not taken for a short dispatch (OCTOPUS_SLOT_MIN_MINUTES)")
     _reset(my_predbat)

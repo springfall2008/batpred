@@ -46,11 +46,15 @@ def test_load_ml(my_predbat=None):
         ("dataset_with_temp", _test_dataset_with_temp, "Dataset creation with temperature features"),
         ("normalization", _test_normalization, "Z-score normalization correctness"),
         ("ema_normalization", _test_ema_normalization, "EMA normalization drift tracking during fine-tuning"),
+        ("normalization_bounded", _test_normalization_bounded, "Normalised features held within FEATURE_Z_LIMIT on every normalisation path"),
+        ("rate_spike_bounded_inputs", _test_rate_spike_bounded_inputs, "A rate spike reaches the network bounded, in training and in prediction"),
         ("adam_optimizer", _test_adam_optimizer, "Adam optimiser step"),
         ("training_convergence", _test_training_convergence, "Training convergence on synthetic data"),
         ("training_with_pv", _test_training_with_pv, "Training with PV input features"),
         ("training_with_temp", _test_training_with_temp, "Training with temperature input features"),
         ("model_persistence", _test_model_persistence, "Model save/load with version check"),
+        ("model_version_discards_unbounded", _test_model_version_discards_unbounded, "A model saved before the inputs were bounded is discarded on load"),
+        ("model_limit_mismatch_discards", _test_model_limit_mismatch_discards, "A model saved under a different input limit is discarded on load"),
         ("cold_start", _test_cold_start, "Cold start with insufficient data"),
         ("fine_tune", _test_fine_tune, "Fine-tune on recent data"),
         ("curriculum_training", _test_curriculum_training, "Curriculum training with progressive window expansion"),
@@ -555,6 +559,92 @@ def _test_normalization():
     assert np.allclose(y, y_denorm, atol=1e-5), "Denormalization should recover original"
 
 
+def _test_normalization_bounded():
+    """Normalised features are held within +/- FEATURE_Z_LIMIT on every normalisation path: prediction and validation
+    (_normalize_features, copied or in place) and training batches (WindowedFeatures rows and its full matrix) (#6147)"""
+    import load_predictor
+    from load_predictor import WindowedFeatures, FEATURE_Z_LIMIT, LOOKBACK_STEPS, NUM_TIME_FEATURES
+
+    assert FEATURE_Z_LIMIT == 5.0, f"Expected FEATURE_Z_LIMIT 5.0, got {FEATURE_Z_LIMIT}"
+    predictor = LoadPredictor()
+    predictor.feature_mean = np.zeros(TOTAL_FEATURES, dtype=np.float32)
+    predictor.feature_std = np.ones(TOTAL_FEATURES, dtype=np.float32)
+    import_start = 3 * LOOKBACK_STEPS
+
+    # A +/-100p rate against a 1p spread, and an ordinary load value that must pass untouched
+    X = np.zeros((2, TOTAL_FEATURES), dtype=np.float32)
+    X[0, import_start] = 100.0
+    X[1, import_start] = -100.0
+    X[0, 0] = 2.5
+    out = predictor._normalize_features(X)
+    assert out[0, import_start] == FEATURE_Z_LIMIT and out[1, import_start] == -FEATURE_Z_LIMIT, f"The spike should be held at +/-{FEATURE_Z_LIMIT}, got {out[:, import_start]}"
+    assert out[0, 0] == 2.5, f"A value inside the limit should pass untouched, got {out[0, 0]}"
+    assert X[0, import_start] == 100.0, "Normalising a copy should leave the input alone"
+    assert np.array_equal(predictor._normalize_features(X.copy(), in_place=True), out), "In-place normalisation should be bounded the same way"
+
+    # Training batches come from WindowedFeatures, which normalises as it assembles rows
+    steps = LOOKBACK_STEPS + 10
+    channels = [np.zeros(steps, dtype=np.float32) for _ in range(5)]
+    channels[3][5] = 100.0  # import channel: inside every window of the five targets below
+    windows = WindowedFeatures(channels, np.zeros((steps, NUM_TIME_FEATURES), dtype=np.float32), np.arange(5, dtype=np.int64))
+    windows.mean = predictor.feature_mean
+    windows.std = predictor.feature_std
+    assert np.max(np.abs(windows[np.arange(5)])) == FEATURE_Z_LIMIT, "Training batch rows should be bounded"
+    assert np.max(np.abs(np.asarray(windows))) == FEATURE_Z_LIMIT, "The materialised training matrix should be bounded"
+
+    # With the limit off the spike goes through, so it is the limit that holds it
+    saved_limit = load_predictor.FEATURE_Z_LIMIT
+    try:
+        load_predictor.FEATURE_Z_LIMIT = 0
+        assert predictor._normalize_features(X)[0, import_start] == 100.0, "With the limit off the spike should pass through"
+        assert np.max(windows[np.arange(5)]) == 100.0, "With the limit off training rows should pass the spike through"
+    finally:
+        load_predictor.FEATURE_Z_LIMIT = saved_limit
+
+
+def _test_rate_spike_bounded_inputs():
+    """A rate spike far outside training (a saving session in the history, an Axle event in the forecast) reaches the
+    network no further than FEATURE_Z_LIMIT from normal, in training and in prediction (#6147, #6259)"""
+    from load_predictor import FEATURE_Z_LIMIT
+
+    now_utc = datetime(2026, 11, 18, 12, 0, tzinfo=timezone.utc)
+    midnight_utc = now_utc.replace(hour=0, minute=0, second=0, microsecond=0)
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=3, now_utc=now_utc)
+    history_minutes = range(0, 3 * 24 * 60 + STEP_MINUTES, STEP_MINUTES)
+    # A flat 6.6p / 12p tariff, with a one-hour 106.6p saving session ten hours ago
+    import_rates = {minute: 106.6 if 600 <= minute < 660 else 6.6 for minute in history_minutes}
+    export_rates = {minute: 12.0 for minute in history_minutes}
+
+    predictor = LoadPredictor(learning_rate=0.005)
+    seen = []
+    real_forward = predictor._forward
+
+    def recording_forward(X, training=False):
+        """Note the largest normalised input reaching the network, then run the real forward pass."""
+        seen.append(float(np.max(np.abs(X))))
+        return real_forward(X, training=training)
+
+    predictor._forward = recording_forward
+    predictor.train(load_data, now_utc, import_rates=import_rates, export_rates=export_rates, is_initial=True, epochs=2, time_decay_days=7)
+    assert seen, "Training should run the network"
+    assert max(seen) <= FEATURE_Z_LIMIT + 1e-5, f"Training inputs should be bounded, got {max(seen)}"
+    assert max(seen) >= FEATURE_Z_LIMIT - 1e-5, f"The saving session should have reached the limit in training, got {max(seen)}"
+
+    # A +100p event eight hours ahead on both rates, as an Axle VPP event is published
+    seen.clear()
+    future_import = dict(import_rates)
+    future_export = dict(export_rates)
+    for minute in range(STEP_MINUTES, 48 * 60 + STEP_MINUTES, STEP_MINUTES):
+        event = 100.0 if 8 * 60 < minute <= 9 * 60 else 0.0
+        future_import[-minute] = 6.6 + event
+        future_export[-minute] = 12.0 + event
+    predictions = predictor.predict(load_data, now_utc, midnight_utc, import_rates=future_import, export_rates=future_export)
+    assert predictions, "Prediction should succeed"
+    assert max(seen) <= FEATURE_Z_LIMIT + 1e-5, f"Prediction inputs should be bounded, got {max(seen)}"
+    assert max(seen) >= FEATURE_Z_LIMIT - 1e-5, f"The forecast event should have reached the limit, got {max(seen)}"
+
+
 def _test_ema_normalization():
     """Test EMA normalization drift tracking during fine-tuning.
 
@@ -776,6 +866,93 @@ def _test_model_persistence():
         assert np.allclose(out1, out2), "Predictions should match after load"
 
     finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _test_model_version_discards_unbounded():
+    """A model saved before the normalised inputs were bounded (version 10) is discarded on load, so it is retrained
+    from the saved history: bounding the inputs does not revive the ReLU units unbounded rate spikes killed (#6147)"""
+    import json
+    from load_predictor import MODEL_VERSION
+
+    assert MODEL_VERSION == 11, f"Expected MODEL_VERSION 11, got {MODEL_VERSION}"
+    predictor = LoadPredictor()
+    predictor._initialize_weights()
+    predictor.feature_mean = np.zeros(TOTAL_FEATURES, dtype=np.float32)
+    predictor.feature_std = np.ones(TOTAL_FEATURES, dtype=np.float32)
+
+    with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
+        temp_path = f.name
+    try:
+        assert predictor.save(temp_path), "Model save should succeed"
+        assert LoadPredictor().load(temp_path), "A model saved at the current version should load"
+
+        # Rewrite it as a version 10 model, as saved by the previous release
+        with np.load(temp_path, allow_pickle=True) as data:
+            arrays = {key: data[key] for key in data.files}
+        metadata = json.loads(str(arrays["metadata_json"]))
+        metadata["model_version"] = 10
+        arrays["metadata_json"] = json.dumps(metadata)
+        np.savez(temp_path, **arrays)
+
+        logged = []
+        old = LoadPredictor(log_func=logged.append)
+        assert not old.load(temp_path), "A version 10 model should be discarded"
+        assert not old.model_initialized, "A discarded model should leave the predictor untrained"
+        assert any("version mismatch" in line for line in logged), f"The discard should be logged, got {logged}"
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _test_model_limit_mismatch_discards():
+    """The input limit a model was trained under is saved with it, and a model saved under a different limit (or none)
+    is discarded on load, so tuning FEATURE_Z_LIMIT can't leave old weights predicting under a transform they never saw"""
+    import json
+    import load_predictor
+
+    predictor = LoadPredictor()
+    predictor._initialize_weights()
+    predictor.feature_mean = np.zeros(TOTAL_FEATURES, dtype=np.float32)
+    predictor.feature_std = np.ones(TOTAL_FEATURES, dtype=np.float32)
+
+    def rewrite(path, change):
+        """Rewrite a saved model's metadata with change applied."""
+        with np.load(path, allow_pickle=True) as data:
+            arrays = {key: data[key] for key in data.files}
+        metadata = json.loads(str(arrays["metadata_json"]))
+        change(metadata)
+        arrays["metadata_json"] = json.dumps(metadata)
+        np.savez(path, **arrays)
+
+    def refused(path):
+        """True when a fresh predictor refuses the model at path and logs the limit mismatch."""
+        logged = []
+        fresh = LoadPredictor(log_func=logged.append)
+        return not fresh.load(path) and not fresh.model_initialized and any("input limit mismatch" in line for line in logged)
+
+    with tempfile.NamedTemporaryFile(suffix=".npz", delete=False) as f:
+        temp_path = f.name
+    saved_limit = load_predictor.FEATURE_Z_LIMIT
+    try:
+        assert predictor.save(temp_path), "Model save should succeed"
+        with np.load(temp_path, allow_pickle=True) as data:
+            assert json.loads(str(data["metadata_json"])).get("feature_z_limit") == saved_limit, "The limit should be saved with the model"
+        assert LoadPredictor().load(temp_path), "A model saved under the current limit should load"
+
+        # The constant is tuned after the model was saved
+        load_predictor.FEATURE_Z_LIMIT = 4.0
+        assert refused(temp_path), "A model saved under 5.0 should be discarded once the limit is 4.0"
+        load_predictor.FEATURE_Z_LIMIT = saved_limit
+
+        # The saved metadata names another limit, or none at all
+        rewrite(temp_path, lambda metadata: metadata.update(feature_z_limit=4.0))
+        assert refused(temp_path), "A model saved under limit 4.0 should be discarded"
+        rewrite(temp_path, lambda metadata: metadata.pop("feature_z_limit"))
+        assert refused(temp_path), "A model saved without a limit should be discarded"
+    finally:
+        load_predictor.FEATURE_Z_LIMIT = saved_limit
         if os.path.exists(temp_path):
             os.unlink(temp_path)
 
@@ -1040,7 +1217,8 @@ def _test_component_retrain_interval():
 
 def _test_component_run_data_merge():
     """Test LoadMLComponent.run() - mocks _fetch_load_data and verifies:
-    1. Run 1 (first=True): data is fetched and stored, but training is deferred (no save).
+    1. Run 1 (first=True): data is fetched and stored, but training is deferred (no save) and
+       the run still records a success so the component is not reported as failed.
     2. Run 2 (first=False, last_train_time=None): initial training fires because the model
        has never been trained; old keys are shifted before new data is merged.
     3. Run 3 (first=False, model just trained): only a fetch+predict cycle runs (no retrain),
@@ -1154,8 +1332,12 @@ def _test_component_run_data_merge():
         assert component.initial_training_done is False, "initial_training_done should still be False after first run"
         assert save_call_count[0] == 0, f"save_database_history should NOT be called on first run (deferred), called {save_call_count[0]} times"
         assert training_call_count[0] == 0, f"Training should NOT run on first run, ran {training_call_count[0]} times"
+        # Deferring initial training is a healthy state, not a failure: without a success timestamp
+        # components.is_alive() reads the component as dead and the next plan run reports
+        # "component errors: ML Load Forecaster" until training starts a minute later.
+        assert component.last_updated_time() is not None, "Deferred initial training must still record a success so the component reads as alive"
 
-        print("    PASS: Run 1: data populated, training deferred, no save")
+        print("    PASS: Run 1: data populated, training deferred, no save, success recorded")
 
         # ── Advance time by ELAPSED_MINUTES ─────────────────────────────────────
         mock_base.now_utc = mock_base.now_utc + timedelta(minutes=ELAPSED_MINUTES)

@@ -399,9 +399,9 @@ def test_request_real_oauth_auth_error_refreshes_through_the_edge_function():
 
     refreshes = []
 
-    async def fake_do_refresh():
+    async def fake_do_refresh(reason=None):
         """Stand in for the oauth-refresh edge function, installing a fresh token."""
-        refreshes.append(1)
+        refreshes.append(reason)
         s.access_token = "refreshed-token"
         return True
 

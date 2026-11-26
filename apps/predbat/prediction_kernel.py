@@ -1083,7 +1083,12 @@ def run_prediction_kernel_batch(pred, jobs, n_threads=1):
         """Marshal a window list's start/end arrays, reusing an earlier job's arrays where possible"""
         entry = window_cache.get(id(windows))
         if entry is None:
-            entry = (int32_array([window["start"] for window in windows]), int32_array([window["end"] for window in windows]), windows)
+            # From the identity-keyed bounds cache, which outlives the batch: the charge windows and a plan's
+            # base export windows are the same lists batch after batch, so their arrays are built once, not once
+            # per batch. That cache is kept honest by set_window_start/set_window_end (see its notes) and the
+            # arrays are read-only to the kernel, as the single-run path already relies on.
+            starts, ends = window_bound_arrays(windows)
+            entry = (starts, ends, windows)
             window_cache[id(windows)] = entry
         return entry
 

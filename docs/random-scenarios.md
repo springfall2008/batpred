@@ -81,7 +81,7 @@ Each scenario prints a progress line:
 Scenario 3/50 seed=2 metric=541.6 cost=726.1 runtime=0.462s [ok]
 ```
 
-The `metric` is the full optimisation metric (cost + battery value adjustment + PV10 weighting + carbon). The `cost` is the raw import/export money with no adjustments. `runtime_s` measures the wall-clock time of `calculate_plan()` alone.
+The `metric` is the planner's own objective for the final plan, from the same `run_prediction_metric()` the optimiser scores its trials with: cost plus battery value adjustment, blended across nominal, PV10 and PV90 by `pv_metric10_weight` and `pv_metric90_weight` (PV90 only when `calculate_pv90_plan` is on), plus carbon and cycle cost, with no standing charge. The `cost` is the raw import/export money with no adjustments, from the published plan's nominal run (so it does include the standing charge). `runtime_s` measures the wall-clock time of `calculate_plan()` alone.
 
 ### Results JSON format
 
