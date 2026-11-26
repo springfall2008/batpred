@@ -191,6 +191,44 @@ def create_test_history_data_with_soc_glitches(my_predbat, battery_size_kwh=10.0
     my_predbat.ha_interface.get_history = mock_get_history
 
 
+def create_test_history_data_charge_discharge(my_predbat, num_days=2, battery_size_kwh=10.0, sensor_inverted=False):
+    """
+    Two charges and two discharges a day (2.44 kW for two hours each, 20% <-> ~69%), with the battery power
+    sensor in Predbat's convention (negative = charging) or, with sensor_inverted, the opposite one.
+    """
+    ha = my_predbat.ha_interface
+    base_time = my_predbat.midnight_utc - timedelta(days=num_days)
+    history_dict = {"sensor.soc_percent": [], "sensor.battery_power": []}
+    ha.dummy_items["sensor.soc_percent"] = 20
+    ha.dummy_items["sensor.battery_power"] = 0
+    power_w = 2600 * 0.94
+    soc_step = (power_w * 5 / 60.0) / (battery_size_kwh * 1000.0) * 100.0
+    sign = -1 if sensor_inverted else 1
+    current_soc = 20.0
+
+    for minutes in range(0, num_days * 24 * 60, 5):
+        timestamp = base_time + timedelta(minutes=minutes)
+        timestamp_str = timestamp.strftime("%Y-%m-%dT%H:%M:%S%z")
+        hour = timestamp.hour
+        if 2 <= hour < 4 or 18 <= hour < 20:
+            battery_power = -power_w  # charging
+            current_soc = min(100.0, current_soc + soc_step)
+        elif 8 <= hour < 10 or 21 <= hour < 23:
+            battery_power = power_w  # discharging
+            current_soc = max(0.0, current_soc - soc_step)
+        else:
+            battery_power = 0
+        history_dict["sensor.soc_percent"].append({"state": str(round(current_soc)), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "%"}})
+        history_dict["sensor.battery_power"].append({"state": round(sign * battery_power, 1), "last_updated": timestamp_str, "attributes": {"unit_of_measurement": "W"}})
+
+    def mock_get_history(entity_id, now=None, days=30):
+        if entity_id in history_dict:
+            return [history_dict[entity_id]]
+        return None
+
+    my_predbat.ha_interface.get_history = mock_get_history
+
+
 def remove_test_history_data(my_predbat):
     def mock_get_history(entity_id, now=None, days=30):
         return None
@@ -416,6 +454,77 @@ def test_find_battery_size_inverted_power(my_predbat):
         traceback.print_exc()
         failed = True
 
+    return failed
+
+
+def test_find_battery_size_wrong_sign_hint(my_predbat):
+    """
+    A battery_power sensor with the wrong sign turns every discharge into a "charge" whose SoC falls: the warning
+    must say so and name the battery_power_invert value to try (#6375). A right-way-round sensor gets an estimate,
+    and a rejection that is not about the sign gets no hint.
+    """
+    print("*** Running test: find_battery_size_wrong_sign_hint ***")
+    failed = False
+    expected_battery_size = 10.0
+    hint = "probably has the wrong sign"
+
+    def run_case(sensor_inverted, invert_flag, battery_size_kwh=expected_battery_size, charge_only=False):
+        """Run find_battery_size on one history and return (estimate, unable-to-find warnings)."""
+        inv = Inverter(my_predbat, 0)
+        inv.battery_rate_max_charge = 2600 / 60000
+        inv.battery_rate_max_discharge = 2600 / 60000
+        inv.soc_max = expected_battery_size
+        inv.battery_scaling = 1.0
+        setup_predbat(my_predbat)
+        my_predbat.args["battery_power_invert"] = [invert_flag]
+        if charge_only:
+            create_test_history_data(my_predbat, num_days=2, battery_size_kwh=battery_size_kwh)
+        else:
+            create_test_history_data_charge_discharge(my_predbat, num_days=2, battery_size_kwh=battery_size_kwh, sensor_inverted=sensor_inverted)
+        logs = []
+        inv.log = logs.append
+        estimate = inv.find_battery_size()
+        return estimate, [line for line in logs if "Unable to find any suitable charge periods" in line]
+
+    try:
+        # Sensor inverted, flag not set: no estimate, and the warning points at the sign
+        estimate, warnings = run_case(sensor_inverted=True, invert_flag=False)
+        if estimate is not None:
+            print("ERROR: a wrong-sign sensor should give no estimate, got {}".format(estimate))
+            failed = True
+        if len(warnings) != 1 or hint not in warnings[0] or "battery_power_invert to true" not in warnings[0] or "periods where battery_power said" not in warnings[0]:
+            print("ERROR: expected the warning to point at the sign and suggest battery_power_invert true, got {}".format(warnings))
+            failed = True
+
+        # The same sensor with battery_power_invert set: the charges are found
+        estimate, warnings = run_case(sensor_inverted=True, invert_flag=True)
+        if not estimate or not (expected_battery_size * 0.8 <= estimate <= expected_battery_size * 1.2):
+            print("ERROR: with battery_power_invert set the estimate should be near {} kWh, got {}".format(expected_battery_size, estimate))
+            failed = True
+
+        # A right-way-round sensor with battery_power_invert wrongly set: the hint says to turn it off
+        estimate, warnings = run_case(sensor_inverted=False, invert_flag=True)
+        if estimate is not None or len(warnings) != 1 or "battery_power_invert to false" not in warnings[0]:
+            print("ERROR: expected no estimate and a hint to set battery_power_invert false, got {} {}".format(estimate, warnings))
+            failed = True
+
+        # Charges too small to measure (a 100 kWh battery gains ~5%): rejected, but the SoC rose, so no sign hint
+        estimate, warnings = run_case(sensor_inverted=False, invert_flag=False, battery_size_kwh=100.0, charge_only=True)
+        if estimate is not None or len(warnings) != 1 or "soc_change_too_small" not in warnings[0] or hint in warnings[0]:
+            print("ERROR: small charges should be rejected without a sign hint, got {} {}".format(estimate, warnings))
+            failed = True
+
+        if not failed:
+            print("SUCCESS: wrong-sign battery power is named in the warning, and only then")
+    except Exception as e:
+        print("ERROR: test_find_battery_size_wrong_sign_hint raised exception: {}".format(e))
+        import traceback
+
+        traceback.print_exc()
+        failed = True
+
+    setup_predbat(my_predbat)
+    remove_test_history_data(my_predbat)
     return failed
 
 
@@ -2167,6 +2276,10 @@ def run_find_battery_size_tests(my_predbat):
         return failed
 
     failed |= test_find_battery_size_inverted_power(my_predbat)
+    if failed:
+        return failed
+
+    failed |= test_find_battery_size_wrong_sign_hint(my_predbat)
     if failed:
         return failed
 

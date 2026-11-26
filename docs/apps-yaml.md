@@ -2799,6 +2799,11 @@ On subsequent Predbat cycles in the same day the stored sensor state is used ins
 If the day's calculation finds no usable charge (it runs just after midnight UTC, before an overnight charge), it is retried hourly
 until it does, so that night's charge is used the same morning. The time of the last attempt is kept on the sensor as `last_attempt`.
 
+Charge periods are found from the sign of `battery_power` (negative while charging). If that sensor reads the other way round,
+discharges are mistaken for charges and every one is rejected because the SoC fell (`soc_change_too_small`); the
+`Unable to find any suitable charge periods` warning then says the sensor probably has the wrong sign and which
+`battery_power_invert` value to try.
+
 The resulting `battery_scaling` is clamped to the range [0.8, 1.0] if `soc_max` is configured.
 If `soc_max` is not set the estimate is used directly and stays an estimate: it is never written back as `soc_max`,
 so later days are measured afresh rather than held near the first figure.
