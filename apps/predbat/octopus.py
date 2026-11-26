@@ -2627,7 +2627,13 @@ class OctopusAPI(ComponentBase):
 
         request_context = response.request_info.headers[integration_context_header] if integration_context_header in response.request_info.headers else "Unknown"
 
-        text = await response.text()
+        try:
+            text = await response.text()
+        except UnicodeDecodeError as error:
+            # A body that does not decode in the charset it declares (a proxy cutting a multi-byte character short) is a failed read like
+            # unreadable JSON, rather than a ValueError that escapes the caller's connection-error handler and fails the whole run
+            self.log(f"Warn: OctopusAPI: Failed to decode response - {url} ({request_context}) - status {response.status}: {error}")
+            return None
 
         if response.status >= 400:
             if response.status >= 500:
@@ -2759,7 +2765,7 @@ class OctopusAPI(ComponentBase):
                 # Handled here rather than in async_read_response so it is logged as the edge
                 # block it is - the generic "Unauthenticated request" line reads like a bad
                 # API key and sends anyone diagnosing this down the wrong path.
-                if token_response.status == 403 and is_edge_block_body(await token_response.text()):
+                if token_response.status == 403 and is_edge_block_body(await token_response.text(errors="replace")):
                     self.failures_total += 1
                     self.start_token_mint_backoff()
                     # The block says nothing about the token already held, so do not fail this
@@ -2793,8 +2799,14 @@ class OctopusAPI(ComponentBase):
                 else:
                     self.log("Warn: OctopusAPI: Failed to retrieve auth token")
                     return None
-        except TimeoutError:
-            self.log(f"Warn: OctopusAPI: Failed to connect. Timeout of {self.api.timeout} exceeded.")
+        except (TimeoutError, aiohttp.ClientError) as error:
+            # A timeout, no network, a DNS failure or a dropped connection: a failed mint the caller handles by keeping the
+            # data it has, rather than an exception that fails the whole run (and the component's start)
+            self.failures_total += 1
+            if isinstance(error, TimeoutError):
+                self.log(f"Warn: OctopusAPI: Failed to connect. Timeout of {self.api.timeout} exceeded.")
+            else:
+                self.log(f"Warn: OctopusAPI: Failed to connect to mint a token: {error}")
             return None
 
     async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False, _retry_count=0, use_backend=False):
@@ -2870,7 +2882,7 @@ class OctopusAPI(ComponentBase):
                     # Log the response in full first: the WAF return and the retry below both leave before the
                     # response logger further down. A second-attempt 401/403 is not logged here: its body is logged
                     # by async_read_response_retry below
-                    error_text = await response.text()
+                    error_text = await response.text(errors="replace")
                     log_response(response.status, error_text, always_full=True)
                     edge_block_token = None
                     if response.status == 403 and is_edge_block_body(error_text):
@@ -2959,10 +2971,15 @@ class OctopusAPI(ComponentBase):
                         if returns_data:
                             self.log(f"Warn: OctopusAPI: Failed to retrieve data from graphql query {request_context}")
                     return None
-        except TimeoutError:
+        except (TimeoutError, aiohttp.ClientError) as error:
+            # A timeout, no network, a DNS failure or a dropped connection: a failed query, so a poll keeps what the
+            # component already has (see async_update_intelligent_devices) instead of failing the whole run
             self.failures_total += 1
             log_request_beside_failure()
-            self.log(f"Warn: OctopusAPI: Failed to connect, timeout exceeded.")
+            if isinstance(error, TimeoutError):
+                self.log(f"Warn: OctopusAPI: Failed to connect, timeout exceeded.")
+            else:
+                self.log(f"Warn: OctopusAPI: Failed to connect for graphql query {request_context}: {error}")
             record_api_call("octopus", False, "connection_error")
 
         return None
