@@ -24,8 +24,9 @@ import datetime
 sys.path.insert(0, os.path.dirname(__file__) + "/..")
 
 from inverter import Inverter
-from dispatch import InverterDispatch, dispatch_power_for_rate
+from dispatch import InverterDispatch, dispatch_power_for_rate, DISABLE_MAX_ATTEMPTS
 from const import EXPORT_MODE_TARGET
+from config import SOLAX_SOLIS_MODES_FB00
 from utils import pack_export_limit
 from tests.fleet_rig import FleetInverter, setup_fleet
 
@@ -134,6 +135,8 @@ def _stub_inverter(base, inv_id=0):
     stub.inv_write_backoff = False
     stub.reserve_percent = 20
     stub.reserve_min = 4
+    # Set by _init_attribute_defaults() on a real Inverter; the disarm path reads it directly.
+    stub.inv_time_button_press = False
     stub.track_charge_start = "00:00:00"
     stub.track_charge_end = "00:00:00"
     stub.track_discharge_start = "00:00:00"
@@ -425,6 +428,9 @@ def test_dispatch_disable_is_idempotent(my_predbat=None):
     stub.dispatch.active = True
 
     stub.dispatch.disable_dispatch()
+    # A real inverter applies the press and the status sensor reports idle by the next cycle; the
+    # fake has to do the same, or the second call is testing a device that never updates.
+    base.states["sensor.solax_dispatch_status"] = "0"
     stub.dispatch.disable_dispatch()
     disable_presses = _services(base, "button/press", "button.solax_disable_remote_dispatch")
     if len(disable_presses) != 1:
@@ -933,6 +939,118 @@ def test_dispatch_through_execute_plan(my_predbat):
     return 1 if failed else 0
 
 
+def test_dispatch_refuses_a_shared_stop_control(my_predbat=None):
+    """
+    A shared disable button or master switch is a shared block, even when the writes are per inverter.
+
+    Power/apply/mode as two-item lists but one plain-string master is a plausible multi-inverter
+    set-up: both inverters pass the required-entity check, both drive the same block, and the first
+    window to end force-turns the shared master off - stopping the other inverter's live dispatch.
+    """
+    failed = False
+    print("**** Testing dispatch refuses a shared stop control ****")
+
+    for arg, entity in (("dispatch_master", "switch.solax_dispatch_master"), ("dispatch_disable_button", "button.solax_shared_disable")):
+        args = {
+            "dispatch_power": ["number.solax_dispatch_power", "number.solax_dispatch_power_2"],
+            "dispatch_apply_button": ["button.solax_apply_remote_dispatch", "button.solax_apply_remote_dispatch_2"],
+            "dispatch_control_mode": ["select.solax_dispatch_control_mode", "select.solax_dispatch_control_mode_2"],
+            arg: entity,
+        }
+        base = _DispatchBase(args, dict(INITIAL_STATES))
+        stub0 = _stub_inverter(base, 0)
+        stub1 = _stub_inverter(base, 1)
+        base.inverters = [stub0, stub1]
+        if stub0.dispatch.enabled() or stub1.dispatch.enabled():
+            print("ERROR: dispatch enabled with a shared {} - one inverter's stop would kill the other".format(arg))
+            failed = True
+
+    if not failed:
+        print("PASS: a shared master or disable button is refused for both inverters")
+    return 1 if failed else 0
+
+
+def test_dispatch_retries_a_discarded_disable(my_predbat=None):
+    """
+    A press the device accepts but does not apply must be retried from the status sensor.
+
+    `_press_button` only knows the service call did not fail. With the status sensor still reporting
+    the block running, the stop is unconfirmed: keep tracking and press again next cycle, up to a
+    bound, so a firmware that silently drops the write is not left exporting until the failsafe.
+    """
+    failed = False
+    print("**** Testing a disable the device accepted but did not apply is retried ****")
+
+    args = {
+        "dispatch_power": "number.solax_dispatch_power",
+        "dispatch_apply_button": "button.solax_apply_remote_dispatch",
+        "dispatch_disable_button": "button.solax_disable_remote_dispatch",
+        "dispatch_control_mode": "select.solax_dispatch_control_mode",
+        "dispatch_status": "sensor.solax_dispatch_status",
+    }
+    base = _DispatchBase(args, dict(INITIAL_STATES))
+    base.states["sensor.solax_dispatch_status"] = "1"
+    stub = _stub_inverter(base)
+    base.inverters = [stub]
+    stub.dispatch.active = True
+
+    if stub.dispatch.disable_dispatch():
+        print("ERROR: disable reported success while the status still reports the block running")
+        failed = True
+    if not stub.dispatch.active:
+        print("ERROR: an unconfirmed disable cleared the tracking, so it would never retry")
+        failed = True
+
+    # Keep trying while the reading never changes, but not forever.
+    for _ in range(10):
+        stub.dispatch.disable_dispatch()
+    presses = _services(base, "button/press", "button.solax_disable_remote_dispatch")
+    if len(presses) != DISABLE_MAX_ATTEMPTS:
+        print("ERROR: expected {} disable presses before giving up, got {}".format(DISABLE_MAX_ATTEMPTS, len(presses)))
+        failed = True
+    if stub.dispatch.active:
+        print("ERROR: dispatch still marked active after the retries were exhausted")
+        failed = True
+
+    if not failed:
+        print("PASS: a discarded disable is retried, then left to the failsafe")
+    return 1 if failed else 0
+
+
+def test_dispatch_export_still_writes_the_fb00_switch(my_predbat=None):
+    """
+    A dispatch-driven export must still move the FB00 energy-control switch to Backup/Reserve.
+
+    That switch is a separate entity from the dispatch block, so writing it is not a second writer
+    against the block. Skipping it left the switch on 64 (Feed-in priority, set by a freeze cycle)
+    while dispatch drove the discharge.
+    """
+    failed = False
+    print("**** Testing a dispatch export still writes the FB00 energy-control switch ****")
+
+    base = _DispatchBase(dict(DISPATCH_ARGS), dict(INITIAL_STATES))
+    stub = _stub_inverter(base)
+    base.inverters = [stub]
+    stub.inv_has_target_soc = True
+    stub.inv_has_solis_energy_control = True
+    written = []
+    stub.write_solis_energy_control = lambda value, mode, label: written.append((value, mode, label)) or True
+    services = []
+    stub.call_service_template = lambda *args, **kwargs: services.append(args) or True
+
+    stub.adjust_export_immediate(50)
+    if written != [(49, SOLAX_SOLIS_MODES_FB00, "export")]:
+        print("ERROR: expected the FB00 switch to be written to 49 (Backup/Reserve), got {}".format(written))
+        failed = True
+    if services:
+        print("ERROR: the stock service-template export path ran as well as dispatch: {}".format(services))
+        failed = True
+
+    if not failed:
+        print("PASS: a dispatch export still writes the FB00 energy-control switch")
+    return 1 if failed else 0
+
+
 def run_dispatch_control_tests(my_predbat):
     """Run every real-time dispatch control test, returning a non-zero count on failure."""
     failed = 0
@@ -941,15 +1059,18 @@ def run_dispatch_control_tests(my_predbat):
     failed += test_dispatch_enabled_requires_per_inverter_entities(my_predbat)
     failed += test_dispatch_needs_a_way_to_stop(my_predbat)
     failed += test_dispatch_refuses_a_shared_block(my_predbat)
+    failed += test_dispatch_refuses_a_shared_stop_control(my_predbat)
     failed += test_dispatch_failed_power_write_blocks_apply(my_predbat)
     failed += test_dispatch_failed_staging_keeps_tracking(my_predbat)
     failed += test_dispatch_retries_an_unconfirmed_disable(my_predbat)
+    failed += test_dispatch_retries_a_discarded_disable(my_predbat)
     failed += test_dispatch_disable_ignores_idle_status(my_predbat)
     failed += test_dispatch_disable_is_idempotent(my_predbat)
     failed += test_dispatch_state_survives_refresh_config(my_predbat)
     failed += test_dispatch_disarms_a_stale_slot(my_predbat)
     failed += test_dispatch_slot_disarm_presses_the_update_button(my_predbat)
     failed += test_dispatch_freeze_keeps_the_stock_path(my_predbat)
+    failed += test_dispatch_export_still_writes_the_fb00_switch(my_predbat)
     failed += test_dispatch_failsafe_outlasts_a_cycle(my_predbat)
     failed += test_dispatch_is_quiet_when_unconfigured(my_predbat)
     failed += test_dispatch_unconfigured_uses_stock_path(my_predbat)

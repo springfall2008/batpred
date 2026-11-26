@@ -3253,7 +3253,7 @@ class Inverter(BatteryCurve):
                     # pressed, so writing the switch alone leaves the armed slot live on the device
                     # and it keeps exporting alongside the dispatch block. The stock path presses
                     # the same button after the same write; match it.
-                    if getattr(self, "inv_time_button_press", False):
+                    if self.inv_time_button_press:
                         self.press_and_poll_button(side="discharge")
         if not force_export:
             self.adjust_idle_time(discharge_start="00:00:00", discharge_end="00:00:00")
@@ -3573,16 +3573,23 @@ class Inverter(BatteryCurve):
         # "hold and do not export", so a freeze export keeps the stock path below (including the
         # caller's discharge_freeze_service and the FB00 energy-control switch), and the dispatch
         # block is stopped separately because no export rate is planned for the cycle.
-        if self.dispatch.enabled() and target_soc < 100 and not freeze:
-            return
+        dispatch_owns_export = self.dispatch.enabled() and target_soc < 100 and not freeze
 
         # FB00's Energy Storage Control Switch on an exporting cycle: Feed-in priority - No Grid Charging for a freeze
         # export (PV goes to the load then the grid ahead of the battery, which still covers the load - the plugin
         # offers no Feed-in priority with the Battery Reserve bit, so the inverter's own minimum SoC is the floor), and
         # Backup/Reserve for a real export. The idle call (target 100) comes on the same cycle as adjust_charge_immediate,
         # which owns it then.
+        #
+        # This runs for a dispatch-driven export too: energy_control_switch is a different entity
+        # from the dispatch block, so writing it is not a second writer against that block, and
+        # returning above it left the switch on whatever the previous cycle chose - a freeze export
+        # set 64 (Feed-in priority) and the next real export never moved it back to 49.
         if self.inv_has_target_soc and self.inv_has_solis_energy_control and target_soc < 100:
             self.write_solis_energy_control(64 if freeze else 49, SOLAX_SOLIS_MODES_FB00, "freeze export" if freeze else "export")
+
+        if dispatch_owns_export:
+            return
 
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"discharge_start_time": self.base.get_arg("discharge_start_time", index=self.id, default="00:00:00"), "discharge_end_time": self.base.get_arg("discharge_end_time", index=self.id, default="00:00:00")}

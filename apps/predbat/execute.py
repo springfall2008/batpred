@@ -1251,7 +1251,14 @@ class Execute:
                         status_per_inverter[inverter.id] = status
                         # adjust_reserve() clamps to each inverter's own minimum, so an inverter with
                         # a higher reserve rightly stops above the fleet target - judge it at its own
-                        monitor_target = dispatch_soc_min
+                        # depth. Only a dispatch inverter is driven to the per-inverter share, though:
+                        # dispatch_soc_min drops best_soc_min, so using it for everyone silently moved
+                        # the judge target on multi-inverter or best_soc_min sites that never opted
+                        # in to dispatch.
+                        if inverter.dispatch.enabled():
+                            monitor_target = dispatch_soc_min
+                        else:
+                            monitor_target = max(calc_percent_limit(discharge_soc, self.soc_max), inverter.reserve_percent or 0)
                         monitor_slots[inverter.id] = (MODE_EXPORTING, window["start"], window["end"], monitor_target)
                         status_extra_parts.append((inverter.id, "target", status, "{}%-{}%".format(inverter.soc_percent, int(target))))  # append multi-inverter target SoC's together
                         # Immediate export mode
