@@ -303,11 +303,12 @@ def _create_empty_db(out_db):
         shutil.copyfile(Path(tmp) / "predbat.db", out_db)
 
 
-def export_db(live_db, out_db, t0, days, remap, prefix, dropped, replacements):
+def export_db(live_db, out_db, t0, days, remap, prefix, dropped, replacements, strip_outputs=False):
     """Write out_db from live_db: the last days days up to t0 of every exported entity, and their latest states.
 
     t0 is naive UTC, as the database stores times. Exported are the entities that dropped() does not reject and that
-    are not Predbat outputs (settings stay) or remapped real inverter entities; the remapped entities' history is
+    are not remapped real inverter entities, including Predbat's own (it reads some of their history back, and a
+    db_primary install reloads them all); strip_outputs leaves out Predbat's outputs, keeping its settings; the remapped entities' history is
     written under the dummy's sensor names instead. replacements are applied to every name, state and attribute.
     Returns {"entities", "rows", "totals" (the dummy's starting lifetime totals), "dropped"}.
     """
@@ -327,7 +328,7 @@ def export_db(live_db, out_db, t0, days, remap, prefix, dropped, replacements):
         entities = live.execute("SELECT entity_index, entity_name FROM entities ORDER BY entity_index").fetchall()
         for entity_index, name in entities:
             item = remap_by_entity.get(name)
-            if item is None and (dropped(name) or is_predbat_output(name, prefix, settings)):
+            if item is None and (dropped(name) or (strip_outputs and is_predbat_output(name, prefix, settings))):
                 stats["dropped"] += 1
                 continue
             rows = live.execute("SELECT datetime, state, attributes, system, keep FROM states WHERE entity_index = ? AND datetime >= ? AND datetime <= ? ORDER BY datetime", (entity_index, start, end)).fetchall()

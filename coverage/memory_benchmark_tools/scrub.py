@@ -11,6 +11,7 @@ checks afterwards that none of the real values survived anywhere.
 """
 
 import os
+import re
 from pathlib import Path
 from typing import Iterable
 
@@ -21,26 +22,34 @@ FAKE_POSTCODE = "SW1A 1AA"
 FAKE_LATITUDE = 51.501
 FAKE_LONGITUDE = -0.1419
 
+# An Octopus account number
+ACCOUNT_NUMBER_RE = re.compile(r"\bA-[0-9A-F]{8}\b")
+
 # Field name in the Octopus account data -> prefix of its fake replacement
-SENSITIVE_FIELDS = {"mpan": "BENCH-MPAN", "mprn": "BENCH-MPRN", "serialNumber": "BENCH-MSN"}
+SENSITIVE_FIELDS = {"mpan": "BENCH-MPAN", "mprn": "BENCH-MPRN", "serialNumber": "BENCH-MSN", "deviceId": "BENCH-DEVICE"}
 
 
 def collect_sensitive(account_cache):
     """Return {real value: fake value} for every identifier in an Octopus account cache entry.
 
-    The account number is the key under account_data.account that is not gasAgreements; every mpan, mprn and meter
-    serialNumber found below it gets a numbered fake, in order of appearance.
+    Every mpan, mprn and meter serialNumber gets a numbered fake, in order of appearance, and any Octopus account
+    number (A- and eight hex digits) found in a key or value maps to FAKE_ACCOUNT. The keys under
+    account_data.account are the agreement lists (electricityAgreements, gasAgreements), not identifiers.
     """
     replacements = {}
     counters = {prefix: 0 for prefix in SENSITIVE_FIELDS.values()}
-    account = ((account_cache or {}).get("account_data") or {}).get("account") or {}
-    if not isinstance(account, dict):
-        return replacements
+
+    def note_accounts(text):
+        """Record every account number inside text."""
+        for number in ACCOUNT_NUMBER_RE.findall(text):
+            replacements.setdefault(number, FAKE_ACCOUNT)
 
     def visit(obj):
-        """Walk obj and record every sensitive field's value."""
+        """Walk obj and record every sensitive field's value and account number."""
         if isinstance(obj, dict):
             for key, value in obj.items():
+                if isinstance(key, str):
+                    note_accounts(key)
                 if key in SENSITIVE_FIELDS and isinstance(value, str) and value and value not in replacements:
                     prefix = SENSITIVE_FIELDS[key]
                     counters[prefix] += 1
@@ -50,11 +59,10 @@ def collect_sensitive(account_cache):
         elif isinstance(obj, list):
             for item in obj:
                 visit(item)
+        elif isinstance(obj, str):
+            note_accounts(obj)
 
-    for key, value in account.items():
-        if key != "gasAgreements" and isinstance(key, str) and key not in replacements:
-            replacements[key] = FAKE_ACCOUNT
-        visit(value)
+    visit(account_cache or {})
     return replacements
 
 

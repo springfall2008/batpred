@@ -17,11 +17,12 @@ import scrub  # noqa: E402
 ACCOUNT_CACHE = {
     "account_data": {
         "account": {
-            "A-1234": [{"meterPoint": {"mpan": "999", "meters": [{"serialNumber": "S1"}], "agreements": []}}],
+            "electricityAgreements": [{"meterPoint": {"mpan": "999", "meters": [{"serialNumber": "S1", "smartDevices": [{"deviceId": "30-EB-5A-FF"}]}], "agreements": []}}],
             "gasAgreements": [{"meterPoint": {"mprn": "888", "meters": [{"serialNumber": "G1"}]}}],
         }
     },
     "kraken_token": "tok",
+    "note": "billed to account A-1234ABCD",
 }
 
 
@@ -29,12 +30,18 @@ class TestCollectSensitive(unittest.TestCase):
     """collect_sensitive finds every identifier in the Octopus account cache."""
 
     def test_collect_sensitive_finds_account_mpan_mprn_and_serials(self):
-        """The account number, MPAN, MPRN and meter serials map to numbered fakes in order of appearance."""
+        """The account number, MPAN, MPRN, meter serials and device IDs map to numbered fakes in order of appearance."""
         found = scrub.collect_sensitive(ACCOUNT_CACHE)
         self.assertEqual(
             found,
-            {"A-1234": scrub.FAKE_ACCOUNT, "999": "BENCH-MPAN-1", "S1": "BENCH-MSN-1", "888": "BENCH-MPRN-1", "G1": "BENCH-MSN-2"},
+            {"999": "BENCH-MPAN-1", "S1": "BENCH-MSN-1", "30-EB-5A-FF": "BENCH-DEVICE-1", "888": "BENCH-MPRN-1", "G1": "BENCH-MSN-2", "A-1234ABCD": scrub.FAKE_ACCOUNT},
         )
+
+    def test_collect_sensitive_never_takes_the_agreement_keys_for_identifiers(self):
+        """The keys under account_data.account are the agreement lists, not the account number, and must survive."""
+        found = scrub.collect_sensitive(ACCOUNT_CACHE)
+        self.assertNotIn("electricityAgreements", found)
+        self.assertNotIn("gasAgreements", found)
 
     def test_collect_sensitive_on_an_empty_cache(self):
         """An empty or missing account section gives no replacements."""

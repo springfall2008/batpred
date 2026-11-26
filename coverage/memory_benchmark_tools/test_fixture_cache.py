@@ -158,15 +158,16 @@ class TestOctopusExport(unittest.TestCase):
         self.live.mkdir()
         self.out.mkdir()
         account = {
-            "account_data": {"account": {"A-9876": [{"meterPoint": {"mpan": "1900000000001", "meters": [{"serialNumber": "21E1234567"}], "agreements": [{"tariffCode": "E-1R-INTELLI-VAR-24-10-29-A"}]}}]}},
+            "account_data": {"account": {"electricityAgreements": [{"meterPoint": {"mpan": "1900000000001", "meters": [{"serialNumber": "21E1234567"}], "agreements": [{"tariffCode": "E-1R-INTELLI-VAR-24-10-29-A"}]}}]}},
             "kraken_token": "secret-token",
+            "note": "account A-9876ABCD",
             "tariff_fetched_at": datetime(2026, 1, 1),
             "device_fetched_at": datetime(2026, 1, 1),
         }
         write_live(self.live, "octopus_user_account", account)
         self.rates = {"results": [{"value_inc_vat": 24.5, "valid_from": "2026-11-26T00:00:00Z"}]}
         write_live(self.live, "octopus_0123456789abcdef", self.rates)
-        write_live(self.live, "octopus_user_billing", {"account": "A-9876", "bills": [1, 2]})
+        write_live(self.live, "octopus_user_billing", {"account": "A-9876ABCD", "bills": [1, 2]})
         write_live(self.live, "unrelated_thing", {"keep": "out"})
 
     def tearDown(self):
@@ -176,8 +177,9 @@ class TestOctopusExport(unittest.TestCase):
     def test_octopus_export_scrubs_identifiers_and_token(self):
         """No identifier or token survives, tariff codes stay, and the fetch times are T0."""
         replacements = fixture_cache.export_octopus_cache(self.live, self.out, T0)
-        self.assertEqual(replacements["A-9876"], scrub.FAKE_ACCOUNT)
-        self.assertEqual(scrub.find_leaks(self.out, ["A-9876", "1900000000001", "21E1234567", "secret-token"]), [])
+        self.assertEqual(replacements["A-9876ABCD"], scrub.FAKE_ACCOUNT)
+        self.assertIn("electricityAgreements", (self.out / "octopus_user_account.yaml").read_text())
+        self.assertEqual(scrub.find_leaks(self.out, ["A-9876ABCD", "1900000000001", "21E1234567", "secret-token"]), [])
         account = yaml.safe_load((self.out / "octopus_user_account.yaml").read_text())
         self.assertIsNone(account["kraken_token"])
         self.assertEqual(account["tariff_fetched_at"], T0.replace(tzinfo=None))

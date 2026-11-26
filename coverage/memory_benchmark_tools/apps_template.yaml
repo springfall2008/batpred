@@ -9,8 +9,8 @@ pred_bat:
   db_primary: true
   db_mirror_ha: false
   db_days: 30
-  # Mirror the Predbat cloud shape: MCP and Load ML off, the kernel on, one fixed planning thread
-  mcp_enable: false
+  # Mirror the Predbat cloud shape: Load ML off, the kernel on, one fixed planning thread. MCP is off by leaving
+  # mcp_enable out: the component counts the setting's presence, whatever its value, as switching it on
   load_ml_enable: false
   prediction_kernel_enable: true
   threads: 0

@@ -184,7 +184,7 @@ class TestExportDb(unittest.TestCase):
         self.assertEqual(query(self.out, sql), query(reference / "predbat.db", sql))
 
     def test_export_db_window_remap_and_drop(self):
-        """Old rows are cut, inverter history is re-keyed and converted, outputs go and settings stay."""
+        """Old rows are cut, inverter history is re-keyed and converted, and Predbat's own entities stay by default."""
         stats = self.export()
         load = history(self.out, "sensor.predbat_dummy_load_lifetime")
         self.assertEqual([float(state) for _, state in load], [0.0, 1.0, 1.0, 1.5])
@@ -192,13 +192,21 @@ class TestExportDb(unittest.TestCase):
         self.assertEqual(history(self.out, "sensor.real_load_today"), [])
         self.assertEqual([state for _, state in history(self.out, "sensor.predbat_dummy_battery_power")], ["-1500.0"])
         self.assertEqual([state for _, state in history(self.out, "sensor.predbat_dummy_battery_capacity")], ["9.5"])
-        self.assertEqual(history(self.out, "predbat.plan_history"), [])
-        self.assertEqual(history(self.out, "sensor.predbat_cost_today"), [])
+        self.assertEqual([state for _, state in history(self.out, "predbat.plan_history")], ["x"])
+        self.assertEqual([state for _, state in history(self.out, "sensor.predbat_cost_today")], ["1.23"])
         self.assertEqual([state for _, state in history(self.out, "switch.predbat_expert_mode")], ["on"])
         latest = query(self.out, "SELECT l.attributes FROM latest l JOIN entities e USING(entity_index) WHERE e.entity_name = 'sensor.octopus_rates'")
         self.assertEqual(json.loads(latest[0][0]), {"account": "A-FAKE"})
         oldest = query(self.out, "SELECT min(datetime) FROM states")[0][0]
         self.assertGreaterEqual(datetime.strptime(oldest, TIME_FORMAT_DB), T0 - timedelta(days=7))
+        self.assertEqual(stats["dropped"], 0)
+
+    def test_export_db_strip_outputs_drops_predbat_outputs_and_keeps_settings(self):
+        """With strip_outputs, Predbat's own outputs are left out and its settings kept."""
+        stats = fixture_db.export_db(self.live, self.out, T0, 7, self.remap, "predbat", dropped=lambda name: False, replacements={}, strip_outputs=True)
+        self.assertEqual(history(self.out, "predbat.plan_history"), [])
+        self.assertEqual(history(self.out, "sensor.predbat_cost_today"), [])
+        self.assertEqual([state for _, state in history(self.out, "switch.predbat_expert_mode")], ["on"])
         self.assertEqual(stats["dropped"], 2)
 
     def test_export_db_keeps_a_remapped_value_that_last_changed_before_the_window(self):

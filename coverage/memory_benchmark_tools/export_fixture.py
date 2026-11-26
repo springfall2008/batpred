@@ -68,6 +68,8 @@ INVERTER_KEYS = {
     "battery_charge_power_curve",
     "battery_discharge_power_curve",
     "export_limit",
+    # Names the real inverter's {geserial} entities
+    "watch_list",
 }
 INVERTER_PREFIXES = ("inverter_", "givtcp_", "ge_cloud_", "battery_temperature", "geserial")
 
@@ -217,7 +219,7 @@ def _sha256(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def export(live, out, days, t0):
+def export(live, out, days, t0, strip_outputs=False):
     """Write the fixture for live into out (which must not exist) and return (stats, secrets)."""
     live_args = load_live_apps_text((live / "apps.yaml").read_text())
     prefix = live_args.get("prefix", "predbat")
@@ -228,10 +230,10 @@ def export(live, out, days, t0):
         # A consistent local copy of the live database, which the add-on keeps writing; kept outside the fixture
         snapshot = Path(snapshot_dir) / "predbat.db"
         fixture_db.snapshot_db(live / "predbat.db", snapshot)
-        return _export_from(live, out, days, t0, live_args, prefix, replacements, snapshot)
+        return _export_from(live, out, days, t0, live_args, prefix, replacements, snapshot, strip_outputs)
 
 
-def _export_from(live, out, days, t0, live_args, prefix, replacements, snapshot):
+def _export_from(live, out, days, t0, live_args, prefix, replacements, snapshot, strip_outputs):
     """Finish export() from a snapshot of the live database; returns (stats, secrets)."""
     live_names = fixture_db.entity_names(snapshot)
     # Device serials, read off the entity names the live config's {geserial}-style templates match; the geserial setting
@@ -247,7 +249,7 @@ def _export_from(live, out, days, t0, live_args, prefix, replacements, snapshot)
 
     forecast_entities = {fixture_db._first_entity(live_args.get(key)) for key in ("pv_forecast_today", "pv_forecast_tomorrow", "pv_forecast_d3", "pv_forecast_d4")} - {None}
     remap = fixture_db.build_remap(live_args, prefix, live_names)
-    stats = fixture_db.export_db(snapshot, out / "predbat.db", t0.replace(tzinfo=None), days, remap, prefix, dropped=lambda name: name in forecast_entities, replacements=replacements)
+    stats = fixture_db.export_db(snapshot, out / "predbat.db", t0.replace(tzinfo=None), days, remap, prefix, dropped=lambda name: name in forecast_entities, replacements=replacements, strip_outputs=strip_outputs)
 
     apps = build_apps_yaml(load_template(), live_args, forecast_config, stats["totals"], battery_sizing(out / "predbat.db", prefix))
     (out / "apps.yaml").write_text(yaml.safe_dump(apps, sort_keys=False))
@@ -265,6 +267,7 @@ def main(argv=None):
     parser.add_argument("--live", required=True, help="the live add-on config directory (holding apps.yaml, predbat.db and cache/)")
     parser.add_argument("--out", required=True, help="the fixture directory to write, normally coverage/memory_benchmark_data")
     parser.add_argument("--days", type=int, default=7, help="days of history to keep (default 7)")
+    parser.add_argument("--strip-outputs", action="store_true", help="leave Predbat's own output entities out (its settings stay)")
     parser.add_argument("--t0", help="the extraction time as an ISO datetime, for tests and re-exports (default now)")
     args = parser.parse_args(argv)
 
@@ -281,7 +284,7 @@ def main(argv=None):
     if work.exists():
         shutil.rmtree(work)
     try:
-        stats, secrets = export(live, work, args.days, t0)
+        stats, secrets = export(live, work, args.days, t0, args.strip_outputs)
         leaks = scrub.find_leaks(work, secrets)
     except Exception:
         shutil.rmtree(work, ignore_errors=True)

@@ -50,6 +50,8 @@ pred_bat:
     - number.real_charge_rate
   car_charging_now: sensor.car_plugged
   days_previous: 7
+  watch_list:
+    - sensor.givtcp_{geserial}_load_energy_today_kwh_prediction
   octopus_api_key: !secret octopus_key
   octopus_api_account: !secret octopus_account
   wallbox_username: !secret wallbox_user
@@ -94,7 +96,7 @@ def make_live(root, plant_leak=False):
     url, params = fixture_cache.forecast_requests(config, {"ZZ9 9ZZ": (52.1, -1.6)}, source)[0]
     forecast = {"result": {"watts": {"2026-11-26 09:00:00": 100}}, "message": {"info": {"latitude": 52.1, "longitude": -1.6, "place": "Real Place"}}}
     fixture_cache.write_entry(live / "cache", "solar", source.cache_key(url, params), forecast, "json", T0)
-    account = {"account_data": {"account": {"A-9876": [{"meterPoint": {"mpan": "1900000000001", "meters": [{"serialNumber": "21E1234567"}]}}]}}, "kraken_token": "eyJ0eXAiOiJKV1QifQ.test.signature"}
+    account = {"account_data": {"account": {"electricityAgreements": [{"meterPoint": {"mpan": "1900000000001", "meters": [{"serialNumber": "21E1234567"}]}}]}}, "kraken_token": "eyJ0eXAiOiJKV1QifQ.test.signature"}
     fixture_cache.write_entry(live / "cache", "octopus_user", "account", account, "yaml", T0)
     return live
 
@@ -120,7 +122,7 @@ class TestBuildAppsYaml(unittest.TestCase):
         text = yaml.safe_dump(apps)
         for real in ("XX1234Y567", "QQ1 1QQ", "homeassistant.local", "real-forecast-key", "ZZ9 9ZZ", "inverter.local"):
             self.assertNotIn(real, text)
-        for key in ("ha_key", "ha_url", "wallbox_username", "chat", "givtcp_rest", "carbon_postcode", "geserial", "charge_rate", "soc_max", "load_today"):
+        for key in ("ha_key", "ha_url", "wallbox_username", "chat", "givtcp_rest", "carbon_postcode", "geserial", "charge_rate", "soc_max", "load_today", "watch_list"):
             self.assertNotIn(key, apps)
         self.assertEqual(apps["car_charging_now"], "sensor.car_plugged")
         self.assertEqual(apps["days_previous"], 7)
@@ -129,9 +131,9 @@ class TestBuildAppsYaml(unittest.TestCase):
         self.assertEqual(apps["forecast_solar"], self.neutral)
 
     def test_build_apps_yaml_disables_mcp_load_ml_and_givtcp(self):
-        """MCP and Load ML are off, threads fixed at 0, the database is primary and there is no HA connection."""
+        """MCP is left out (the component treats the key's presence as on), Load ML is off, threads fixed at 0, the database is primary and there is no HA connection."""
         apps = self.build()
-        self.assertIs(apps["mcp_enable"], False)
+        self.assertNotIn("mcp_enable", apps)
         self.assertIs(apps["load_ml_enable"], False)
         self.assertEqual(apps["threads"], 0)
         self.assertIs(apps["db_primary"], True)
