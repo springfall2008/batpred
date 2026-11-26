@@ -24,6 +24,7 @@ from aiohttp import ClientError, WSMsgType, WSServerHandshakeError
 import array
 import bisect
 import json
+import sys
 import traceback
 import threading
 import time
@@ -125,7 +126,7 @@ class EntityHistory:
     oldest to newest so the epoch array stays sorted.
     """
 
-    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions", "anchored"]
+    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions", "attribute_schemas", "anchored"]
 
     def __init__(self):
         """
@@ -135,7 +136,12 @@ class EntityHistory:
         self.states = array.array("d")
         self.state_exceptions = {}
         self.shared_attributes = None
+        # epoch -> (keys, values) for each record whose attributes differ from shared_attributes: the key tuple is
+        # shared by every record with the same keys (see attribute_schemas) and the values are an array of doubles
+        # when every value is a float, else a tuple. This costs far less than a dict per record.
         self.attribute_exceptions = {}
+        # One key tuple per distinct key sequence seen, so records with the same keys share it
+        self.attribute_schemas = {}
         # True while the first record is one prune() re-stamped at its cutoff rather than a real change
         self.anchored = False
 
@@ -155,7 +161,7 @@ class EntityHistory:
         else:
             state = self.states[index]
         if self.attribute_exceptions and epoch in self.attribute_exceptions:
-            attributes = dict(self.attribute_exceptions[epoch])
+            attributes = dict(zip(*self.attribute_exceptions[epoch]))
         else:
             attributes = dict(self.shared_attributes) if self.shared_attributes else {}
         return {"state": state, "last_updated": datetime.fromtimestamp(epoch, timezone.utc).isoformat(), "attributes": attributes}
@@ -189,7 +195,8 @@ class EntityHistory:
             state_value = None
         if state_value is None or state_value != state_value:
             # Keep non-numeric states (including NaN, which would break equality checks) as-is
-            self.state_exceptions[epoch] = state
+            # Repeated string states (e.g. a status) then share one string object
+            self.state_exceptions[epoch] = sys.intern(state) if type(state) is str else state
             state_value = 0.0
         self.epochs.append(epoch)
         self.states.append(state_value)
@@ -198,8 +205,23 @@ class EntityHistory:
         if self.shared_attributes is None:
             self.shared_attributes = dict(attributes)
         elif attributes != self.shared_attributes:
-            self.attribute_exceptions[epoch] = dict(attributes)
+            self.attribute_exceptions[epoch] = self._pack_attributes(attributes)
         return True
+
+    def _pack_attributes(self, attributes):
+        """
+        Pack an attributes dict into a (keys, values) pair for attribute_exceptions.
+
+        The keys tuple is shared with every earlier record of the same key sequence. The values are an
+        array of doubles when each one is exactly a float (bools and ints keep their type in a tuple), else
+        a tuple. dict(zip(keys, values)) rebuilds an equal dict with the same key order.
+        """
+        keys = tuple(attributes)
+        keys = self.attribute_schemas.setdefault(keys, keys)
+        values = tuple(attributes.values())
+        if values and all(type(value) is float for value in values):
+            return (keys, array.array("d", values))
+        return (keys, values)
 
     @classmethod
     def from_records(cls, records):
@@ -234,7 +256,7 @@ class EntityHistory:
             else:
                 state = states[index]
             if attribute_exceptions and epoch in attribute_exceptions:
-                attributes = dict(attribute_exceptions[epoch])
+                attributes = dict(zip(*attribute_exceptions[epoch]))
             else:
                 attributes = shared_attributes
             records.append({"state": state, "last_updated": datetime.fromtimestamp(epoch, utc).isoformat(), "attributes": attributes})
