@@ -101,6 +101,9 @@ class InverterDispatch:
         # Consecutive disable attempts that the status sensor did not confirm - see
         # disable_dispatch(). Bounded so a status that never changes cannot press forever.
         self._disable_attempts = 0
+        # The cycle (base.now_utc) the last stop attempt was made in, so the two call sites in one
+        # execute_plan() pass cannot both press.
+        self._disable_cycle = None
 
     def refresh(self):
         """Re-resolve the configuration: called from Inverter.refresh_config() once a cycle.
@@ -197,7 +200,7 @@ class InverterDispatch:
 
     def _shared_args(self):
         """Dispatch-block args this inverter resolves to the same entity as another inverter."""
-        inverters = getattr(self.base, "inverters", None) or []
+        inverters = self.base.inverters or []
         if len(inverters) < 2:
             return []
         shared = []
@@ -208,11 +211,11 @@ class InverterDispatch:
                 # two inverters that both leave an arg out compared None == None and were refused.
                 continue
             for other in inverters:
-                other_dispatch = getattr(other, "dispatch", None)
-                other_entity = getattr(other_dispatch, "_entity", None)
-                if other is self.inv or other_entity is None:
-                    continue
-                if other_entity(arg) == entity:
+                # Direct attribute access, not getattr(): every Inverter builds this helper in
+                # __init__, and a safety check that silently skips a collaborator it does not
+                # recognise would fail open - two inverters driving one block is exactly what
+                # this guard exists to refuse.
+                if other is not self.inv and other.dispatch._entity(arg) == entity:
                     shared.append(arg)
                     break
         return shared
@@ -224,8 +227,19 @@ class InverterDispatch:
     def _press_button(self, name, entity_id):
         """Press a button entity via HA services, mirroring _press_single_toggle_button."""
         result = self.base.call_service_wrapper("button/press", entity_id=entity_id)
+        if result is False:
+            # Only log success when it succeeded: the old unconditional "pressed" line was
+            # immediately contradicted by the caller's "apply button did not press" warning.
+            self.log("Warn: Inverter {} dispatch: pressing {} ({}) failed".format(self.inv.id, name, entity_id))
+            return False
         self.log("Inverter {} dispatch: pressed {} ({})".format(self.inv.id, name, entity_id))
-        return result is not False
+        # A commit button press is a real write to the inverter - on Solis a non-volatile one - so
+        # it must be counted like any other, as _press_single_toggle_button() does (#4712). Apply is
+        # pressed every cycle of an export window, and leaving it out of the per-inverter write
+        # count and inverter_register_writes_total hid the very register wear this feature exists
+        # to reduce.
+        self.inv.count_register_writes += 1
+        return True
 
     def _dispatch_status(self):
         """The inverter-side dispatch status reading, as a lower-case string, or None."""
@@ -346,16 +360,24 @@ class InverterDispatch:
         self.log("Inverter {} dispatch: applied {}W (soc window {}-{}%) mode {}".format(self.inv.id, power_w, soc_min, soc_max, mode))
         return True
 
+    def _master_reads_on(self, master_entity):
+        """Whether the dispatch master switch currently reads on in HA."""
+        return str(self.base.get_state_wrapper(master_entity, default="off")).strip().lower() not in ("off", "false", "0", "none", "")
+
     def disable_dispatch(self):
         """Stop the dispatch and clear the block.
 
         Idempotent: only writes when a dispatch was previously applied, or when the inverter
         reports the block still running, so the reset paths that call adjust_force_export(False)
-        every cycle don't spam the block.
+        every cycle don't spam the block. At most one stop attempt per cycle, because
+        adjust_dispatch_slot_cleanup() and apply_dispatch_intent() both reach here in the same
+        execute_plan() pass.
 
         Returns True only when something confirmed the block was stopped. On a failed press the
         block is still tracked and the next cycle retries - clearing `active` regardless was what
-        left a running block with nothing left to stop it.
+        left a running block with nothing left to stop it. Confirmation comes from a LATER cycle's
+        status reading, not a same-cycle re-read: get_state_wrapper() serves the cached state, so
+        the reading taken straight after the press is the one taken before it.
         """
         status = self._dispatch_status()
         hot = self._status_is_hot(status)
@@ -364,37 +386,51 @@ class InverterDispatch:
         if not self.active and status == self._disabled_status:
             # Already pressed for this exact reported state; the status sensor has not refreshed.
             return False
+        now = self.base.now_utc
+        if self._disable_cycle is not None and self._disable_cycle == now:
+            # Already attempted in this execute_plan() pass. A second attempt would press twice
+            # and burn two of the retry budget at the moment the block is failing to stop.
+            return False
         disable_entity = self._entity("dispatch_disable_button")
         master_entity = self._entity("dispatch_master")
+
+        if not hot and status is not None:
+            # The device itself reports the block stopped. This is the ordinary end of a stop that
+            # the last cycle's press could not confirm: clear the tracking here, or `active` stays
+            # set forever and every later cycle logs "disable was not confirmed".
+            self.active = False
+            self._disabled_status = status
+            self._disable_attempts = 0
+            self._disable_cycle = now
+            # The master can still read on in HA after the inverter-side block cleared, so re-sync
+            # it - but only then, otherwise every idle cycle would repeat the turn_off.
+            if master_entity and self._master_reads_on(master_entity):
+                self.inv.write_and_poll_switch("dispatch_master", master_entity, False, force=True)
+            self.log("Inverter {} dispatch: disabled".format(self.inv.id))
+            return True
+
         pressed = False
-        # Only press Disable while the block is reported running (or when there is no status sensor
-        # to ask): a reading that already says idle means there is nothing to stop, and pressing
-        # anyway is how a lagging sensor produced a second press for the same stop.
-        if disable_entity and (hot or status is None):
+        if disable_entity:
             pressed = self._press_button("dispatch disable", disable_entity)
         master_off = False
         if master_entity:
-            # Always force the master off too: the disable button clears the inverter-side block
-            # without updating the HA switch, leaving it optimistically "on" while the register
-            # reads 0 - the exact stale-on state that makes the next apply skip the master write
-            # and silently kill the dispatch. Turning it off both stops any inverter-side dispatch
-            # and re-syncs the HA state so the next apply re-arms.
-            #
-            # Skip it when there is nothing to sync: the switch already reads off and the status
-            # says the block is not running, so a second disable would only repeat the turn_off.
-            master_reads_on = str(self.base.get_state_wrapper(master_entity, default="off")).strip().lower() not in ("off", "false", "0", "none", "")
-            if hot or master_reads_on or status is None:
+            # Force the master off too: the disable button clears the inverter-side block without
+            # updating the HA switch, leaving it optimistically "on" while the register reads 0 -
+            # the exact stale-on state that makes the next apply skip the master write and silently
+            # kill the dispatch. Turning it off both stops any inverter-side dispatch and re-syncs
+            # the HA state so the next apply re-arms. Skipped only when it already reads off and
+            # there is a status reading saying the block is not running.
+            if hot or status is None or self._master_reads_on(master_entity):
                 master_off = self.inv.write_and_poll_switch("dispatch_master", master_entity, False, force=True)
+        self._disable_cycle = now
         if not pressed and not master_off:
             self.log("Warn: Inverter {} dispatch: disable was not confirmed, retrying next cycle".format(self.inv.id))
             return False
         # A press is an acknowledgement, not proof: call_service_wrapper returns True whenever the
         # service call does not fail, and a firmware that accepts the press and discards the write
-        # leaves the block running. Clearing `active` on that alone stopped every retry, because the
-        # `status == self._disabled_status` guard above then returns early for as long as the reading
-        # stays the same. Confirm from the status sensor instead - it is the device's own answer.
-        after = self._dispatch_status()
-        if status is not None and after is not None and after == status and self._status_is_hot(after):
+        # leaves the block running. With a status sensor configured, wait for a later cycle to
+        # confirm the stop rather than believing the press.
+        if status is not None and hot:
             self._disable_attempts += 1
             if self._disable_attempts < DISABLE_MAX_ATTEMPTS:
                 self._warn_once(

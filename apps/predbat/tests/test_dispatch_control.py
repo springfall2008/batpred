@@ -226,6 +226,28 @@ def test_dispatch_applies_planned_power_and_depth(my_predbat=None):
     if not stub.dispatch.active:
         print("ERROR: dispatch was not marked active after a successful apply")
         failed = True
+    # The Apply press is a register write like any other (#4712): it must show up in the
+    # per-inverter write count, or the wear this feature exists to reduce stays invisible. The
+    # other staged writes also count, so measure the press on its own.
+    before = stub.count_register_writes
+    if not stub.dispatch._press_button("dispatch apply", "button.solax_apply_remote_dispatch"):
+        print("ERROR: a press that the service accepted was reported as failed")
+        failed = True
+    if stub.count_register_writes != before + 1:
+        print("ERROR: a button press did not increment count_register_writes")
+        failed = True
+    base.fail_services = {"button/press"}
+    before = stub.count_register_writes
+    if stub.dispatch._press_button("dispatch apply", "button.solax_apply_remote_dispatch"):
+        print("ERROR: a failed press was reported as successful")
+        failed = True
+    if stub.count_register_writes != before:
+        print("ERROR: a failed press was still counted as a register write")
+        failed = True
+    if any("pressed dispatch apply" in line for line in base.logs[-1:]):
+        print("ERROR: a failed press was logged as a success")
+        failed = True
+    base.fail_services = set()
     if master_on:
         master_idx = base.calls.index(("service", "switch/turn_on", "switch.solax_dispatch_master", None))
         power_idx = base.calls.index(power_writes[0])
@@ -428,13 +450,26 @@ def test_dispatch_disable_is_idempotent(my_predbat=None):
     stub.dispatch.active = True
 
     stub.dispatch.disable_dispatch()
+    # Same cycle, second call site (slot cleanup AND the apply pass both stop the block): no
+    # second press, and no second attempt burned off the retry budget.
+    stub.dispatch.disable_dispatch()
+    if not stub.dispatch.active:
+        print("ERROR: active was cleared before the status sensor confirmed the stop")
+        failed = True
     # A real inverter applies the press and the status sensor reports idle by the next cycle; the
     # fake has to do the same, or the second call is testing a device that never updates.
     base.states["sensor.solax_dispatch_status"] = "0"
+    base.now_utc += datetime.timedelta(minutes=5)
+    stub.dispatch.disable_dispatch()
+    if stub.dispatch.active:
+        print("ERROR: active was never cleared once the status reported the block stopped")
+        failed = True
+    # And once confirmed, later cycles stay quiet.
+    base.now_utc += datetime.timedelta(minutes=5)
     stub.dispatch.disable_dispatch()
     disable_presses = _services(base, "button/press", "button.solax_disable_remote_dispatch")
     if len(disable_presses) != 1:
-        print("ERROR: expected exactly 1 disable press across two calls, got {}".format(len(disable_presses)))
+        print("ERROR: expected exactly 1 disable press across the stop, got {}".format(len(disable_presses)))
         failed = True
     master_off = _services(base, "switch/turn_off", "switch.solax_dispatch_master")
     if len(master_off) != 1:
@@ -518,16 +553,20 @@ def test_dispatch_unconfigured_uses_stock_path(my_predbat=None):
     stub.base.midnight_utc = datetime.datetime(2026, 9, 10, 0, 0, 0)
     # Idle-time bookkeeping is out of scope for this test; the slot writes are the point.
     stub.adjust_idle_time = lambda **kwargs: None
+    stub.commit_pending = {}
+    stub.last_committed = {}
+    stub.inv_has_ge_eco_toggle = False
+    stub.inv_output_charge_control = "enabled"
+    stub.inv_has_charge_enable_time = True
 
-    try:
-        stub.adjust_force_export(True, start, end)
-    except Exception as e:
-        # The stock path needs more scripted state than we provide; what matters is
-        # that it ATTEMPTED the slot writes before any failure
-        print("   (stock path raised {} - treated as reaching the slot logic)".format(type(e).__name__))
-    any_slot_write = any(call[2] in (STOCK_ARGS["discharge_start_time"], STOCK_ARGS["discharge_end_time"], STOCK_ARGS["scheduled_discharge_enable"]) for call in _services(base))
-    if not any_slot_write:
-        print("ERROR: stock path did not write any slot entity (and no exception path was exercised)")
+    # No try/except here: swallowing an exception meant a stock path that crashed after its first
+    # write still passed. The state above is what the stock path needs, so a real failure must fail.
+    stub.adjust_force_export(True, start, end)
+    slot_entities = (STOCK_ARGS["discharge_start_time"], STOCK_ARGS["discharge_end_time"], STOCK_ARGS["scheduled_discharge_enable"])
+    written = {call[2] for call in _services(base)}
+    missing = [entity for entity in slot_entities if entity not in written]
+    if missing:
+        print("ERROR: stock path did not write every slot entity, missing {} (wrote {})".format(missing, sorted(written)))
         failed = True
     if _services(base, "button/press"):
         print("ERROR: stock path pressed a dispatch button")
@@ -723,6 +762,8 @@ def test_dispatch_retries_an_unconfirmed_disable(my_predbat=None):
 
     base.fail_services = set()
     base.reject = set()
+    # The retry is the NEXT cycle, not a second attempt inside the same execute_plan() pass.
+    base.now_utc += datetime.timedelta(minutes=5)
     if not stub.dispatch.disable_dispatch():
         print("ERROR: the retried disable did not succeed")
         failed = True
@@ -1001,8 +1042,10 @@ def test_dispatch_retries_a_discarded_disable(my_predbat=None):
         print("ERROR: an unconfirmed disable cleared the tracking, so it would never retry")
         failed = True
 
-    # Keep trying while the reading never changes, but not forever.
+    # Keep trying while the reading never changes, but not forever. Each attempt is a new cycle:
+    # within one cycle the second call site is deliberately a no-op.
     for _ in range(10):
+        base.now_utc += datetime.timedelta(minutes=5)
         stub.dispatch.disable_dispatch()
     presses = _services(base, "button/press", "button.solax_disable_remote_dispatch")
     if len(presses) != DISABLE_MAX_ATTEMPTS:
