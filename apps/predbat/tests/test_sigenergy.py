@@ -5953,6 +5953,28 @@ def test_sigenergy_listener_reconnect_reuses_own_factory(my_predbat):
     return failed
 
 
+def test_sigenergy_listener_waits_out_login_cooldown(my_predbat):
+    """With no token during a login cooldown the listener sleeps until the cooldown ends, never less than its reconnect delay."""
+    failed = False
+    for remaining, expected_wait in ((300, 300), (2, 5)):
+        api = _listener_api("keyC", None, "broker-c.example", "SITE_C")
+        api.token_expires_at = 0
+        record = _new_record()
+        clock = VirtualClock()
+        api._auth_retry_at = clock.mono + remaining
+        session = _ScriptedAuthSession([{"code": 0, "data": {"accessToken": "tok_after", "expiresIn": 43200}}])
+        with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()), patch("sigenergy.aiohttp.ClientSession", session):
+            with _api_mqtt_factory(api, _recording_factory(record, stop_api=api)), _api_clock(api, clock):
+                with patch("aiomqtt.Client", side_effect=AssertionError("the default aiomqtt.Client must not be built")):
+                    run_async(api._mqtt_listener_loop())
+
+        assert clock.sleeps and abs(clock.sleeps[0] - expected_wait) < 1e-9, "{}s of cooldown left: first sleep is {}s, got {}".format(remaining, expected_wait, clock.sleeps)
+        assert any("token refresh failed" in m and "retrying in {}s".format(expected_wait) in m for m in api.log_messages), "{}s left: the warning names the {}s wait, got {}".format(remaining, expected_wait, api.log_messages)
+        assert session.posts == 1, "{}s left: one login, made after the cooldown, got {}".format(remaining, session.posts)
+        assert len(record["clients"]) == 1 and record["clients"][0]["password"] == "tok_after", "{}s left: connected once with the new token, got {}".format(remaining, record["clients"])
+    return failed
+
+
 def test_sigenergy_duplicate_command_window_ignores_wall_clock(my_predbat):
     """The 5 minute duplicate-command window follows the monotonic clock, not a wall clock that steps."""
     failed = False
@@ -6453,6 +6475,7 @@ def run_sigenergy_tests(my_predbat):
         ("auth_rejection_backoff_escalates_and_resets", test_sigenergy_auth_rejection_backoff_escalates_and_resets),
         ("auth_rejection_cooldown_is_jittered", test_sigenergy_auth_rejection_cooldown_is_jittered),
         ("auth_concurrent_callers_single_login", test_sigenergy_auth_concurrent_callers_single_login),
+        ("listener_waits_out_login_cooldown", test_sigenergy_listener_waits_out_login_cooldown),
         ("fetch_system_list", test_sigenergy_fetch_system_list),
         ("fetch_system_list_with_filter", test_sigenergy_fetch_system_list_with_filter),
         ("fetch_history_totals", test_sigenergy_fetch_history_totals),
