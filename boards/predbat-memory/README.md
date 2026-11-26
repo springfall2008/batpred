@@ -38,7 +38,9 @@ and what `measure.py` uses to judge the lead's candidate. Its design is in
   run, served from their seeded caches. MCP, Load ML and GivTCP are off. After every component has published once,
   the driver runs 6 plan cycles, each forced to recompute.
 - **Where:** a Linux container on a pinned image (`coverage/memory_benchmark_tools/Dockerfile`), with `--network none`,
-  4 CPUs and 3 GB. The kernel is built inside from `<tree>`, so a branch never runs a stale binary. The wall clock is
+  4 CPUs and 3 GB. The container gets a copy of `<tree>`'s `apps/predbat` made for that run, because Docker Desktop
+  can serve a file edited after an earlier container read it at its old length. The kernel is built inside from that
+  copy, so a branch never runs a stale binary. The wall clock is
   frozen at the fixture's T0 with libfaketime (monotonic time keeps running), so every run plans at the same instant
   whenever it is made.
 - **Output:** `<out dir>/result.json`, `<out dir>/modules.txt` and the run's `predbat.log`:

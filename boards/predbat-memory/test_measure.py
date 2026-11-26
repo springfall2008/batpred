@@ -178,7 +178,22 @@ class TestMain(unittest.TestCase):
 
 # What a worker needs for the intents the lead writes: Python to profile (importtime, gc referrers, deeper tracemalloc),
 # merge and rebase to combine earlier board commits, and the everyday read-only tools
-NEEDED = ("Bash(python3 *)", "Bash(*/coverage/venv/bin/python3 *)", "Bash(git merge *)", "Bash(git rebase *)", "Bash(find *)", "Bash(sort *)", "Bash(diff *)", "Bash(docker ps*)")
+NEEDED = (
+    "Bash(python3 *)",
+    "Bash(*/coverage/venv/bin/python3 *)",
+    "Bash(git merge *)",
+    "Bash(git rebase *)",
+    "Bash(git -C *)",
+    "Bash(find *)",
+    "Bash(sort *)",
+    "Bash(diff *)",
+    "Bash(docker ps*)",
+    # CLAUDE.md asks for impact analysis before an edit and detect_changes before a commit; both only read the index
+    "mcp__gitnexus__impact",
+    "mcp__gitnexus__context",
+    "mcp__gitnexus__query",
+    "mcp__gitnexus__detect_changes",
+)
 
 # The mistakes the deny list is there to stop: anything that leaves the machine, rewrites main or another intent's
 # branch, throws away work, or changes the shared venv
@@ -202,6 +217,17 @@ class TestBoardFile(unittest.TestCase):
         for entry in DANGEROUS:
             self.assertIn(entry, self.board["permissions"]["deny"])
             self.assertNotIn(entry, self.board["permissions"]["allow"])
+
+    def test_every_git_deny_also_denies_its_git_dash_c_form(self):
+        """Bash(git -C *) is allowed, and a rule matches the command's start, so `git -C <dir> push` would slip past Bash(git push*)."""
+        deny = self.board["permissions"]["deny"]
+        for entry in deny:
+            if entry.startswith("Bash(git ") and not entry.startswith("Bash(git -C "):
+                self.assertIn("Bash(git -C * " + entry[len("Bash(git ") :], deny, entry)
+
+    def test_gitnexus_rename_is_denied(self):
+        """rename edits code across files, so only the read-only GitNexus tools are allowed."""
+        self.assertIn("mcp__gitnexus__rename", self.board["permissions"]["deny"])
 
     def test_merge_and_rebase_are_limited_to_the_workers_own_branch(self):
         """The rules say where merge and rebase may be used, since the permissions cannot."""

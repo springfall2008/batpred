@@ -112,7 +112,10 @@ model = "sonnet"
 # their own branch) and the everyday read-only tools. A deny entry matches only its own command, so a Python script
 # could still do what the list denies; it is there to stop mistakes, not a determined worker, as ./run_all already runs
 # the worktree's own code on the host. What it stops: anything that leaves the machine, rewriting main or another
-# intent's branch, throwing work away, and changing the shared venv. test_measure.py checks both lists.
+# intent's branch, throwing work away, and changing the shared venv. A rule matches the command's start, so with
+# `git -C *` allowed every git deny has a `git -C * ...` twin, or `git -C <dir> push` would get through. The GitNexus
+# tools that only read the index are allowed for CLAUDE.md's impact analysis; rename, which edits code, is not.
+# test_measure.py checks both lists.
 allow = [
   "Read(~/predbat/**)",
   "Edit(~/predbat/batpred/.worktrees/board-memory-*/**)",
@@ -140,6 +143,7 @@ allow = [
   "Bash(git rebase *)",
   "Bash(git restore *)",
   "Bash(git stash*)",
+  "Bash(git -C *)",
   "Bash(cd *)",
   "Bash(bash apps/predbat/build_kernel.sh*)",
   "Bash(coverage/memory_benchmark *)",
@@ -181,6 +185,10 @@ allow = [
   "Bash(docker info*)",
   "Bash(docker images*)",
   "Bash(date*)",
+  "mcp__gitnexus__impact",
+  "mcp__gitnexus__context",
+  "mcp__gitnexus__query",
+  "mcp__gitnexus__detect_changes",
 ]
 deny = [
   "Bash(git push*)",
@@ -210,6 +218,19 @@ deny = [
   "Write(~/predbat/batpred/coverage/**)",
   "Edit(~/predbat/batpred/boards/**)",
   "Write(~/predbat/batpred/boards/**)",
+  "Bash(git -C * push*)",
+  "Bash(git -C * reset --hard*)",
+  "Bash(git -C * branch -f*)",
+  "Bash(git -C * branch --force*)",
+  "Bash(git -C * branch -D*)",
+  "Bash(git -C * branch -d*)",
+  "Bash(git -C * branch -m*)",
+  "Bash(git -C * branch -M*)",
+  "Bash(git -C * update-ref*)",
+  "Bash(git -C * checkout -B*)",
+  "Bash(git -C * switch -C*)",
+  "Bash(git -C * clean*)",
+  "mcp__gitnexus__rename",
 ]
 max_turns = 300
 worker_timeout_minutes = 90

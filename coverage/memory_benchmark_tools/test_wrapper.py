@@ -79,6 +79,31 @@ class TestWrapperChecks(unittest.TestCase):
             for name in stale:
                 self.assertFalse((out / name).exists(), name)
 
+    def test_wrapper_mounts_a_fresh_copy_of_the_tree_not_the_tree_itself(self):
+        """The container reads a copy made for this run, so Docker Desktop never serves an edited file at its old length."""
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "fixture"
+            data.mkdir()
+            (data / "manifest.json").write_text('{"t0": "2026-11-26T10:56:00+00:00"}')
+            record = Path(tmp) / "record.txt"
+            bin_dir = Path(tmp) / "bin"
+            bin_dir.mkdir()
+            docker = bin_dir / "docker"
+            # image inspect succeeds (no build); run records the source mounted at /src and what it holds, then fails
+            docker.write_text(
+                "#!/bin/bash\n"
+                '[ "$1" = image ] && exit 0\n'
+                'while [ $# -gt 0 ]; do if [ "$1" = -v ] && [ "${2%:/src:ro}" != "$2" ]; then src="${2%:/src:ro}"; fi; shift; done\n'
+                'echo "$src" > "{record}"; ls "$src" >> "{record}"\n'
+                "exit 1\n".replace("{record}", str(record))
+            )
+            docker.chmod(0o755)
+            code, output = run_wrapper(REPO, Path(tmp) / "out", data=data, bin_dir=bin_dir)
+            self.assertNotEqual(code, 0, output)
+            lines = record.read_text().splitlines()
+        self.assertNotEqual(Path(lines[0]).resolve(), (REPO / "apps" / "predbat").resolve())
+        self.assertIn("predbat.py", lines[1:])
+
     def test_wrapper_with_tracemalloc_still_needs_two_arguments(self):
         """--tracemalloc does not stand in for the tree or the out dir."""
         code, output = run_wrapper("--tracemalloc", REPO)
