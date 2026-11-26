@@ -248,6 +248,7 @@ EVDC
 evergen
 evilspringfall
 evse
+executemany
 exog
 expmsg
 exportlimit
@@ -406,6 +407,7 @@ labelnames
 ladybugdb
 Lanmate
 larr
+lastrowid
 libbi
 libc
 libyaml
