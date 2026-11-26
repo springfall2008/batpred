@@ -197,7 +197,7 @@ If you reached step 3 and classified as `bug`, the one-line bug statement follow
 
 After posting, apply the `BOT_TRIAGED` label via `gh issue edit <number> --add-label BOT_TRIAGED` — every triage run gets this label, including a duplicate-close, regardless of classification. It marks the issue as triaged for the separate PR-creation flow (see `.claude/skills/issue-pr/SKILL.md`).
 
-Then, if the `mcp__shared-memory__*` tools are available and your investigation established something a later session would want (a root cause, a module ruled out, a reproduction), `store` it in scope `predbat-devs` with tags `repo:batpred`, `issue:<number>` and `status:open`. Follow the public-safety rules in CLAUDE.md's "Shared team memory": write it from what you verified, in your own words, with nothing that identifies the reporter. Skip this for duplicates, pure questions and gate exits.
+Then, if the `mcp__shared-memory__*` tools are available and your investigation established something a later session would want (a root cause, a module ruled out, a reproduction), `store` it in scope `predbat-devs` with tags `repo:batpred`, `issue:<number>` and `status:open`. Follow the public-safety rules in CLAUDE.md's "Shared team memory": write it from what you verified, in your own words, with nothing that identifies the reporter. Skip this for duplicates, pure questions and gate exits. If you store a finding as its own memory, separate from the issue's status memory, link it with `relate_memories(<finding>, <issue memory>, "derived-from")`; if it replaces an earlier finding, also link it `supersedes` that one.
 
 ## Guardrails
 

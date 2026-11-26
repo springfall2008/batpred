@@ -796,6 +796,10 @@ class LoadMLComponent(ComponentBase):
                 self.log("ML Component: Starting initial training")
             else:
                 self.log("ML Component: Initial training is required, delaying until component has started")
+                # Deferring is healthy: without a success timestamp components.is_alive() reads the
+                # component as dead and the next plan run reports it as a component error until
+                # training starts on the following tick (e.g. after a MODEL_VERSION bump).
+                self.update_success_timestamp()
                 return True
         elif should_train:
             self.log("ML Component: Starting fine-tune training ({:g}h interval), model age is {} hours".format(self.ml_retrain_interval_seconds / 3600.0, retrain_age_seconds / 3600.0))

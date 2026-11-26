@@ -89,6 +89,9 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self.oauth_failed = False
         self._refresh_in_progress = False
         self.token_hash = ""
+        self.oauth_failed_reason = ""
+        self._same_token_count = 0
+        self._forced_refresh_after = 0
         # automatic_config drives Predbat's own config switches (e.g. inverter_hybrid) through
         # ComponentBase.set_state_external, which is the only path that updates the matching
         # CONFIG_ITEMS value. Capture those writes rather than plain entity states so tests can
@@ -532,6 +535,31 @@ def test_teslemetry_automatic_config_wires_limits_without_overriding_apps_yaml()
         assert any("keeping your apps.yaml setting" in message and arg in message for message in api.log_messages), arg
 
 
+def test_teslemetry_automatic_config_binds_zero_battery_min_soc():
+    """automatic_config binds battery_min_soc to the Powerwall's 0% floor, so a set_reserve_min below Predbat's
+    4% default is not raised back to 4% - but a battery_min_soc the user set in apps.yaml wins."""
+    api = MockTeslemetryAPI()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_SUPPLY_METER
+    assert run_async(api.fetch_site_info()) is True
+    run_async(api.automatic_config())
+    assert api.args_set["battery_min_soc"] == [0], api.args_set.get("battery_min_soc")
+    # A constant Predbat supplies rather than a figure the device reports, so it is an entity value stand-in
+    # (as SolaX's is), not a rating - spec D14 and section 1.3
+    record = _discovery_tesla().build_discovery()["inverters"][0]
+    assert record["entities"]["battery_min_soc"] == {"value": 0, "access": "r"}, record["entities"].get("battery_min_soc")
+    assert "battery_min_soc" not in record["ratings"], record["ratings"]
+
+    api = MockTeslemetryAPI()
+    api.base.args_from_apps_yaml = {"battery_min_soc": 10}
+    api.base.apps_yaml_override_warned = set()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = SITE_INFO_PW3_SUPPLY_METER
+    assert run_async(api.fetch_site_info()) is True
+    run_async(api.automatic_config())
+    assert "battery_min_soc" not in api.args_set
+    assert any("keeping your apps.yaml setting" in message and "battery_min_soc" in message for message in api.log_messages)
+    print("  ✓ automatic_config binds battery_min_soc to 0% unless apps.yaml sets it")
+
+
 def test_teslemetry_live_status_tracks_last_soc():
     """fetch_live_status records the live SOC for the scheduler emulator."""
     api = MockTeslemetryAPI()
@@ -564,6 +592,31 @@ def test_teslemetry_request_auth_failure():
         assert api.api_auth_failed is True
         assert mock_session.request.call_count == 1  # No retries on auth failure
         assert any("auth failed" in msg for msg in api.log_messages)
+
+    run_async(test())
+
+
+def test_teslemetry_request_auth_failure_message_by_mode():
+    """The 401 warning names the Tesla Fleet API in oauth mode and keeps the Teslemetry wording for api_key mode (GH#6284)."""
+
+    async def test():
+        """Drive the real _request against a 401 in each auth mode and compare the warning."""
+        messages = {}
+        for mode in ("oauth", "api_key"):
+            api = _make_real_request_api()
+            api.auth_method = mode
+            api.access_token = "DEAD"
+            api.check_and_refresh_oauth_token = AsyncMock(return_value=True)
+            api.handle_oauth_401 = AsyncMock(return_value=False)  # the refresh brought no new token
+            mock_session = create_aiohttp_mock_session(create_aiohttp_mock_response(status=401, json_data={}))
+            mock_session.request = mock_session.get
+            with patch("aiohttp.ClientSession") as mock_session_class:
+                mock_session_class.return_value = mock_session
+                assert await api._request("GET", "/api/1/energy_sites/123456/live_status") is None
+            messages[mode] = [msg for msg in api.log_messages if "(401)" in msg]
+        assert any("Tesla Fleet API rejected the OAuth token" in msg for msg in messages["oauth"]), messages
+        assert not any("subscription lapsed" in msg for msg in messages["oauth"]), messages
+        assert any("Teslemetry auth failed" in msg and "subscription lapsed" in msg for msg in messages["api_key"]), messages
 
     run_async(test())
 
@@ -3806,6 +3859,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_site_info_charge_limit_per_unit_capped_at_nameplate()
     test_teslemetry_soc_max_from_gateway_energy()
     test_teslemetry_automatic_config_wires_limits_without_overriding_apps_yaml()
+    test_teslemetry_automatic_config_binds_zero_battery_min_soc()
     test_teslemetry_live_status_tracks_last_soc()
     test_teslemetry_time_to_minutes()
     test_teslemetry_in_window()
@@ -3882,6 +3936,7 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_init_oauth_sets_state()
     test_teslemetry_request_skips_when_oauth_refresh_fails()
     test_teslemetry_request_401_refreshes_and_retries_once()
+    test_teslemetry_request_auth_failure_message_by_mode()
     test_teslemetry_request_api_key_mode_does_not_refresh()
     test_teslemetry_catalogue_none_before_site_info()
     test_teslemetry_record_ac_powerwall()
