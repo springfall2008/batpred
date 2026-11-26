@@ -42,8 +42,8 @@ and what `measure.py` uses to judge the lead's candidate. Its design is in
   whenever it is made.
 - **Output:** `<out dir>/result.json`, `<out dir>/modules.txt` and the run's `predbat.log`:
     - `steady_rss_mb`: the median `VmRSS` (MiB) of cycles 4 to 6.
-    - `peak_rss_mb`: `VmHWM` (MiB) for the whole run. `measure.py` reports it but does not judge it: the board's goal
-      is steady-state memory.
+    - `peak_rss_mb`: `VmHWM` (MiB) for the whole run. The board's goal is steady-state memory, so `measure.py` only
+      checks that the candidate's median peak is no more than 10% above main's (`PEAK_RISE`).
     - `plan_digest`: a hash of each cycle's charge and export windows and limits, and its predicted SoC and cost every
       half-hour.
     - `ok`: false on any `Error:` line, a stale kernel binary, or a forecast URL fetch. Also false on any Octopus failure
@@ -116,8 +116,9 @@ startup loads, the Python libraries included. On main at 7b86c544 the run loads 
 packages by compiled size are aiohttp (7.3 MiB with its multidict, propcache, frozenlist, yarl and attrs helpers taking
 another 3.8 MiB), PyYAML (2.9 MiB) and ruamel.yaml (0.6 MiB), so two YAML libraries are loaded.
 
-Noise is about 4 MB on steady between identical trees. The peak is reported but not judged, so its own 1 to 2 MB of
-noise cannot fail a candidate.
+Noise is about 4 MB on steady between identical trees. The peak's own noise is 1 to 2 MB, so a strict "no higher than
+main's" would fail unchanged peaks. The 10% limit (about 14 MB on main's 137 MB) is well clear of that noise, and still
+stops a steady saving being bought with a much higher peak, which a memory-limited add-on runs out of.
 
 The Octopus component needs #6369 (its token mint and GraphQL query catching connection errors) to run offline. Until
 that is on main, a base of main fails every cycle.

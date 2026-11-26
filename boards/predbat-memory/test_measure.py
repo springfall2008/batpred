@@ -50,11 +50,18 @@ class TestVerdict(unittest.TestCase):
         self.assertFalse(passed)
         self.assertIn("plans changed", lines[-1])
 
-    def test_a_higher_peak_does_not_fail_but_is_reported(self):
-        """The goal is steady memory: a higher median peak passes, and the report still shows both peaks."""
-        passed, lines = measure.verdict(BASE, [run(70, 160)] * 3)
-        self.assertTrue(passed, lines)
-        self.assertIn("median peak: base 150.0 MB, candidate 160.0 MB", lines)
+    def test_a_peak_up_to_ten_percent_higher_passes_and_is_reported(self):
+        """The goal is steady memory: a median peak within 10% of the base's passes (165 is exactly 10% over 150)."""
+        for peak in (160, 165):
+            passed, lines = measure.verdict(BASE, [run(70, peak)] * 3)
+            self.assertTrue(passed, (peak, lines))
+        self.assertIn("median peak: base 150.0 MB, candidate 165.0 MB, +10.0% (limit +10%)", lines)
+
+    def test_a_peak_more_than_ten_percent_higher_fails(self):
+        """A steady saving bought with a much higher peak fails: 166 MB is more than 10% over 150 MB."""
+        passed, lines = measure.verdict(BASE, [run(70, 166)] * 3)
+        self.assertFalse(passed)
+        self.assertIn("median peak RSS is 10.7% above the base's", lines[-1])
 
     def test_fails_when_a_run_is_not_ok(self):
         """A run that reported ok false fails the candidate."""
@@ -199,9 +206,10 @@ class TestBoardFile(unittest.TestCase):
         self.assertIn("modules.txt", self.board["rules"])
         self.assertIn("libraries", self.board["goal"])
 
-    def test_peak_is_not_part_of_done_when(self):
-        """The board judges steady-state RSS only; measure.py reports the peak without judging it."""
-        self.assertNotIn("peak", self.board["done_when"])
+    def test_done_when_states_the_peak_limit_measure_applies(self):
+        """The done-when names the same peak limit as measure.PEAK_RISE, so the lead and the measurement agree."""
+        self.assertEqual(measure.PEAK_RISE, 0.10)
+        self.assertIn("no more than 10% above main's", self.board["done_when"])
 
 
 class TestDocstrings(unittest.TestCase):

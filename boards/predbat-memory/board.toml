@@ -10,12 +10,13 @@ workspace = "~/predbat/batpred"
 goal = """Cut Predbat's memory use. On the standalone memory benchmark (coverage/memory_benchmark: Predbat run \
 standalone with db_primary and the dummy inverter, in a Linux container, for a fixed run of plan cycles), lower the \
 steady-state RSS by at least 25% against main without changing any plan, so every install needs less RAM. Steady \
-state is what counts, not the peak. What Predbat holds includes the Python libraries it loads, and reviewing and \
+state is what counts; the peak only has to stay within 10% of main's. What Predbat holds includes the Python libraries it loads, and reviewing and \
 cutting those is in scope as much as the data its plan cycles keep."""
 
 done_when = """Facts show a single branch whose median steady-state RSS over three runs is at least 25% below main's, \
 measured interleaved with main on the same machine and benchmark (each tree runs in the image the benchmark builds \
-from its own requirements.txt, so a branch that drops a dependency is measured without it), with its plan_digest identical to main's in \
+from its own requirements.txt, so a branch that drops a dependency is measured without it), with its median peak RSS \
+no more than 10% above main's, its plan_digest identical to main's in \
 every run, and ./run_all --quick and ./run_pre_commit passing on the branch. The board's measurement \
 (boards/predbat-memory/measure.py) then confirms it."""
 
@@ -59,8 +60,8 @@ and what it achieved:
   Commit: <hash> on board/predbat-memory/<short id>
   Built on: <hash it started from> (main, or the fact id of that commit)
   Tree contains: one line per board commit in `git log --oneline main..<hash>`, each with the fact id that measured it
-  Steady: <branch median> MB against main <median> MB (<percent>); Peak (reported, not judged): <branch median> MB \
-against main <median> MB
+  Steady: <branch median> MB against main <median> MB (<percent>); Peak (limit +10%): <branch median> MB \
+against main <median> MB (<percent>)
 Then: every run's figures and the machine; the plan_digest comparison; what the saving removed (which objects, how \
 many MB); the commands run.
 Long output: logs, snapshots and profiles go under /tmp/predbat-board/memory/<intent short id>/. Facts cite the path \
