@@ -50,6 +50,7 @@ repos:
   - id: memory-benchmark-tools-tests
     name: memory benchmark tools unit tests
     language: python
+    additional_dependencies: [pyyaml, aiofiles, aiohttp, pytz]
     entry: python -m unittest discover -s coverage/memory_benchmark_tools
     files: ^coverage/memory_benchmark_tools/
     pass_filenames: false
