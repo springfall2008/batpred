@@ -442,6 +442,7 @@ mdi
 mdlrc
 measurand
 measurands
+memray
 Meteo
 Meteoalarm
 meterpoint
@@ -771,6 +772,7 @@ tmrw
 tojson
 topbar
 tottime
+tracemalloc
 trapezoidally
 trapz
 Trefor
@@ -841,6 +843,7 @@ workmode
 workstream
 workstreams
 worktree
+worktrees
 writeonly
 wrongsha
 WRONLY
