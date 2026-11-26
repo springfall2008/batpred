@@ -413,6 +413,13 @@ def generate_random_scenario(scenario_id, seed):
                 "iboost_today": round(feature_rng.uniform(0.0, 3.0), 2),
             }
         )
+        # iboost_on_export (iBoost runs while the battery is forced to export) and iboost_prevent_discharge
+        # (the battery must not feed an iBoost inside the CT clamp) contradict each other: during a forced
+        # export the battery discharges into the iBoost anyway, so a plan can use an export window as a way
+        # round the hold. That is a misconfiguration, not a setup worth benchmarking. Both values are still
+        # drawn above so the rng stream - and so every other scenario - is unchanged; only the conflict is cleared.
+        if features["iboost_on_export"] and features["iboost_prevent_discharge"]:
+            features["iboost_prevent_discharge"] = False
 
     return {
         "id": scenario_id,
@@ -703,7 +710,8 @@ def apply_scenario_to_predbat(my_predbat, scenario):
     # Every per-car attribute predbat indexes by car_n has to be sized to num_cars, not just the ones
     # this scenario varies - set_rate_thresholds takes max(car_charging_plan_max_price[:num_cars]) and
     # raises on an empty slice, and the prediction indexes the rest per car per minute.
-    my_predbat.car_charging_slots = [[dict(slot) for slot in slots] for slots in cars["slots"]] + [[] for _ in range(8 - num_cars)]
+    # calculate_plan() publishes the car plan, which reads every slot's average and cost
+    my_predbat.car_charging_slots = [[dict({"average": 0.0, "cost": 0.0}, **slot) for slot in slots] for slots in cars["slots"]] + [[] for _ in range(8 - num_cars)]
     my_predbat.car_charging_battery_size = list(cars["battery_kwh"]) or [100.0]
     my_predbat.car_charging_limit = [size for size in cars["battery_kwh"]] or [100.0]
     my_predbat.car_charging_soc = [0.0 for _ in range(num_cars)]
@@ -907,9 +915,26 @@ def run_scenario(my_predbat, scenario, debug=False):
         my_predbat.debug_enable = False  # disable debug output for normal scenario runs (huge overhead)
         t_start = time.perf_counter()
         my_predbat.calculate_plan(recompute=True)
+        # runtime_s is calculate_plan() alone, as documented - not the scoring runs below
+        t_elapsed = time.perf_counter() - t_start
+
+        # The metric is the planner's own objective for this plan, taken from run_prediction_metric - the call
+        # every optimiser pass scores its trials with - so it blends nominal, pv10 and (when the planner
+        # weights it) pv90 exactly as the engine does, with no standing charge. Rebuilding it here from the
+        # reporting runs below scored a different objective from the one the plan was optimised for: those
+        # runs leave pv90 out of the blend, and the save="best" nominal run adds the standing charge and
+        # models low-power charging. The order is not load-bearing: a save=None run writes only predict_soc,
+        # which run_prediction_metric restores itself, and none of the best/best10/best90 state the runs below save.
+        metric = my_predbat.run_prediction_metric(
+            my_predbat.charge_limit_best,
+            my_predbat.charge_window_best,
+            my_predbat.export_window_best,
+            my_predbat.export_limits_best,
+            end_record=my_predbat.end_record,
+        )[0]
 
         # Normal prediction (cost = raw import/export money)
-        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, metric_keep, final_iboost, final_carbon_g = my_predbat.run_prediction(
+        cost, import_kwh_battery, import_kwh_house, export_kwh, soc_min, soc, soc_min_minute, battery_cycle, _, _, final_carbon_g = my_predbat.run_prediction(
             my_predbat.charge_limit_best,
             my_predbat.charge_window_best,
             my_predbat.export_window_best,
@@ -919,15 +944,15 @@ def run_scenario(my_predbat, scenario, debug=False):
             save="best",
         )
 
-        # PV10 prediction (pessimistic solar) needed for compute_metric
-        cost10, _, _, _, _, soc10, _, _, _, final_iboost10, _ = my_predbat.run_prediction(
+        # PV10 prediction (pessimistic solar)
+        cost10 = my_predbat.run_prediction(
             my_predbat.charge_limit_best,
             my_predbat.charge_window_best,
             my_predbat.export_window_best,
             my_predbat.export_limits_best,
             PV_SCENARIO_PV10,
             end_record=my_predbat.end_record,
-        )
+        )[0]
 
         # PV90 prediction (optimistic solar, lighter load). Scoring the plan in each future is what makes a
         # hedging feature measurable at all: a plan that weights PV90 spends money the central forecast says
@@ -942,24 +967,6 @@ def run_scenario(my_predbat, scenario, debug=False):
             end_record=my_predbat.end_record,
         )[0]
 
-        # Combined metric: cost + battery value adjustment + pv10 weighting + carbon + self-sufficiency + cycle cost
-        metric, _ = my_predbat.compute_metric(
-            my_predbat.end_record,
-            soc,
-            soc10,
-            cost,
-            cost10,
-            final_iboost,
-            final_iboost10,
-            battery_cycle,
-            metric_keep,
-            final_carbon_g,
-            import_kwh_battery,
-            import_kwh_house,
-            export_kwh,
-        )
-
-        t_elapsed = time.perf_counter() - t_start
         base_result.update(
             {
                 "metric": round(float(metric), 4),
@@ -1597,3 +1604,118 @@ def _sample_rate_params(rng, rate_type, cheap):
         low = round(rng.uniform(-15.0, 0.0), 2)
         high = round(rng.uniform(25.0, 50.0), 2)
         return {"base_rate": base, "low_rate": low, "high_rate": high, "num_highs": rng.randint(1, 3), "num_lows": rng.randint(1, 3)}
+
+
+def _scenario_mismatch(generated, committed, path=""):
+    """Return the path of the first value that differs between two scenarios, or None when they match.
+
+    Floats are compared to 1e-12 rather than exactly: the rate, load and PV shapes come from math.cos and
+    math.exp, whose last bit differs between platform maths libraries (macOS against glibc), so the same
+    seed gives a fixture that differs in the 16th significant digit on Linux CI.
+    """
+    if isinstance(generated, dict) and isinstance(committed, dict):
+        if generated.keys() != committed.keys():
+            return "{} keys {} vs {}".format(path or "scenario", sorted(generated.keys(), key=str), sorted(committed.keys(), key=str))
+        for key in generated:
+            found = _scenario_mismatch(generated[key], committed[key], "{}.{}".format(path, key))
+            if found:
+                return found
+        return None
+    if isinstance(generated, list) and isinstance(committed, list):
+        if len(generated) != len(committed):
+            return "{} length {} vs {}".format(path, len(generated), len(committed))
+        for index, (gen_value, com_value) in enumerate(zip(generated, committed)):
+            found = _scenario_mismatch(gen_value, com_value, "{}[{}]".format(path, index))
+            if found:
+                return found
+        return None
+    if isinstance(generated, float) or isinstance(committed, float):
+        numeric = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in (generated, committed))
+        if numeric and math.isclose(generated, committed, rel_tol=1e-12, abs_tol=1e-12):
+            return None
+    elif generated == committed and type(generated) is type(committed):
+        return None
+    return "{}: {!r} vs {!r}".format(path, generated, committed)
+
+
+def run_random_scenario_generator_tests(my_predbat):
+    """The committed scenarios are what the generator makes, and none sets both iBoost conflict flags.
+
+    The plan tests replay cases/random_scenarios.yaml, not generate_random_scenario, so a generator change
+    (a dropped normalisation, a moved draw, a new probability) passes them all and only shows up at the
+    next ./run_random regeneration. iboost_on_export with iboost_prevent_discharge is a misconfiguration
+    the generator clears; this fails the moment it could come back. Floats match to 1e-12, not exactly -
+    see _scenario_mismatch.
+
+    my_predbat is deliberately unused - no plan is run.
+    """
+    print("**** Running random scenario generator matches the committed scenarios ****")
+    committed = load_scenarios(RANDOM_SCENARIOS)
+    # Round-trip through YAML so the comparison sees the types the committed file holds
+    generated = yaml.load(yaml.dump({"scenarios": generate_scenarios(len(committed))}), Loader=getattr(yaml, "CSafeLoader", yaml.SafeLoader))["scenarios"]
+
+    failed = False
+    for scenario in generated:
+        features = scenario["params"].get("features", {})
+        if features.get("iboost_on_export") and features.get("iboost_prevent_discharge"):
+            print("ERROR: generated scenario {} sets both iboost_on_export and iboost_prevent_discharge".format(scenario["id"]))
+            failed = True
+    differing = []
+    for gen_scenario, com_scenario in zip(generated, committed):
+        mismatch = _scenario_mismatch(gen_scenario, com_scenario)
+        if mismatch:
+            differing.append(gen_scenario["id"])
+            print("Scenario {} first differs at {}".format(gen_scenario["id"], mismatch))
+    if differing:
+        print("ERROR: generate_scenarios({}) differs from {} in scenario(s) {} - regenerate the fixture and the baseline with ./run_random, or restore the generator".format(len(committed), RANDOM_SCENARIOS, differing))
+        failed = True
+    if not failed:
+        print("PASS: {} generated scenarios match the committed file".format(len(generated)))
+    return failed
+
+
+def run_random_scenario_metric_tests(my_predbat):
+    """The metric the harness records is the planner's own objective for the final plan.
+
+    run_scenario takes it from run_prediction_metric, the call every optimiser pass scores trials with,
+    so it blends nominal, pv10 and pv90 as the engine does. A metric rebuilt by hand from the reporting
+    runs drifted from that once - it left pv90 out and picked up the standing charge from the save="best"
+    nominal run - and every benchmark comparison then scored a different objective from the one the plans
+    were optimised for. This pins the two together on one scenario, with pv90 weighted so it counts.
+
+    my_predbat is deliberately unused - each run gets a fresh instance, as for run_random_scenario_tests.
+    """
+    print("**** Running random scenario metric matches the engine ****")
+
+    from unit_test import create_predbat
+
+    scenario_predbat = create_predbat()
+    reset_inverter(scenario_predbat)
+    scenario_predbat.read_debug_yaml(RANDOM_TEMPLATE)
+    scenario_predbat.config_root = "./"
+    scenario_predbat.save_restore_dir = "./"
+    scenario_predbat.load_user_config()
+
+    scenario = load_scenarios(RANDOM_SCENARIOS)[0]
+    result = run_scenario(scenario_predbat, scenario)
+    if result["failed"]:
+        print("ERROR: scenario {} failed: {}".format(scenario["id"], result["error"]))
+        return True
+
+    failed = False
+    if not scenario_predbat.pv_metric90_weight > 0:
+        print("ERROR: the template no longer weights pv90 (pv_metric90_weight {}), so this test no longer checks the pv90 term".format(scenario_predbat.pv_metric90_weight))
+        failed = True
+    engine = scenario_predbat.run_prediction_metric(
+        scenario_predbat.charge_limit_best,
+        scenario_predbat.charge_window_best,
+        scenario_predbat.export_window_best,
+        scenario_predbat.export_limits_best,
+        end_record=scenario_predbat.end_record,
+    )[0]
+    if result["metric"] != round(float(engine), 4):
+        print("ERROR: scenario {} recorded metric {} but the planner scores its final plan {}".format(scenario["id"], result["metric"], round(float(engine), 4)))
+        failed = True
+    if not failed:
+        print("Scenario {} metric {} matches the planner's own score".format(scenario["id"], result["metric"]))
+    return failed
