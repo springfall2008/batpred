@@ -219,6 +219,20 @@ class TestExportDb(unittest.TestCase):
         latest = query(self.out, "SELECT l.state FROM latest l JOIN entities e USING(entity_index) WHERE e.entity_name = 'sensor.predbat_dummy_battery_soc'")
         self.assertEqual(latest, [("4.2",)])
 
+    def test_export_db_carries_in_the_state_at_window_start(self):
+        """An entity that last changed before the window keeps that state as one row at the window's start, as a history query sees it."""
+        engine = DatabaseEngine(StubBase(self.live.parent), 30)
+        engine._set_state_db("sensor.rarely_changes", "12.5", {"unit_of_measurement": "kWh"}, T0 - timedelta(days=9))
+        engine._set_state_db("sensor.rarely_changes", "13.0", {"unit_of_measurement": "kWh"}, T0 - timedelta(days=8))
+        engine._close()
+        self.export()
+        self.assertEqual(history(self.out, "sensor.rarely_changes"), [((T0 - timedelta(days=7)).strftime(TIME_FORMAT_DB), "13.0")])
+
+    def test_octopus_account_ids_are_read_off_entity_names(self):
+        """The Octopus component names its entities after the account number, which the export scrubs."""
+        names = {"binary_sensor.predbat_octopus_a_1234abcd_saving_session", "sensor.predbat_octopus_a_1234abcd_free_electricity", "sensor.other"}
+        self.assertEqual(fixture_db.octopus_account_ids(names, "predbat"), {"1234abcd"})
+
     def test_export_db_dropped_predicate_removes_entities(self):
         """An entity the caller marks as dropped is not exported."""
         fixture_db.export_db(self.live, self.out, T0, 7, self.remap, "predbat", dropped=lambda name: name == "sensor.octopus_rates", replacements={})

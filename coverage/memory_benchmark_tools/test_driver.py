@@ -64,6 +64,24 @@ class TestCheckLog(unittest.TestCase):
         self.assertEqual(driver.check_log(CLEAN + allowed, allowed_warnings=("OctopusAPI: Failed to retrieve auth token",)), [])
         self.assertEqual(len(driver.check_log(CLEAN + other, allowed_warnings=("OctopusAPI: Failed to retrieve auth token",))), 1)
 
+    def test_offline_octopus_and_version_check_warnings_are_not_problems(self):
+        """The warnings a run with no network always logs (Octopus polls, the GitHub version check) are expected."""
+        lines = [
+            "Warn: OctopusAPI: Failed to retrieve data from graphql query get-intelligent-devices - token refresh failed",
+            "Warn: OctopusAPI: Could not list intelligent devices, refreshing the 1 known device(s) instead",
+            "Warn: OctopusAPI: Settings fetch failed for intelligent device 0000, reusing the last known settings",
+            "Warn: OctopusAPI: Failed to connect to mint a token: Cannot connect to host",
+            "Warn: Unable to load data from GitHub URL: https://api.github.com/repos/springfall2008/batpred/releases",
+            "Warn: Unable to download Predbat version information from GitHub, return code: []",
+        ]
+        text = CLEAN + "".join("2026-11-26 09:17:20.000001: {}\n".format(line) for line in lines)
+        self.assertEqual(driver.check_log(text), [])
+
+    def test_benign_warnings_each_carry_a_reason(self):
+        """Every benign warning says why it is harmless in the benchmark."""
+        for substring, reason in driver.BENIGN_WARNINGS.items():
+            self.assertTrue(substring and len(reason) > 20, substring)
+
     def test_check_log_reports_lines_without_their_timestamps(self):
         """A problem is reported as the message, so two runs' problems compare equal."""
         problems = driver.check_log(CLEAN + "2026-11-26 09:17:20.000001: Error: boom\n")

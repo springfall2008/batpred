@@ -157,6 +157,16 @@ def snapshot_db(source, dest, attempts=5, delay=3):
             time.sleep(delay)
 
 
+def octopus_account_ids(names, prefix):
+    """Return the Octopus account numbers (lower case, without "a_") that the Octopus component's entity names carry.
+
+    The component names its entities <domain>.<prefix>_octopus_a_<account digits>_..., so the account number is in
+    the database even when the live apps.yaml holds it as a !secret.
+    """
+    pattern = re.compile(r"\.{}_octopus_a_([0-9a-f]{{8}})_".format(re.escape(prefix)))
+    return {match.group(1) for name in names for match in [pattern.search(name)] if match}
+
+
 def entity_names(db_path):
     """Return the set of entity names in a predbat.db, opened read-only."""
     conn = sqlite3.connect("file:{}?mode=ro".format(Path(db_path).resolve()), uri=True)
@@ -345,6 +355,12 @@ def export_db(live_db, out_db, t0, days, remap, prefix, dropped, replacements, s
                     stats["totals"][total_key] = round(final, 6)
                 name = item.dummy_entity
             else:
+                if not rows or rows[0][0] > start:
+                    # The state at the window's start: the newest change before it, stamped at the start, as a history
+                    # query of a recorder returns it (the database itself only records changes)
+                    before = live.execute("SELECT datetime, state, attributes, system, keep FROM states WHERE entity_index = ? AND datetime < ? ORDER BY datetime DESC LIMIT 1", (entity_index, start)).fetchone()
+                    if before is not None:
+                        rows = [(start,) + tuple(before[1:])] + list(rows)
                 name = scrub.replace_everywhere(name, replacements)
                 rows = [scrub.replace_everywhere(row, replacements) for row in rows]
                 latest = scrub.replace_everywhere(latest, replacements) if latest else None

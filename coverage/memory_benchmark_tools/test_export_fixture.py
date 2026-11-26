@@ -87,6 +87,7 @@ def make_live(root, plant_leak=False):
     engine._set_state_db("sensor.givtcp_xx1234y567_soc_kwh", "4.75", {"unit_of_measurement": "kWh"}, when)
     engine._set_state_db("sensor.real_load_today", "3.0", {"unit_of_measurement": "kWh"}, when)
     engine._set_state_db("sensor.car_plugged", "on", {"serial": "XX1234Y567"}, when)
+    engine._set_state_db("binary_sensor.predbat_octopus_a_1234abcd_saving_session", "off", {"account": "A-1234ABCD"}, when)
     engine._set_state_db("sensor.weather", "sunny", {"note": "QQ1 1QQ" if plant_leak else "fine"}, when)
     engine._close()
     source = fixture_cache.solcast_source()
@@ -165,7 +166,8 @@ class TestExportFixtureCli(unittest.TestCase):
             apps = yaml.safe_load((out / "apps.yaml").read_text())["pred_bat"]
             self.assertEqual(apps["dummy_inverter"]["battery_size"], 9.5)
             self.assertEqual(apps["dummy_inverter"]["soc_initial"], 50.0)
-            self.assertEqual(scrub.find_leaks(out, ["A-9876", "1900000000001", "XX1234Y567", "xx1234y567", "real-forecast-key", "Real Place"]), [])
+            self.assertEqual(scrub.find_leaks(out, ["A-9876", "1900000000001", "XX1234Y567", "xx1234y567", "real-forecast-key", "Real Place", "a_1234abcd", "A-1234ABCD"]), [])
+            self.assertIn(b"binary_sensor.predbat_octopus_a_bench0001_saving_session", (out / "predbat.db").read_bytes())
 
     def test_export_fixture_cli_refuses_a_leak_and_removes_its_output(self):
         """A real value the scrub does not cover makes the CLI fail and leaves no fixture behind."""

@@ -239,6 +239,12 @@ def _export_from(live, out, days, t0, live_args, prefix, replacements, snapshot,
     # Device serials, read off the entity names the live config's {geserial}-style templates match; the geserial setting
     # itself may just say "auto". Too short a value would be replaced inside unrelated text, so it is not trusted.
     serials = sorted(value for value in fixture_db.template_values(live_args, live_names) if len(value) >= MIN_SERIAL_LENGTH)
+    # The Octopus account number, read off the component's entity names (the live config may hold it as a !secret), in
+    # the two spellings it appears in: the account's "A-XXXXXXXX" and the entity names' "a_xxxxxxxx"
+    fake_digits = scrub.FAKE_ACCOUNT[2:]
+    for digits in fixture_db.octopus_account_ids(live_names, prefix):
+        for real, fake in (("a_" + digits, "a_" + fake_digits.lower()), ("A-" + digits.upper(), scrub.FAKE_ACCOUNT), ("a-" + digits, "a-" + fake_digits.lower()), ("A_" + digits.upper(), "A_" + fake_digits)):
+            replacements[real] = fake
     for number, serial in enumerate(serials, start=1):
         fake = "{}{}".format(FAKE_SERIAL, number)
         replacements[serial.lower()] = fake.lower()

@@ -29,10 +29,18 @@ from pathlib import Path
 ALLOWED_WARNINGS = (
     "OctopusAPI: Failed to retrieve auth token",
     "OctopusAPI: Failed to connect",
+    "OctopusAPI: Failed to retrieve data from graphql query",
+    "OctopusAPI: Could not list intelligent devices, refreshing the",
+    "OctopusAPI: Settings fetch failed for intelligent device",
 )
 
 # Other warnings a clean benchmark run is known to log, each with the reason it is harmless here
-BENIGN_WARNINGS = ()
+BENIGN_WARNINGS = {
+    "Unable to load data from GitHub URL": "the release check has no network in the container; it changes nothing in the plan",
+    "Unable to download Predbat version information from GitHub": "the same release check, reported by its caller",
+    "credential-like value(s) not using the !secret mechanism": "the generated apps.yaml holds fake keys inline, so there is no secrets.yaml to use",
+    "Octopus's catalogue lists charge point": "a note about the real account's charger in the Octopus vehicle catalogue, logged by a real install too",
+}
 
 # Components the first cycle must not start without: they publish the inverter, forecast and rates the plan reads
 READY_COMPONENTS = ("dummy_inverter", "solar", "octopus")
