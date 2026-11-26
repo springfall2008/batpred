@@ -2796,6 +2796,11 @@ class OctopusAPI(ComponentBase):
         except TimeoutError:
             self.log(f"Warn: OctopusAPI: Failed to connect. Timeout of {self.api.timeout} exceeded.")
             return None
+        except aiohttp.ClientError as error:
+            # No network, a DNS failure or a dropped connection: the same as a timeout to the caller, which keeps the
+            # data it has, rather than an exception that fails the whole run (and the component's start)
+            self.log(f"Warn: OctopusAPI: Failed to connect to mint a token: {error}")
+            return None
 
     async def async_graphql_query(self, query, request_context, returns_data=True, ignore_errors=False, _retry_count=0, use_backend=False):
         """
@@ -2963,6 +2968,13 @@ class OctopusAPI(ComponentBase):
             self.failures_total += 1
             log_request_beside_failure()
             self.log(f"Warn: OctopusAPI: Failed to connect, timeout exceeded.")
+            record_api_call("octopus", False, "connection_error")
+        except aiohttp.ClientError as error:
+            # No network, a DNS failure or a dropped connection: a failed query like a timeout, so a poll keeps what the
+            # component already has (see async_update_intelligent_devices) instead of failing the whole run
+            self.failures_total += 1
+            log_request_beside_failure()
+            self.log(f"Warn: OctopusAPI: Failed to connect for graphql query {request_context}: {error}")
             record_api_call("octopus", False, "connection_error")
 
         return None

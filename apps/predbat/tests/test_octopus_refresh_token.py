@@ -3,6 +3,7 @@ Tests for Octopus async_refresh_token function
 """
 
 import asyncio
+import aiohttp
 import base64
 import json
 from datetime import datetime, timedelta, timezone
@@ -35,6 +36,8 @@ async def test_octopus_refresh_token(my_predbat):
     - Test 13: An elapsed backoff deadline reopens the mint without touching the state
     - Test 14: A token inside the proactive-refresh window is still used while backing off
     - Test 15: The backoff reason is repeated but throttled
+    - Test 16: A connection error on the mint (no network, DNS failure) returns None instead of raising
+    - Test 17: A connection error on a GraphQL query returns None instead of raising
     """
     print("**** Running Octopus async_refresh_token tests ****")
     failed = False
@@ -515,6 +518,71 @@ async def test_octopus_refresh_token(my_predbat):
             failed = True
         else:
             print("PASS: The backoff reason is restated once per throttle interval, not per call")
+
+    def connection_error_session():
+        """A session whose request fails the way aiohttp does when the host cannot be resolved or reached."""
+        session = MagicMock()
+        response = MagicMock()
+
+        async def raise_connection_error(*args, **kwargs):
+            raise aiohttp.ClientConnectionError("Cannot connect to host api.octopus.energy:443 [Temporary failure in name resolution]")
+
+        response.__aenter__ = raise_connection_error
+        response.__aexit__ = AsyncMock(return_value=None)
+        session.post = MagicMock(return_value=response)
+        return session
+
+    # Test 16: a connection error on the mint returns None, as a timeout does, rather than raising out of the caller
+    print("\n*** Test 16: A connection error on the mint returns None instead of raising ***")
+    api = OctopusAPI(my_predbat, key="test-api-key-16", account_id="test-account-16", automatic=False)
+    api.graphql_token = None
+    api.api.async_create_client_session = AsyncMock(return_value=connection_error_session())
+    api.save_octopus_cache = AsyncMock()
+    logged = []
+    api.log = lambda message, *args, **kwargs: logged.append(str(message))
+    try:
+        result = await api.async_refresh_token()
+    except Exception as error:
+        print(f"ERROR: A connection error on the mint should not raise, got {type(error).__name__}: {error}")
+        failed = True
+    else:
+        if result is not None:
+            print(f"ERROR: Expected None for a connection error, got {result}")
+            failed = True
+        elif not any(line.startswith("Warn: OctopusAPI: Failed to connect") for line in logged):
+            print(f"ERROR: Expected a Warn line naming the connection failure, got {logged}")
+            failed = True
+        elif api.save_octopus_cache.call_count != 0:
+            print("ERROR: Cache should not be saved on a connection error")
+            failed = True
+        else:
+            print("PASS: A connection error on the mint is handled like a timeout")
+
+    # Test 17: a connection error on a GraphQL query returns None, so a poll keeps what the component already has
+    print("\n*** Test 17: A connection error on a GraphQL query returns None instead of raising ***")
+    api = OctopusAPI(my_predbat, key="test-api-key-17", account_id="test-account-17", automatic=False)
+    api.graphql_token = create_mock_jwt_token(datetime.now() + timedelta(hours=1))
+    api.api.async_create_client_session = AsyncMock(return_value=connection_error_session())
+    logged = []
+    api.log = lambda message, *args, **kwargs: logged.append(str(message))
+    failures_before = api.failures_total
+    try:
+        result = await api.async_graphql_query("query { account }", "test-context")
+    except Exception as error:
+        print(f"ERROR: A connection error on a query should not raise, got {type(error).__name__}: {error}")
+        failed = True
+    else:
+        if result is not None:
+            print(f"ERROR: Expected None for a connection error, got {result}")
+            failed = True
+        elif api.failures_total != failures_before + 1:
+            print(f"ERROR: Expected the failure to be counted, failures_total {failures_before} -> {api.failures_total}")
+            failed = True
+        elif not any(line.startswith("Warn: OctopusAPI: Failed to connect") for line in logged):
+            print(f"ERROR: Expected a Warn line naming the connection failure, got {logged}")
+            failed = True
+        else:
+            print("PASS: A connection error on a query is handled like a timeout")
 
     # Summary
     if failed:
