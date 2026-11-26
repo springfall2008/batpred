@@ -813,9 +813,7 @@ def apply_scenario_to_predbat(my_predbat, scenario):
         my_predbat.set_rate_thresholds()
 
     if my_predbat.rate_export:
-        my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True, alt_rates=my_predbat.rate_import)
-        if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
-            my_predbat.rate_export_cost_threshold = export_lowest
+        my_predbat.scan_export_windows(alt_rates=my_predbat.rate_import)
 
     if my_predbat.rate_import:
         my_predbat.low_rates, lowest, highest = my_predbat.rate_scan_window(my_predbat.rate_import, 5, my_predbat.rate_import_cost_threshold, False, alt_rates=my_predbat.rate_export)
@@ -1718,4 +1716,142 @@ def run_random_scenario_metric_tests(my_predbat):
         failed = True
     if not failed:
         print("Scenario {} metric {} matches the planner's own score".format(scenario["id"], result["metric"]))
+    return failed
+
+
+def run_random_scenario_dawn_surplus_tests(my_predbat):
+    """A battery still holding energy at dawn before an export-limited solar day exports it at the night rate.
+
+    Scenario 8 is a dual-band export tariff (5.6p 00:30-05:30) with a 0.78 kW export limit and a big
+    solar day. With iBoost off and the battery enlarged to 10 kWh at 95%, the house cannot use the
+    stored energy before the sun comes up, so the battery fills early and the solar beyond the export
+    limit is clipped. Exporting the surplus overnight at the cheapest rate earns 5.6p a kWh; keeping it
+    earns nothing. That export is only possible if the automatic export threshold offers the cheapest
+    rate, so this fails if the night band is dropped from the candidates again.
+
+    my_predbat is deliberately unused - each run gets a fresh instance, as for run_random_scenario_tests.
+    """
+    print("**** Running random scenario dawn-surplus export ****")
+
+    from unit_test import create_predbat
+    from utils import export_mode_of
+    from const import EXPORT_MODE_IDLE
+
+    scenario_predbat = create_predbat()
+    reset_inverter(scenario_predbat)
+    scenario_predbat.read_debug_yaml(RANDOM_TEMPLATE)
+    scenario_predbat.config_root = "./"
+    scenario_predbat.save_restore_dir = "./"
+    scenario_predbat.load_user_config()
+
+    scenario = [s for s in load_scenarios(RANDOM_SCENARIOS) if s["id"] == 8][0]
+    apply_scenario_to_predbat(scenario_predbat, scenario)
+    scenario_predbat.iboost_enable = False
+    scenario_predbat.soc_max = 10.0
+    scenario_predbat.soc_kw = 9.5
+    scenario_predbat.args["threads"] = 0
+    scenario_predbat.plan_valid = False
+    scenario_predbat.debug_enable = False
+    scenario_predbat.calculate_plan(recompute=True)
+
+    night_rate = min(scenario_predbat.rate_export.values())
+    night_exports = [
+        (window["start"], window["end"])
+        for window_n, window in enumerate(scenario_predbat.export_window_best)
+        if export_mode_of(scenario_predbat.export_limits_best[window_n]) != EXPORT_MODE_IDLE and scenario_predbat.rate_export.get(window["start"]) == night_rate
+    ]
+    if not night_exports:
+        print("ERROR: expected an export at the {}p night rate to clear the battery before the clipped solar day, plan exports {}".format(night_rate, [(w["start"], w["end"], scenario_predbat.export_limits_best[n]) for n, w in enumerate(scenario_predbat.export_window_best)]))
+        return True
+    print("Night-rate exports planned: {}".format(night_exports))
+    # The night export is a planning decision, not a high rate: the levels threshold the plan table shades with and
+    # predbat.rates_export publishes must not drop to the night rate (find_price_levels skips the cheapest band)
+    if scenario_predbat.rate_best_cost_threshold_export is None or scenario_predbat.rate_best_cost_threshold_export <= night_rate:
+        print("ERROR: the levels export threshold fell to the {}p night rate (got {}), so the plan table would shade the night band as a high export rate".format(night_rate, scenario_predbat.rate_best_cost_threshold_export))
+        return True
+    return False
+
+
+def run_random_scenario_axle_precharge_tests(my_predbat):
+    """Charging at the peak rate to cover an Axle event does not make the peak a published low rate.
+
+    In automatic mode find_low_rate_windows() offers the plan every import slot before an event worth
+    charging for, the peak included. Scenario 5 at 08:55 on a 7p (00:30-04:30) / 30p import tariff, with
+    a +100p export event at 18:00, has no night before the event, so the plan tops the battery up at 30p
+    in the afternoon. After the plan, publish_rate_and_threshold() replaces the import threshold with the
+    levels output, and the plan table shades by it. That must stay at the 7p tariff rate: the 30p charge is
+    a need, not a cheap slot. What keeps it there is find_price_levels() skipping the most expensive
+    candidate charge band; this fails if that skip goes. The low-rate sensors' tariff windows must hold no
+    30p slot either (GH#5050).
+
+    my_predbat is deliberately unused - each run gets a fresh instance, as for run_random_scenario_tests.
+    """
+    print("**** Running random scenario Axle pre-charge threshold ****")
+
+    from unit_test import create_predbat
+
+    pb = create_predbat()
+    reset_inverter(pb)
+    pb.read_debug_yaml(RANDOM_TEMPLATE)
+    pb.config_root = "./"
+    pb.save_restore_dir = "./"
+    pb.load_user_config()
+
+    scenario = [s for s in load_scenarios(RANDOM_SCENARIOS) if s["id"] == 5][0]
+    apply_scenario_to_predbat(pb, scenario)
+    pb.iboost_enable = False
+
+    night_rate, day_rate = 7.0, 30.0
+    event_start = 18 * 60
+    if not pb.minutes_now + 6 * 60 <= event_start:
+        print("ERROR: scenario 5's clock ({}) no longer leaves the afternoon before an 18:00 event, so this test no longer checks a peak-rate pre-charge".format(pb.time_abs_str(pb.minutes_now)))
+        return True
+    minutes = range(-24 * 60, 4 * 24 * 60)
+    rate_import = {minute: (night_rate if 30 <= minute % (24 * 60) < 270 else day_rate) for minute in minutes}
+    rate_export_base = {minute: 15.0 for minute in minutes}
+    rate_export = dict(rate_export_base)
+    event_minutes = set(range(event_start, event_start + 60))
+    for minute in event_minutes:
+        rate_export[minute] += 100.0
+    pb.rate_import = rate_import
+    pb.rate_import_base = dict(rate_import)
+    pb.rate_import_pre_saving = dict(rate_import)
+    pb.rate_import_replicated = {}
+    pb.rate_import_saving_minutes = set()
+    pb.rate_export = rate_export
+    pb.rate_export_base = rate_export_base
+    pb.rate_export_pre_saving = dict(rate_export_base)
+    pb.rate_export_replicated = {minute: "saving" for minute in event_minutes}
+    pb.rate_export_saving_minutes = event_minutes
+    pb.rate_low_threshold = 0
+    pb.rate_high_threshold = 0
+    pb.rate_scan(pb.rate_import, print=False)
+    pb.rate_min_forward = pb.rate_min_forward_calc(pb.rate_import)
+    pb.rate_scan_export(pb.rate_export, print=False)
+    pb.set_rate_thresholds()
+    pb.scan_export_windows(alt_rates=pb.rate_import)
+    pb.find_low_rate_windows(alt_rates=pb.rate_export)
+
+    pb.args["threads"] = 0
+    pb.plan_valid = False
+    pb.debug_enable = False
+    pb.calculate_plan(recompute=True)
+
+    failed = False
+    peak_charges = [(pb.time_abs_str(w["start"]), pb.charge_limit_best[n]) for n, w in enumerate(pb.charge_window_best) if pb.charge_limit_best[n] > pb.reserve and w["start"] < event_start and w["average"] >= day_rate]
+    if not peak_charges:
+        print("ERROR: expected the plan to charge at the {}p day rate before the event, so the test checks a peak-rate pre-charge - charges were {}".format(day_rate, [(w["start"], w["average"], pb.charge_limit_best[n]) for n, w in enumerate(pb.charge_window_best)]))
+        return True
+    print("Peak-rate charges before the event: {}".format(peak_charges))
+
+    if any(w["average"] >= day_rate for w in pb.low_rates_tariff):
+        print("ERROR: the low-rate sensors' tariff windows include the {}p day rate: {}".format(day_rate, [(w["start"], w["average"]) for w in pb.low_rates_tariff]))
+        failed = True
+    pb.publish_rate_and_threshold()
+    if pb.rate_import_cost_threshold >= day_rate:
+        print("ERROR: the published import threshold rose to {} after the plan charged at the {}p day rate ahead of the event, so the plan table would shade the peak as cheap".format(pb.rate_import_cost_threshold, day_rate))
+        failed = True
+
+    if not failed:
+        print("PASS")
     return failed

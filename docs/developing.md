@@ -34,7 +34,7 @@ The whole cycle for one change, from reopening your environment to a pushed bran
 | 5. Go to the test directory | `cd coverage`. The test scripts (`run_all`, `run_pre_commit`) set up the Python environment themselves, so the first run in a new Codespace takes longer while the packages install. You only need to activate it yourself (`source venv/bin/activate`) for `run_cov`, `run_profile`, or Python commands you run directly. See [setting up the Python environment](#setting-up-the-python-environment) |
 | 6. Make the change, and its unit test | Edit in VS Code. A new test must be imported and registered in `unit_test.py`. See [adding a unit test](#adding-a-unit-test) |
 | 7. Run the tests for your change | `./run_all -k keyword > /tmp/t.txt 2>&1`, then `tail -3 /tmp/t.txt` and `grep -n Traceback /tmp/t.txt`. See [running the tests](#running-the-tests) |
-| 8. Run the pre-commit checks and the quick tests | `./run_pre_commit > /tmp/pre.txt 2>&1`, then `tail -5 /tmp/pre.txt`. This takes a few minutes. See [running the checks locally](#running-the-checks-locally) |
+| 8. Run the pre-commit checks and the quick tests | `./run_pre_commit > /tmp/pre.txt 2>&1`, then `tail -5 /tmp/pre.txt`. This takes a few minutes. For a documentation-only change, `./run_pre_commit --checks-only` skips the tests. See [running the checks locally](#running-the-checks-locally) |
 | 9. Check what will be committed | `git status`, or the Source Control view. See [check what you are about to commit](#check-what-you-are-about-to-commit) |
 | 10. Commit | In the Source Control view, click `+` beside each file, type a message and click Commit. Or: `git add file1 file2`, then `git commit -m "message"` |
 | 11. Push the new branch (first time only) | Source Control view: `...` menu, then Branch, then Publish Branch..., and choose `origin`. Or in the terminal: `git push -u origin my-change-name`. Don't use the Sync Changes button for the first push |
@@ -681,6 +681,8 @@ You don't need to copy any files anywhere, and you don't need a Home Assistant s
 The `./run_all`, `./run_pre_commit`, `./run_random`, `./run_random_profile` and `./run_shuffle` scripts set up the Python environment themselves. Each time they run, they run `source setup.csh`, which
 creates a virtual environment in `coverage/venv` if there isn't one, and installs the packages in `requirements.txt` into it.
 So the first run takes a little longer, and you don't need to do anything by hand before running them.
+The venv's `pip` is the one that came with your Python, so it is often not the latest release. `setup.csh` turns off pip's version check, so you don't get a
+"new release of pip is available" notice every time a script runs. You don't need to upgrade pip, but you can with `pip install --upgrade pip` once the environment is active.
 
 The environment is only active while one of these scripts runs - it isn't left switched on in your terminal.
 The other scripts (`run_cov`, `run_profile`, `standalone`, `standalone_ha` and the Python helper scripts) don't set it up, so activate it yourself first.
@@ -705,9 +707,9 @@ source venv/bin/activate
 | `./run_all` | Runs all the tests |
 | `./run_all --quick` | Skips the slow tests. This is what the GitHub checks run, so it's the one to use before a PR |
 | `./run_all --list` | Lists all the test names, and which are marked slow |
-| `./run_all --test basic_rates` | Runs one test, by name |
+| `./run_all --test basic_rates` | Runs one test, by its name in `--list`. Its Python function name (e.g. `test_basic_rates`) also works, as does the name with `test_` in front |
 | `./run_all --test basic_rates --test units` | Runs several named tests |
-| `./run_all -k octopus_` | Runs every test whose name contains the keyword |
+| `./run_all -k octopus_` | Runs every test whose name, or Python function name, contains the keyword. A leading `test_` on the keyword is ignored, so `-k test_octopus_` finds the same tests |
 | `./run_all --shuffle` | Runs the tests in a random order (see [finding test order dependencies](#finding-test-order-dependencies)) |
 
 The tests take a while to run, so **always send the output to a file, then search the file afterwards**.
@@ -857,9 +859,29 @@ dummy_inverter:
   soc_initial: 50           # %
   pv_peak: 4.0              # kW, clear-sky curve used when there is no PV forecast
   load: 0.4                 # kW, or a list of 24 hourly values
+  totals:                   # kWh the lifetime sensors start from (default 0)
+    load: 0
+    pv: 0
+    import: 0
+    export: 0
 ```
 
-Every setting is optional. The model steps once a minute: the battery charges and discharges within its rate and losses, PV and battery share the inverter limit with PV first, export is capped at the export limit, and PV with nowhere to go is clipped (published as `sensor.predbat_dummy_clipped_power` and `_clipped_lifetime`). Predbat's charge and export windows are obeyed, a zero-rate window freezes the battery, and outside a window it runs self-consumption. PV comes from Predbat's forecast when one is configured. The simulation state is not saved, so a restart starts again from `soc_initial`.
+Every setting is optional. `totals` lets the `_lifetime` sensors continue an existing history instead of starting from zero, which the memory benchmark uses so its recorded load and PV history meet the simulated counters without a jump. The model steps once a minute: the battery charges and discharges within its rate and losses, PV and battery share the inverter limit with PV first, export is capped at the export limit, and PV with nowhere to go is clipped (published as `sensor.predbat_dummy_clipped_power` and `_clipped_lifetime`). Predbat's charge and export windows are obeyed, a zero-rate window freezes the battery, and outside a window it runs self-consumption. PV comes from Predbat's forecast when one is configured. The simulation state is not saved, so a restart starts again from `soc_initial`.
+
+### Memory benchmark
+
+`coverage/memory_benchmark <tree> <out dir>` measures how much memory Predbat from `<tree>` uses. It runs Predbat standalone in a Linux container with no network: the database is the only data source, the dummy inverter replaces the real one, and the forecast and Octopus components are served from seeded caches. The wall clock is frozen, and the run makes 6 plan cycles. It writes `result.json` with the steady and peak RSS and a digest of the plans, which must not change when memory use does, and `modules.txt`, the modules loaded after the last cycle grouped by top-level package with their compiled size, so you can see which libraries a run pulls in. The `predbat-memory` board (`boards/predbat-memory/`) uses it to find savings.
+
+Its input is a local fixture, built from a live Predbat add-on config directory and never committed:
+
+```bash
+python3 coverage/memory_benchmark_tools/export_fixture.py --live <add-on config dir> --out coverage/memory_benchmark_data
+coverage/memory_benchmark . /tmp/memory-run
+```
+
+To see where the memory goes, add `--tracemalloc` (`coverage/memory_benchmark --tracemalloc . /tmp/memory-run`). It also writes `tracemalloc.txt`, the largest live allocations after the last cycle by line and by file. Tracing slows the run and adds to its RSS, so its figures are not comparable: its `result.json` says `"tracemalloc": true`.
+
+See `boards/predbat-memory/README.md` for what the fixture holds, how identifiers are scrubbed, and the measured baseline. The tools' tests run with `python3 -m unittest discover -s coverage/memory_benchmark_tools`, and in pre-commit.
 
 ### Random scenario benchmarking
 
@@ -888,7 +910,7 @@ Everything here is run from the `coverage/` directory. Scripts that don't set up
 | Script | What it does |
 | --- | --- |
 | `run_all` | Sets up the Python environment, removes any old `predbat.log` (the log file that Predbat writes as it runs), then runs `../apps/predbat/unit_test.py`, passing on any options you give it. See [running the tests](#running-the-tests) |
-| `run_pre_commit` | Sets up the environment, runs the pre-commit checks on all files, then the quick tests. See [running the checks locally](#running-the-checks-locally) |
+| `run_pre_commit` | Sets up the environment, runs the pre-commit checks on all files, then the quick tests. `--checks-only` runs just the checks. See [running the checks locally](#running-the-checks-locally) |
 | `run_cov` \* | Runs `unit_test.py` under coverage analysis (passing on options such as `--quick`), then writes an HTML report to `htmlcov/`, leaving out the tests themselves |
 | `run_shuffle` | Sets up the environment, then runs `../tools/shuffle_fuzz.py` with your options. See [finding test order dependencies](#finding-test-order-dependencies) |
 | `setup.csh` | Creates the virtual environment in `coverage/venv` and installs `../requirements.txt` into it. Run by the scripts above, or by hand |
@@ -1015,9 +1037,18 @@ tail -5 /tmp/pre_commit.txt
 ```
 
 As with the tests, send the output to a file as it is long and the run takes a few minutes.
-The script doesn't take any options: anything you type after its name, such as `--files`, is ignored and it still runs everything.
-If you only want to run the checks (for example after a small documentation change), or to run them on named files or on just the files you have staged,
-use the `pre-commit` tool directly, as described below.
+
+For a documentation-only change, such as rewording a page after a review comment, running the whole test suite again adds nothing and takes 10 minutes or more.
+`--checks-only` runs the pre-commit checks on every file and skips the tests:
+
+```bash
+cd coverage
+./run_pre_commit --checks-only > /tmp/pre_commit.txt 2>&1
+tail -5 /tmp/pre_commit.txt
+```
+
+Use the full `./run_pre_commit` for any change to code, tests or templates. Any other option is rejected with an error rather than ignored.
+To run the checks on named files or on just the files you have staged, use the `pre-commit` tool directly, as described below.
 Inside the virtual environment, `python3 -m pre_commit` does the same job as the `pre-commit` command.
 
 If you are using a Codespaces environment, you'll already have `pre-commit`

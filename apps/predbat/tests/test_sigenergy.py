@@ -1392,6 +1392,114 @@ def test_sigenergy_get_access_token_no_retry_on_api_error(my_predbat):
     return failed
 
 
+class _ScriptedAuthSession:
+    """aiohttp.ClientSession stand-in that answers each login POST with the next scripted body and counts them."""
+
+    def __init__(self, bodies):
+        self.bodies = list(bodies)
+        self.posts = 0
+
+    def __call__(self, *args, **kwargs):
+        body = self.bodies[min(self.posts, len(self.bodies) - 1)]
+        self.posts += 1
+        return _make_mock_session(_make_mock_response(status=200, json_data=body))
+
+
+def test_sigenergy_auth_rejection_cools_down(my_predbat):
+    """After the login endpoint rejects the key, further calls skip the login until the cooldown has passed."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    api = MockSigenergyAPI()
+    clock = VirtualClock()
+    session = _ScriptedAuthSession([{"code": 1201, "msg": "Access restriction"}, {"code": 0, "data": {"accessToken": "tok_after", "expiresIn": 43200}}])
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", session):
+        assert run_async_real(api.get_access_token()) is None, "rejected login gives no token"
+        assert session.posts == 1, "one login attempt for a rejection, got {}".format(session.posts)
+        clock.mono += backoff[0] - 1
+        for _ in range(5):
+            assert run_async_real(api.get_access_token()) is None, "no token while cooling down"
+        assert session.posts == 1, "no login attempts inside the cooldown, got {}".format(session.posts)
+        clock.mono += 1
+        assert run_async_real(api.get_access_token()) == "tok_after", "login retried once the cooldown passed"
+        assert session.posts == 2, "exactly one more login attempt, got {}".format(session.posts)
+    return failed
+
+
+def test_sigenergy_auth_rejection_backoff_escalates_and_resets(my_predbat):
+    """Repeated rejections lengthen the cooldown up to its cap; a successful login resets it."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    api = MockSigenergyAPI()
+    clock = VirtualClock()
+    reject = {"code": 2036, "msg": "client token requested too frequently"}
+    ok = {"code": 0, "data": {"accessToken": "tok", "expiresIn": 43200}}
+    session = _ScriptedAuthSession([reject] * (len(backoff) + 2) + [ok, reject])
+    waits = []
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", session):
+        for _ in range(len(backoff) + 2):
+            before = session.posts
+            assert run_async_real(api.get_access_token()) is None
+            assert session.posts == before + 1, "each call after a cooldown makes one login attempt"
+            waits.append(api._auth_retry_at - clock.mono)
+            clock.mono = api._auth_retry_at
+        assert waits == backoff + [backoff[-1]] * 2, "cooldown escalates then caps, got {}".format(waits)
+        assert run_async_real(api.get_access_token()) == "tok", "login succeeds once allowed"
+        api.access_token = None  # force a fresh login, as a 401 would
+        assert run_async_real(api.get_access_token()) is None
+        assert api._auth_retry_at - clock.mono == backoff[0], "a success resets the backoff to its first step"
+    return failed
+
+
+def test_sigenergy_auth_concurrent_callers_single_login(my_predbat):
+    """Two tasks needing a token at once make one login and count one rejection."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    api = MockSigenergyAPI()
+    clock = VirtualClock()
+    posts = {"n": 0}
+
+    def make_session(*args, **kwargs):
+        posts["n"] += 1
+        response = _make_mock_response(status=200)
+
+        async def slow_json(*a, **k):
+            await asyncio.sleep(0)  # yield so the other caller reaches the login while this one is in flight
+            await asyncio.sleep(0)
+            return {"code": 1201, "msg": "Access restriction"}
+
+        response.json = slow_json
+        return _make_mock_session(response)
+
+    async def both():
+        return await asyncio.gather(api.get_access_token(), api.get_access_token())
+
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", make_session):
+        results = run_async_real(both())
+    assert results == [None, None], "both callers get no token"
+    assert posts["n"] == 1, "one login for two concurrent callers, got {}".format(posts["n"])
+    assert api._auth_failures == 1, "one rejection counted, got {}".format(api._auth_failures)
+    assert api._auth_retry_at - clock.mono == backoff[0], "first-step cooldown, got {}".format(api._auth_retry_at - clock.mono)
+    return failed
+
+
+def test_sigenergy_auth_rejection_cooldown_is_jittered(my_predbat):
+    """The cooldown carries up to SIGENERGY_AUTH_REJECT_JITTER extra so many clients do not retry in lockstep."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff, SIGENERGY_AUTH_REJECT_JITTER as jitter
+
+    api = MockSigenergyAPI()
+    clock = VirtualClock()
+    session = _ScriptedAuthSession([{"code": 1201, "msg": "Access restriction"}])
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.999), patch("sigenergy.aiohttp.ClientSession", session):
+        run_async_real(api.get_access_token())
+    wait = api._auth_retry_at - clock.mono
+    assert backoff[0] < wait <= backoff[0] * (1 + jitter), "jittered cooldown within bounds, got {}".format(wait)
+    return failed
+
+
 def test_sigenergy_fetch_system_list(my_predbat):
     """Test fetch_system_list populates self.systems."""
     failed = False
@@ -5845,6 +5953,28 @@ def test_sigenergy_listener_reconnect_reuses_own_factory(my_predbat):
     return failed
 
 
+def test_sigenergy_listener_waits_out_login_cooldown(my_predbat):
+    """With no token during a login cooldown the listener sleeps until the cooldown ends, never less than its reconnect delay."""
+    failed = False
+    for remaining, expected_wait in ((300, 300), (2, 5)):
+        api = _listener_api("keyC", None, "broker-c.example", "SITE_C")
+        api.token_expires_at = 0
+        record = _new_record()
+        clock = VirtualClock()
+        api._auth_retry_at = clock.mono + remaining
+        session = _ScriptedAuthSession([{"code": 0, "data": {"accessToken": "tok_after", "expiresIn": 43200}}])
+        with patch("sigenergy.ssl.create_default_context", return_value=MagicMock()), patch("sigenergy.aiohttp.ClientSession", session):
+            with _api_mqtt_factory(api, _recording_factory(record, stop_api=api)), _api_clock(api, clock):
+                with patch("aiomqtt.Client", side_effect=AssertionError("the default aiomqtt.Client must not be built")):
+                    run_async(api._mqtt_listener_loop())
+
+        assert clock.sleeps and abs(clock.sleeps[0] - expected_wait) < 1e-9, "{}s of cooldown left: first sleep is {}s, got {}".format(remaining, expected_wait, clock.sleeps)
+        assert any("token refresh failed" in m and "retrying in {}s".format(expected_wait) in m for m in api.log_messages), "{}s left: the warning names the {}s wait, got {}".format(remaining, expected_wait, api.log_messages)
+        assert session.posts == 1, "{}s left: one login, made after the cooldown, got {}".format(remaining, session.posts)
+        assert len(record["clients"]) == 1 and record["clients"][0]["password"] == "tok_after", "{}s left: connected once with the new token, got {}".format(remaining, record["clients"])
+    return failed
+
+
 def test_sigenergy_duplicate_command_window_ignores_wall_clock(my_predbat):
     """The 5 minute duplicate-command window follows the monotonic clock, not a wall clock that steps."""
     failed = False
@@ -6341,6 +6471,11 @@ def run_sigenergy_tests(my_predbat):
         ("get_access_token_failure", test_sigenergy_get_access_token_failure),
         ("get_access_token_retry", test_sigenergy_get_access_token_retry),
         ("get_access_token_no_retry_on_api_error", test_sigenergy_get_access_token_no_retry_on_api_error),
+        ("auth_rejection_cools_down", test_sigenergy_auth_rejection_cools_down),
+        ("auth_rejection_backoff_escalates_and_resets", test_sigenergy_auth_rejection_backoff_escalates_and_resets),
+        ("auth_rejection_cooldown_is_jittered", test_sigenergy_auth_rejection_cooldown_is_jittered),
+        ("auth_concurrent_callers_single_login", test_sigenergy_auth_concurrent_callers_single_login),
+        ("listener_waits_out_login_cooldown", test_sigenergy_listener_waits_out_login_cooldown),
         ("fetch_system_list", test_sigenergy_fetch_system_list),
         ("fetch_system_list_with_filter", test_sigenergy_fetch_system_list_with_filter),
         ("fetch_history_totals", test_sigenergy_fetch_history_totals),

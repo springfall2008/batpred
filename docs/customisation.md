@@ -480,8 +480,11 @@ e.g. setting to 0.8 = 80% of the average rate.<BR>
 If you set this too low you might not get enough charge slots. If it's too high you might get too many in the
 24-hour period which makes optimisation harder.
 
-**input_number.predbat_rate_high_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future export rates in the plan
-and determine the threshold above which a slot can be considered a potential exporting slot.<BR>
+**input_number.predbat_rate_high_threshold** (_expert mode_) When set to 0 (the default) every future export slot, the cheapest included, is a potential
+exporting slot, and the optimiser decides which are worth using. The cheapest rate matters on a dual-rate export tariff with an export limit: a battery
+still holding energy at dawn before a sunny day can export it at the night rate rather than have the solar that displaces it clipped later.
+Predbat still works out a high-rate threshold automatically, and only the slots above it are published as high-rate export slots
+(**predbat.high_rate_export_start** and the related entities).<BR>
 If rate_high_threshold is set to a non-zero value this will set the threshold above future average export rates as the minimum export rate to consider exporting for,
 e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
