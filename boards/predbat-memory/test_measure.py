@@ -178,12 +178,17 @@ class TestMain(unittest.TestCase):
 
 # What a worker needs for the intents the lead writes: Python to profile (importtime, gc referrers, deeper tracemalloc),
 # merge and rebase to combine earlier board commits, and the everyday read-only tools
+WORKTREE_GIT = "Bash(git -C */.worktrees/board-memory-* "
+
 NEEDED = (
     "Bash(python3 *)",
     "Bash(*/coverage/venv/bin/python3 *)",
-    "Bash(git merge *)",
-    "Bash(git rebase *)",
-    "Bash(git -C *)",
+    WORKTREE_GIT + "merge *)",
+    WORKTREE_GIT + "rebase *)",
+    WORKTREE_GIT + "commit *)",
+    WORKTREE_GIT + "cherry-pick *)",
+    "Bash(git -C * status*)",
+    "Bash(git -C * log*)",
     "Bash(find *)",
     "Bash(sort *)",
     "Bash(diff *)",
@@ -197,7 +202,26 @@ NEEDED = (
 
 # The mistakes the deny list is there to stop: anything that leaves the machine, rewrites main or another intent's
 # branch, throws away work, or changes the shared venv
-DANGEROUS = ("Bash(git push*)", "Bash(gh *)", "Bash(git reset --hard*)", "Bash(git branch -D*)", "Bash(git branch -f*)", "Bash(git update-ref*)", "Bash(rm -rf*)", "Bash(pip *)", "Edit(~/predbat/batpred/apps/**)")
+DANGEROUS = (
+    "Bash(git push*)",
+    "Bash(gh *)",
+    "Bash(git reset --hard*)",
+    "Bash(git branch -D*)",
+    "Bash(git branch -f*)",
+    "Bash(git update-ref*)",
+    "Bash(rm -rf*)",
+    "Bash(pip *)",
+    # python3 is allowed, so its pip spellings need their own entries or the venv could still change
+    "Bash(python3 -m pip*)",
+    "Bash(python -m pip*)",
+    "Bash(*/coverage/venv/bin/python3 -m pip*)",
+    "Bash(*/coverage/venv/bin/python -m pip*)",
+    "Edit(~/predbat/batpred/apps/**)",
+)
+
+# git subcommands that change a branch, the index or the working tree: in the main checkout they would land on main,
+# which is the base measure.py measures, so they are allowed only as `git -C <a board worktree> ...`
+GIT_WRITES = ("add", "commit", "merge", "rebase", "cherry-pick", "restore", "checkout", "switch", "stash", "reset", "revert", "am", "apply", "pull", "fetch", "push", "tag")
 
 
 class TestBoardFile(unittest.TestCase):
@@ -224,6 +248,23 @@ class TestBoardFile(unittest.TestCase):
         for entry in deny:
             if entry.startswith("Bash(git ") and not entry.startswith("Bash(git -C "):
                 self.assertIn("Bash(git -C * " + entry[len("Bash(git ") :], deny, entry)
+
+    def test_git_writes_are_allowed_only_in_a_board_worktree(self):
+        """Workers run the benchmark from the main checkout, where a plain `git merge` or `git commit` would move main."""
+        for entry in self.board["permissions"]["allow"]:
+            if not entry.startswith("Bash(git "):
+                continue
+            words = entry[len("Bash(") : -1].split()
+            command = words[3] if words[1] == "-C" else words[1]
+            if command.rstrip("*") in GIT_WRITES:
+                self.assertTrue(entry.startswith(WORKTREE_GIT), entry)
+            # a bare `git -C *` would let any write through with any path
+            self.assertNotEqual(entry, "Bash(git -C *)")
+
+    def test_no_allow_entry_is_a_catch_all(self):
+        """Bash(rm *) cannot be made safe by spelling-based denies (rm -R, --recursive, reordered flags), and Bash(env) runs anything after it."""
+        for entry in self.board["permissions"]["allow"]:
+            self.assertFalse(entry.startswith("Bash(rm") or entry.startswith("Bash(env"), entry)
 
     def test_gitnexus_rename_is_denied(self):
         """rename edits code across files, so only the read-only GitNexus tools are allowed."""
