@@ -89,6 +89,13 @@ _EV_START_BLOCKED_STATUSES = frozenset({"Unavailable", "Faulted", "Offline"})
 # after this long, so the selects show the Hub's own schedule again (seconds).
 _STAGED_EXPIRY_SECONDS = 600
 
+# oauth-refresh answers from its stored MQTT token while that token has not reached its own expiry
+# (GH#6284), so asking again straight away only gets the same token back. After a reply carrying the
+# token already held, the next refresh waits this long, doubled for each repeat up to the cap (seconds).
+# The wait ends early once the held token expires, when a real refresh can succeed.
+_SAME_TOKEN_REFRESH_BACKOFF = 5 * 60
+_SAME_TOKEN_REFRESH_BACKOFF_MAX = 30 * 60
+
 # Sends of one schedule-write command before it is given up as unanswered, one per
 # _COMMAND_ACK_WINDOW, and how often the commit looks for its ack (seconds)
 _COMMIT_ATTEMPTS = 3
@@ -537,6 +544,8 @@ class GatewayMQTT(ComponentBase):
         self._last_plan_timezone = None
         self._plan_version = 0
         self._refresh_in_progress = False
+        self._same_token_count = 0  # refreshes in a row that handed back the MQTT token already held
+        self._token_refresh_after = 0  # wall-clock epoch before which an unexpired token is not refreshed again
         self._error_count = 0
 
         # Entity naming prefix
@@ -4248,14 +4257,24 @@ class GatewayMQTT(ComponentBase):
         if not self._is_auth_failure(error):
             return False
         self.log("Info: GatewayMQTT: Broker rejected auth — refreshing MQTT token before reconnect")
-        return await self._do_token_refresh()
+        return await self._do_token_refresh(reason="mqtt_auth_rejected")
 
-    def _apply_refresh_response(self, data):
-        """Apply an oauth-refresh JSON reply to the in-memory token. Returns success."""
+    def _apply_refresh_response(self, data, rejected_token=None):
+        """Apply an oauth-refresh JSON reply to the in-memory token. Returns success.
+
+        rejected_token is the token the broker just refused, when the refresh was forced by that; a
+        reply carrying the same token is not a refresh and is reported as a failure (GH#6284).
+        """
         if not data.get("success"):
             self.log(f"Warn: GatewayMQTT: Token refresh failed: {data.get('error', 'unknown')}")
             return False
 
+        if rejected_token and data["access_token"] == rejected_token:
+            backoff = self._back_off_same_token()
+            self.log(f"Warn: GatewayMQTT: Token refresh after an auth rejection returned the same token the broker refused, next refresh in {backoff}s")
+            return False
+
+        unchanged = data["access_token"] == self.mqtt_token
         self.mqtt_token = data["access_token"]
         if data.get("expires_at"):
             try:
@@ -4266,33 +4285,60 @@ class GatewayMQTT(ComponentBase):
                     self.mqtt_token_expires_at = dt.timestamp()
             except (ValueError, AttributeError):
                 self.mqtt_token_expires_at = 0
-        self.log("Info: GatewayMQTT: MQTT token refreshed")
+        if unchanged:
+            backoff = self._back_off_same_token()
+            self.log(f"Info: GatewayMQTT: Token refresh returned the token already held, next refresh in {backoff}s")
+        else:
+            self._same_token_count = 0
+            self._token_refresh_after = 0
+            self.log("Info: GatewayMQTT: MQTT token refreshed")
         return True
 
-    async def _do_token_refresh(self):
+    def _back_off_same_token(self):
+        """Hold off the next token refresh after a reply carrying the token already held (GH#6284); returns the wait in seconds."""
+        self._same_token_count += 1
+        backoff = min(_SAME_TOKEN_REFRESH_BACKOFF * (2 ** (self._same_token_count - 1)), _SAME_TOKEN_REFRESH_BACKOFF_MAX)
+        self._token_refresh_after = self.wall_time() + backoff
+        return backoff
+
+    def _same_token_backoff_active(self, now):
+        """True while the last refresh handed back the token already held and that token has not expired yet."""
+        return now < self._token_refresh_after and self.mqtt_token_expires_at > now
+
+    async def _do_token_refresh(self, reason=None):
         """Refresh the MQTT JWT via the oauth-refresh edge function, unconditionally.
 
         Shared by the proactive near-expiry check and the auth-failure reconnect
-        path. The refresh token is held server-side in instance secrets. Returns
-        True if a new access token was obtained and applied.
+        path. The refresh token is held server-side in instance secrets. reason is
+        set when the broker rejected the token, so the request asks for a forced
+        refresh and a reply with the same token counts as a failure. Returns True
+        if a new access token was obtained and applied.
         """
         if not HAS_AIOHTTP:
             return False
+        from oauth_mixin import refresh_hook_kwargs  # here, not at module top: oauth_mixin needs aiohttp, which this module treats as optional
 
         if self._refresh_in_progress:
             return False
 
+        if self._same_token_backoff_active(self.wall_time()):
+            # Both callers land here: the proactive near-expiry check every cycle and the reconnect loop's forced refresh
+            if reason:
+                self.log(f"Warn: GatewayMQTT: the last token refresh returned the token already held, not asking again for {int(self._token_refresh_after - self.wall_time())}s")
+            return False
+
         self._refresh_in_progress = True
+        rejected_token = self.mqtt_token if reason else None
         try:
             instance_id = self.args.get("user_id", "") if isinstance(self.args, dict) else ""
 
             refresh_provider = getattr(getattr(self, "base", None), "oauth_refresh_provider", None)
             if refresh_provider is not None:
-                data = await refresh_provider(instance_id, "predbat_gateway", "")
+                data = await refresh_provider(instance_id, "predbat_gateway", "", **refresh_hook_kwargs(refresh_provider, reason))
                 if data is None:
                     self.log("Warn: GatewayMQTT: Token refresh provider returned no answer")
                     return False
-                return self._apply_refresh_response(data)
+                return self._apply_refresh_response(data, rejected_token=rejected_token)
 
             supabase_url = os.environ.get("SUPABASE_URL", "")
             supabase_key = os.environ.get("SUPABASE_KEY", "")
@@ -4310,6 +4356,9 @@ class GatewayMQTT(ComponentBase):
                 "instance_id": instance_id,
                 "provider": "predbat_gateway",
             }
+            if reason:
+                payload["force"] = True
+                payload["reason"] = reason
 
             self.log("Info: GatewayMQTT: Refreshing MQTT token")
 
@@ -4322,7 +4371,7 @@ class GatewayMQTT(ComponentBase):
 
                     data = await response.json()
 
-            return self._apply_refresh_response(data)
+            return self._apply_refresh_response(data, rejected_token=rejected_token)
 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             self.log(f"Warn: GatewayMQTT: Token refresh network error: {e}")

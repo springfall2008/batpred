@@ -13,6 +13,7 @@ from gecloud import GECloudDirect, GECloudData, regname_to_ha
 from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
 from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from gecloud import CONTROL_SETTINGS_REFRESH_SECONDS, DEVICE_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
+from gecloud import ems_load_balance, ems_today_counters
 from gecloud import DEVICE_HOLD_INITIAL_SECONDS, DEVICE_HOLD_MAX_SECONDS, DEVICE_TIMEOUT_ATTEMPTS
 from utils import dp4
 import asyncio
@@ -56,6 +57,8 @@ class MockGECloudDirect(GECloudDirect):
         self.status = {}
         self.live_display_samples = {}
         self.meter = {}
+        self.ems_device = None
+        self.ems_load_state = {}
         self.info = {}
         self.device_list = []
         self.evc_device_list = []
@@ -342,6 +345,7 @@ def test_ge_cloud(my_predbat=None):
         ("parse_validation_options", _test_parse_validation_options, "Parse options from validation text"),
         ("publish_status", _test_publish_status, "Publish status"),
         ("publish_meter", _test_publish_meter, "Publish meter"),
+        ("ems_load_today", _test_ems_load_today, "EMS load_today by energy balance across the midnight reset"),
         ("publish_info", _test_publish_info, "Publish info"),
         ("publish_info_soh", _test_publish_info_soh, "Publish info SOH calculation"),
         ("publish_registers", _test_publish_registers, "Publish registers"),
@@ -5131,6 +5135,133 @@ def _test_publish_meter(my_predbat):
     return 0
 
 
+def _ems_today(grid_import, grid_export, solar, discharge, charge):
+    """An EMS meter 'today' section with the given daily counters."""
+    return {"solar": solar, "grid": {"import": grid_import, "export": grid_export}, "battery": {"charge": charge, "discharge": discharge}, "consumption": 0}
+
+
+def _test_ems_load_today(my_predbat):
+    """
+    The EMS's load_today is the energy balance of its daily counters, held steady when GivEnergy resets those
+    counters at different moments around midnight.
+    """
+    entity = "sensor.predbat_gecloud_ems001_consumption_derived_today"
+    tz = pytz.timezone("Europe/London")
+
+    def at(day, hour, minute):
+        """A local time on November <day>."""
+        return tz.localize(datetime(2026, 11, day, hour, minute))
+
+    def fresh():
+        """A component whose EMS is ems001."""
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.ems_device = "ems001"
+        return ge_cloud
+
+    def load(ge_cloud):
+        """The published energy-balance load."""
+        return ge_cloud.dashboard_items[entity]["state"]
+
+    # The balance itself: import - export + solar + discharge - charge, never below 0
+    assert ems_load_balance(ems_today_counters(_ems_today(47.0, 30.1, 9.2, 32.8, 40.5))) == 47.0 - 30.1 + 9.2 + 32.8 - 40.5
+    assert ems_load_balance(ems_today_counters(_ems_today(0, 0, 0, 22.6, 23.4))) == 0.0, "a negative balance is clamped to 0"
+    assert ems_today_counters({"solar": 1.0}) is None, "no grid counters, nothing to balance"
+    assert ems_today_counters({"grid": {"import": "bad"}}) is None, "an unreadable counter gives no balance"
+    assert ems_today_counters({"grid": {"import": 2.0}}) == {"import": 2.0, "export": 0.0, "solar": 0.0, "discharge": 0.0, "charge": 0.0}, "a counter left out counts as 0"
+
+    # Published from publish_meter for the EMS only: a day that came to 18.4kWh, against 47kWh of grid import that was mostly battery charging
+    ge_cloud = fresh()
+    meter = {"today": _ems_today(47.0, 30.1, 9.2, 32.8, 40.5), "total": {"consumption": 21566.6}}
+    run_async(ge_cloud.publish_meter("ems001", meter))
+    assert load(ge_cloud) == 18.4, "expected 18.4 got {}".format(load(ge_cloud))
+    run_async(ge_cloud.publish_meter("battery001", meter))
+    assert "sensor.predbat_gecloud_battery001_consumption_derived_today" not in ge_cloud.dashboard_items, "only the EMS publishes the energy-balance load"
+    run_async(ge_cloud.publish_meter("ems001", {"today": {"solar": 1.0}}))
+    assert load(ge_cloud) == 18.4, "a section with no grid counters leaves the sensor alone"
+
+    # Grid and solar reset five minutes before the battery counters: the balance never runs away, and the new day starts from 0
+    ge_cloud = fresh()
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50)))
+    assert load(ge_cloud) == 82.8
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0, 0, 0, 22.6, 23.4), now=at(13, 23, 55)))
+    assert load(ge_cloud) == 0.0, "partly reset: reads 0 until every counter has reset"
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.5, 0, 0, 0.2, 0.3), now=at(14, 0, 0)))
+    assert load(ge_cloud) == 0.4, "expected the new day's 0.4 got {}".format(load(ge_cloud))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.3, 0, 0, 0.2, 1.7), now=at(14, 0, 20)))
+    assert load(ge_cloud) == 1.8
+
+    # The other way round: the battery counters reset first. A plain balance would jump to 83.8kWh here
+    ge_cloud = fresh()
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50)))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 0.0, 0.1), now=at(13, 23, 55)))
+    assert load(ge_cloud) == 0.0, "battery counters reset first: must not jump to {}".format(ems_load_balance(ems_today_counters(_ems_today(68.5, 1.3, 16.6, 0.0, 0.1))))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.4, 0, 0, 0.0, 0.2), now=at(14, 0, 0)))
+    assert load(ge_cloud) == 0.2
+
+    # A counter that falls during the day is a glitch, not a reset: each counter keeps its high point
+    ge_cloud = fresh()
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(30.0, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 0)))
+    assert load(ge_cloud) == 17.0
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(28.5, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 5)))
+    assert load(ge_cloud) == 17.0, "a midday fall in import must not lower the load"
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(31.0, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 10)))
+    assert load(ge_cloud) == 18.0
+
+    # A counter that never resets: after the window the new readings are taken as they are
+    ge_cloud = fresh()
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(40.0, 2.0, 5.0, 4.0, 20.0), now=at(13, 23, 50)))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.1, 0.0, 0.0, 0.0, 20.0), now=at(14, 0, 0)))
+    assert load(ge_cloud) == 0.0
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(1.5, 0.0, 0.0, 0.0, 20.0), now=at(14, 0, 30)))
+    assert load(ge_cloud) == 0.0, "still inside the window"
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.0, 0.0, 0.0, 0.0, 20.5), now=at(14, 1, 0)))
+    assert load(ge_cloud) == 0.0, "a stuck counter gives a 0 balance until it moves, never a jump"
+    assert ge_cloud.ems_load_state["ems001"]["reset_from"] is None, "the reset ends once the window has passed"
+
+    # A restart part-way through a reset: the hold is kept in storage, so the new process carries on at 0 rather
+    # than publishing the partly reset counters' balance (83.7kWh here), which history would count as a second day's load
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = StorageLocalFiles(tmpdir, print)
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50)))
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 0.0, 0.1), now=at(13, 23, 55)))
+        assert load(ge_cloud) == 0.0
+        assert "ems001" in run_async(storage.load("gecloud", "ems_load_reset")), "a reset in progress is kept in storage"
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 0.0, 0.1), now=at(13, 23, 57)))
+        assert load(ge_cloud) == 0.0, "after a restart mid-reset the sensor must not rise to {}".format(ems_load_balance(ems_today_counters(_ems_today(68.5, 1.3, 16.6, 0.0, 0.1))))
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.4, 0, 0, 0.0, 0.2), now=at(14, 0, 0)))
+        assert load(ge_cloud) == 0.2, "the restored reset completes as it would have"
+        assert run_async(storage.load("gecloud", "ems_load_reset")) == {}, "a completed reset is cleared from storage"
+
+        # A reset kept from long ago has run its window: a restart takes the counters as they are
+        run_async(storage.save("gecloud", "ems_load_reset", {"ems001": {"reset_from": {"import": 68.5, "export": 1.3, "solar": 16.6, "discharge": 22.3, "charge": 23.3}, "reset_since": at(13, 23, 55).isoformat()}}, format="json"))
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.0, 0.0, 0.0, 1.0, 1.5), now=at(14, 9, 0)))
+        assert load(ge_cloud) == 2.5, "a stale reset in storage is ignored, got {}".format(load(ge_cloud))
+
+        # Nothing usable in storage: the counters are taken as they are
+        run_async(storage.save("gecloud", "ems_load_reset", {"ems001": {"reset_from": "bad", "reset_since": "bad"}}, format="json"))
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.0, 0.0, 0.0, 1.0, 1.5), now=at(13, 23, 57)))
+        assert load(ge_cloud) == 2.5
+
+    # Polling stalled across midnight: the first reading of the new day is mid-morning, still taken as the reset
+    ge_cloud = fresh()
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(40.0, 2.0, 5.0, 4.0, 20.0), now=at(13, 22, 0)))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(4.0, 0.0, 0.0, 1.0, 3.0), now=at(14, 9, 0)))
+    assert load(ge_cloud) == 2.0, "expected 2.0 got {}".format(load(ge_cloud))
+    # ...but a later fall that day is still a glitch
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(2.5, 0.0, 0.0, 1.0, 3.0), now=at(14, 10, 0)))
+    assert load(ge_cloud) == 2.0
+
+    return 0
+
+
 def _test_publish_info(my_predbat):
     """Test publishing info entities"""
     ge_cloud = MockGECloudDirect()
@@ -5649,7 +5780,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_end_time") == ["select.predbat_gecloud_ems001_export_end_time_slot_1"]
 
         # EMS-specific sensors
-        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_ems001_consumption_total"]
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_ems001_consumption_derived_today"], "EMS load_today is the energy balance, not consumption_total which counts battery grid charging as load"
         assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_ems001_solar_total"]
         assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_ems001_grid_import_total"]
         assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_ems001_grid_export_total"]

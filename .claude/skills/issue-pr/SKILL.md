@@ -8,7 +8,7 @@ allowed-tools: You can view and edit files in this repo, write code and tests, r
 
 You are implementing the fix or feature described in one already-triaged GitHub issue on `springfall2008/batpred`, and opening a draft pull request for maintainer review. The working directory is the same dedicated local clone the triage skill uses — investigate and work using it directly.
 
-Arguments: `<issue-number> [scratch=<dir>]`, same convention as `/issue-triage`. If no `scratch=` is given (an interactive invocation), use `/tmp/predbat-triage/<issue-number>` and `mkdir -p` it yourself.
+Arguments: `<issue-number> [scratch=<dir>] [force=true]`, same convention as `/issue-triage`. `force=true` means a maintainer added `BOT_FORCE`: it is the only case in which you may pass `force` to `claim_memory`. If no `scratch=` is given (an interactive invocation), use `/tmp/predbat-triage/<issue-number>` and `mkdir -p` it yourself.
 
 This skill assumes the issue has already been triaged — the daemon only invokes it once that's confirmed. Read the existing triage comment before doing anything else.
 
@@ -29,6 +29,7 @@ A `bug` label can arrive without that statement: the split and evidence gates (`
 
 - Read [tools/debug-journal.md](../../../tools/debug-journal.md) before forming an implementation approach — it maps common symptoms to modules and records known per-integration behaviour from past investigations. Its entries are dated observations, not current truth — confirm anything you rely on against the working tree.
 - If the `mcp__shared-memory__*` tools are available, `search` for `issue:<issue-number>` and the area you are about to change. A triage memory may record approaches already ruled out. Confirm against the working tree.
+- If the `mcp__shared-memory__*` tools are available, claim the issue before you change anything. Use the issue's memory found by `issue:<issue-number>`; if there is none, `store` one now in scope `predbat-devs` with a public-safe summary, tagged `repo:batpred`, `issue:<issue-number>` and `status:open`. Then `claim_memory` it with `minutes: 120`, `session_label: "batpred-bot-issue-<issue-number>"`, a public-safe reason such as "bot fix PR in progress", and `force: true` only if you were given `force=true`. A claim belongs to a member and session together, so a leftover claim from an earlier run of this flow on this issue carries the same label and simply renews. If the claim fails because another member or another session holds an active claim, someone else is on this work: write `<scratch>/claim-blocked.json` containing `{"holder": ..., "until": ..., "description": ...}` (from the memory's `claim`, or from the error, which names all three; `until` is null for an indefinite claim), then stop without changing anything else - no branch, no commit, no comment. The daemon posts the explanation and relabels the issue. If you forced the claim, say in the PR description whose claim you took over (holder, end and reason).
 - Read the relevant source area named in the triage comment's root-cause pointer, or that the issue's classification points to.
 - Check `git log`/`git blame` on that area — the triage comment may already cover this, but confirm nothing has changed on `main` since triage ran.
 
@@ -128,13 +129,13 @@ EOF
 )"
 ```
 
-If the `mcp__shared-memory__*` tools are available, record the outcome: `update` the issue's memory (found by `issue:<issue-number>`), or `store` one in scope `predbat-devs`. Tag it `repo:batpred`, `issue:<issue-number>`, `pr:<pr-number>` and `status:in-review`. Say what the fix changes and why this approach over the alternatives. The public-safety rules in CLAUDE.md's "Shared team memory" apply.
+If the `mcp__shared-memory__*` tools are available, record the outcome: `update` the issue's memory (found by `issue:<issue-number>`), or `store` one in scope `predbat-devs`. Tag it `repo:batpred`, `issue:<issue-number>`, `pr:<pr-number>` and `status:in-review`. Say what the fix changes and why this approach over the alternatives. Then `release_claim` the claim you took, passing the same `session_label`; a release from any other session is refused. Release it whenever you stop after claiming, including when the quality gate fails and no PR is opened. The public-safety rules in CLAUDE.md's "Shared team memory" apply.
 
 That is the last step on success — there is nothing further to report; the daemon detects the new PR itself.
 
 ## 8. On failure
 
-If step 4's quality gate failed, or an earlier step couldn't proceed (e.g. the fix genuinely needs information only a maintainer has), post exactly one comment on the issue via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated PR-creation attempt (a maintainer will review before any action is taken), followed by what you attempted and what failed — never word it so a skipped step reads as one you completed (same guardrail as the triage skill). Then stop. Do not commit, push, or open a PR — the daemon detects this outcome itself by finding no PR referencing the issue afterwards.
+If step 4's quality gate failed, or an earlier step couldn't proceed (e.g. the fix genuinely needs information only a maintainer has), post exactly one comment on the issue via `gh issue comment <number> --body "..."`, opening with a line disclosing this is an automated PR-creation attempt (a maintainer will review before any action is taken), followed by what you attempted and what failed — never word it so a skipped step reads as one you completed (same guardrail as the triage skill). If you claimed the issue in step 2, `release_claim` it with the same `session_label`, and leave the issue's memory at `status:open`. Then stop. Do not commit, push, or open a PR — the daemon detects this outcome itself by finding no PR referencing the issue afterwards.
 
 ## Guardrails
 
