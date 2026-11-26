@@ -47,9 +47,11 @@ from hypervolt import (
     is_stale,
     max_current_command,
     plugged_state,
+    _session_key,
     release_command,
     status_text,
 )
+from utils import minute_data
 
 # Charger ids are decimal; their hex form is 12 digits for a V2 and 16 for a V3
 V2_ID = str(int("a" * 12, 16))
@@ -681,6 +683,123 @@ def test_session_energy_v3_without_session_id():
     apply_session(v2, {"charging": True, "watt_hours": 4000})
     assert v2.session_energy_kwh == 5.0
     print("  ✓ Session energy on V3 without a session id")
+
+
+def test_session_key():
+    """Session ids are held in one form: 5, 5.0 and "5" are one session, a large int keeps its value, and empty or null text is no id."""
+    for value, expected in ((5, 5), (5.0, 5), ("5", 5), ("5.0", 5), (" 7 ", 7), (5.5, 5.5), ("5.50", 5.5), (2**53 + 1, 2**53 + 1), (str(2**53 + 1), 2**53 + 1), ("abc", "abc"), ("+-5", "+-5")):
+        assert _session_key(value) == expected and type(_session_key(value)) is type(expected), (value, _session_key(value))
+    for value in (None, True, "", "null", "None"):
+        assert _session_key(value) is None, (value, _session_key(value))
+    print("  ✓ Session ids held in one form")
+
+
+def test_session_energy_unknown_after_restart():
+    """After a restart the session's energy stays unknown until a message carries watt_hours (#6285)."""
+    charger = HypervoltCharger(V2_ID)
+    assert charger.session_energy_kwh is None
+    apply_snapshot(charger, MOCK_SNAPSHOT)
+    assert charger.session_energy_kwh is None
+    # The first session id since start-up may be a session already part-way through, so no 0 is invented for it
+    apply_session(charger, {"charging": False, "session": 5})
+    assert charger.session_energy_kwh is None and charger.session_id == 5
+    apply_session(charger, {"charging": True, "session": 5, "watt_hours": 4500})
+    assert charger.session_energy_kwh == 4.5
+    # A later new session still starts again from 0
+    apply_session(charger, {"charging": True, "session": 6})
+    assert charger.session_energy_kwh == 0.0 and charger.session_id == 6
+    # A null session id, or the same id as text, is not a new session
+    apply_session(charger, {"charging": True, "session": 6, "watt_hours": 1200})
+    apply_session(charger, {"charging": True, "session": None})
+    apply_session(charger, {"charging": True, "session": "6"})
+    apply_session(charger, {"charging": True, "session": 6.0})
+    assert charger.session_energy_kwh == 1.2 and charger.session_id == 6, (charger.session_energy_kwh, charger.session_id)
+    # The same whichever form arrives first
+    text_first = HypervoltCharger(V2_ID)
+    apply_session(text_first, {"charging": True, "session": "7", "watt_hours": 800})
+    for session in (7.0, 7, "7.0"):
+        # No watt_hours, so a wrong reset to 0 would show
+        apply_session(text_first, {"charging": True, "session": session})
+    assert text_first.session_id == 7 and text_first.session_energy_kwh == 0.8, (text_first.session_id, text_first.session_energy_kwh)
+    # Energy held from messages without a session id isn't carried into the first session id seen
+    v3 = HypervoltCharger(V3_ID, api_version=3)
+    apply_session(v3, {"charging": True, "watt_hours": 17836})
+    apply_session(v3, {"charging": True, "session": 9})
+    assert v3.session_energy_kwh is None and v3.session_id == 9, v3.session_energy_kwh
+    apply_session(v3, {"charging": True, "session": 9, "watt_hours": 500})
+    assert v3.session_energy_kwh == 0.5
+    print("  ✓ Session energy unknown after a restart")
+
+
+def test_restart_history_counts_session_once():
+    """
+    A restart mid-session, published by the component and read back through minute_data as car_charging_energy reads it,
+    counts the session once; the 0 the old code published counted it twice (#6285).
+    """
+    now = datetime.datetime(2026, 11, 20, 12, 0, tzinfo=datetime.timezone.utc)
+    start = now - datetime.timedelta(minutes=120)
+    entity = "sensor.predbat_hypervolt_{}_session_energy".format(V2_ID)
+    history = []
+
+    def publish(component, minute):
+        """Publish the component's chargers and record the session energy state at this minute."""
+        run_async(component.publish_data())
+        history.append({"state": str(component.base.entities[entity]["state"]), "last_updated": (start + datetime.timedelta(minutes=minute)).isoformat()})
+
+    before = HypervoltCharger(V2_ID, charging=True, last_message=time.time())
+    component = _make_component([before])
+    component.update_car_order([V2_ID])
+    apply_session(before, {"charging": True, "session": 5, "watt_hours": 0})
+    for minute in range(0, 91, 5):
+        apply_session(before, {"charging": True, "session": 5, "watt_hours": round(4500 * minute / 90)})
+        publish(component, minute)
+    # Predbat restarts: a new component and charger record, heard from (a snapshot and a session message without watt_hours)
+    after = HypervoltCharger(V2_ID, charging=True, last_message=time.time())
+    component = _make_component([after])
+    component.update_car_order([V2_ID])
+    apply_snapshot(after, MOCK_SNAPSHOT)
+    apply_session(after, {"charging": True, "session": 5})
+    publish(component, 91)
+    for minute, watt_hours in ((101, 4500), (115, 5000)):
+        apply_session(after, {"charging": True, "session": 5, "watt_hours": watt_hours})
+        publish(component, minute)
+
+    def counted(states):
+        """Energy minute_data counts over these states."""
+        data, _ = minute_data([dict(entry) for entry in states], 1, now, "state", "last_updated", backwards=True, smoothing=True, scale=1.0, clean_increment=True, can_modify_history=True)
+        return data[0] - data[max(data)]
+
+    assert history[-3]["state"] == "unavailable", history[-3]
+    assert abs(counted(history) - 5.0) < 0.01, counted(history)
+    # The 0 the old code published at the restart
+    old = [dict(entry, state="0.0") if entry["state"] == "unavailable" else entry for entry in history]
+    assert abs(counted(old) - 9.5) < 0.01, counted(old)
+    print("  ✓ Restart history counts the session once")
+
+
+def test_publishes_unavailable_session_energy_until_known():
+    """A charger heard from but with no watt_hours yet publishes session energy as unavailable, not 0 (#6285)."""
+    component = _make_component([HypervoltCharger(V3_ID, api_version=3, release_state="default", pilot_status="C", charging=True, last_message=time.time())])
+    assert run_async(component.run(0, True)) is True
+    entity = "sensor.predbat_hypervolt_{}_session_energy".format(V3_ID)
+    assert component.base.entities[entity]["state"] == "unavailable", component.base.entities[entity]
+    charger = component.transport.chargers[V3_ID]
+    apply_session(charger, {"charging": True, "session": 3, "watt_hours": 2100})
+    run_async(component.publish_data())
+    assert component.base.entities[entity]["state"] == 2.1, component.base.entities[entity]
+    apply_session(charger, {"charging": True, "session": 4})
+    run_async(component.publish_data())
+    assert component.base.entities[entity]["state"] == 0.0, component.base.entities[entity]
+    # A V3 charger that sends no session id publishes its first watt_hours after a restart, and a later drop as a new session
+    v3 = HypervoltCharger(V3_ID, api_version=3, release_state="default", pilot_status="C", charging=True, last_message=time.time())
+    component = _make_component([v3])
+    assert run_async(component.run(0, True)) is True
+    assert component.base.entities[entity]["state"] == "unavailable", component.base.entities[entity]
+    for watt_hours, expected in ((3100, 3.1), (3400, 3.4), (200, 0.2)):
+        apply_session(v3, {"charging": True, "watt_hours": watt_hours})
+        run_async(component.publish_data())
+        assert component.base.entities[entity]["state"] == expected, (watt_hours, component.base.entities[entity])
+    print("  ✓ Session energy unavailable until known")
 
 
 def test_apply_pilot():
@@ -2292,6 +2411,10 @@ def test_hypervolt(my_predbat=None):
     test_apply_session_power()
     test_session_energy_holds_and_resets()
     test_session_energy_v3_without_session_id()
+    test_session_key()
+    test_session_energy_unknown_after_restart()
+    test_restart_history_counts_session_once()
+    test_publishes_unavailable_session_energy_until_known()
     test_apply_pilot()
     test_connected_state_unknown_until_pilot()
     test_apply_plugncharge()
