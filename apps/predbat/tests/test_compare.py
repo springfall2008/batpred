@@ -1134,6 +1134,7 @@ def test_compare(my_predbat):
     pb.rate_replicate = lambda rates, io_adjusted=None, is_import=True, **kwargs: (dict(rates), {})
     pb.set_rate_thresholds = lambda: None
     pb.rate_scan_window = lambda rates, *args: ([], 0, 0)
+    pb.scan_export_windows = lambda alt_rates=None: (0, 0)
     pb.find_low_rate_windows = lambda: None
     pb.basic_rates = lambda info, *args, **kwargs: {minute: info[0]["rate"] for minute in range(60)}
 
