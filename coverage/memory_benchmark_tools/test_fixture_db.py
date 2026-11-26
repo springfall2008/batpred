@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 HERE = Path(__file__).parent
 sys.path.insert(0, str(HERE))
@@ -129,6 +130,29 @@ class TestNames(unittest.TestCase):
         self.assertEqual(remap["sensor.real_capacity"].kind, "gauge_kwh")
 
 
+class TestTemplates(unittest.TestCase):
+    """Templated live settings ({geserial}) resolve against the database's entity names."""
+
+    NAMES = {"sensor.givtcp_ab12345678_soc_kwh", "sensor.givtcp_ab12345678_battery_power", "sensor.predbat_givtcp_0_battery_power", "sensor.predbat_givtcp_0_load_today"}
+    ARGS = {"soc_kw": ["sensor.givtcp_{geserial}_soc_kwh"], "battery_power": ["sensor.givtcp_{geserial}_battery_power"]}
+
+    def test_template_values_finds_the_serial(self):
+        """The value a placeholder stands for is read off the matching entity name."""
+        self.assertEqual(fixture_db.template_values(self.ARGS, self.NAMES), {"ab12345678"})
+
+    def test_build_remap_resolves_templates_and_prefers_the_predbat_inverter_entity(self):
+        """A templated setting resolves to the real entity; Predbat's own inverter entity wins when it exists, even for unset settings."""
+        remap = {r.dummy_entity: r.real_entity for r in fixture_db.build_remap(self.ARGS, "predbat", self.NAMES)}
+        self.assertEqual(remap["sensor.predbat_dummy_battery_soc"], "sensor.givtcp_ab12345678_soc_kwh")
+        self.assertEqual(remap["sensor.predbat_dummy_battery_power"], "sensor.predbat_givtcp_0_battery_power")
+        self.assertEqual(remap["sensor.predbat_dummy_load_lifetime"], "sensor.predbat_givtcp_0_load_today")
+        self.assertNotIn("sensor.predbat_dummy_pv_lifetime", remap)
+
+    def test_build_remap_skips_a_template_with_no_matching_entity(self):
+        """A templated setting that matches nothing in the database is not remapped."""
+        self.assertEqual(fixture_db.build_remap({"soc_kw": ["sensor.givtcp_{geserial}_soc_kwh"]}, "predbat", {"sensor.other"}), [])
+
+
 class TestExportDb(unittest.TestCase):
     """export_db writes a database the benchmark's Predbat can run from."""
 
@@ -177,10 +201,49 @@ class TestExportDb(unittest.TestCase):
         self.assertGreaterEqual(datetime.strptime(oldest, TIME_FORMAT_DB), T0 - timedelta(days=7))
         self.assertEqual(stats["dropped"], 2)
 
+    def test_export_db_keeps_a_remapped_value_that_last_changed_before_the_window(self):
+        """A sensor recorded only on change (battery capacity) keeps its latest value even when it is older than the window."""
+        engine = DatabaseEngine(StubBase(self.live.parent), 30)
+        engine._set_state_db("sensor.old_soc", "4.2", {"unit_of_measurement": "kWh"}, T0 - timedelta(days=20))
+        engine._close()
+        remap = [fixture_db.Remap("sensor.old_soc", "sensor.predbat_dummy_battery_soc", "gauge_kwh")]
+        fixture_db.export_db(self.live, self.out, T0, 7, remap, "predbat", dropped=lambda name: False, replacements={})
+        latest = query(self.out, "SELECT l.state FROM latest l JOIN entities e USING(entity_index) WHERE e.entity_name = 'sensor.predbat_dummy_battery_soc'")
+        self.assertEqual(latest, [("4.2",)])
+
     def test_export_db_dropped_predicate_removes_entities(self):
         """An entity the caller marks as dropped is not exported."""
         fixture_db.export_db(self.live, self.out, T0, 7, self.remap, "predbat", dropped=lambda name: name == "sensor.octopus_rates", replacements={})
         self.assertEqual(history(self.out, "sensor.octopus_rates"), [])
+
+    def test_snapshot_db_copies_the_live_database(self):
+        """A snapshot holds the same entities and rows as the live database, which is left unchanged."""
+        before = (self.live.read_bytes(), os.stat(self.live).st_mtime_ns)
+        copy = Path(self.tmp.name) / "snapshot.db"
+        fixture_db.snapshot_db(self.live, copy)
+        sql = "SELECT e.entity_name, s.datetime, s.state FROM states s JOIN entities e USING(entity_index) ORDER BY 1, 2"
+        self.assertEqual(query(copy, sql), query(self.live, sql))
+        self.assertEqual((self.live.read_bytes(), os.stat(self.live).st_mtime_ns), before)
+
+    def test_snapshot_db_retries_while_the_live_database_is_being_written(self):
+        """A read that collides with the live writer is retried, and gives up with a clear error after the last attempt."""
+        copy = Path(self.tmp.name) / "snapshot.db"
+        real = fixture_db._backup_once
+        calls = []
+
+        def flaky(source, dest):
+            """Fail like a hot journal twice, then copy."""
+            calls.append(1)
+            if len(calls) < 3:
+                raise sqlite3.OperationalError("attempt to write a readonly database")
+            return real(source, dest)
+
+        with mock.patch.object(fixture_db, "_backup_once", flaky), mock.patch.object(fixture_db.time, "sleep"):
+            fixture_db.snapshot_db(self.live, copy, attempts=3)
+        self.assertEqual(len(calls), 3)
+        with mock.patch.object(fixture_db, "_backup_once", side_effect=sqlite3.OperationalError("busy")), mock.patch.object(fixture_db.time, "sleep"):
+            with self.assertRaises(RuntimeError):
+                fixture_db.snapshot_db(self.live, copy, attempts=2)
 
     def test_export_db_opens_live_db_read_only(self):
         """The live database's bytes and modification time are unchanged by an export."""

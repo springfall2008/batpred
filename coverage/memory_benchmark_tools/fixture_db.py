@@ -12,10 +12,12 @@ would leak the live system's plan into the benchmark's inputs.
 """
 
 import json
+import re
 import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 import types
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -43,6 +45,9 @@ INVERTER_REMAP = {
 
 # Lifetime sensor -> the key of the dummy inverter's totals block it seeds
 LIFETIME_TOTALS = {"pv_lifetime": "pv", "load_lifetime": "load", "grid_import_lifetime": "import", "grid_export_lifetime": "export"}
+
+# A placeholder in a templated live setting, such as {geserial}
+PLACEHOLDER_RE = re.compile(r"\{[a-z_]+\}")
 
 # A counter falling below this fraction of its last value has reset (midnight); a smaller dip is jitter
 RESET_FRACTION = 0.5
@@ -78,11 +83,105 @@ def _flag(value):
     return value is True or str(value).lower() == "true"
 
 
-def build_remap(live_args, prefix):
-    """Map each live inverter setting that names an entity to the dummy inverter's matching sensor."""
+def _template_regex(template):
+    """Return a regex matching the entity names a templated setting ({geserial} and the like) can stand for."""
+    parts = PLACEHOLDER_RE.split(template)
+    return re.compile("^" + "([0-9a-z]+)".join(re.escape(part) for part in parts) + "$")
+
+
+def _resolve(entity, entity_names):
+    """Return the entity name a possibly templated setting resolves to among entity_names, or None."""
+    if not PLACEHOLDER_RE.search(entity):
+        return entity if entity in entity_names else None
+    pattern = _template_regex(entity)
+    matches = sorted(name for name in entity_names if pattern.match(name))
+    return matches[0] if matches else None
+
+
+def _strings(value):
+    """Yield every string inside a live setting's value."""
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _strings(item)
+
+
+def template_values(live_args, entity_names):
+    """Return what the placeholders in the live settings ({geserial} and the like) stand for in entity_names.
+
+    These are real device serials, read off the entity names they appear in, so the export can scrub them.
+    """
+    found = set()
+    for value in live_args.values():
+        for text in _strings(value):
+            if PLACEHOLDER_RE.search(text) and "." in text:
+                pattern = _template_regex(text)
+                for name in entity_names:
+                    match = pattern.match(name)
+                    if match:
+                        found.update(group for group in match.groups() if group)
+    return found
+
+
+def _backup_once(source, dest):
+    """Copy the database at source to dest with SQLite's backup API, reading source through a read-only connection."""
+    live = sqlite3.connect("file:{}?mode=ro".format(Path(source).resolve()), uri=True)
+    out = sqlite3.connect(str(dest))
+    try:
+        live.backup(out)
+    finally:
+        out.close()
+        live.close()
+
+
+def snapshot_db(source, dest, attempts=5, delay=3):
+    """Take a consistent copy of a live predbat.db that another process keeps writing.
+
+    A long read of the live database can collide with its writer (seen as "attempt to write a readonly database" when
+    the read-only connection meets a hot journal); the backup API copies a consistent snapshot in one pass, and a
+    collision is retried. Raises RuntimeError after the last attempt.
+    """
+    for attempt in range(1, attempts + 1):
+        try:
+            if Path(dest).exists():
+                Path(dest).unlink()
+            _backup_once(source, dest)
+            return
+        except sqlite3.OperationalError as error:
+            if attempt == attempts:
+                raise RuntimeError("could not snapshot {} after {} attempts: {}".format(source, attempts, error)) from error
+            time.sleep(delay)
+
+
+def entity_names(db_path):
+    """Return the set of entity names in a predbat.db, opened read-only."""
+    conn = sqlite3.connect("file:{}?mode=ro".format(Path(db_path).resolve()), uri=True)
+    try:
+        return {row[0] for row in conn.execute("SELECT entity_name FROM entities")}
+    finally:
+        conn.close()
+
+
+def build_remap(live_args, prefix, names=None):
+    """Map each live inverter setting to the dummy inverter's matching sensor.
+
+    With names (the live database's entity names), Predbat's own record of the inverter it talks to,
+    sensor.<prefix>_givtcp_0_<setting>, is preferred, even for a setting the live config leaves unset; otherwise the
+    live setting is used with its placeholders resolved, and a setting that resolves to nothing is skipped. Without
+    names the live settings are taken as written.
+    """
     remap = []
     for setting, (name, kind) in INVERTER_REMAP.items():
-        entity = _first_entity(live_args.get(setting))
+        live = _first_entity(live_args.get(setting))
+        if names is None:
+            entity = live
+        else:
+            own = "sensor.{}_givtcp_0_{}".format(prefix, setting)
+            entity = own if own in names else (_resolve(live, names) if live else None)
         if entity:
             invert = kind == "power_w" and _flag(live_args.get(setting + "_invert", False))
             remap.append(Remap(entity, "sensor.{}_dummy_{}".format(prefix, name), kind, invert))
@@ -234,6 +333,10 @@ def export_db(live_db, out_db, t0, days, remap, prefix, dropped, replacements):
             rows = live.execute("SELECT datetime, state, attributes, system, keep FROM states WHERE entity_index = ? AND datetime >= ? AND datetime <= ? ORDER BY datetime", (entity_index, start, end)).fetchall()
             latest = live.execute("SELECT datetime, state, attributes, system, keep FROM latest WHERE entity_index = ?", (entity_index,)).fetchone()
             if item is not None:
+                if not rows and latest is not None:
+                    # Recorded only on change and unchanged for the whole window (battery capacity): its latest value
+                    # still holds at T0
+                    rows = [latest]
                 rows, final = _converted_rows(item, rows)
                 latest = rows[-1] if rows else None
                 total_key = LIFETIME_TOTALS.get(item.dummy_entity.rsplit("_dummy_", 1)[-1])

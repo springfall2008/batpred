@@ -123,6 +123,19 @@ class TestForecastExport(unittest.TestCase):
         lookup = json.loads((self.out / "solar_{}.json".format(source.cache_key(fixture_cache.POSTCODE_URL.format(scrub.FAKE_POSTCODE), {}))).read_text())
         self.assertEqual((lookup["result"]["latitude"], lookup["result"]["longitude"]), (scrub.FAKE_LATITUDE, scrub.FAKE_LONGITUDE))
 
+    def test_forecast_export_with_secret_keys_matches_by_recency(self):
+        """When the api keys are !secret references the request keys cannot be computed, so the newest cached forecast is used."""
+        import export_fixture
+
+        config = [dict(plane, api_key=export_fixture.Secret("forecast_key")) for plane in LIVE_CONFIG]
+        neutral, secrets = fixture_cache.export_forecast_cache(self.live, self.out, T0, config)
+        source = fixture_cache.solcast_source()
+        self.assertEqual([plane["api_key"] for plane in neutral], [scrub.FAKE_FORECAST_KEY, scrub.FAKE_FORECAST_KEY])
+        url, params = fixture_cache.forecast_requests(neutral, {scrub.FAKE_POSTCODE: (scrub.FAKE_LATITUDE, scrub.FAKE_LONGITUDE)}, source)[0]
+        written = json.loads((self.out / "solar_{}.json".format(source.cache_key(url, params))).read_text())
+        self.assertEqual(written["result"], FORECAST["result"])
+        self.assertEqual(scrub.find_leaks(self.out, secrets), [])
+
     def test_forecast_export_without_a_cached_forecast_fails(self):
         """A live cache with no forecast for the configured planes is an error, not an empty fixture."""
         for path in list(self.live.glob("solar_*.json")):

@@ -137,6 +137,19 @@ def _read_json(path):
     return json.loads(path.read_text()) if path.exists() else None
 
 
+def _newest_forecasts(live_cache, count):
+    """Return the count newest forecast.solar responses (those with result.watts) in the live cache, newest first."""
+    found = []
+    for path in Path(live_cache).glob("solar_*.json"):
+        data = _read_json(path)
+        if isinstance(data, dict) and isinstance(data.get("result"), dict) and "watts" in data["result"]:
+            meta = _read_json(path.with_suffix(".meta")) or {}
+            found.append((meta.get("created", ""), data))
+    found.sort(key=lambda pair: pair[0], reverse=True)
+    responses = [data for _, data in found[:count]]
+    return responses + [None] * (count - len(responses))
+
+
 def export_forecast_cache(live_cache, out_cache, t0, live_config):
     """Write the forecast.solar entries the benchmark's forecast component needs, under neutral request values.
 
@@ -157,7 +170,7 @@ def export_forecast_cache(live_cache, out_cache, t0, live_config):
             result = (lookup or {}).get("result") or {}
             if "latitude" in result and "longitude" in result:
                 locations[postcode] = (result["latitude"], result["longitude"])
-        if plane.get("api_key"):
+        if isinstance(plane.get("api_key"), str):
             secrets.append(plane["api_key"])
         for field in ("latitude", "longitude"):
             if field in plane:
@@ -177,10 +190,17 @@ def export_forecast_cache(live_cache, out_cache, t0, live_config):
     if len(real_requests) != len(neutral_requests):
         raise ValueError("the neutral forecast_solar planes group into {} requests but the live ones into {}".format(len(neutral_requests), len(real_requests)))
 
-    for (real_url, real_params), (neutral_url, neutral_params) in zip(real_requests, neutral_requests):
-        data = _read_json(live_cache / "solar_{}.json".format(source.cache_key(real_url, real_params)))
-        if not data:
-            raise ValueError("the live cache has no forecast.solar response for one of the configured requests")
+    if all(isinstance(plane.get("api_key"), (str, type(None))) for plane in planes):
+        # The real request keys can be computed, so each response is found under the key the component stored it at
+        responses = [_read_json(live_cache / "solar_{}.json".format(source.cache_key(url, params))) for url, params in real_requests]
+    else:
+        # An api_key is a !secret reference, whose value this tool does not read: take the newest cached forecast.solar
+        # responses instead, one per request
+        responses = _newest_forecasts(live_cache, len(real_requests))
+    if not all(responses):
+        raise ValueError("the live cache has no forecast.solar response for one of the configured requests")
+
+    for data, (neutral_url, neutral_params) in zip(responses, neutral_requests):
         info = (data.get("message") or {}).get("info") or {}
         if info.get("place"):
             secrets.append(info["place"])
