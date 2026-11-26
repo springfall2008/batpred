@@ -235,9 +235,9 @@ the dummy inverter's time all agree with the data, and a run gives the same dige
 - **The mechanism is the builder's choice** (a preloaded libfaketime in the container, which freezes the wall clock for
   C code and Python alike, or a Python-level patch installed before the first import). The requirement is the behaviour
   above, and that it is the same for main and every branch.
-- **File times are still real.** The kernel stamps files it writes with the real time, so seeded cache entries written at
-  the start of a run are "in the future" of a clock frozen days earlier. The builder checks how the storage cache computes
-  an entry's age (file time or a stored timestamp) and sets the entries' times to T0 where needed.
+- **Cache ages come from the entry, not the file.** `storage.age()` reads the `created` field in each entry's `.meta`
+  sidecar and compares it with `datetime.now(timezone.utc)`, so with the clock frozen at T0 the export writes `created` as
+  T0 and every seeded entry is fresh. File times (which the kernel stamps with the real time) are not used.
 - With the clock frozen at T0, `db_days` no longer has to be large: the fixture is never older than its own window.
 
 ### One run
