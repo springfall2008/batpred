@@ -15,7 +15,10 @@ predict_battery_temperature() looks back at most 24 hours plus one step, so hold
 max_days_previous days of per-minute temperatures (about 3 MB at 22 days) was dead weight.
 """
 
+import os
 from datetime import timedelta
+
+import yaml
 
 from const import PREDICT_STEP, TIME_FORMAT
 from fetch import BATTERY_TEMPERATURE_HISTORY_DAYS
@@ -339,4 +342,42 @@ def test_battery_temperature_history_stuck_warning_once(my_predbat):
 
     if not failed:
         print("✓ reported once, re-armed on recovery, plan effect named only when a curve is set")
+    return failed
+
+
+def test_templates_set_battery_temperature_history(my_predbat):
+    """
+    Every apps.yaml template that sets battery_temperature also sets battery_temperature_history to the same sensors.
+    Without it the plan reads the current temperature but the rate grids are learned with no temperature, and the
+    Curves page draws every sample at its 20 °C placeholder (GH#6270, the Sigenergy template).
+    """
+    print("\n*** Test: apps.yaml templates that set battery_temperature also set battery_temperature_history (#6270) ***")
+    failed = False
+    templates_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "templates")
+
+    checked = []
+    for name in sorted(os.listdir(templates_dir)):
+        if not name.endswith(".yaml"):
+            continue
+        with open(os.path.join(templates_dir, name), encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+        if not isinstance(data, dict):
+            continue
+        for section in data.values():
+            if not isinstance(section, dict) or "battery_temperature" not in section:
+                continue
+            checked.append(name)
+            history = section.get("battery_temperature_history", None)
+            if history is None:
+                print("ERROR: {} sets battery_temperature but not battery_temperature_history".format(name))
+                failed = True
+            elif history != section["battery_temperature"]:
+                print("ERROR: {} battery_temperature_history {} does not name the battery_temperature sensors {}".format(name, history, section["battery_temperature"]))
+                failed = True
+
+    if "sigenergy_sigenstor.yaml" not in checked:
+        print("ERROR: expected sigenergy_sigenstor.yaml to be checked, only saw {}".format(checked))
+        failed = True
+    elif not failed:
+        print("✓ {} templates set battery_temperature_history alongside battery_temperature: {}".format(len(checked), ", ".join(checked)))
     return failed

@@ -123,7 +123,7 @@ Write one JSON file with the Write tool at `<scratch>/review.json`:
 
 If the review turned up something a future triage run would want to know, write it to the journal queue as the appended system prompt describes, for example a trap in a module or a convention the codebase relies on that is written down nowhere. Usually there is nothing to write.
 
-Separately, if the `mcp__shared-memory__*` tools are available and the review reached a conclusion worth keeping (a real defect confirmed, or a suspected one ruled out and why), `update` the PR's memory (found by `pr:<pr-number>`), or `store` one in scope `predbat-devs` tagged `repo:batpred`, `pr:<pr-number>` and `status:in-review`. Skip this in `dry-run`. The public-safety rules in CLAUDE.md's "Shared team memory" apply.
+Separately, if the `mcp__shared-memory__*` tools are available and the review reached a conclusion worth keeping (a real defect confirmed, or a suspected one ruled out and why), `update` the PR's memory (found by `pr:<pr-number>`), or `store` one in scope `predbat-devs` tagged `repo:batpred`, `pr:<pr-number>` and `status:in-review`. When you store a new memory and the PR references an issue (`Fixes #<n>`) whose memory exists, link it with `relate_memories(<new>, <issue memory>, "derived-from")`. Skip this in `dry-run`. A review never claims the PR. The public-safety rules in CLAUDE.md's "Shared team memory" apply.
 
 If `dry-run` was given, stop here and print the path of the review file.
 

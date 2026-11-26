@@ -5,6 +5,13 @@ on:
   # while every PR can read main's, so without this the pre-commit environments were rebuilt on every run
   push:
     branches: [main]
+  # Nightly on main (scheduled runs use the default branch), so a failure that comes from the date or from a new
+  # dependency release, rather than from a merge, shows on main before it shows up on the next unrelated PR (#6244).
+  # Just after midnight UTC, when a test written against "today" first goes wrong. kernel-binaries only runs on a PR
+  # from this repo, so a scheduled run skips it.
+  schedule:
+  - cron: "17 0 * * *"
+  workflow_dispatch:
 jobs:
   pre-commit:
     runs-on: ubuntu-latest

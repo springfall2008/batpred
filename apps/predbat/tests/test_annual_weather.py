@@ -100,8 +100,17 @@ def test_annual_weather(my_predbat):
     # GTI-dependent cell-temperature derate (Task 1) means this is not the raw 800/1000 GTI
     # ratio: a naive implementation that skipped the temperature derate would land on exactly
     # 0.8, so a tight tolerance around the true measured value also catches that regression.
-    if abs(ratio - 0.8162221180559525) > 1e-6:
-        print("  ERROR: expected the measured P10 ratio of 0.8162221180559525, got {}".format(ratio))
+    # Each hourly sample is a preceding-hour mean and is derated on its own (not averaged with its
+    # neighbour first), which is what fixes this value.
+    if abs(ratio - 0.8162117357875782) > 1e-6:
+        print("  ERROR: expected the measured P10 ratio of 0.8162117357875782, got {}".format(ratio))
+        failed = True
+
+    print("Test: the hour before the window is not counted as a day")
+    # The 00:00 sample on 1 January covers 23:00-00:00 on 31 December; that stub hour must not
+    # appear as a one-hour day (it would add a whole-day ratio to December's P10 on sites east of UTC)
+    if year.has_actual(date(2024, 12, 31)):
+        print("  ERROR: 31 December 2024, before the window, should have no actual data")
         failed = True
 
     print("Test: actual daily energy is below forecast daily energy")

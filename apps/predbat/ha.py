@@ -20,7 +20,7 @@ HAHistory for automatic entity history tracking and pruning.
 import os
 from datetime import timedelta, datetime, timezone
 import asyncio
-from aiohttp import WSMsgType
+from aiohttp import ClientError, WSMsgType, WSServerHandshakeError
 import array
 import bisect
 import json
@@ -30,13 +30,36 @@ import time
 from utils import str2time, strptime_aware
 from const import TIME_FORMAT_HA, TIMEOUT, TIME_FORMAT_HA_TZ
 from component_base import ComponentBase
-from http_sync import http_get, http_post, HttpJSONDecodeError, HttpTimeout, HttpConnectionError, run_async, RunThread  # noqa: F401 (run_async and RunThread are imported from here by other modules)
+from http_sync import http_get, http_post, HttpError, HttpJSONDecodeError, HttpTimeout, HttpConnectionError, run_async, RunThread  # noqa: F401 (run_async and RunThread are imported from here by other modules)
 
 # Maximum days of history fetched per request. Long windows are split so only one chunk's
 # response body, decoded string and parsed objects are resident at a time.
 HISTORY_CHUNK_DAYS = 3
 HA_STARTUP_API_RETRY_INTERVAL = 5
 HA_STARTUP_API_RETRY_TIMEOUT = 10 * 60
+# How long a service call waits to complete, over the websocket or looped back to a Predbat-published control
+HA_SERVICE_CALL_TIMEOUT = 2 * 60
+
+# How long Home Assistant may be continuously unreachable before Predbat gives up and stops (#5437).
+# A Home Assistant restart takes minutes to serve its API again, so the limit is a duration,
+# not a count of failed calls (which a restart exhausts in seconds).
+HA_OUTAGE_LIMIT_SECONDS = 15 * 60
+
+# Failures further apart than this are separate outages: a long silence between two failures says nothing
+# about whether Home Assistant was down in between
+HA_OUTAGE_GAP_SECONDS = 10 * 60
+
+# HTTP statuses a gateway or proxy in front of Home Assistant returns while it is restarting: 502/503/504, and
+# Cloudflare's origin-down family (520 empty reply, 521 refused, 522/524 timed out, 523 unreachable, 530 tunnel down).
+# Not Cloudflare's 525/526 (TLS to the origin failed, a certificate problem waiting will not fix), nor 500 or 501,
+# which a misconfigured proxy or one that cannot do the Web Socket upgrade keeps sending, and Home Assistant itself can send 500.
+HA_RESTARTING_STATUSES = (502, 503, 504, 520, 521, 522, 523, 524, 530)
+
+# Request errors that are not Home Assistant being down, so waiting will not fix them: a malformed ha_url or ha_key
+# (e.g. a trailing newline), a redirect loop, or a body that cannot be encoded. http_sync raises these as a plain
+# HttpError; its subclasses for a timeout, a lost connection and a reply we cannot decode are outages and are caught
+# before this in api_call().
+HA_NOT_OUTAGE_ERRORS = (HttpError,)
 
 # The 2-minute refresh of a tracked entity reads from its last record or from its last check less
 # this overlap, whichever is later, so a quiet entity is not re-read from a change days ago. The
@@ -51,6 +74,43 @@ HISTORY_EMPTY_RECHECK_SECONDS = 30 * 60
 # distinct list (see HAInterface.share_long_lists), and the share cache is reset at this many lists
 SHARED_LIST_MIN_LENGTH = 64
 SHARED_LIST_CACHE_MAX = 256
+
+
+class OutageTimer:
+    """
+    Tracks one run of failures to reach Home Assistant, so that an outage is measured in time rather than by counting
+    failed calls (a restart exhausts any count in seconds). The REST calls and the Web Socket each have their own
+    timer: one channel working must not hide the other being down.
+    """
+
+    def __init__(self):
+        """Start with no outage in progress."""
+        self.lock = threading.Lock()
+        self.since = None  # time.monotonic() of the first failure in the current outage
+        self.last = None  # time.monotonic() of the latest failure
+
+    def failure(self):
+        """
+        Record a failure. Returns "started" for the first failure of an outage, "expired" once the outage has
+        lasted HA_OUTAGE_LIMIT_SECONDS with no contact, otherwise None. Failures more than HA_OUTAGE_GAP_SECONDS
+        apart are separate outages.
+        """
+        now = time.monotonic()
+        with self.lock:
+            if self.since is None or now - self.last > HA_OUTAGE_GAP_SECONDS:
+                self.since = self.last = now
+                return "started"
+            self.last = now
+            if now - self.since >= HA_OUTAGE_LIMIT_SECONDS:
+                return "expired"
+        return None
+
+    def success(self):
+        """End any outage, returning how many seconds it lasted (None if there was none)."""
+        with self.lock:
+            since = self.since
+            self.since = self.last = None
+        return None if since is None else int(time.monotonic() - since)
 
 
 class EntityHistory:
@@ -471,7 +531,9 @@ class HAInterface(ComponentBase):
         self.db = None
         self.db_cursor = None
         self.websocket_active = False
-        self.api_errors = 0
+        self.outage = OutageTimer()
+        self.auth_rejected = False
+        self.auth_failures = 0
         self.last_api_status = None
         self.last_success_timestamp = None
 
@@ -513,7 +575,7 @@ class HAInterface(ComponentBase):
             deadline = time.monotonic() + HA_STARTUP_API_RETRY_TIMEOUT
             attempts = 0
             while True:
-                check = self.api_call("/api/services", silent=True)
+                check = self.api_call("/api/services", silent=True, track_outage=False)
                 if isinstance(check, list):
                     break
 
@@ -532,8 +594,6 @@ class HAInterface(ComponentBase):
                 attempts += 1
                 if attempts == 1 or attempts % 6 == 0:
                     self.log("Warn: Home Assistant API at {} is not ready during startup (HTTP {}); retrying".format(self.ha_url, status if status is not None else "unavailable"))
-                # Keep boot-time proxy failures from tripping the runtime fatal-error limit.
-                self.api_errors = 0
                 time.sleep(min(HA_STARTUP_API_RETRY_INTERVAL, remaining))
 
         if self.db_enable:
@@ -609,7 +669,7 @@ class HAInterface(ComponentBase):
         self.ws_sync_event.set()
 
         # Wait for response with 2 minute timeout
-        event.wait(timeout=2 * 60)
+        event.wait(timeout=HA_SERVICE_CALL_TIMEOUT)
 
         # Extract result
         if result_holder.get("error"):
@@ -643,6 +703,7 @@ class HAInterface(ComponentBase):
         Web socket loop for HA interface
         """
         error_count = 0
+        ws_outage = OutageTimer()
 
         while True:
             if self.api_stop or self.fatal_error:
@@ -757,11 +818,12 @@ class HAInterface(ComponentBase):
                                         elif message_type == "auth_required":
                                             pass
                                         elif message_type == "auth_ok":
-                                            pass
+                                            self.outage_success(ws_outage)  # Connected and authenticated, any outage is over
                                         elif message_type == "auth_invalid":
                                             self.log("Warn: Web Socket auth failed, check your ha_key setting")
                                             self.websocket_active = False
                                             error_count += 1
+                                            self.outage_failure(ws_outage, "Web Socket auth failed")
                                             raise Exception("Web Socket auth failed")
                                         else:
                                             self.log("Info: Web Socket unknown message {}".format(data))
@@ -773,10 +835,10 @@ class HAInterface(ComponentBase):
                                     break
 
                             elif message and message.type == WSMsgType.CLOSED:
-                                error_count += 1
+                                self.outage_failure(ws_outage, "Web Socket closed")
                                 break
                             elif message and message.type == WSMsgType.ERROR:
-                                error_count += 1
+                                self.outage_failure(ws_outage, "Web Socket error")
                                 break
 
                             # Process queued commands (runs even if no message received)
@@ -850,6 +912,16 @@ class HAInterface(ComponentBase):
                                         self.log("Warn: Service call timeout for request id {}".format(req_id))
                                         error_count += 1
 
+                except (ClientError, asyncio.TimeoutError, ConnectionError) as e:
+                    if isinstance(e, WSServerHandshakeError) and e.status not in HA_RESTARTING_STATUSES:
+                        # Home Assistant answered but refused the upgrade (wrong URL path, a proxy rejecting us...), which waiting will not fix
+                        self.log("Error: Web Socket handshake rejected with HTTP {}: {}".format(e.status, e))
+                        error_count += 1
+                    else:
+                        # Home Assistant is down or restarting (connection refused, 502 on the upgrade...), so this is
+                        # an outage to ride out rather than a count towards giving up (#5437). Only the first failure logs the outage
+                        # warning; each reconnect attempt still logs its own Info/Warn lines below.
+                        self.outage_failure(ws_outage, "Web Socket could not connect: {}".format(e))
                 except Exception as e:
                     self.log("Error: Web Socket exception in startup: {}".format(e))
                     self.log("Error: " + traceback.format_exc())
@@ -1212,6 +1284,60 @@ class HAInterface(ComponentBase):
             self.api_call("/api/states/{}".format(entity_id), data, post=True)
             self.update_state(entity_id)
 
+    def _is_owned_virtual_control(self, domain, data):
+        """
+        Return True if this service call targets only controls Predbat published itself.
+
+        Every component control made with dashboard_item(..., app=...) is recorded in
+        dashboard_index_app and published to HA as state only (POST /api/states), with no
+        select/number/switch platform behind it. HA fires the call_service event for such an
+        entity but then logs "Referenced entities ... are missing" because no platform owns it,
+        so these writes are looped back to Predbat directly instead of going through HA.
+        """
+        if domain not in ("select", "number", "switch"):
+            return False
+        entities = data.get("entity_id")
+        if not entities:
+            return False
+        if isinstance(entities, str):
+            entities = [entities]
+        elif not isinstance(entities, (list, tuple, set)):
+            return False
+        return all(entity_id in self.base.dashboard_index_app for entity_id in entities)
+
+    def call_service_owned_control(self, domain, service, data):
+        """
+        Run a write to a Predbat-published control on a thread, waiting up to HA_SERVICE_CALL_TIMEOUT for it.
+
+        This keeps what routing the write through Home Assistant gave: HA fires the call_service event
+        before it runs the service and sends the websocket result after, and the socket loop runs the
+        Predbat handler inline on that event, so the caller waited for the handler, capped by the
+        websocket wait, and a handler exception never reached it. Returns the handler's result, or None
+        (the websocket branch's failure value) if the handler raised or is still running at the timeout,
+        in which case it is left to finish on its thread.
+        """
+        data_frame = {"domain": domain, "service": service, "service_data": data}
+        outcome = {}
+
+        def run_handler():
+            """Thread body: run the handler on its own event loop and keep its result or exception."""
+            try:
+                outcome["result"] = asyncio.run(self.base.trigger_callback(data_frame))
+            except Exception as e:
+                outcome["error"] = e
+                self.log("Warn: Service call {}/{} data {} failed: exception {}".format(domain, service, data, e))
+                self.log("Warn: " + traceback.format_exc())
+
+        thread = threading.Thread(target=run_handler, name="predbat-service-{}.{}".format(domain, service), daemon=True)
+        thread.start()
+        thread.join(timeout=HA_SERVICE_CALL_TIMEOUT)
+        if thread.is_alive():
+            self.log("Warn: Service call {}/{} data {} did not complete within {} seconds (timeout), leaving it to finish".format(domain, service, data, HA_SERVICE_CALL_TIMEOUT))
+            return None
+        if "error" in outcome:
+            return None
+        return outcome.get("result")
+
     def call_service(self, service, **kwargs):
         """
         Call a service in Home Assistant via Websocket
@@ -1228,13 +1354,52 @@ class HAInterface(ComponentBase):
             domain = ""
 
         if self.websocket_active:
+            if self._is_owned_virtual_control(domain, data):
+                # A control Predbat published itself: HA has no platform for it, so run it here
+                return self.call_service_owned_control(domain, service, data)
             return self.call_service_websocket_command(domain, service, data)
         else:
             # Loopback with no home assistant
             data_frame = {"domain": domain, "service": service, "service_data": data}
             return run_async(self.base.trigger_callback(data_frame))
 
-    def api_call(self, endpoint, data_in=None, post=False, core=True, silent=False):
+    def outage_failure(self, timer, reason):
+        """
+        Record that Home Assistant could not be reached (restarting, 502, timeout, refused connection...) on one channel.
+
+        This is expected for a few minutes whenever Home Assistant restarts, so it only becomes fatal once the
+        outage has lasted HA_OUTAGE_LIMIT_SECONDS without a single successful contact (#5437, #5354).
+        """
+        result = timer.failure()
+        if result == "started":
+            self.log("Warn: Home Assistant is unavailable ({}), will keep retrying for up to {} minutes".format(reason, HA_OUTAGE_LIMIT_SECONDS // 60))
+        elif result == "expired" and not self.fatal_error:
+            self.log("Error: Home Assistant has been unavailable for {} minutes ({}), stopping".format(HA_OUTAGE_LIMIT_SECONDS // 60, reason))
+            self.fatal_error_occurred()
+
+    def outage_success(self, timer):
+        """
+        Record that Home Assistant answered on one channel, ending any outage in progress.
+        """
+        lasted = timer.success()
+        if lasted is not None:
+            self.log("Info: Home Assistant is available again after {} seconds".format(lasted))
+
+    def ha_available(self):
+        """
+        Record that a REST call to Home Assistant worked.
+        """
+        self.outage_success(self.outage)
+        self.auth_rejected = False
+        self.auth_failures = 0
+
+    def ha_unavailable(self, reason):
+        """
+        Record that a REST call could not reach Home Assistant.
+        """
+        self.outage_failure(self.outage, reason)
+
+    def api_call(self, endpoint, data_in=None, post=False, core=True, silent=False, track_outage=True):
         """
         Make an API call to Home Assistant.
 
@@ -1243,6 +1408,7 @@ class HAInterface(ComponentBase):
         :param post: True if this is a POST request, False for GET.
         :param core: True is this is a call to HA Core, False if it is a Supervisor call
         :param silent: True if warning message from the API call is to be suppressed
+        :param track_outage: False when the caller is already retrying for itself and the outage timer must not also give up (initialize)
         :return: The response from the API.
         """
         if core:
@@ -1261,6 +1427,7 @@ class HAInterface(ComponentBase):
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        track = core and track_outage
         self.last_api_status = None
         try:
             if post:
@@ -1274,27 +1441,54 @@ class HAInterface(ComponentBase):
                 else:
                     response = http_get(url, headers=headers, timeout=TIMEOUT)
             self.last_api_status = response.status_code
+            # Home Assistant is up but rejecting our key, which waiting will not fix
+            auth_failed = core and response.status_code == 401
+            if auth_failed:
+                self.log("Error: Home Assistant rejected the ha_key (HTTP {}), please check your configuration of ha_key".format(response.status_code))
+                self.auth_rejected = True
+                self.auth_failures += 1
+                if track:
+                    self.outage_success(self.outage)  # it did answer
+                if self.auth_failures >= 10:
+                    self.log("Error: Too many rejected API calls, stopping")
+                    self.fatal_error_occurred()
+                return None
+            if core and response.status_code in HA_RESTARTING_STATUSES:
+                # A gateway in front of Home Assistant answering for it while it restarts, whatever the body says.
+                # Checked even when not tracking, so initialize() keeps retrying rather than taking a JSON error body as ready.
+                if not silent:
+                    self.log("Warn: HTTP {} from {}".format(response.status_code, url))
+                if track:
+                    self.ha_unavailable("HTTP {} from {}".format(response.status_code, endpoint))
+                return None
             data = response.json()
-            self.api_errors = 0
+            if track:
+                self.ha_available()
         except HttpJSONDecodeError:
             if not silent:  # suppress warning message for call to get slug id from supervisor because in docker installs this will always error (no supervisor)
                 self.log("Warn: Failed to decode response {} from {}".format(response, url))
-                self.api_errors += 1
-
+            if track:
+                self.ha_unavailable("bad response from {}".format(endpoint))
             data = None
         except HttpTimeout:
             if not silent:
                 self.log("Warn: Timeout from {}".format(url))
-            self.api_errors += 1
+            if track:
+                self.ha_unavailable("timeout from {}".format(endpoint))
             data = None
         except HttpConnectionError as e:
             if not silent:
                 self.log("Warn: Connection error from {}: {}".format(url, e))
-            self.api_errors += 1
+            if track:
+                self.ha_unavailable("connection error from {}".format(endpoint))
             data = None
-
-        if self.api_errors >= 10:
-            self.log("Error: Too many API errors, stopping")
-            self.fatal_error_occurred()
+        except HA_NOT_OUTAGE_ERRORS as e:
+            # Not an outage and waiting will not fix it: initialize() lets it fail at once naming the real problem,
+            # while at runtime one bad call is logged and dropped rather than aborting the whole update cycle
+            if not track_outage:
+                raise
+            if not silent:
+                self.log("Warn: Request error from {}: {}".format(url, e))
+            data = None
 
         return data

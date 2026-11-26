@@ -32,10 +32,12 @@ from tests.test_plot import run_plot_tests
 from tests.test_predict_pv_power import run_predict_pv_power_tests
 from tests.test_dashboard_device_class import test_dashboard_device_class
 from tests.test_inverter_config_sensor import test_inverter_config_sensor
+from tests.test_solar_surplus import run_solar_surplus_tests
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
 from tests.test_prediction_batch import run_prediction_batch_tests
 from tests.test_kernel_static_cache import run_kernel_static_cache_tests
 from tests.test_execute import run_execute_tests
+from tests.test_inverter_rate_no_entity import run_inverter_rate_no_entity_tests, run_inverter_rate_no_entity_execute_tests, run_inverter_rate_no_entity_execute_10kw_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
 from tests.test_predheat import (
@@ -54,6 +56,8 @@ from tests.test_temperature_units import test_temperature_unit_conversion
 from tests.test_charge_hold import run_charge_hold_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
 from tests.test_multi_car_iog import run_multi_car_iog_tests
+from tests.test_octopus_smart_control import run_octopus_smart_control_tests
+from tests.test_octopus_smart_control_switch import test_octopus_smart_control_switch
 from tests.test_car_manual_soc import run_car_manual_soc_tests
 from tests.test_car_max_rate import run_car_max_rate_tests
 from tests.test_fetch_config_options import test_fetch_config_options, test_save_restore_options_are_per_engine
@@ -163,6 +167,7 @@ from tests.test_hainterface_api import run_hainterface_api_tests
 from tests.test_hainterface_service import run_hainterface_service_tests
 from tests.test_hainterface_lifecycle import run_hainterface_lifecycle_tests
 from tests.test_hainterface_websocket import run_hainterface_websocket_tests
+from tests.test_hainterface_owned_controls import run_hainterface_owned_controls_tests
 from tests.test_history_chunking import run_history_chunking_tests
 from tests.test_web_if import run_test_web_if
 from tests.test_web_apps_edit import run_web_apps_edit_tests, run_web_apps_filter_tests
@@ -214,6 +219,7 @@ from tests.test_trial_memo import run_trial_memo_tests
 from tests.test_batch_job_packing import run_batch_job_packing_tests
 from tests.test_kernel_rounding import run_kernel_rounding_tests
 from tests.test_hit_charge_cache import run_hit_charge_cache_tests
+from tests.test_levels_block_replay import run_levels_block_replay_tests
 from tests.test_window_selection import run_window_selection_tests
 from tests.test_export_encoding import run_export_encoding_tests
 from tests.test_export_more_solar_warning import run_export_more_solar_warning_tests
@@ -322,6 +328,7 @@ from tests.test_annual_profiles import test_annual_profiles
 from tests.test_annual_load import test_annual_load, test_annual_load_octopus
 from tests.test_annual_weather import test_annual_weather, test_annual_weather_orientation_cache, test_annual_weather_window
 from tests.test_annual_tariff import test_annual_tariff
+from tests.test_octopus_domain import test_octopus_domain
 from tests.test_rate_add_io_slots import run_rate_add_io_slots_tests
 from tests.test_iog_car_need_gate import run_iog_car_need_gate_tests
 from tests.test_iog_charge_skew import run_iog_charge_skew_tests
@@ -361,10 +368,23 @@ from tests.test_find_charge_window import test_find_charge_window
 from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
 from tests.test_fetch_no_load_source import test_fetch_no_load_source
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
-from tests.test_random_scenarios import generate_scenarios, save_scenarios, run_scenarios_from_file, compare_results, profile_scenario, run_random_scenario_tests, run_random_scenario_reapply_tests
+from tests.test_random_scenarios import (
+    generate_scenarios,
+    save_scenarios,
+    run_scenarios_from_file,
+    compare_results,
+    profile_scenario,
+    run_random_scenario_tests,
+    run_random_scenario_reapply_tests,
+    run_random_scenario_metric_tests,
+    run_random_scenario_dawn_surplus_tests,
+    run_random_scenario_axle_precharge_tests,
+    run_random_scenario_generator_tests,
+)
 from tests import network_guard
 from tests.test_network_guard import test_network_guard
 from tests.test_debug_yaml_cache import test_debug_yaml_cache
+from tests.test_debug_yaml_safe_load import run_debug_yaml_safe_load_tests
 from tests.test_gecloud_budget import run_gecloud_budget_harness_tests, run_gecloud_api_budget
 from tests.test_carbon import test_carbon
 from tests.test_storage import test_storage
@@ -383,6 +403,7 @@ from tests.test_myenergi import test_myenergi
 from tests.test_wallbox import test_wallbox
 from tests.test_hypervolt import test_hypervolt
 from tests.test_car_charger_control import run_car_charger_control_tests
+from tests.test_car_cancel import run_car_cancel_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
@@ -402,6 +423,7 @@ from tests.test_battery_temperature_fetch import (
     test_battery_temperature_history_stuck_warning,
     test_battery_temperature_history_stuck_warning_fetch,
     test_battery_temperature_history_stuck_warning_once,
+    test_templates_set_battery_temperature_history,
 )
 from tests.test_oauth_mixin import run_oauth_mixin_tests
 from tests.test_fox_oauth import run_fox_oauth_tests
@@ -454,6 +476,8 @@ from tests.test_annual_export_sweep import (
     test_annual_export_sweep_tariff_threading,
 )
 from tests.test_debug_history import test_debug_history
+from tests.select_tests import choose_tests
+from tests.test_select_tests import test_select_tests
 from tests.test_debug_history_capture import test_debug_history_capture, test_debug_history_capture_slot_alignment, test_debug_history_count_range
 
 # Mock the components and plugin system
@@ -591,6 +615,7 @@ def main():
     # Format: (name, function, description, slow)
     TEST_REGISTRY = [
         ("secrets", run_secrets_tests, "Secrets loading tests", False),
+        ("select_tests", test_select_tests, "--test and -k test selection accepts function names and a test_ prefix", False),
         ("env_config", run_env_config_tests, "Per-instance PREDBAT_APPS_FILE / PREDBAT_SECRETS_FILE config tests", False),
         ("export_encoding", run_export_encoding_tests, "Packed export limit encoding accessor tests", False),
         ("export_more_solar_warning", run_export_more_solar_warning_tests, "export_more_solar / set_export_freeze dependency warning tests", False),
@@ -600,10 +625,14 @@ def main():
         ("predict_pv_power", run_predict_pv_power_tests, "predict_pv_power plan-interval scaling tests", False),
         ("dashboard_device_class", test_dashboard_device_class, "Dashboard sensor device_class regression tests (#3352)", False),
         ("inverter_config_sensor", test_inverter_config_sensor, "Aggregated static prediction inputs published as sensor.<prefix>_inverter_config", False),
+        ("solar_surplus", run_solar_surplus_tests, "Solar surplus power and force export slot sensor tests", False),
         ("model_kernel", run_model_kernel_tests, "Model tests run with the C++ prediction kernel enabled", False),
         ("kernel_parity", run_kernel_parity_tests, "C++ prediction kernel vs Python engine parity tests", False),
         ("prediction_batch", run_prediction_batch_tests, "Batched prediction fan-out tests", False),
         ("inverter", run_inverter_tests, "Inverter tests", False),
+        ("inverter_rate_no_entity", run_inverter_rate_no_entity_tests, "Rate read-back for an inverter with no rate entity, sent as {power} (#3311)", False),
+        ("inverter_rate_no_entity_execute", run_inverter_rate_no_entity_execute_tests, "execute_plan() sends this cycle's rate as {power} to a script-driven inverter (#3311, #5252)", False),
+        ("inverter_rate_no_entity_execute_10kw", run_inverter_rate_no_entity_execute_10kw_tests, "As inverter_rate_no_entity_execute at 10kW: a low power charge after an export is not held at 0", False),
         ("execute", run_execute_tests, "Execute tests", False),
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),
@@ -775,6 +804,8 @@ def main():
         ("octopus_slots", run_load_octopus_slots_tests, "Load Octopus slots tests", False),
         ("octopus_slot_max_default", run_octopus_slot_max_default_tests, "Octopus slot max auto-detection from IOG-SMB tariff code", False),
         ("multi_car_iog", run_multi_car_iog_tests, "Multi-car IOG tests", False),
+        ("octopus_smart_control_switch", test_octopus_smart_control_switch, "Built-in Octopus component Smart Control switch: state, SUSPEND/UNSUSPEND commands, rollback, wiring", False),
+        ("octopus_smart_control", run_octopus_smart_control_tests, "Planned Octopus dispatches are ignored while Smart Control is off", False),
         ("car_manual_soc", run_car_manual_soc_tests, "Manual car SoC: automatic enable, reset on unplug, energy-sensor tracking", False),
         ("car_max_rate", run_car_max_rate_tests, "car_charging_max_rate caps each car's charge rate, per car, held through sensor drop-outs, and against the Octopus raise", False),
         ("rate_add_io_slots", run_rate_add_io_slots_tests, "Rate add IO slots tests", False),
@@ -862,6 +893,7 @@ def main():
         ("annual_weather_orientation_cache", test_annual_weather_orientation_cache, "Annual weather cache keys separate roof orientations", False),
         ("annual_weather_window", test_annual_weather_window, "Annual weather month-window fetch tests", False),
         ("annual_tariff", test_annual_tariff, "Annual prediction tariff tests", False),
+        ("octopus_domain", test_octopus_domain, "Octopus API domain move to api.oegb-kraken.energy (GH#5786)", False),
         ("solax", run_solax_tests, "SolaX API tests", False),
         ("sigenergy", run_sigenergy_tests, "Sigenergy Cloud API tests", False),
         ("iboost_smart", run_iboost_smart_tests, "iBoost smart tests", False),
@@ -874,6 +906,7 @@ def main():
         ("batch_job_packing", run_batch_job_packing_tests_isolated, "Kernel batch jobs packed with struct match the per-field fill", False),
         ("kernel_rounding", run_kernel_rounding_tests_isolated, "Kernel returns its scalar results already rounded to 4dp", False),
         ("hit_charge_cache", run_hit_charge_cache_tests, "Hit charge window cache tests", False),
+        ("levels_block_replay", run_levels_block_replay_tests, "Levels pass block replay matches a full rebuild", False),
         ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
         ("kernel_static_cache", run_kernel_static_cache_tests, "Kernel static context cache tests", False),
         ("optimise_export_copy", run_optimise_export_copy_tests, "Optimise export window copying tests", False),
@@ -931,6 +964,8 @@ def main():
         ("hainterface_lifecycle", run_hainterface_lifecycle_tests, "HAInterface lifecycle tests", False),
         # HAInterface websocket tests
         ("hainterface_websocket", run_hainterface_websocket_tests, "HAInterface websocket tests", False),
+        # HAInterface routing of Predbat-published controls (#6223)
+        ("hainterface_owned_controls", run_hainterface_owned_controls_tests, "HAInterface Predbat-published control routing tests", False),
         # History chunking (long windows fetched in pieces) tests
         ("history_chunking", run_history_chunking_tests, "History chunking tests", False),
         # Carbon Intensity API unit tests
@@ -953,6 +988,7 @@ def main():
         ("inverter_write_poll", run_inverter_write_poll_tests, "Inverter write-and-poll timing tests", False),
         ("givtcp_rest", run_givtcp_rest_tests, "GivTCP REST client write/retry/transport tests", False),
         ("car_charger_control", run_car_charger_control_tests, "Shared Predbat-led EV charger control tests", False),
+        ("car_cancel", run_car_cancel_tests, "Cancel a car slot for export tests", False),
         # myenergi Zappi and Eddi unit tests
         ("myenergi", test_myenergi, "myenergi Zappi and Eddi comprehensive tests (normalisation, transports, publishing, auto-config, controls)", False),
         ("wallbox", test_wallbox, "Wallbox EV charger tests (transport, normalisation, publishing, auto-config, controls, plan-led charging)", False),
@@ -974,6 +1010,7 @@ def main():
         ("battery_temperature_stuck_warning", test_battery_temperature_history_stuck_warning, "Battery temperature history stuck at 0 warns, naming the GivTCP rename (#6193)", False),
         ("battery_temperature_stuck_warning_fetch", test_battery_temperature_history_stuck_warning_fetch, "Battery temperature stuck warning through the real fetch path (#6193)", False),
         ("battery_temperature_stuck_warning_once", test_battery_temperature_history_stuck_warning_once, "Battery temperature stuck warning reported once, curve-aware wording (#6193)", False),
+        ("templates_battery_temperature_history", test_templates_set_battery_temperature_history, "apps.yaml templates that set battery_temperature also set battery_temperature_history (#6270)", False),
         ("temperature", test_temperature, "External Temperature API tests (initialization, zone.home fallback, timezone conversion, caching)", False),
         ("band_rate_text", test_band_rate_text, "Band rate text tests (flat rate, Cosy, Flux import/export)", False),
         ("rate_text_scan", test_rate_text_scan, "Rate text scan tests (multi-band min/max range grouping)", False),
@@ -1027,6 +1064,7 @@ def main():
         ("optimise_swap_export", run_optimise_swap_export_tests, "Optimise pairwise export-window swap tests", False),
         ("network_guard", test_network_guard, "Unit tests may not reach the network: non-local lookups and connects fail the test", False),
         ("debug_yaml_cache", test_debug_yaml_cache, "Debug dump parse cache used by the test runner", False),
+        ("debug_yaml_safe_load", run_debug_yaml_safe_load_tests, "Replaying a debug dump never runs code the dump names", False),
         ("debug_cases", run_debug_cases, "Debug case file tests", False),
         ("annual_config", test_annual_config, "Annual prediction config validation tests", False),
         ("annual_bootstrap", test_annual_bootstrap, "Annual prediction bootstrap and state reset tests", False),
@@ -1067,6 +1105,10 @@ def main():
         ("ml_training_perf", run_ml_training_perf_tests, "ML training performance tests", True),
         ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
         ("random_reapply", run_random_scenario_reapply_tests, "Running a random scenario leaves it unchanged, so a re-run plans identically", False),
+        ("random_metric", run_random_scenario_metric_tests, "The random scenario harness records the planner's own metric for the final plan", False),
+        ("random_dawn_surplus", run_random_scenario_dawn_surplus_tests, "A battery holding energy at dawn before a clipped solar day exports it at the night rate", False),
+        ("random_axle_precharge", run_random_scenario_axle_precharge_tests, "Charging at the peak rate ahead of an Axle event does not make the peak a published low rate", False),
+        ("random_generator", run_random_scenario_generator_tests, "The committed random scenarios are what the generator makes, with no iBoost conflict", False),
         ("gecloud_budget_harness", run_gecloud_budget_harness_tests, "GE Cloud API budget harness unit tests", False),
         ("gecloud_api_budget", run_gecloud_api_budget, "GE Cloud API calls over a simulated day (baseline measurement)", True),
         ("debug_history", test_debug_history, "Rolling debug-history snapshot buffer tests", False),
@@ -1087,8 +1129,8 @@ def main():
     parser.add_argument("--full_debug", action="store_true", help="Enable full debug output")
     parser.add_argument("--redo", action="store_true", help="Redo rates, load model and octopus slots for debug test")
     parser.add_argument("--compare", action="store_true", help="Run compare")
-    parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name (can be used multiple times, use --list to see available tests)")
-    parser.add_argument("--keyword", "-k", action="store", help="Run tests matching keyword pattern (e.g., -k carbon_ runs all carbon tests)")
+    parser.add_argument("--test", "-t", action="append", help="Run specific test(s) by name or test function name (can be used multiple times, use --list to see available tests)")
+    parser.add_argument("--keyword", "-k", action="store", help="Run tests whose name or function name contains the keyword (e.g., -k carbon_ runs all carbon tests; a leading test_ is ignored)")
     parser.add_argument("--list", "-l", action="store_true", help="List all available tests")
     # Named from the registry rather than hard-coded: the previous literal list had drifted to
     # name three tests that are not marked slow at all, while the four that are went unmentioned.
@@ -1207,31 +1249,12 @@ def main():
         run_single_debug(args.debug_file, my_predbat, args.debug_file, compare=args.compare, debug=args.full_debug, redo=args.redo, overrides=overrides)
         sys.exit(0)
 
-    # Collect tests to run based on arguments
-    tests_to_run = []
-
-    if args.keyword:
-        # Run tests matching keyword pattern
-        keyword = args.keyword
-        tests_to_run = [(name, func, desc, slow) for name, func, desc, slow in TEST_REGISTRY if keyword in name]
-        if not tests_to_run:
-            print(f"ERROR: No tests found matching keyword '{keyword}'")
-            sys.exit(1)
-    elif args.test:
-        # Run specific tests by name
-        for test_name in args.test:
-            test_found = False
-            for name, func, desc, slow in TEST_REGISTRY:
-                if name == test_name:
-                    tests_to_run.append((name, func, desc, slow))
-                    test_found = True
-                    break
-            if not test_found:
-                print(f"ERROR: Test '{test_name}' not found. Use --list to see available tests.")
-                sys.exit(1)
-    else:
-        # Run all tests from the registry
-        tests_to_run = TEST_REGISTRY
+    # Collect tests to run based on arguments: -k, then --test, else everything. Both accept the registry name, the test function name, or a
+    # registry name typed with "test_" in front
+    tests_to_run, error = choose_tests(TEST_REGISTRY, keyword=args.keyword, test_names=args.test)
+    if error:
+        print(error)
+        sys.exit(1)
 
     if args.shuffle:
         shuffle_seed = args.shuffle_seed if args.shuffle_seed is not None else random.randrange(2**32)
