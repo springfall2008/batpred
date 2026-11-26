@@ -75,6 +75,11 @@ def test_scenarios_share_one_trial(my_predbat, kernel_modes):
                 lambda pv: prediction.thread_run_prediction_charge_min_max(try_soc, 1, charge_limit, charge_window, export_window, export_limits, pv, None, end_record),
                 ("charge_limit",),
             ),
+            "single": (
+                lambda pv: prediction.queue_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv, end_record, 5),
+                lambda pv: prediction.thread_run_prediction_single(charge_limit, charge_window, export_window, export_limits, pv, end_record, 5),
+                ("charge_limit", "export_limits"),
+            ),
             "charge_all_n": (
                 lambda pv: prediction.queue_run_prediction_charge(try_soc, 1, charge_limit, charge_window, export_window, export_limits, pv, [0, 2], end_record),
                 lambda pv: prediction.thread_run_prediction_charge(try_soc, 1, charge_limit, charge_window, export_window, export_limits, pv, [0, 2], end_record),
@@ -192,6 +197,32 @@ def test_different_trials_do_not_share(my_predbat):
         if name != "base" and job.charge_limit is charge_jobs["base"].charge_limit:
             print("ERROR: charge trial '{}' shares its limits with the base trial".format(name))
             failed = True
+
+    # Single-scenario trials (the levels pass): a copy is shared only by jobs handed the same pair of lists
+    singles = {"base": (charge_limit, export_limits), "charge list": (list(charge_limit), export_limits), "export list": (charge_limit, list(export_limits))}
+    single_jobs = {}
+    for name, (this_charge, these_limits) in singles.items():
+        single_jobs[name] = prediction.queue_run_prediction_single(this_charge, charge_window, export_window, these_limits, PV_SCENARIO_NOMINAL, end_record, 5).job
+        if single_jobs[name].charge_limit != list(this_charge) or single_jobs[name].export_limits != list(these_limits):
+            print("ERROR: single trial '{}' was given another trial's lists".format(name))
+            failed = True
+        if single_jobs[name].charge_limit is this_charge or single_jobs[name].export_limits is these_limits:
+            print("ERROR: single trial '{}' should own copies, not the caller's lists".format(name))
+            failed = True
+    for name, job in single_jobs.items():
+        if name != "base" and (job.charge_limit is single_jobs["base"].charge_limit or job.export_limits is single_jobs["base"].export_limits):
+            print("ERROR: single trial '{}' shares a list with the base trial".format(name))
+            failed = True
+    # A trial whose list is changed after its handle is read must not be handed the earlier copy
+    prediction.flush_batch()
+    caller_charge = list(charge_limit)
+    first_single = prediction.queue_run_prediction_single(caller_charge, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record, 5)
+    first_single.get()
+    caller_charge[1] = 0.0
+    second_single = prediction.queue_run_prediction_single(caller_charge, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, end_record, 5)
+    if second_single.job.charge_limit is first_single.job.charge_limit or second_single.job.charge_limit[1] != 0.0:
+        print("ERROR: a single trial queued after a flush was handed the copy made before it")
+        failed = True
     prediction.flush_batch()
     if not failed:
         print("PASS")

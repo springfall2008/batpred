@@ -1595,6 +1595,7 @@ _SNAPSHOT_FIELDS = (
     "rate_import_pre_event_threshold",
     "rate_import_tariff_max",
     "rate_export_cost_threshold",
+    "rate_export_candidate_threshold",
     # test_compare_and_annual_clear_stale_saving_minutes drives the real scan pipeline through
     # annual._apply_rates()/Compare.fetch_rates(), which populate these from its synthetic tariff -
     # unrestored they leak a 48h tariff's windows onto the shared fixture (#5079 class of bug, and
@@ -1602,6 +1603,7 @@ _SNAPSHOT_FIELDS = (
     "low_rates",
     "low_rates_tariff",
     "high_export_rates",
+    "high_export_rates_tariff",
     "rate_min_forward",
     # Rebuilt by Compare.fetch_rates() for a tariff with its own export rates
     "rate_export_max_forward",
@@ -1620,6 +1622,58 @@ _SNAPSHOT_FIELDS = (
     # compare.fetch_rates() resets io_adjusted when a tariff replaces the import rates
     "io_adjusted",
 )
+
+
+def test_automatic_export_candidates_include_the_cheapest_rate(my_predbat):
+    """In automatic mode the optimiser is offered every export rate, the cheapest included, but only the
+    high rate is published as one.
+
+    On a dual-rate export tariff (5p 00:30-05:30, 15p otherwise) the automatic high-rate threshold is
+    min + 0.5 = 5.5p, which drops the whole night band. As the optimiser's candidate threshold that hid
+    the export a battery still holding energy at dawn needs before an export-limited solar day:
+    exported at 5p it earns something, displaced by solar that is then clipped it earns nothing (#6214).
+    So high_export_rates, which calculate_plan() seeds export_window_best from, must hold night windows,
+    while high_export_rates_tariff, behind the high_rate_export sensors, and the ratcheted
+    threshold must still describe the 15p band alone.
+    """
+    print("**** test_automatic_export_candidates_include_the_cheapest_rate ****")
+    failed = False
+
+    _setup_export_event(my_predbat)
+    rate_export = {minute: (5.0 if 30 <= minute % 1440 < 330 else 15.0) for minute in range(0, 48 * 60)}
+    my_predbat.rate_export = rate_export
+    my_predbat.rate_export_base = rate_export.copy()
+    my_predbat.rate_export_pre_saving = rate_export.copy()
+    my_predbat.rate_export_replicated = {}
+    my_predbat.rate_export_saving_minutes = set()
+    my_predbat.rate_export_min, my_predbat.rate_export_max, my_predbat.rate_export_average, _, _ = my_predbat.rate_minmax(rate_export)
+
+    my_predbat.set_rate_thresholds()
+    if abs(my_predbat.rate_export_cost_threshold - 5.5) > 0.01 or abs(my_predbat.rate_export_candidate_threshold - 4.9) > 0.01:
+        print("ERROR: automatic thresholds should be high-rate 5.5 (5p + 0.5) and candidate 4.9 (5p - 0.1), got {} and {}".format(my_predbat.rate_export_cost_threshold, my_predbat.rate_export_candidate_threshold))
+        failed = True
+
+    my_predbat.scan_export_windows(alt_rates=my_predbat.rate_import)
+
+    def in_night(window):
+        return 30 <= window["start"] % 1440 < 330
+
+    if not any(in_night(w) for w in my_predbat.high_export_rates):
+        print("ERROR: no night-band export window is offered to the optimiser - candidates were {}".format([(w["start"], w["end"]) for w in my_predbat.high_export_rates]))
+        failed = True
+    if not any(not in_night(w) for w in my_predbat.high_export_rates):
+        print("ERROR: the 15p windows are missing from the optimiser's candidates")
+        failed = True
+    if not my_predbat.high_export_rates_tariff or any(in_night(w) for w in my_predbat.high_export_rates_tariff):
+        print("ERROR: the published high-rate windows should be the 15p band only - got {}".format([(w["start"], w["end"], w["average"]) for w in my_predbat.high_export_rates_tariff]))
+        failed = True
+    if abs(my_predbat.rate_export_cost_threshold - 15.0) > 0.01:
+        print("ERROR: the ratchet should settle on the cheapest high-rate window, 15p, got {}".format(my_predbat.rate_export_cost_threshold))
+        failed = True
+
+    if not failed:
+        print("PASS")
+    return failed
 
 
 def run_set_rate_thresholds_tests(my_predbat):
@@ -1670,6 +1724,7 @@ def run_set_rate_thresholds_tests(my_predbat):
         failed |= test_compare_reused_live_rates_keep_saving_minutes(my_predbat)
         failed |= test_compare_override_reaches_kept_pre_saving_snapshot(my_predbat)
         failed |= test_compare_rate_min_forward_ignores_live_sessions(my_predbat)
+        failed |= test_automatic_export_candidates_include_the_cheapest_rate(my_predbat)
         return failed
     finally:
         for field, value in snapshot.items():

@@ -76,7 +76,7 @@ The parking rule in `/issue-triage` step 9 applies to any new "believed fixed" l
 
 Do **not** touch the `BOT_TRIAGED` or `BOT_REVIEW` labels — the daemon manages both.
 
-If the `mcp__shared-memory__*` tools are available and this review changed what is known, `update` the issue's existing memory (found by `issue:<number>`) rather than storing a second one. If none exists, `store` one as `/issue-triage` step 9 describes. The public-safety rules in CLAUDE.md's "Shared team memory" apply.
+If the `mcp__shared-memory__*` tools are available and this review changed what is known, `update` the issue's existing memory (found by `issue:<number>`) rather than storing a second one. If none exists, `store` one as `/issue-triage` step 9 describes. If you store a finding as its own memory, separate from the issue's status memory, link it with `relate_memories(<finding>, <issue memory>, "derived-from")`; if it replaces an earlier finding, also link it `supersedes` that one. The public-safety rules in CLAUDE.md's "Shared team memory" apply.
 
 ## Guardrails
 

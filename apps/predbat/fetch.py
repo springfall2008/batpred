@@ -1964,11 +1964,8 @@ class Fetch:
 
         # Find discharging windows
         if self.rate_export:
-            self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=self.rate_import)
-            # Update threshold automatically
-            self.log("High export rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
-            if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
-                self.rate_export_cost_threshold = lowest
+            lowest, highest = self.scan_export_windows(alt_rates=self.rate_import)
+            self.log("High export rate found rates in range {}{} to {}{}, {} export candidate window(s) for the optimiser".format(lowest, curr, highest, curr, len(self.high_export_rates)))
 
         # Find charging windows
         if self.rate_import:
@@ -3806,6 +3803,27 @@ class Fetch:
 
         return rate_min_forward
 
+    def scan_export_windows(self, alt_rates=None):
+        """
+        Find the export windows, after set_rate_thresholds().
+
+        The export counterpart of find_low_rate_windows()'s low_rates / low_rates_tariff (GH#5050).
+        high_export_rates is what the optimiser is offered (calculate_plan() seeds export_window_best from it):
+        every window at or above rate_export_candidate_threshold, which in automatic mode is every export slot.
+        high_export_rates_tariff is the tariff's own high-rate windows, at or above rate_export_cost_threshold,
+        and drives the high_rate_export sensors - publishing the tariff's cheapest band as the next high rate
+        would be wrong. In automatic mode the threshold is then ratcheted to the cheapest high-rate window.
+        Returns the lowest and highest average of the high-rate windows.
+        """
+        self.high_export_rates_tariff, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=alt_rates)
+        if self.rate_export_candidate_threshold < self.rate_export_cost_threshold:
+            self.high_export_rates, _, _ = self.rate_scan_window(self.rate_export, 5, self.rate_export_candidate_threshold, True, alt_rates=alt_rates)
+        else:
+            self.high_export_rates = self.high_export_rates_tariff
+        if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
+            self.rate_export_cost_threshold = lowest
+        return lowest, highest
+
     def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False, alt_rates=None, pv_light_dark=None, start_minute=0):
         """
         Scan for the next high/low rate window, from start_minute (midnight by default)
@@ -3961,12 +3979,19 @@ class Fetch:
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
             self.rate_export_cost_threshold = dp2(rate_export_average * self.rate_high_threshold)
+            self.rate_export_candidate_threshold = self.rate_export_cost_threshold
         else:
             # In automatic mode select the only rate or everything but the most cheapest
             if (rate_export_max == rate_export_min) or (rate_export_min > rate_min) or have_alerts:
                 self.rate_export_cost_threshold = rate_export_min - 0.1
             else:
                 self.rate_export_cost_threshold = rate_export_min + 0.5
+            # The optimiser is offered every export rate, the cheapest included (scan_export_windows). Leaving the
+            # cheapest out hid the one export a dual-rate tariff needs when the solar will clip: a battery still
+            # holding energy at dawn before an export-limited solar day earns the night rate by exporting it, or
+            # nothing once the solar that displaces it is clipped (#6214). Whether an export is worth making is the
+            # optimiser's decision. rate_export_cost_threshold above stays the high-rate one the entities publish.
+            self.rate_export_candidate_threshold = rate_export_min - 0.1
 
         self.log(
             "Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(

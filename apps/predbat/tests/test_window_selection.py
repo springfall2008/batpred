@@ -24,7 +24,12 @@ four-deep sweep: the trials that survive must be exactly the ones that were the 
 set of windows, in the same order, because the search breaks ties on the first trial it sees.
 """
 
+import random
+
 from plan import distinct_slot_trials, select_window_candidates, slots_around
+
+# A threshold every price passes on the charge side (threshold >= price)
+ANY_PRICE = float("inf")
 
 # The slot length lists optimise_charge_limit_price_threads sweeps (local to that function)
 COARSE_SLOT_LENGTHS = [32, 16, 8, 4, 2, 1, 0]
@@ -41,6 +46,65 @@ def run_window_selection_tests(my_predbat):
     failed |= test_prefix_property_matches_capped_scan()
     failed |= test_distinct_slot_trials_drop_repeats()
     failed |= test_distinct_slot_trials_match_full_sweep()
+    failed |= test_threshold_selection_matches_predicate()
+    return failed
+
+
+def predicate_reference(entries, price_selected, allow_freeze, accept=None):
+    """select_window_candidates as it was before it compared the price inline: the price test is a predicate.
+
+    Kept here as the reference the inline comparisons are checked against, with the levels search's
+    two predicates (charge: loop_price >= price, export: loop_price < price).
+    """
+    chosen = []
+    seen = set()
+    for price, window_n, freeze in entries:
+        if not price_selected(price):
+            continue
+        if freeze and not allow_freeze:
+            continue
+        if window_n in seen:
+            continue
+        if accept is not None and not accept(window_n):
+            continue
+        seen.add(window_n)
+        chosen.append((window_n, freeze))
+    return chosen
+
+
+def test_threshold_selection_matches_predicate():
+    """select_window_candidates gives exactly what predicate_reference gives with the levels search's
+    two predicates (charge: loop_price >= price, export: loop_price < price).
+
+    Prices are drawn from a small set so thresholds land on entry prices - the boundary the two
+    comparisons must get the same way - and windows repeat, mixing freeze flags, with and without a
+    rejecting accept filter.
+    """
+    print("**** test_threshold_selection_matches_predicate ****")
+    failed = False
+    rng = random.Random(6086)
+    prices = [-2.5, 0.0, 4.0, 7.25, 7.3, 15.0, 30.0]
+    for case in range(400):
+        entries = [[rng.choice(prices), rng.randrange(8), rng.random() < 0.4] for _ in range(rng.randrange(0, 14))]
+        rejected = set(rng.sample(range(8), rng.randrange(0, 3)))
+
+        def accept(window_n, rejected=rejected):
+            """Reject a random few windows so the accept filter is exercised"""
+            return window_n not in rejected
+
+        for threshold in prices + [rng.uniform(-5, 35)]:
+            for allow_freeze in (True, False):
+                for use_accept in (False, True):
+                    acceptor = accept if use_accept else None
+                    expect_charge = predicate_reference(entries, lambda price: threshold >= price, allow_freeze, accept=acceptor)
+                    got_charge = select_window_candidates(entries, threshold, True, allow_freeze, accept=acceptor)
+                    expect_export = predicate_reference(entries, lambda price: threshold < price, allow_freeze, accept=acceptor)
+                    got_export = select_window_candidates(entries, threshold, False, allow_freeze, accept=acceptor)
+                    if got_charge != expect_charge or got_export != expect_export:
+                        print("ERROR: case {} threshold {} freeze {} accept {}: charge {} want {}, export {} want {}".format(case, threshold, allow_freeze, use_accept, got_charge, expect_charge, got_export, expect_export))
+                        failed = True
+    if not failed:
+        print("PASS")
     return failed
 
 
@@ -75,7 +139,7 @@ def test_takes_windows_passing_the_threshold_in_order():
 
     entries = [[10.0, 0, False], [12.0, 1, False], [8.0, 2, False]]
     # Charge side semantics: take everything at or below the loop price
-    got = select_window_candidates(entries, lambda price: 10.0 >= price, True)
+    got = select_window_candidates(entries, 10.0, True, True)
     expect = [(0, False), (2, False)]
     if got != expect:
         print("ERROR: expected {} but got {}".format(expect, got))
@@ -93,12 +157,12 @@ def test_skips_freeze_windows_when_freeze_not_allowed():
 
     entries = [[10.0, 0, True], [10.0, 1, False]]
 
-    got = select_window_candidates(entries, lambda price: True, False)
+    got = select_window_candidates(entries, ANY_PRICE, True, False)
     if got != [(1, False)]:
         print("ERROR: freeze disabled should drop window 0, got {}".format(got))
         failed = True
 
-    got = select_window_candidates(entries, lambda price: True, True)
+    got = select_window_candidates(entries, ANY_PRICE, True, True)
     if got != [(0, True), (1, False)]:
         print("ERROR: freeze enabled should keep both, got {}".format(got))
         failed = True
@@ -114,7 +178,7 @@ def test_deduplicates_keeping_the_first_occurrence():
     failed = False
 
     entries = [[10.0, 5, False], [11.0, 6, False], [12.0, 5, True]]
-    got = select_window_candidates(entries, lambda price: True, True)
+    got = select_window_candidates(entries, ANY_PRICE, True, True)
     expect = [(5, False), (6, False)]
     if got != expect:
         print("ERROR: expected {} but got {}".format(expect, got))
@@ -142,7 +206,7 @@ def test_rejected_window_is_retried_on_a_later_entry():
         return not (window_n == 7 and calls.count(7) == 1)
 
     entries = [[10.0, 7, False], [11.0, 7, False]]
-    got = select_window_candidates(entries, lambda price: True, True, accept=accept)
+    got = select_window_candidates(entries, ANY_PRICE, True, True, accept=accept)
     if got != [(7, False)]:
         print("ERROR: expected the second entry to be retried and taken, got {}".format(got))
         failed = True
@@ -184,7 +248,7 @@ def test_prefix_property_matches_capped_scan():
 
     for allow_freeze in (True, False):
         for accept in (None, reject_even):
-            unbounded = select_window_candidates(entries, lambda price: 12.0 >= price, allow_freeze, accept=accept)
+            unbounded = select_window_candidates(entries, 12.0, True, allow_freeze, accept=accept)
             for max_slots in range(0, 10):
                 expect_chosen, expect_mods = capped_reference(entries, lambda price: 12.0 >= price, allow_freeze, max_slots, accept=accept)
                 sliced = unbounded[:max_slots]
