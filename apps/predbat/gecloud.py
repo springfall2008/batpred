@@ -498,6 +498,16 @@ def register_switch_on(value):
     return isinstance(value, str) and value in ["on", "true", "True"]
 
 
+def register_exact_value(validation_rules):
+    """
+    The only value a register accepts, from an "exact:<value>" validation rule, or None when it has none
+    """
+    for validation_rule in validation_rules or []:
+        if isinstance(validation_rule, str) and validation_rule.startswith("exact:"):
+            return validation_rule.split(":", 1)[1]
+    return None
+
+
 VALIDATION_OPTIONS_PREFIX = "Value must be one of:"
 
 
@@ -905,7 +915,17 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                         new_value = False
                     elif service == "toggle":
                         new_value = not value
-                    # validation_rules = setting.get("validation_rules", [])
+
+                    validation_rules = setting.get("validation_rules", None) or []
+                    if "writeonly" in validation_rules:
+                        # A write-only register is an action (Restart Inverter is
+                        # ["writeonly", "exact:100"]) - it has no state to turn off, and the
+                        # API rejects anything but its exact value with -4, so True never worked
+                        if service == "turn_off":
+                            return
+                        new_value = register_exact_value(validation_rules)
+                        if new_value is None:
+                            new_value = True
 
                     result = await self.async_write_inverter_setting(device, key, new_value)
 

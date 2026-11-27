@@ -348,6 +348,7 @@ def test_ge_cloud(my_predbat=None):
         ("reread_follow_up_not_pushed_back", _test_control_reread_follow_up_not_pushed_back, "Failures counted while a follow-up is pending do not push it back"),
         ("reread_reason_left_read_only", _test_control_reread_reason_kept_on_leaving_read_only, "Control failure reason kept when Predbat leaves read only in the same cycle"),
         ("switch_event", _test_switch_event, "Switch event handler"),
+        ("switch_event_writeonly_action", _test_switch_event_writeonly_action, "Write-only action register writes its exact value, nothing on turn_off"),
         ("number_event", _test_number_event, "Number event handler"),
         ("select_event", _test_select_event, "Select event handler"),
         ("select_event_bracketed_options", _test_select_event_bracketed_options, "Select event with bracketed or unparseable option validation"),
@@ -5043,6 +5044,64 @@ def _test_switch_event(my_predbat):
                 return 1
             if write_calls[1]["value"] is not False:
                 print("ERROR: Expected value=False for turn_off, got {}".format(write_calls[1]["value"]))
+                return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_switch_event_writeonly_action(my_predbat):
+    """A write-only action register (Restart Inverter) writes its exact value on turn_on and nothing on turn_off"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        # As GivEnergy lists it: {"id": 83, "name": "Restart Inverter", "validation": "Value can only be 100", "validation_rules": ["writeonly", "exact:100"]}
+        restart_entity = "switch.predbat_gecloud_test123_restart_inverter"
+        ge_cloud.register_entity_map[restart_entity] = {"key": 83, "device": "test123"}
+        # A write-only register without an exact value, to check it still writes True
+        action_entity = "switch.predbat_gecloud_test123_some_action"
+        ge_cloud.register_entity_map[action_entity] = {"key": 99, "device": "test123"}
+        ge_cloud.settings["test123"] = {
+            83: {"name": "Restart Inverter", "value": None, "validation": "Value can only be 100", "validation_rules": ["writeonly", "exact:100"]},
+            99: {"name": "Some Action", "value": None, "validation_rules": ["writeonly"]},
+        }
+
+        write_calls = []
+
+        async def mock_write(serial, setting_id, value):
+            write_calls.append({"serial": serial, "id": setting_id, "value": value})
+            # What the API answers for a successful write-only write
+            return {"value": "Set"}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_write_inverter_setting = mock_write
+            ge_cloud.publish_registers = mock_publish
+
+            await ge_cloud.switch_event(restart_entity, "turn_on")
+            if write_calls != [{"serial": "test123", "id": 83, "value": "100"}]:
+                print("ERROR: Expected one write of '100' to setting 83 on turn_on, got {}".format(write_calls))
+                return 1
+
+            # A write-only register has no state to turn off, so nothing is written
+            await ge_cloud.switch_event(restart_entity, "turn_off")
+            if len(write_calls) != 1:
+                print("ERROR: Expected no write on turn_off of a write-only register, got {}".format(write_calls))
+                return 1
+
+            # Toggle fires the action again, however the last write left the stored value
+            await ge_cloud.switch_event(restart_entity, "toggle")
+            if len(write_calls) != 2 or write_calls[1]["value"] != "100":
+                print("ERROR: Expected toggle to write '100' to setting 83, got {}".format(write_calls))
+                return 1
+
+            await ge_cloud.switch_event(action_entity, "turn_on")
+            if len(write_calls) != 3 or write_calls[2]["value"] is not True:
+                print("ERROR: Expected a write-only register without an exact value to write True, got {}".format(write_calls))
                 return 1
 
         return 0
