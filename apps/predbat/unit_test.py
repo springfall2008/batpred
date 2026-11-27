@@ -30,7 +30,7 @@ from tests.test_perf import run_perf_test
 from tests.test_model import run_model_tests
 from tests.test_plot import run_plot_tests
 from tests.test_predict_pv_power import run_predict_pv_power_tests
-from tests.test_dashboard_device_class import test_dashboard_device_class
+from tests.test_dashboard_device_class import test_dashboard_device_class, test_dashboard_attribute_keys
 from tests.test_inverter_config_sensor import test_inverter_config_sensor
 from tests.test_solar_surplus import run_solar_surplus_tests
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
@@ -626,6 +626,7 @@ def main():
         ("plot", run_plot_tests, "Failure plot display is opt-in (--plot) tests", False),
         ("predict_pv_power", run_predict_pv_power_tests, "predict_pv_power plan-interval scaling tests", False),
         ("dashboard_device_class", test_dashboard_device_class, "Dashboard sensor device_class regression tests (#3352)", False),
+        ("dashboard_attribute_keys", test_dashboard_attribute_keys, "Dashboard sensor HA attribute keys spelt correctly, soc_kw_best_h* in kWh (#6388)", False),
         ("inverter_config_sensor", test_inverter_config_sensor, "Aggregated static prediction inputs published as sensor.<prefix>_inverter_config", False),
         ("solar_surplus", run_solar_surplus_tests, "Solar surplus power and force export slot sensor tests", False),
         ("model_kernel", run_model_kernel_tests, "Model tests run with the C++ prediction kernel enabled", False),
