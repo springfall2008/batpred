@@ -165,8 +165,8 @@ Tasks 1-3 must be merged into the branch first. This task changes only benign-wa
 - Record (not committed): the figures from Steps 3-4 under `coverage/load_ml_benchmark_runs/`, for Task 5's README
 
 - [ ] **Step 1: Build the fixture** from the main checkout (read-only on the live side):
-  `python3 coverage/memory_benchmark_tools/export_fixture.py --load-ml --days 28 --live /Volumes/addon_configs/6adb4f0d_predbat --out coverage/load_ml_benchmark_data`
-  Expected: `Fixture written to ...`, with no leak or personal-data refusal. The live path is the maintainer's; never write it into a committed file.
+  `python3 coverage/memory_benchmark_tools/export_fixture.py --load-ml --days 28 --live <add-on config dir> --out coverage/load_ml_benchmark_data`
+  Expected: `Fixture written to ...`, with no leak or personal-data refusal. Never write the real live path into a committed file.
 - [ ] **Step 2: Check the training inputs.** Confirm the fixture's `apps.yaml` points `load_today`, `pv_today` and `load_power` at entities with 28 days of rows in the fixture DB. Query the DB with `sqlite3`: count the rows per entity. If any is missing, fix `fixture_db.build_remap` under Task 2's TDD steps, and say so in the report.
 - [ ] **Step 3: Run main twice:** `coverage/load_ml_benchmark <main checkout> coverage/load_ml_benchmark_runs/main-1`, then `main-2`. Expected: both have `ok: true`, the same `forecast_digest`, `epochs_trained` and `val_mae`, and `training_seconds` within about 5% of each other. Read `predbat.log` for warnings. For each harmless one, add a `LOAD_ML_BENIGN_WARNINGS` entry with its reason under TDD (a test line per entry, as `test_benign_warnings_each_carry_a_reason` does), and re-run. **If the digests differ, stop and report the two runs: don't loosen the rule.**
 - [ ] **Step 4: Run once with `--profile`.** Record the share of `training_seconds` in NumPy/BLAS kernels (`numpy` and `_multiarray_umath` frames with high `tottime`) for the README. If that share is over 75%, flag it to the maintainer before Task 5's board file is finalised (spec stop rule).
