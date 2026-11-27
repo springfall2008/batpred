@@ -20,6 +20,7 @@ from unittest.mock import patch
 import pytz
 
 from octopus import OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME, PackedUrlCacheRates, decode_octopus_url_cache, encode_octopus_url_cache
+from utils import minute_data
 from tests.test_infra import run_async
 from tests.test_octopus_free import _attach_storage, _reset_free_cache
 
@@ -99,7 +100,13 @@ def _check_packed_holder(failed):
     if type(unpacked) is not dict or list(unpacked.items()) != list(rates.items()) or unpacked is PackedUrlCacheRates.unpack(packed):
         print("FAIL: unpack should give a new dict with the same minutes, rates and order each time")
         failed = True
-    for name, data in (("gap", {0: 10.0, 2: 11.0}), ("int rate", {0: 10.0, 1: 7}), ("descending", {1: 10.0, 0: 11.0}), ("str minute", {"0": 1.0}), ("empty", {})):
+    # A run stored out of order (a download is newest half hour first) still packs, and reads back ascending
+    descending = {1: 10.0, 0: 11.0}
+    held = PackedUrlCacheRates.pack_copy(descending)
+    if not isinstance(held, PackedUrlCacheRates) or held.start != 0 or list(PackedUrlCacheRates.unpack(held).items()) != [(0, 11.0), (1, 10.0)]:
+        print("FAIL: a run of minutes stored out of order should pack and read back ascending, got {!r}".format(held))
+        failed = True
+    for name, data in (("gap", {0: 10.0, 2: 11.0}), ("int rate", {0: 10.0, 1: 7}), ("out of order int rate", {1: 10.0, 0: 7}), ("str minute", {"0": 1.0}), ("empty", {})):
         held = PackedUrlCacheRates.pack_copy(data)
         if type(held) is not dict or held is data or held != data:
             print("FAIL: pack_copy of a {} series should be a separate copy of the dict".format(name))
@@ -137,13 +144,24 @@ def _check_download_reads(my_predbat, failed):
     try:
         my_predbat.octopus_url_cache = {}
         my_predbat.octopus_url_cache_loaded = True
-        downloaded = {minute: 20.0 + (minute // 30) % 7 for minute in range(-60, my_predbat.minutes_now + 2880)}
-        downloaded = {minute: float(rate) for minute, rate in downloaded.items()}
-        expected = dict(downloaded)
+        # Built as download_octopus_rates_func() builds it: half hours newest first, minutes ascending within each
+        first_minute = -60
+        last_minute = (my_predbat.minutes_now + 2880) // 30 * 30
+        downloaded = {}
+        for block in range(last_minute - 30, first_minute - 1, -30):
+            for minute in range(block, block + 30):
+                downloaded[minute] = float(20.0 + (minute // 30) % 7)
+        if list(downloaded) == sorted(downloaded):
+            print("FAIL: test setup - the download should not be in ascending minute order")
+            failed = True
+        expected = dict(sorted(downloaded.items()))
         with patch.object(my_predbat, "download_octopus_rates_func", return_value=downloaded), patch.object(my_predbat, "_save_octopus_url_cache_to_storage"):
             first = my_predbat.download_octopus_rates(url)
         if not isinstance(my_predbat.octopus_url_cache[url]["data"], PackedUrlCacheRates):
-            print("FAIL: a downloaded run of float minutes should be held packed")
+            print("FAIL: a downloaded run of float minutes, newest half hour first, should be held packed")
+            failed = True
+        if first != expected:
+            print("FAIL: the first read should return the downloaded rates")
             failed = True
         first[my_predbat.minutes_now] = 999.0  # a saving session added by the caller
         with patch.object(my_predbat, "download_octopus_rates_func", side_effect=AssertionError("cache hit expected")):
@@ -172,6 +190,43 @@ def _check_download_reads(my_predbat, failed):
         my_predbat.octopus_url_cache, my_predbat.octopus_url_cache_loaded = saved
     if not failed:
         print("PASS: downloads are held packed and every read is the caller's own dict")
+    return failed
+
+
+def _check_newest_first_download(failed):
+    """Rates built the way download_octopus_rates_func() builds them, from rows newest first as Octopus returns them, still encode compactly."""
+    midnight = pytz.utc.localize(datetime(2026, 11, 26, 0, 0, 0))
+    rows = []
+    for slot in range(4):
+        valid_from = midnight + timedelta(minutes=30 * slot)
+        valid_to = valid_from + timedelta(minutes=30)
+        rows.append({"valid_from": valid_from.strftime("%Y-%m-%dT%H:%M:%SZ"), "valid_to": valid_to.strftime("%Y-%m-%dT%H:%M:%SZ"), "value_inc_vat": 10.0 + slot})
+    rows.reverse()
+    rates, _ = minute_data(rows, 3, midnight, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+    if list(rates) == sorted(rates):
+        print("FAIL: test setup - newest-first rows should give a dict whose minutes are not in ascending order")
+        return True
+    cache = {_RATE_URL: {"stamp": datetime(2026, 11, 26, 10, 0, 0), "midnight_utc": midnight, "data": rates}}
+    encoded = encode_octopus_url_cache(cache)
+    run = encoded[_RATE_URL]["data"]
+    if set(run) != {"start", "rates"} or run["start"] != 0 or len(run["rates"]) != 120:
+        print("FAIL: newest-first download not encoded as start + rates, got keys {}".format(sorted(run)))
+        return True
+    decoded = decode_octopus_url_cache(json.loads(json.dumps(encoded)))[_RATE_URL]["data"]
+    if decoded != rates:
+        print("FAIL: newest-first download did not round trip")
+        failed = True
+    elif list(decoded) != sorted(rates):
+        print("FAIL: newest-first download should reload in ascending minute order")
+        failed = True
+    elif decoded[0] != 10.0 or decoded[119] != 13.0:
+        print("FAIL: rates landed on the wrong minutes: minute 0 {} minute 119 {}".format(decoded[0], decoded[119]))
+        failed = True
+    elif not isinstance(PackedUrlCacheRates.pack_copy(rates), PackedUrlCacheRates) or PackedUrlCacheRates.pack_copy(rates) != rates:
+        print("FAIL: newest-first download should be held packed in memory, equal to the downloaded dict")
+        failed = True
+    else:
+        print("PASS: newest-first download encoded compactly and reloads ascending")
     return failed
 
 
@@ -247,6 +302,7 @@ def test_octopus_url_cache(my_predbat):
     failed = False
     failed = _check_round_trip(failed)
     failed = _check_compact(failed)
+    failed = _check_newest_first_download(failed)
     failed = _check_packed_holder(failed)
     failed = _check_download_reads(my_predbat, failed)
     failed = _check_storage(my_predbat, failed)

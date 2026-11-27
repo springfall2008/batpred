@@ -87,6 +87,7 @@ from axle import fetch_axle_active
 from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
+from oauth_mixin import OAuthMixin, TOKEN_REFRESH_THRESHOLD
 from predbat_metrics import record_api_call
 
 
@@ -473,7 +474,7 @@ def command_probe_verdict(report):
     return ok, lines
 
 
-class SigenergyAPI(ComponentBase):
+class SigenergyAPI(ComponentBase, OAuthMixin):
     """Sigenergy Cloud API component for Predbat.
 
     Polls the Sigenergy OpenAPI for realtime energy-flow data and battery
@@ -481,12 +482,13 @@ class SigenergyAPI(ComponentBase):
     control commands on behalf of Predbat's planner.
     """
 
-    def initialize(self, app_key, app_secret, base_url=None, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None, system_id=None, automatic=False, enable_controls=True, **kwargs):
+    def initialize(self, app_key, app_secret=None, base_url=None, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None, system_id=None, automatic=False, enable_controls=True, auth_method=None, **kwargs):
         """Initialise the Sigenergy API component.
 
         Args:
             app_key: Sigenergy Application Key (from Control Center → Settings).
-            app_secret: Sigenergy Application Secret.
+            app_secret: Sigenergy Application Secret. Required for the default
+                        "api_key" auth method, unused with "oauth".
             base_url: Override the API base URL (default: SIGENERGY_DEFAULT_BASE_URL).
             mqtt_host: Override the MQTT broker hostname (default: derived from SIGENERGY_DEFAULT_MQTT_HOST
                        by replacing the regional prefix to match *base_url*).
@@ -499,6 +501,11 @@ class SigenergyAPI(ComponentBase):
             automatic: When True, call set_arg() to wire Predbat config to the
                        published entity IDs on first run.
             enable_controls: When True, apply charge/discharge commands.
+            auth_method: "api_key" (default) logs in with app_key + app_secret.
+                         "oauth" never logs in: the access token comes from the
+                         oauth-refresh service (see OAuthMixin), which can share
+                         one token between many clients of the same app key.
+                         The first token is fetched on first use.
         """
 
         if not HAS_AIOHTTP:
@@ -534,9 +541,16 @@ class SigenergyAPI(ComponentBase):
         else:
             self.system_id_filter = {str(system_id)}
 
-        # Token state
+        # Token state. With auth_method "oauth" OAuthMixin owns both, and token_expires_at is then
+        # UNIX time (the refresh service's expiry), not monotonic.
         self.access_token = None
         self.token_expires_at = 0.0  # monotonic time (see monotonic()), not a UNIX timestamp
+        self._init_oauth(auth_method, None, None, "sigenergy")
+        self._oauth_rejected_token = None  # oauth: the token last refused with 401, never handed out again
+        if self.auth_method != "oauth":
+            self.token_expires_at = 0.0
+            if not app_secret:
+                self.log("Warn: SigenergyAPI: sigenergy_app_secret is not set, logins will fail (set it, or use sigenergy_auth_method: oauth)")
 
         # Data stores keyed by systemId
         self.systems = {}         # systemId → system info dict
@@ -613,9 +627,14 @@ class SigenergyAPI(ComponentBase):
         from SIGENERGY_AUTH_REJECT_BACKOFF has passed, and calls made in the
         meantime return None without touching the network.
 
+        With auth_method "oauth" no login is made here: the token is fetched
+        from the oauth-refresh service (see _get_oauth_token).
+
         Returns:
             Access token string on success, None on failure.
         """
+        if self.auth_method == "oauth":
+            return await self._get_oauth_token()
         now = self.monotonic()
         if self.access_token and now < self.token_expires_at - SIGENERGY_TOKEN_EXPIRY_BUFFER:
             return self.access_token
@@ -631,6 +650,79 @@ class SigenergyAPI(ComponentBase):
             if now < self._auth_retry_at:
                 return None
             return await self._login_with_key(now)
+
+    def _hold_off_oauth(self):
+        """Wait one cooldown before asking the refresh service again after it gave no fresh token."""
+        wait = SIGENERGY_AUTH_REJECT_BACKOFF[0]
+        wait += wait * SIGENERGY_AUTH_REJECT_JITTER * random.random()
+        self._auth_retry_at = self.monotonic() + wait
+        self.log("Warn: SigenergyAPI: The OAuth refresh service gave no fresh token - asking again in {:.0f}s".format(wait))
+
+    def _oauth_token_usable(self):
+        """The held oauth token, unless it was refused with 401 or has reached its expiry (UNIX time in oauth mode)."""
+        token = self.access_token
+        if token and token != self._oauth_rejected_token and self.token_expires_at and self.wall_time() < self.token_expires_at:
+            return token
+        return None
+
+    def _oauth_needs_renewal(self):
+        """True once the held oauth token is inside the refresh window, on the component clock."""
+        return not self.token_expires_at or self.wall_time() > self.token_expires_at - TOKEN_REFRESH_THRESHOLD
+
+    def _oauth_needs_reauth(self):
+        """True once the refresh service answered needs_reauth: only a reconnect fixes that, so stop asking."""
+        return self.oauth_failed and self.oauth_failed_reason == "needs_reauth"
+
+    async def _oauth_refresh(self, force):
+        """One refresh through the refresh service; True if it produced a fresh token.
+
+        Fresh means usable (not the token that was refused, not expired) and outside the refresh
+        window. Anything else - a failure, no token, the refused token handed back, or one about to
+        expire - holds off further refreshes for a cooldown. A needs_reauth answer is terminal
+        and stops refreshes altogether (see _oauth_needs_reauth). That cooldown is the only backoff in
+        oauth mode, so the refresh service is asked at most once per cooldown however many requests,
+        401s and MQTT reconnects want a token. force names the refused token to the service (its
+        token_hash), so it logs in again rather than serving it back.
+        """
+        await self._do_refresh(reason="401" if force else None)
+        if self._oauth_needs_reauth():
+            return False
+        if self._oauth_token_usable() and not self._oauth_needs_renewal():
+            self._oauth_rejected_token = None
+            return True
+        self._hold_off_oauth()
+        return False
+
+    async def _get_oauth_token(self):
+        """The access token in oauth mode, refreshed through the refresh service when needed.
+
+        While a cooldown runs, a held token that is still usable is handed out and nothing is asked.
+        """
+        if self._oauth_needs_reauth() or self.monotonic() < self._auth_retry_at:
+            return self._oauth_token_usable()
+        async with self._auth_lock:
+            if self._oauth_needs_reauth() or self.monotonic() < self._auth_retry_at:
+                return self._oauth_token_usable()
+            if self._oauth_token_usable() and not self._oauth_needs_renewal():
+                return self.access_token
+            # Still holding the refused token: keep asking for a replacement, not for the same one.
+            await self._oauth_refresh(force=bool(self.access_token) and self.access_token == self._oauth_rejected_token)
+            return self._oauth_token_usable()
+
+    async def _oauth_after_401(self, rejected_token):
+        """A request was refused with 401 in oauth mode. Returns the token to retry with, or None."""
+        async with self._auth_lock:
+            if self.access_token and self.access_token != rejected_token:
+                # Another task already replaced the refused token while this one waited for the lock;
+                # forcing again would report the new token as refused. Use it only if it is not itself
+                # refused or expired since.
+                return self._oauth_token_usable()
+            self._oauth_rejected_token = rejected_token
+            if self._oauth_needs_reauth() or self.monotonic() < self._auth_retry_at:
+                return None
+            if await self._oauth_refresh(force=True):
+                return self.access_token
+            return None
 
     async def _login_with_key(self, now):
         """POST the key to the login endpoint and cache the token; the retry loop for get_access_token."""
@@ -757,8 +849,11 @@ class SigenergyAPI(ComponentBase):
                         if response.status == 401:
                             self.log("Warn: SigenergyAPI: 401 Unauthorised — refreshing token")
                             record_api_call("sigenergy", False, "auth_error")
-                            self.access_token = None
-                            token = await self.get_access_token()
+                            if self.auth_method == "oauth":
+                                token = await self._oauth_after_401(token)
+                            else:
+                                self.access_token = None
+                                token = await self.get_access_token()
                             if not token:
                                 return None
                             headers["Authorization"] = "Bearer {}".format(token)
