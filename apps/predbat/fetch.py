@@ -3387,7 +3387,11 @@ class Fetch:
                 rate = rates[minute]
                 if ((not find_high) and (rate <= threshold_rate)) or (find_high and (rate >= threshold_rate) and (rate > 0)) or (minute in manual_all_times) or (rate_low_start in manual_all_times):
                     rate_diff = abs(rate - rate_low_rate)
-                    if (rate_low_start >= 0) and rate_diff > self.combine_rate_threshold:
+                    # A window that opened on a manual slot always runs the whole slot, even when the rate steps inside it
+                    # (e.g. an Intelligent dispatch cancelled mid-slot). Keyed on where the window started, as the minute
+                    # of the step itself is not a manual time. The slot is then priced at its average rate.
+                    inside_manual_slot = (rate_low_start >= 0) and (rate_low_start in manual_all_times) and ((minute - rate_low_start) < self.plan_interval_minutes)
+                    if (rate_low_start >= 0) and (not inside_manual_slot) and rate_diff > self.combine_rate_threshold:
                         # Refuse mixed rates that are different by more than threshold
                         rate_low_end = minute
                         break
