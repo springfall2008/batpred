@@ -518,6 +518,15 @@ _EXPORT_LIMIT_BUFFER_CACHE = {}
 _EXPORT_LIMIT_BUFFER_CACHE_MAX = 512
 
 
+def release_export_limit_buffers():
+    """Drop the contents-keyed export-limit buffers once the plan search that filled them is over.
+
+    The buffers only save re-marshalling the same few plans during a search; the next search simply builds
+    them again, so holding them between cycles costs memory for no gain.
+    """
+    _EXPORT_LIMIT_BUFFER_CACHE.clear()
+
+
 def _build_export_limit_array(export_limits):
     """Pack one export-limit list of (mode, target, power) tuples into a PkExportLimit array.
 

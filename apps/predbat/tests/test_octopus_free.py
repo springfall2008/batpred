@@ -14,6 +14,7 @@ import tempfile
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
+from octopus import OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME, decode_octopus_url_cache, encode_octopus_url_cache
 from storage import StorageComponent, StorageLocalFiles
 from tests.test_infra import run_async
 
@@ -138,7 +139,7 @@ def test_octopus_free(my_predbat):
             failed = True
         else:
             print("PASS: Fresh download returned 1 session")
-        saved = run_async(storage.load("octopus_free", "url_cache"))
+        saved = decode_octopus_url_cache(run_async(storage.load(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME)) or {})
         if not saved or _URL not in saved or saved[_URL].get("data") != sessions:
             print("FAIL: Cache not correctly persisted to storage")
             failed = True
@@ -174,7 +175,7 @@ def test_octopus_free(my_predbat):
         _reset_free_cache(my_predbat)
         old_midnight = my_predbat.midnight_utc - timedelta(days=1)
         stale = {_URL: {"stamp": datetime.now(), "midnight_utc": old_midnight, "data": sessions}}
-        run_async(storage.save("octopus_free", "url_cache", stale, format="yaml", expiry=None))
+        run_async(storage.save(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME, encode_octopus_url_cache(stale), format="json", expiry=None))
         with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
             my_predbat.download_octopus_free(_URL)
         if mock_get.call_count != 1:
@@ -187,7 +188,7 @@ def test_octopus_free(my_predbat):
         _reset_free_cache(my_predbat)
         old_stamp = datetime.now() - timedelta(hours=1)
         expired = {_URL: {"stamp": old_stamp, "midnight_utc": my_predbat.midnight_utc, "data": sessions}}
-        run_async(storage.save("octopus_free", "url_cache", expired, format="yaml", expiry=None))
+        run_async(storage.save(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME, encode_octopus_url_cache(expired), format="json", expiry=None))
         with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)) as mock_get:
             my_predbat.download_octopus_free(_URL)
         if mock_get.call_count != 1:
@@ -203,7 +204,7 @@ def test_octopus_free(my_predbat):
             my_predbat.download_octopus_free(_URL)
         with patch("octopus.http_get", return_value=_mock_http_response(_JSON_BODY)):
             my_predbat.download_octopus_free(_URL2)
-        saved_multi = run_async(storage.load("octopus_free", "url_cache"))
+        saved_multi = decode_octopus_url_cache(run_async(storage.load(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME)) or {})
         if not saved_multi or _URL not in saved_multi or _URL2 not in saved_multi:
             print("FAIL: Both URLs not found in storage after multi-URL save")
             failed = True
@@ -235,7 +236,7 @@ def test_octopus_free(my_predbat):
             failed = True
         else:
             print("PASS: Stale and malformed entries pruned from in-memory cache")
-        saved_pruned = run_async(storage.load("octopus_free", "url_cache"))
+        saved_pruned = decode_octopus_url_cache(run_async(storage.load(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME)) or {})
         if not saved_pruned or set(saved_pruned) != {_URL}:
             print("FAIL: Pruned cache not persisted correctly, storage has {}".format(sorted(saved_pruned) if saved_pruned else saved_pruned))
             failed = True

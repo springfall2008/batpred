@@ -25,7 +25,6 @@ import re
 import yaml
 from http_sync import http_get
 import hashlib
-import tarfile
 import tempfile
 
 DEFAULT_PREDBAT_REPOSITORY = "springfall2008/batpred"
@@ -419,6 +418,8 @@ def extract_predbat_files_from_archive(archive_path, tag, file_list, this_path):
             wanted[name] = file_info
 
     staged_files = []
+    import tarfile  # only an update needs it, so it is not loaded at start
+
     try:
         with tarfile.open(archive_path, "r:gz") as archive:
             # Single forward pass over the archive, members are matched against the directory
