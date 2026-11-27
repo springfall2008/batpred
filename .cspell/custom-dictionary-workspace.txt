@@ -259,6 +259,7 @@ exportlimit
 exportvalue
 facecolor
 faketime
+fcntl
 fdpwr
 fdsoc
 feedin
@@ -382,8 +383,10 @@ invname
 iot
 IPPROTO
 isinstance
+isneginf
 isoformat
 isort
+isposinf
 itemsize
 itemtype
 ivtime

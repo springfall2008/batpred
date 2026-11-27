@@ -60,6 +60,12 @@ repos:
     entry: python -m unittest discover -s boards/predbat-memory
     files: ^boards/predbat-memory/
     pass_filenames: false
+  - id: board-predbat-load-ml-tests
+    name: board predbat-load-ml measurement tests
+    language: python
+    entry: python -m unittest discover -s boards/predbat-load-ml
+    files: ^boards/predbat-load-ml/
+    pass_filenames: false
   - id: owner-gate-tests
     name: owner gate workflow tests
     language: python
