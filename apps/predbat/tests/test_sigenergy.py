@@ -1170,6 +1170,92 @@ def test_sigenergy_automatic_config_keeps_user_car_charging_energy(my_predbat):
 
     assert "car_charging_energy" not in api.set_args, "automatic_config must not set car_charging_energy over the user's own, got {}".format(api.set_args.get("car_charging_energy"))
     assert api.args["car_charging_energy"] == "sensor.my_charger_energy", api.args["car_charging_energy"]
+    # The log must not claim the charger was mapped, and must say how to add it to the user's own list
+    assert not any("mapped to its lifetime energy" in message for message in api.log_messages), api.log_messages
+    assert any("apps.yaml" in message and "sensor.predbat_sigenergy_sig001_ac_ev_charge_lifetime" in message for message in api.log_messages), api.log_messages
+
+    return failed
+
+
+def test_sigenergy_automatic_config_zero_ac_charger(my_predbat):
+    """A TO_EVAC node reading 0 does not bind car_charging_energy, so the threshold heuristic still covers any other charger.
+
+    Whether the API omits TO_EVAC on a system with no AC charger or returns it at 0 is not known, so the
+    binding must not depend on the node merely being present. The log must not claim the user's own
+    car_charging_energy was left unset either.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.history_totals = {"SIG001": {"TO_LOAD": 987.6, "TO_EVDC": 0.0, "TO_EVAC": 0.0}}
+
+    run_async(api.automatic_config())
+
+    assert "car_charging_energy" not in api.set_args, "a zero TO_EVAC must not bind car_charging_energy, got {}".format(api.set_args.get("car_charging_energy"))
+
+    # No charger, but the user set their own car_charging_energy: the log must not say it is unset
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.history_totals = {"SIG001": {"TO_LOAD": 987.6}}
+    api.base.args_from_apps_yaml = {"car_charging_energy": "sensor.my_charger_energy"}
+    api.args["car_charging_energy"] = "sensor.my_charger_energy"
+
+    run_async(api.automatic_config())
+
+    assert api.args["car_charging_energy"] == "sensor.my_charger_energy", api.args["car_charging_energy"]
+    assert not any("left unset" in message for message in api.log_messages), api.log_messages
+
+    return failed
+
+
+def test_sigenergy_run_binds_ac_charger_after_history_refresh(my_predbat):
+    """car_charging_energy is bound when a later history refresh first shows the AC charger, not only at startup.
+
+    automatic_config() runs once, on the first run, and can see a history_totals cache restored from
+    before the charger was read (or a failed first fetch). The binding is re-checked whenever a history
+    refresh lands, and logged only when it changes.
+    """
+    failed = False
+    sid = "SIG001"
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {sid: {"systemName": "Home", "deviceList": []}}
+    api.current_mode = {sid: SIGENERGY_MODE_VPP}
+    api.system_id_filter = {sid}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_energy_flow = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+
+    # First run: the restored cache predates TO_EVAC, so nothing is bound
+    api.history_totals = {sid: {"TO_LOAD": 3899.57}}
+    run_async(api.automatic_config())
+    assert "car_charging_energy" not in api.set_args, api.set_args.get("car_charging_energy")
+
+    async def _fetch_history(system_id):
+        """Stand in for a history fetch that now reports the AC charger."""
+        api.history_totals[system_id] = {"TO_LOAD": 3899.57, "TO_EVAC": 1291.47}
+        return True
+
+    api.fetch_history_totals = AsyncMock(side_effect=_fetch_history)
+    run_async(api.run(seconds=300, first=False))
+
+    assert api.set_args.get("car_charging_energy") == ["sensor.predbat_sigenergy_sig001_ac_ev_charge_lifetime"], api.set_args.get("car_charging_energy")
+    mapped_logs = [message for message in api.log_messages if "mapped to its lifetime energy" in message]
+    assert len(mapped_logs) == 1, mapped_logs
+
+    # A further refresh with the same chargers neither rebinds nor logs again
+    api.data_age = {}
+    run_async(api.run(seconds=600, first=False))
+    mapped_logs = [message for message in api.log_messages if "mapped to its lifetime energy" in message]
+    assert len(mapped_logs) == 1, mapped_logs
 
     return failed
 
@@ -6795,6 +6881,8 @@ def run_sigenergy_tests(my_predbat):
         ("automatic_config_maps_ac_charger_energy", test_sigenergy_automatic_config_maps_ac_charger_energy),
         ("automatic_config_no_ac_charger", test_sigenergy_automatic_config_no_ac_charger),
         ("automatic_config_keeps_user_car_charging_energy", test_sigenergy_automatic_config_keeps_user_car_charging_energy),
+        ("automatic_config_zero_ac_charger", test_sigenergy_automatic_config_zero_ac_charger),
+        ("run_binds_ac_charger_after_history_refresh", test_sigenergy_run_binds_ac_charger_after_history_refresh),
         ("battery_reserve_min_live_change_message", test_sigenergy_battery_reserve_min_live_change_message),
         ("battery_reserve_min_zero", test_sigenergy_battery_reserve_min_zero),
         ("battery_reserve_min_unknown", test_sigenergy_battery_reserve_min_unknown),

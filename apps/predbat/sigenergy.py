@@ -256,7 +256,7 @@ SIGENERGY_HISTORY_NODES = [
     ("FROM_BATTERY", "battery_discharge_lifetime", "Battery Discharge Lifetime"),
     ("TO_EVDC", "ev_charge_lifetime", "EV Charge Lifetime"),
     ("FROM_EVDC", "ev_discharge_lifetime", "EV Discharge Lifetime"),
-    # The Sigen EV AC charger (EVAC). The node is only listed for a system that has one.
+    # The Sigen EV AC charger (EVAC). Published as 0 when a system's history has no such node.
     ("TO_EVAC", "ac_ev_charge_lifetime", "AC EV Charge Lifetime"),
 ]
 
@@ -265,7 +265,7 @@ SIGENERGY_HISTORY_NODES = [
 # showed import 6.48 = TO_LOAD 2.43 + battery charge 1.33 + 2.72 kWh that the charger's own meter
 # recorded. But grid import and the live load power (MQTT derives it as pv + battery - grid) both
 # include the charger, so it is added back: load history then agrees with them, and
-# car_charging_energy (bound to TO_EVAC by automatic_config()) subtracts the car exactly once.
+# car_charging_energy (bound to TO_EVAC by bind_car_charging_energy()) subtracts the car exactly once.
 SIGENERGY_LOAD_NODES = ("TO_LOAD", "TO_EVAC")
 
 # Lifetime kWh a PV source (FROM_SOLAR or FROM_THIRD_PARTY_INV) must have produced to count as
@@ -572,6 +572,7 @@ class SigenergyAPI(ComponentBase, OAuthMixin):
         self.system_status = {}   # systemId → latest systemStatus dict
         self.daily_summary = {}   # systemId → latest summary dict
         self.history_totals = {}  # systemId → {sankey node id: lifetime kWh total}
+        self.car_energy_slugs = None  # system slugs whose AC EV charger car_charging_energy was last bound to (None until first checked)
         self.mqtt_period_raw = {}  # systemId → merged raw 'period' fields (MQTT only sends fields that changed)
         self.current_mode = {}    # systemId → energyStorageOperationMode int
         self.last_contended_by = {}  # systemId → mode name of the controller that last displaced Predbat
@@ -3009,18 +3010,7 @@ class SigenergyAPI(ComponentBase, OAuthMixin):
         self.set_arg("export_today", ["sensor.{}_sigenergy_{}_grid_export_lifetime".format(self.prefix, s) for s in slugs])
         self.set_arg("inverter_time", ["sensor.{}_sigenergy_{}_time".format(self.prefix, s) for s in slugs])
 
-        # car_charging_energy only for the systems whose lifetime history lists an AC charger (TO_EVAC):
-        # on one without, the sensor reads a permanent 0, which would look like a charger that is never
-        # used and stop the car_charging_threshold heuristic covering a charger Predbat cannot read. The
-        # history totals are fetched, or restored from the cache, before this runs. A list is right here:
-        # minute_data_import_export() sums however many entities it is given. The user's own
-        # car_charging_energy, such as a charger integration's, is kept (overwrite=False).
-        ev_slugs = [slug for system_id, slug in zip(system_ids, slugs) if "TO_EVAC" in self.history_totals.get(system_id, {})]
-        if ev_slugs:
-            self.set_arg_auto("car_charging_energy", ["sensor.{}_sigenergy_{}_ac_ev_charge_lifetime".format(self.prefix, s) for s in ev_slugs], overwrite=False)
-            self.log("SigenergyAPI: AC EV charger found on {} system(s), car_charging_energy mapped to its lifetime energy. It only affects the plan once car_charging_hold is enabled.".format(len(ev_slugs)))
-        else:
-            self.log("SigenergyAPI: no AC EV charger in the lifetime history, so car_charging_energy is left unset")
+        self.bind_car_charging_energy()
 
         # Control entities
         self.set_arg("charge_start_time", ["select.{}_sigenergy_{}_charge_start_time".format(self.prefix, s) for s in slugs])
@@ -3038,6 +3028,41 @@ class SigenergyAPI(ComponentBase, OAuthMixin):
         await self.apply_hybrid_verdict()
 
         self.log("SigenergyAPI: automatic_config complete")
+
+    def bind_car_charging_energy(self):
+        """Bind car_charging_energy to the AC EV charger lifetime of each system whose charger has recorded energy.
+
+        Called by automatic_config() and again whenever a history refresh lands, because the first run
+        can see a restored cache from before the charger was read or a failed fetch. Only a TO_EVAC
+        above 0 counts: whether the API omits the node on a system with no AC charger or returns it at
+        0 is not established, and a permanently-zero sensor would read as a charger that is never used,
+        which stops the car_charging_threshold heuristic covering any charger Predbat cannot read. A
+        fitted charger that has never charged has nothing to subtract yet; it is bound once its first
+        charge reaches the totals, and its recorder history then covers that charge too. The lifetime
+        totals only grow, so the set of systems never shrinks. A list is right here:
+        minute_data_import_export() sums however many entities it is given. The user's own
+        car_charging_energy, such as a charger integration's, is kept (overwrite=False).
+        """
+        ev_slugs = [self._system_slug(sid) for sid in self.systems if _safe_float(self.history_totals.get(sid, {}).get("TO_EVAC", 0)) > 0]
+        if ev_slugs == self.car_energy_slugs:
+            return
+        self.car_energy_slugs = ev_slugs
+        user_value = (getattr(self.base, "args_from_apps_yaml", None) or {}).get("car_charging_energy")
+        if not ev_slugs:
+            if user_value is None:
+                self.log("SigenergyAPI: no AC EV charger energy in the lifetime history yet, so car_charging_energy is left unset")
+            return
+        entities = ["sensor.{}_sigenergy_{}_ac_ev_charge_lifetime".format(self.prefix, s) for s in ev_slugs]
+        self.set_arg_auto("car_charging_energy", entities, overwrite=False)
+        if user_value is not None and user_value != entities:
+            # set_arg_auto() kept the user's own entry, but load_today now includes the Sigen AC charger
+            self.log(
+                "SigenergyAPI: AC EV charger found on {} system(s), but car_charging_energy is set in apps.yaml so it is kept. load_today includes this charger, so add {} to your car_charging_energy list or its charging stays in the load history.".format(
+                    len(ev_slugs), ", ".join(entities)
+                )
+            )
+        else:
+            self.log("SigenergyAPI: AC EV charger found on {} system(s), car_charging_energy mapped to its lifetime energy. It only affects the plan once car_charging_hold is enabled.".format(len(ev_slugs)))
 
     # -----------------------------------------------------------------------
     # Controls
@@ -4029,6 +4054,11 @@ class SigenergyAPI(ComponentBase, OAuthMixin):
                 await self._save_cache("daily_summary", self.daily_summary)
             if history_updated:
                 await self._save_cache("history_totals", self.history_totals)
+                # automatic_config() only runs on the first run, which can see a history_totals cache
+                # from before an AC charger recorded energy (or from before TO_EVAC was read), or a
+                # failed first fetch, so re-check the car_charging_energy binding on fresh totals
+                if self.automatic and not first:
+                    self.bind_car_charging_energy()
 
         # Publish entities
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:
