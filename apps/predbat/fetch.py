@@ -79,7 +79,6 @@ from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import ast
-import copy
 import math
 import re
 
@@ -1734,8 +1733,8 @@ class Fetch:
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
             self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
-            # Need to take a copy, as saving sessions will repeatedly increment cached import rates
-            import_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False)))
+            # download_octopus_rates() returns a new dict each call, so the saving sessions added to it later cannot reach the cache
+            import_rates = self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False))
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
@@ -1824,8 +1823,8 @@ class Fetch:
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
             self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
-            # Need to take a copy, as saving sessions will repeatedly increment cached export rates
-            export_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False)))
+            # download_octopus_rates() returns a new dict each call, so the saving sessions added to it later cannot reach the cache
+            export_rates = self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False))
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
