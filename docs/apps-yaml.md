@@ -2800,7 +2800,8 @@ If the day's calculation finds no usable charge (it runs just after midnight UTC
 until it does, so that night's charge is used the same morning. The time of the last attempt is kept on the sensor as `last_attempt`.
 
 Charge periods are found from the sign of `battery_power` (negative while charging). If that sensor reads the other way round,
-discharges are mistaken for charges and every one is rejected because the SoC fell (`soc_change_too_small`); the
+discharges are mistaken for charges and every one is rejected because the SoC fell (`soc_change_too_small`); when the
+SoC fell by 3% or more in most of the rejected periods (a point or two is treated as sensor jitter), the
 `Unable to find any suitable charge periods` warning then says the sensor probably has the wrong sign and which
 `battery_power_invert` value to try.
 
@@ -2931,6 +2932,7 @@ How the grids are learned:
   The first and last 5 minutes of each run are dropped (ramping up and down) and the rest is cut into 5-minute segments, each giving one point: SoC, battery temperature and the rate the battery reached.
 - A minute where the battery did not actually charge (or discharge), or a forced export that did not reach the grid (from **grid_power**, when it has history), breaks the run: that is a control failure or the house using the power, not a battery limit.
   An export held back by **export_limit** (the grid export reached it) is still evidence: it shows the battery was not limited by its SoC or temperature, so it records no battery limit. The same goes for a forced export where the battery reached **inverter_limit_export**, which Predbat writes as its discharge rate. Discharge evidence needs **grid_power** history to tell these apart, so without it none is gathered.
+  Whether the battery charged or discharged is read from the sign of **battery_power** (negative while charging). If a scan finds no segments, but in 15 or more full-rate minutes, more than it saw going the right way, **battery_power** showed the battery going the other way (discharging during a full-rate charge that drew from the grid, or charging during a forced export that reached it), the log warns that **battery_power** probably has the wrong sign: check **battery_power_invert**.
 - A battery temperature reading of exactly 0 is treated as missing (several integrations report a missing reading as 0) and also breaks the run. If your temperature sensor only ever reads 0, or **battery_temperature_history** is not set, the grid has no temperature and is learned as a single SoC curve.
 - The points are kept in Predbat's cache for a year, so last winter's cold-weather evidence is still there when the next cold spell arrives. Recent evidence counts for more: a point's weight halves every 90 days.
 - The grid is fitted so the rate never rises as SoC rises (charge) or as SoC falls (discharge), and never rises as the temperature falls. A one-off reading that breaks that rule is averaged against its neighbours rather than followed.

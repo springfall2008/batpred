@@ -508,4 +508,10 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     # Too few wrong-way minutes to be a pattern
     segments, warnings = scan_logged(_charge(BATTERY_RATE_GRID_RUN_MINUTES - 1, power=1560), False)
     failed |= _check("t16 a short wrong-way run does not warn", warnings == [], warnings)
+    # Enough wrong-way minutes, but more right-way ones in blocks too short to form a run: nothing found, and no warning
+    idle_gap = [("Idle", 0, 0, 50, 15.3, 0)] * 5
+    short_right = _charge(BATTERY_RATE_GRID_RUN_MINUTES - 5)
+    block = _charge(BATTERY_RATE_GRID_RUN_MINUTES, power=1560) + idle_gap + short_right + idle_gap + short_right
+    segments, warnings = scan_logged(block, False)
+    failed |= _check("t16 right-way minutes outnumbering wrong-way ones do not warn", segments == [] and warnings == [], (segments, warnings))
     return failed
