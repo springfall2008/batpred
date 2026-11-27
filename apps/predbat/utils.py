@@ -890,13 +890,25 @@ def find_unmasked_secret_paths(node, path=""):
         for key, value in node.items():
             key_path = "{}.{}".format(path, key) if path else str(key)
             if is_secret_key(key, registry=False):
-                if value not in (None, "") and not isinstance(value, SecretReference):
-                    yield key_path
+                yield from _find_inline_secret_values(value, key_path)
             else:
                 yield from find_unmasked_secret_paths(value, key_path)
     elif isinstance(node, list):
         for index, item in enumerate(node):
             yield from find_unmasked_secret_paths(item, "{}[{}]".format(path, index))
+
+
+def _find_inline_secret_values(value, path):
+    """
+    Yield the path of every plain-text value held by a credential-like key. A list is judged entry
+    by entry, so a list of '!secret' references (solcast_api_key with one key per site) is not
+    flagged, while a mixed list flags only its inline entries.
+    """
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _find_inline_secret_values(item, "{}[{}]".format(path, index))
+    elif value not in (None, "") and not isinstance(value, SecretReference):
+        yield path
 
 
 def _mask_secrets_in_yaml_node(node):

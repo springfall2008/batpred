@@ -616,6 +616,12 @@ pred_bat:
   solar_sites:
     - api_key: !secret solcast_key
     - api_key: plaintext_list_key
+  solcast_api_key:
+    - !secret solcast_key_1
+    - !secret solcast_key_2
+  fox_key:
+    - !secret fox_key_1
+    - plaintext_fox_key
   gateway_mqtt_host: mqtt.example.com
   rates_import:
     - start: "00:00"
@@ -650,7 +656,14 @@ pred_bat:
         print("  Inside a list, only the inline credential is flagged")
         assert "solar_sites[1].api_key" in warnings, f"Expected inline solar_sites[1].api_key to be flagged, got {warnings}"
         assert "solar_sites[0].api_key" not in warnings, f"'!secret'-referenced solar_sites[0].api_key must not be flagged, got {warnings}"
-        assert len(warnings) == 3, f"Expected exactly 3 warnings, got {warnings}"
+
+        print("  A credential key holding a list of '!secret' references is not flagged")
+        assert not any(w.startswith("solcast_api_key") for w in warnings), f"A list of '!secret' references under solcast_api_key must not be flagged, got {warnings}"
+
+        print("  A credential key holding a mixed list flags only its inline entries")
+        assert "fox_key[1]" in warnings, f"Expected inline fox_key[1] to be flagged, got {warnings}"
+        assert "fox_key[0]" not in warnings and "fox_key" not in warnings, f"Only the inline entry of fox_key may be flagged, got {warnings}"
+        assert len(warnings) == 4, f"Expected exactly 4 warnings, got {warnings}"
 
         print("  The '!secret' reference loads as its name, and stays off the shared SafeLoader")
         with open(temp_path) as handle:
