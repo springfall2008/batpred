@@ -435,6 +435,7 @@ A value of 0kWh (the default) disables this feature. Be careful setting this fea
 
 **input_number.combine_rate_threshold** (_expert mode_) sets a threshold (in pence) to combine charge or export slots into a single larger average rate slot.
 The default is 0p which disables this feature and all rate changes result in a new slot.
+The exception is a manual override slot (for example a manual charge or export): it is always kept as one whole slot, even when the rate changes inside it, and is planned at the slot's average rate.
 
 **switch.predbat_combine_charge_slots** Controls if charge slots of > the slot duration (default 30 minutes) can be combined. When turned Off (the default) they will be split up, increasing run times but potentially more accurate for planning.<BR>
 Turn this On combines charge slots together into a single block, useful to dissuade Predbat from repeatedly charging and discharging the battery to maximise income when the export rate is higher than the import rate,

@@ -58,6 +58,7 @@ def test_find_charge_window(my_predbat):
     old_combine_export = my_predbat.combine_export_slots
     old_combine_thresh = my_predbat.combine_rate_threshold
     old_manual_charge_times = my_predbat.manual_charge_times
+    old_manual_export_times = my_predbat.manual_export_times
     old_charge_slot_split = my_predbat.charge_slot_split
     old_export_slot_split = my_predbat.export_slot_split
     old_plan_interval = my_predbat.plan_interval_minutes
@@ -237,6 +238,32 @@ def test_find_charge_window(my_predbat):
         rates_n[m] = 6.0
     s, e, avg = my_predbat.find_charge_window(rates_n, 990, 8.0, find_high=False)
     failed |= _assert_window("rate step without a manual slot still splits", s, e, avg, 990, 1000, 4.0)
+
+    # The same rule applies to the export scan (find_high=True): a manual export slot at 16:30 whose export
+    # rate drops from 50p to 10p at 16:40 stays one 16:30-17:00 window at the slot average. Before #6399 it
+    # ended at 16:40, and once now passed 16:40 rate_scan_window dropped it, ending the forced export early.
+    print("Test find_charge_window: export rate step inside a manual export slot keeps the whole slot (Path D, #6399)")
+    my_predbat.manual_export_times = [990]
+    rates_x = {m: 1.0 for m in range(0, scan_end, 5)}
+    for m in range(990, 1000, 5):
+        rates_x[m] = 50.0
+    for m in range(1000, 1020, 5):
+        rates_x[m] = 10.0
+    s, e, avg = my_predbat.find_charge_window(rates_x, 990, 30.0, find_high=True)
+    failed |= _assert_window("manual export slot with a rate step", s, e, avg, 990, 1020, round((50.0 * 2 + 10.0 * 4) / 6, 2))
+    my_predbat.minutes_now = 1005
+    found_x, _, _ = my_predbat.rate_scan_window(rates_x, 5, 30.0, find_high=True)
+    my_predbat.minutes_now = 12 * 60
+    found_spans = [(w["start"], w["end"]) for w in found_x]
+    if found_spans[:1] != [(990, 1020)]:
+        print("ERROR: manual export slot with a rate step: rate_scan_window expected [(990, 1020)] first, got {}".format(found_spans))
+        failed = 1
+
+    # Without the manual export slot the export window still ends at the step
+    my_predbat.manual_export_times = []
+    s, e, avg = my_predbat.find_charge_window(rates_x, 990, 30.0, find_high=True)
+    failed |= _assert_window("export rate step without a manual slot still splits", s, e, avg, 990, 1000, 50.0)
+    my_predbat.manual_export_times = old_manual_export_times
     my_predbat.combine_rate_threshold = old_combine_thresh
 
     # -----------------------------------------------------------------------
