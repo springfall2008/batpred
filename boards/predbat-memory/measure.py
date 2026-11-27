@@ -30,7 +30,7 @@ from statistics import median
 
 STEADY_CUT = 0.25  # the candidate's median steady-state RSS must be at least this fraction below the base's
 PEAK_RISE = 0.10  # and its median peak RSS no more than this fraction above the base's
-ROUNDS = 3
+ROUNDS = 30  # single runs vary by up to ~4 MB, so the medians need many rounds to judge a gap of ~1 MB
 BENCHMARK = Path("coverage/memory_benchmark")
 FIELDS = {"ok": bool, "steady_rss_mb": (int, float), "peak_rss_mb": (int, float), "plan_digest": str}
 FIGURES = ("steady_rss_mb", "peak_rss_mb")

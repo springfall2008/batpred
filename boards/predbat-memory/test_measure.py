@@ -348,6 +348,12 @@ class TestBoardFile(unittest.TestCase):
         self.assertEqual(measure.PEAK_RISE, 0.10)
         self.assertIn("no more than 10% above main's", self.board["done_when"])
 
+    def test_measure_runs_thirty_rounds_and_its_timeout_covers_them(self):
+        """Thirty rounds of base and candidate is 60 benchmark runs of 1.5-2 minutes each, so the runner's measure
+        timeout must allow at least 3 minutes a run, or it kills the measurement before it can judge."""
+        self.assertEqual(measure.ROUNDS, 30)
+        self.assertGreaterEqual(self.board["measure"]["timeout_minutes"], 2 * measure.ROUNDS * 3)
+
 
 class TestDocstrings(unittest.TestCase):
     """Every function and class in this directory has a docstring (CLAUDE.md's 100% interrogate rule)."""

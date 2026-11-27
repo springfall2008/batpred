@@ -99,7 +99,7 @@ max_intents = 20
 
 [measure]
 command = "python3 boards/predbat-memory/measure.py"
-timeout_minutes = 60
+timeout_minutes = 180
 
 [lead]
 model = "opus"
