@@ -44,6 +44,22 @@ def _misspelt_attribute_key(key):
     return None
 
 
+def _misspelt_source_keys(tree):
+    """Yield (lineno, key, canonical) for each misspelt HA attribute key in a parsed module: dict literal keys and subscript-assignment keys (attributes["key"] = ...)."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Dict):
+            candidates = node.keys
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store):
+            candidates = [node.slice]
+        else:
+            continue
+        for key in candidates:
+            if isinstance(key, ast.Constant):
+                canonical = _misspelt_attribute_key(key.value)
+                if canonical:
+                    yield key.lineno, key.value, canonical
+
+
 def test_dashboard_device_class(my_predbat):
     """
     #3352 - a batch of dashboard sensors published with the right unit but no device_class, so
@@ -90,7 +106,8 @@ def test_dashboard_attribute_keys(my_predbat):
     #6388 - predbat.soc_kw_best_h12 was published with the attribute key "unit _of_measurement" (stray
     space), so Home Assistant never saw a unit for it while its h1/h8 siblings were fine. Checks the
     published soc_kw_best_h* sensors carry kWh, that nothing the plan publishes has a misspelt HA
-    attribute key, and that no dict literal anywhere in the source spells one of those keys wrongly.
+    attribute key, and that no dict literal or subscript assignment (attributes["key"] = ...) anywhere
+    in the source spells one of those keys wrongly.
     """
     reset_inverter(my_predbat)
     failed = False
@@ -119,7 +136,17 @@ def test_dashboard_attribute_keys(my_predbat):
         print("  ERROR: expected the best prediction to publish its dashboard sensors, only found {}".format(published))
         failed = True
 
-    print("Test: no dict literal in the Predbat source misspells an HA attribute key")
+    print("Test: the source scan flags misspelt keys in dict literals and subscript assignments, but not reads")
+    sample = (
+        'a = {"unit _of_measurement": "kWh"}\nattributes["Device_Class"] = "energy"\nattributes["State_ class"]: str = "total"\nattributes["Icon "] += ""\nx = attributes["Friendly_Name"]\nok = {"unit_of_measurement": "kWh"}\nattributes["icon"] = "mdi:x"\n'
+    )
+    found = sorted((lineno, canonical) for lineno, _key, canonical in _misspelt_source_keys(ast.parse(sample)))
+    expected = [(1, "unit_of_measurement"), (2, "device_class"), (3, "state_class"), (4, "icon")]
+    if found != expected:
+        print("  ERROR: source scan found {} in the sample, expected {}".format(found, expected))
+        failed = True
+
+    print("Test: no dict literal or subscript assignment in the Predbat source misspells an HA attribute key")
     source_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     scanned = 0
     for filename in sorted(os.listdir(source_dir)):
@@ -129,15 +156,9 @@ def test_dashboard_attribute_keys(my_predbat):
         with open(path, encoding="utf-8") as handle:
             tree = ast.parse(handle.read(), filename=path)
         scanned += 1
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Dict):
-                continue
-            for key in node.keys:
-                if isinstance(key, ast.Constant):
-                    canonical = _misspelt_attribute_key(key.value)
-                    if canonical:
-                        print("  ERROR: {}:{} has dict key {!r} - should be {!r}".format(filename, key.lineno, key.value, canonical))
-                        failed = True
+        for lineno, key, canonical in _misspelt_source_keys(tree):
+            print("  ERROR: {}:{} has attribute key {!r} - should be {!r}".format(filename, lineno, key, canonical))
+            failed = True
     if scanned < 20:
         print("  ERROR: expected to scan the Predbat source in {}, only found {} files".format(source_dir, scanned))
         failed = True
