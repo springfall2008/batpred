@@ -956,11 +956,58 @@ def redact_log_line(line, secret_pattern):
     return "".join(out)
 
 
+class SecretReference(str):
+    """The name in a '!secret name' reference, as secret_reference_yaml_loader() loads it: the reference, not the secret."""
+
+
+def secret_reference_yaml_loader():
+    """
+    Return a yaml.SafeLoader subclass that loads '!secret name' as a SecretReference('name')
+
+    The same parser and tags load_apps_yaml() reads apps.yaml with, but the reference is kept rather than
+    resolved, so find_unmasked_secret_paths() can tell a '!secret' value from one written inline. A new class
+    per call, so the constructor never lands on the process-wide yaml.SafeLoader.
+
+    Unlike yaml.SafeLoader it refuses a key written twice in one mapping, raising a ConstructorError that names
+    the key and both lines, as the ruamel loader this check used before refused it. Keys are compared as
+    Predbat's own load reads them (YAML 1.1, so 'yes' and 'true' are the same key). A key that only repeats
+    one merged in by '<<' is an override, and is allowed.
+    """
+    import yaml
+
+    def reference_constructor(loader, node):
+        """YAML constructor for the !secret tag, keeping the secret's name."""
+        return SecretReference(loader.construct_scalar(node))
+
+    class SecretReferenceYamlLoader(yaml.SafeLoader):
+        """SafeLoader with '!secret' kept as a SecretReference and duplicate keys refused."""
+
+        def construct_mapping(self, node, deep=False):
+            """Refuse a key written twice in this mapping, then construct it as SafeLoader does."""
+            if isinstance(node, yaml.MappingNode):
+                first_seen = {}
+                for key_node, _ in node.value:
+                    if key_node.tag == "tag:yaml.org,2002:merge":
+                        continue
+                    key = self.construct_object(key_node, deep=True)
+                    try:
+                        first = first_seen.setdefault(key, key_node)
+                    except TypeError:
+                        # An unhashable key: SafeLoader reports it as it always has
+                        continue
+                    if first is not key_node:
+                        raise yaml.constructor.ConstructorError("while constructing a mapping", node.start_mark, 'found duplicate key "{}", first written on line {}'.format(key, first.start_mark.line + 1), key_node.start_mark)
+            return super().construct_mapping(node, deep=deep)
+
+    SecretReferenceYamlLoader.add_constructor("!secret", reference_constructor)
+    return SecretReferenceYamlLoader
+
+
 def find_unmasked_secret_paths(node, path=""):
     """
-    Recursively walk a ruamel round-trip-loaded apps.yaml section and yield the dotted path
-    of every credential-like key (per is_secret_key()) whose value is a plain scalar rather
-    than a '!secret' reference into secrets.yaml (loaded as a ruamel TaggedScalar).
+    Recursively walk an apps.yaml section loaded with secret_reference_yaml_loader() and yield
+    the dotted path of every credential-like key (per is_secret_key()) whose value is a plain
+    scalar rather than a '!secret' reference into secrets.yaml (loaded as a SecretReference).
 
     Deliberately asks is_secret_key(registry=False): this drives the "stored in plain text,
     consider !secret" advice, which is about values that grant access. The registry additionally
@@ -968,23 +1015,32 @@ def find_unmasked_secret_paths(node, path=""):
     anything shared, but an inline octopus_api_account is the documented normal setup and
     warning every user about it would be noise rather than advice.
 
-    Only usable against a document loaded with ruamel's round-trip loader - a plain
-    yaml.safe_load() has already resolved '!secret' tags to their real value and lost the
-    distinction this depends on.
+    Only usable against a document that kept its '!secret' references - load_apps_yaml() has
+    already resolved them to their real value and lost the distinction this depends on.
     """
-    from ruamel.yaml.comments import TaggedScalar
-
     if isinstance(node, dict):
         for key, value in node.items():
             key_path = "{}.{}".format(path, key) if path else str(key)
             if is_secret_key(key, registry=False):
-                if value not in (None, "") and not isinstance(value, TaggedScalar):
-                    yield key_path
+                yield from _find_inline_secret_values(value, key_path)
             else:
                 yield from find_unmasked_secret_paths(value, key_path)
     elif isinstance(node, list):
         for index, item in enumerate(node):
             yield from find_unmasked_secret_paths(item, "{}[{}]".format(path, index))
+
+
+def _find_inline_secret_values(value, path):
+    """
+    Yield the path of every plain-text value held by a credential-like key. A list is judged entry
+    by entry, so a list of '!secret' references (solcast_api_key with one key per site) is not
+    flagged, while a mixed list flags only its inline entries.
+    """
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _find_inline_secret_values(item, "{}[{}]".format(path, index))
+    elif value not in (None, "") and not isinstance(value, SecretReference):
+        yield path
 
 
 def _mask_secrets_in_yaml_node(node):
