@@ -13,12 +13,12 @@ steady-state RSS by at least 25% against main without changing any plan, so ever
 state is what counts; the peak only has to stay within 10% of main's. What Predbat holds includes the Python libraries it loads, and reviewing and \
 cutting those is in scope as much as the data its plan cycles keep."""
 
-done_when = """Facts show a single branch whose median steady-state RSS over three runs is at least 25% below main's, \
+done_when = """Facts show a single branch whose median steady-state RSS over at least three rounds is at least 25% below main's, \
 measured interleaved with main on the same machine and benchmark (each tree runs in the image the benchmark builds \
 from its own requirements.txt, so a branch that drops a dependency is measured without it), with its median peak RSS \
 no more than 10% above main's, its plan_digest identical to main's in \
 every run, and ./run_all --quick and ./run_pre_commit passing on the branch. The board's measurement \
-(boards/predbat-memory/measure.py) then confirms it."""
+(boards/predbat-memory/measure.py) then confirms it over 30 rounds."""
 
 rules = """Rules for board predbat-memory.
 Baseline first: until the board has a confirmed baseline fact, the only intent is the baseline intent, and no saving \
@@ -63,10 +63,18 @@ BOARD-WORK line; a run that ends without one is counted as lost.
 Commits: each change is one commit whose message starts `board(predbat-memory <intent short id>): <what it saves>`, \
 so `git log --oneline main..<commit>` lists every saving in a tree. Run that before building on a commit, to see what \
 it already contains.
+Small savings count: ten savings of 0.5 MB are 5% of main, so how small a saving is is never a reason to give up \
+on it or to refute it. A change that keeps every plan identical and passes the tests is kept when it saves anything \
+the measurement can resolve, and is stacked onto the best tree with the others; whether the stack meets the goal is \
+settled by measuring the stack. An intent's "Give up when" names the point at which the idea cannot work (the memory \
+is not where it was thought to be, or freeing it would change behaviour), never a minimum saving in MB. A saving \
+that measures as zero or worse is refuted; one too small to resolve in ten rounds is inconclusive, kept on its \
+branch, and can be stacked and measured again.
 How to verify:
 - Benchmark = `coverage/memory_benchmark <worktree> <out dir>`, run from the main checkout. It writes \
 <out dir>/result.json with ok, steady_rss_mb, peak_rss_mb and plan_digest. Run main and the branch interleaved, three \
-rounds each, and take the median of each figure.
+rounds each, and take the median of each figure. For a saving under about 1 MB, run ten rounds each instead: single \
+runs vary by up to ~4 MB, so three rounds cannot tell a 0.5 MB saving from none.
 - Linux RSS from the benchmark only. macOS RSS swings with page compression and is not evidence.
 - The kernel must be active on both sides: no "stale binary ... using Python engine" line in either log. A stale \
 binary falls back to Python and changes RSS by itself.
@@ -99,7 +107,7 @@ max_intents = 20
 
 [measure]
 command = "python3 boards/predbat-memory/measure.py"
-timeout_minutes = 60
+timeout_minutes = 180
 
 [lead]
 model = "opus"
@@ -290,4 +298,4 @@ deny = [
   "Bash(*/coverage/venv/bin/python -mpip*)",
 ]
 max_turns = 300
-worker_timeout_minutes = 90
+worker_timeout_minutes = 150
