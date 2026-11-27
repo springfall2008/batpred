@@ -111,6 +111,50 @@ class TestLoadMlWrapperChecks(unittest.TestCase):
         for expected in ("BENCH_DRIVER=/bench/load_ml_driver.py", "BENCH_QUEUED_SECONDS", "OPENBLAS_NUM_THREADS=4", "OMP_NUM_THREADS=4", "MKL_NUM_THREADS=4", "BENCH_DRIVER_ARGS=--profile", "none"):
             self.assertIn(expected, lines, expected)
 
+    def test_the_whole_run_is_inside_the_lock(self):
+        """The image check (and any build) and the container all run with the lock held, so nothing heavy overlaps a run."""
+        with tempfile.TemporaryDirectory() as tmp:
+            data = make_fixture(tmp)
+            record = Path(tmp) / "record.txt"
+            bin_dir = make_docker(tmp, '#!/bin/bash\necho "$1 queued=${BENCH_QUEUED_SECONDS:-unset}" >> "{r}"\n[ "$1" = image ] && exit 0\n[ "$1" = ps ] && exit 0\nexit 1\n'.replace("{r}", str(record)))
+            run_wrapper(REPO, Path(tmp) / "out", data=data, bin_dir=bin_dir, lock=Path(tmp) / "lock")
+            calls = record.read_text().splitlines()
+        self.assertIn("image queued=0.0", calls)
+        self.assertIn("run queued=0.0", calls)
+
+    def test_a_leftover_container_is_killed_before_the_run(self):
+        """A container left running by a killed earlier run is found by its label and killed before this run starts, and the run uses --init so a kill reaches it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            data = make_fixture(tmp)
+            record = Path(tmp) / "record.txt"
+            script = '#!/bin/bash\necho "$*" >> "{r}"\n[ "$1" = image ] && exit 0\nif [ "$1" = ps ]; then echo leftover123; exit 0; fi\n[ "$1" = kill ] && exit 0\nexit 1\n'
+            bin_dir = make_docker(tmp, script.replace("{r}", str(record)))
+            run_wrapper(REPO, Path(tmp) / "out", data=data, bin_dir=bin_dir, lock=Path(tmp) / "lock")
+            calls = record.read_text().splitlines()
+        verbs = [call.split()[0] for call in calls]
+        self.assertLess(verbs.index("ps"), verbs.index("run"))
+        self.assertIn("label=predbat-load-ml-bench", calls[verbs.index("ps")])
+        self.assertEqual(calls[verbs.index("kill")], "kill leftover123")
+        self.assertLess(verbs.index("kill"), verbs.index("run"))
+        run = calls[verbs.index("run")].split()
+        self.assertIn("--init", run)
+        self.assertIn("predbat-load-ml-bench", " ".join(run))
+
+    def test_a_second_run_waits_for_the_lock(self):
+        """While another run holds the lock, the wrapper says it is waiting and does not start its own container."""
+        import subprocess as sp
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data = make_fixture(tmp)
+            lock = Path(tmp) / "lock"
+            holder = sp.Popen([sys.executable, "-c", "import fcntl, sys, time\nf = open(sys.argv[1], 'a')\nfcntl.flock(f, fcntl.LOCK_EX)\nprint('held', flush=True)\ntime.sleep(1.5)\n", str(lock)], stdout=sp.PIPE, text=True)
+            self.assertEqual(holder.stdout.readline().strip(), "held")
+            bin_dir = make_docker(tmp, "#!/bin/sh\nexit 1\n")
+            code, output = run_wrapper(REPO, Path(tmp) / "out", data=data, bin_dir=bin_dir, lock=lock)
+            holder.wait()
+        self.assertIn("Waiting for the benchmark lock", output)
+
     def test_memory_benchmark_is_unchanged(self):
         """The memory benchmark takes no lock and passes no driver arguments: its runs and figures stay as they were."""
         text = MEMORY_WRAPPER.read_text()

@@ -14,9 +14,10 @@
 # rss_after_mb, forecast_digest and more), forecast.json, modules.txt and predbat.log, and exits 0 when result.json was
 # written.
 #
-# Only one run goes at a time on a machine: the run holds the lock at $LOAD_ML_BENCHMARK_LOCK for its whole container,
-# so wall time is never measured alongside another run. A caller that has to wait is told so, and result.json records
-# queued_seconds.
+# Only one run goes at a time on a machine: the run holds the lock at $LOAD_ML_BENCHMARK_LOCK from the image check to the
+# end of its container, so wall time is never measured alongside another run. A caller that has to wait is told so, and
+# result.json records queued_seconds. Other CPU-heavy work can take the same lock with
+# python3 coverage/memory_benchmark_tools/bench_lock.py /tmp/predbat-load-ml-benchmark.lock -- <command>.
 #
 # --profile also writes <out dir>/profile.txt (cProfile over the LoadML ticks); --tracemalloc writes tracemalloc.txt.
 # Either marks the result as profiled, and measure.py refuses it.
@@ -33,6 +34,7 @@ CPUS="${LOAD_ML_BENCHMARK_CPUS:-4}"
 MEMORY="${LOAD_ML_BENCHMARK_MEMORY:-3g}"
 THREADS=4
 
+ARGS=("$@")
 TRACEMALLOC=""
 DRIVER_ARGS=""
 case "${1:-}" in
@@ -52,6 +54,11 @@ if [ ! -f "$DATA/manifest.json" ]; then
     echo "Error: no LoadML benchmark fixture at $DATA (no manifest.json). Build it from the live Predbat add-on config with:"
     echo "  python3 coverage/memory_benchmark_tools/export_fixture.py --load-ml --days 28 --live <add-on config dir> --out coverage/load_ml_benchmark_data"
     exit 2
+fi
+# Everything from here on (the image build, the clean-up of an earlier run's container and the run itself) happens
+# with the machine-wide lock held, so no other benchmark run's CPU load overlaps this one's
+if [ -z "${LOAD_ML_BENCHMARK_LOCKED:-}" ]; then
+    exec python3 "$TOOLS/bench_lock.py" "$LOCK" -- env LOAD_ML_BENCHMARK_LOCKED=1 bash "$0" "${ARGS[@]}"
 fi
 mkdir -p "$2"
 OUT="$(cd "$2" && pwd)"
@@ -79,8 +86,19 @@ cp -R "$DATA/." "$SCRATCH/"
 rm -f "$SCRATCH/manifest.json"
 cp -R "$TREE/apps/predbat/." "$SOURCE/"
 
+# A run killed from outside (a worker over its time limit) releases the lock with its process, but docker run --rm
+# leaves its container training; every run's container carries this label, so the next run kills any left over first
+LABEL=predbat-load-ml-bench
+LEFTOVER="$(docker ps -q --filter "label=$LABEL" 2> /dev/null || true)"
+if [ -n "$LEFTOVER" ]; then
+    echo "Killing a benchmark container left running by an earlier run: $LEFTOVER"
+    # $LEFTOVER is unquoted on purpose: it may list several container ids
+    docker kill $LEFTOVER > /dev/null 2>&1 || true
+fi
+
 set +e
-python3 "$TOOLS/bench_lock.py" "$LOCK" -- docker run --rm --network none --cpus "$CPUS" --memory "$MEMORY" \
+# --init gives the container a real PID 1, so a signal sent to the run reaches it
+docker run --rm --init --label "$LABEL" --network none --cpus "$CPUS" --memory "$MEMORY" \
     -e TZ=UTC -e BENCH_T0="$T0" -e BENCH_CYCLES=0 -e BENCH_TIMEOUT="${BENCH_TIMEOUT:-3600}" \
     -e BENCH_DRIVER=/bench/load_ml_driver.py -e BENCH_QUEUED_SECONDS \
     -e OPENBLAS_NUM_THREADS="$THREADS" -e OMP_NUM_THREADS="$THREADS" -e MKL_NUM_THREADS="$THREADS" \

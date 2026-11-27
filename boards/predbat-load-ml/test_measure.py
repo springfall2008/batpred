@@ -292,6 +292,14 @@ class TestBoardFile(unittest.TestCase):
         self.assertIn("Never put `cd` and `git` in the same call", self.board["rules"])
         self.assertIn("end with a BOARD-WORK line", self.board["rules"])
 
+    def test_the_rules_run_the_test_suites_under_the_benchmark_lock(self):
+        """./run_all --quick and ./run_pre_commit load the CPU for minutes, so the rules run them under the benchmark lock
+        and a worker's tests never overlap another worker's measured run; the spelling they give is permitted."""
+        rules = self.board["rules"]
+        self.assertIn("bench_lock.py /tmp/predbat-load-ml-benchmark.lock -- ./run_all --quick", rules)
+        self.assertIn("bench_lock.py /tmp/predbat-load-ml-benchmark.lock -- ./run_pre_commit", rules)
+        self.assertTrue(self.permitted("python3 " + MAIN + "/coverage/memory_benchmark_tools/bench_lock.py /tmp/predbat-load-ml-benchmark.lock -- ./run_all --quick"))
+
     def test_goal_and_done_when_match_measure(self):
         """The goal names both 25% cuts and dp2, and done-when the same limits measure.py applies."""
         self.assertEqual((measure.TIME_CUT, measure.PEAK_CUT, measure.AFTER_RISE, measure.ROUNDS), (0.25, 0.25, 0.10, 3))

@@ -64,7 +64,8 @@ Shell commands: workers run with a fixed allow list (the [permissions] below), a
 not asked about. Run `cd <dir>` as a Bash call of its own; it carries over to later calls. Never put `cd` and `git` in \
 the same call: that chain is refused even when each part is allowed. Create a worktree from the main checkout with \
 absolute paths (`git worktree add -b <branch> <absolute worktree path> <commit>`), then `cd <worktree>` in its own \
-call, then build and test there one command per call (`cd <worktree>/coverage` and then `./run_all --quick`). Every \
+call, then test there one command per call (`cd <worktree>/coverage`, then the test suites under the benchmark lock as \
+How to verify says). Every \
 git command that changes a branch, the index or the files (add, commit, cherry-pick, merge, rebase, restore, checkout, \
 switch, stash) must name your worktree by its canonical absolute path, with no `..` and no symlink: \
 `git -C <absolute worktree path> commit ...`. The plain form is refused wherever you are, because in the main checkout, \
@@ -102,7 +103,11 @@ the whole run).
 in every run. Any difference makes the result refuted, whatever the saving. forecast.json in each out dir shows where \
 two forecasts differ; never quote its values on the board.
 - Before a confirmed saving: `./run_all --quick` and `./run_pre_commit` (both from coverage/, which set up their own \
-Python environment) pass on the branch.
+Python environment) pass on the branch. They load the CPU for minutes, so run them under the benchmark lock, from \
+<worktree>/coverage, so they never overlap another worker's measured run: \
+`python3 ~/predbat/batpred/coverage/memory_benchmark_tools/bench_lock.py /tmp/predbat-load-ml-benchmark.lock -- ./run_all --quick` \
+and `python3 ~/predbat/batpred/coverage/memory_benchmark_tools/bench_lock.py /tmp/predbat-load-ml-benchmark.lock -- ./run_pre_commit`. \
+Run nothing else CPU-heavy outside the lock while the board is running.
 Evidence: every fact about a commit starts with these lines, so other workers and the lead can see what a tree holds \
 and what it achieved:
   Commit: <hash> on board/predbat-load-ml/<short id>
