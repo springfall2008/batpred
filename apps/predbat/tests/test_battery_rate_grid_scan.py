@@ -16,6 +16,7 @@ from tests.test_infra import TestHAInterface
 from predbat import PredBat
 from inverter import Inverter
 from battery_curve import charge_day
+from const import BATTERY_RATE_GRID_RUN_MINUTES
 
 TEMP_SENSOR = "sensor.battery_temperature"
 RATED_W = 2600
@@ -472,4 +473,45 @@ def run_battery_rate_grid_scan_tests(my_predbat_unused=None):
     failed |= _check("t15 no history read", reads == [], reads)
     failed |= _check("t15 coverage cleared, so the merge keeps the stored days", inv.curve_scan_coverage.get("grid_discharge") is None, inv.curve_scan_coverage)
     failed |= _check("t15 charge evidence is still gathered", len(_segments(inv.find_rate_grid_samples(False))) == 3, reads)
+
+    print("Test 16: battery_power with the wrong sign finds nothing and says so, on both the charge and the discharge side (#6375)")
+    sign_warning = "probably has the wrong sign"
+
+    def scan_logged(block, discharge, invert=False):
+        """Scan a block with battery_power_invert set as given, returning (segments, sign warnings logged)."""
+        my_predbat, inv = _make()
+        my_predbat.args["battery_power_invert"] = [invert]
+        _install(my_predbat, block)
+        logs = []
+        inv.log = logs.append
+        segments = _segments(inv.find_rate_grid_samples(discharge))
+        return segments, [line for line in logs if sign_warning in line]
+
+    # A full-rate charge importing from the grid while battery_power reads +1560 W (discharging)
+    segments, warnings = scan_logged(_charge(25, power=1560), False)
+    failed |= _check("t16 wrong-sign charge gives no evidence", segments == [], segments)
+    failed |= _check("t16 wrong-sign charge warns", len(warnings) == 1 and "charge battery_power showed the battery discharging" in warnings[0], warnings)
+    # A full-rate export reaching the grid while battery_power reads -1560 W (charging)
+    segments, warnings = scan_logged(_export(25, power=-1560), True)
+    failed |= _check("t16 wrong-sign export gives no evidence", segments == [], segments)
+    failed |= _check("t16 wrong-sign export warns", len(warnings) == 1 and "export battery_power showed the battery charging" in warnings[0], warnings)
+    # The same sensors with battery_power_invert set are read the right way round
+    segments, warnings = scan_logged(_charge(25, power=1560), False, invert=True)
+    failed |= _check("t16 invert flag recovers the charge", len(segments) == 3 and warnings == [], (segments, warnings))
+    segments, warnings = scan_logged(_export(25, power=-1560), True, invert=True)
+    failed |= _check("t16 invert flag recovers the export", len(segments) == 3 and warnings == [], (segments, warnings))
+    # No warning for a right-way-round run, or for an ignored charge (battery covering the house, nothing imported)
+    segments, warnings = scan_logged(_charge(25), False)
+    failed |= _check("t16 right sign does not warn", len(segments) == 3 and warnings == [], (segments, warnings))
+    segments, warnings = scan_logged([("Charging", RATED_W, 1560, 40, 15.3, 0) for _ in range(25)], False)
+    failed |= _check("t16 ignored charge does not warn", segments == [] and warnings == [], (segments, warnings))
+    # Too few wrong-way minutes to be a pattern
+    segments, warnings = scan_logged(_charge(BATTERY_RATE_GRID_RUN_MINUTES - 1, power=1560), False)
+    failed |= _check("t16 a short wrong-way run does not warn", warnings == [], warnings)
+    # Enough wrong-way minutes, but more right-way ones in blocks too short to form a run: nothing found, and no warning
+    idle_gap = [("Idle", 0, 0, 50, 15.3, 0)] * 5
+    short_right = _charge(BATTERY_RATE_GRID_RUN_MINUTES - 5)
+    block = _charge(BATTERY_RATE_GRID_RUN_MINUTES, power=1560) + idle_gap + short_right + idle_gap + short_right
+    segments, warnings = scan_logged(block, False)
+    failed |= _check("t16 right-way minutes outnumbering wrong-way ones do not warn", segments == [] and warnings == [], (segments, warnings))
     return failed

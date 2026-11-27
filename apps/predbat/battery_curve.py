@@ -381,6 +381,10 @@ class BatteryCurve:
         the fit), so the house-load ceiling is the kW measured. With more than one
         inverter the combined battery is scanned (load_curve_history()).
 
+        When nothing is found but the battery mostly moved the wrong way in minutes that otherwise qualified (charging
+        during a full-rate export, discharging during a full-rate charge, with the grid showing the export or import),
+        a warning points at the sign of battery_power (battery_power_invert), the usual cause.
+
         Args:
             discharge: True for the discharge evidence
             days: how many days of history to read, max_days_previous when not given
@@ -439,6 +443,8 @@ class BatteryCurve:
         scaling = scaling if scaling > 0 else 1.0
         local_tz = getattr(self.base, "local_tz", None)
         self.record_curve_scan_coverage("grid_discharge" if discharge else "grid_charge", min_len)
+        # Minutes that would have qualified but for the battery moving the other way, and ones that moved the right way
+        direction_counts = {"wrong": 0, "right": 0}
 
         def minute_value(minute):
             """(soc %, temperature or None, rate) for a qualifying minute, else None."""
@@ -450,7 +456,7 @@ class BatteryCurve:
             if history["rate"].get(minute, 0) < min_rate:
                 return None
             power = history["battery_power"].get(minute, 0)
-            if (power <= 0 if discharge else power >= 0) or abs(power) < min_power:
+            if abs(power) < min_power:
                 return None
             if grid_power is not None:
                 # The export (or, charging, the import) must reach the grid: otherwise the command was ignored and the battery
@@ -458,6 +464,11 @@ class BatteryCurve:
                 grid = grid_power.get(minute, 0)
                 if (grid < min_power) if discharge else (grid > -min_power):
                     return None
+            if power < 0 if discharge else power > 0:
+                # The battery moved the other way during a full-rate charge (export): counted for the battery_power sign warning
+                direction_counts["wrong"] += 1
+                return None
+            direction_counts["right"] += 1
             soc = history["soc_kwh"].get(minute, None)
             if soc is None:
                 return None
@@ -494,5 +505,15 @@ class BatteryCurve:
                     samples.setdefault(day, []).append([dp2(soc), temp, dp4(rate)])
                     found += 1
             run = []
+        if not found and direction_counts["wrong"] >= BATTERY_RATE_GRID_RUN_MINUTES and direction_counts["wrong"] > direction_counts["right"]:
+            self.log(
+                "Warn: Inverter {} {}: in {} minutes of full-rate {} battery_power showed the battery {} instead, so battery_power probably has the wrong sign (Predbat expects it negative while charging, positive while discharging) - check battery_power_invert".format(
+                    self.id,
+                    purpose,
+                    direction_counts["wrong"],
+                    "export" if discharge else "charge",
+                    "charging" if discharge else "discharging",
+                )
+            )
         self.log("Inverter {} {}: found {} full-rate {}-minute segments in {} days of history{}".format(self.id, purpose, found, BATTERY_RATE_GRID_SEGMENT_MINUTES, days, "" if temperature is not None else " (no battery temperature)"))
         return samples

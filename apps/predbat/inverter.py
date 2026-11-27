@@ -1140,13 +1140,18 @@ class Inverter(BatteryCurve):
     def find_battery_size(self, nominal_capacity=0):
         """
         Given SOC Percent and battery power figure out the approximate battery size in kWh
+
+        When no period is usable and the SoC fell by 3% or more during most of the periods the battery power read as
+        charging, the warning says the power sensor probably has the wrong sign (battery_power_invert).
         """
         soc_percent_sensor = self.base.get_arg("soc_percent", indirect=False, index=self.id)
         soc_kw_sensor = self.base.get_arg("soc_kw", indirect=False, index=self.id)
         # battery_size_power, when a driver or the user sets it, is a battery-side power reading
         # better suited to measuring capacity than battery_power (e.g. Sunsynk's BMS power, which
         # counts against the same current the BMS's SoC does). Same sign convention and invert flag.
-        battery_power_sensor = self.base.get_arg("battery_size_power", indirect=False, index=self.id) or self.base.get_arg("battery_power", indirect=False, index=self.id)
+        battery_size_power_sensor = self.base.get_arg("battery_size_power", indirect=False, index=self.id)
+        battery_power_setting = "battery_size_power" if battery_size_power_sensor else "battery_power"
+        battery_power_sensor = battery_size_power_sensor or self.base.get_arg("battery_power", indirect=False, index=self.id)
         battery_power_invert = self.base.get_arg("battery_power_invert", False, index=self.id)
 
         if (soc_percent_sensor or soc_kw_sensor) and battery_power_sensor:
@@ -1224,6 +1229,8 @@ class Inverter(BatteryCurve):
 
             estimate_battery_sizes = []
             rejected_battery_sizes = {}
+            # Periods read as charging (battery power negative) over which the SoC went down by 3% or more: a discharge, so a sign problem
+            soc_fell_count = 0
 
             # Find continuous charging periods and calculate battery size from energy/SoC relationship
             # Data is indexed backwards: minute 0 = now, minute N = N minutes ago
@@ -1332,6 +1339,9 @@ class Inverter(BatteryCurve):
                         )
 
                         if percent_change < 10:
+                            if percent_change <= -3:
+                                # A fall of a point or two is SoC jitter or lag; only a clear fall counts towards the sign hint
+                                soc_fell_count += 1
                             reject_battery_sample("soc_change_too_small")
                             continue
 
@@ -1422,7 +1432,18 @@ class Inverter(BatteryCurve):
                 )
                 return average_battery_size
             else:
-                self.log("Warn: Inverter {} Unable to find any suitable charge periods to estimate battery size, rejected samples {}".format(self.id, rejected_battery_sizes))
+                rejected_total = sum(rejected_battery_sizes.values())
+                sign_hint = ""
+                if soc_fell_count * 2 > rejected_total:
+                    # A real charge raises the SoC, so most "charges" lowering it means the power reading has the wrong sign
+                    sign_hint = " - the SoC fell during {} of the {} periods where {} said the battery was charging, so {} probably has the wrong sign (Predbat expects it negative while charging): try setting battery_power_invert to {}".format(
+                        soc_fell_count,
+                        rejected_total,
+                        battery_power_setting,
+                        battery_power_setting,
+                        "false" if battery_power_invert else "true",
+                    )
+                self.log("Warn: Inverter {} Unable to find any suitable charge periods to estimate battery size, rejected samples {}{}".format(self.id, rejected_battery_sizes, sign_hint))
                 return None
         else:
             self.log("Warn: Inverter {} unable to estimate battery size from soc_percent and battery_power data".format(self.id))
