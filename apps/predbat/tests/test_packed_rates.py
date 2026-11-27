@@ -221,15 +221,17 @@ def test_packed_rates(my_predbat):
         if not isinstance(packed, PackedRates) or as_packed.getvalue() != as_dict.getvalue():
             print("ERROR: test 9: the debug dump of a packed series differs from the dict's:\n{}\nagainst\n{}".format(as_packed.getvalue()[:300], as_dict.getvalue()[:300]))
             failed = True
-        # dump_debug_yaml() unpacks only the top-level value, so a series nested inside one reaches the dumper itself,
-        # and only DebugYamlDumper's PackedRates representer keeps it a plain map rather than a !!python/object tag
-        nested_as_dict = io.StringIO()
-        dump_debug_yaml({"rates": {"nested": series}}, nested_as_dict)
-        nested_as_packed = io.StringIO()
-        dump_debug_yaml({"rates": {"nested": packed}}, nested_as_packed)
-        if nested_as_packed.getvalue() != nested_as_dict.getvalue() or "!!python" in nested_as_packed.getvalue():
-            print("ERROR: test 9: the debug dump of a nested packed series differs from the dict's:\n{}\nagainst\n{}".format(nested_as_packed.getvalue()[:300], nested_as_dict.getvalue()[:300]))
-            failed = True
+        # A nested series is written by the direct writer (debug_value_lines) when the rest of its key is plain data,
+        # and by yaml.dump when anything else in the key is not (a set here), where only DebugYamlDumper's PackedRates
+        # representer keeps it a plain map rather than a !!python/object tag
+        for path, wrap in (("direct", lambda value: {"nested": value}), ("yaml.dump", lambda value: {"nested": value, "other": {1, 2}})):
+            nested_as_dict = io.StringIO()
+            dump_debug_yaml({"rates": wrap(series)}, nested_as_dict)
+            nested_as_packed = io.StringIO()
+            dump_debug_yaml({"rates": wrap(packed)}, nested_as_packed)
+            if nested_as_packed.getvalue() != nested_as_dict.getvalue() or "!!python" in nested_as_packed.getvalue():
+                print("ERROR: test 9: the {} debug dump of a nested packed series differs from the dict's:\n{}\nagainst\n{}".format(path, nested_as_packed.getvalue()[:300], nested_as_dict.getvalue()[:300]))
+                failed = True
 
     # --- Test 10: the MCP state description of the unpacked series matches the dict's ---
     series = _series(0, 2000)
