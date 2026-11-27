@@ -24,7 +24,6 @@ from aiohttp import ClientError, WSMsgType, WSServerHandshakeError
 import array
 import bisect
 import json
-import sys
 import traceback
 import threading
 import time
@@ -126,7 +125,7 @@ class EntityHistory:
     oldest to newest so the epoch array stays sorted.
     """
 
-    __slots__ = ["epochs", "states", "state_exceptions", "shared_attributes", "attribute_exceptions", "attribute_schemas", "anchored"]
+    __slots__ = ["epochs", "states", "state_exceptions", "state_intern", "shared_attributes", "attribute_exceptions", "attribute_schemas", "anchored"]
 
     def __init__(self):
         """
@@ -135,6 +134,9 @@ class EntityHistory:
         self.epochs = array.array("d")
         self.states = array.array("d")
         self.state_exceptions = {}
+        # One string object per distinct string state still held, so repeated states (e.g. a status) share it.
+        # Kept per store rather than sys.intern()ed so a string is released once prune() drops its last record.
+        self.state_intern = {}
         self.shared_attributes = None
         # epoch -> (keys, values) for each record whose attributes differ from shared_attributes: the key tuple is
         # shared by every record with the same keys (see attribute_schemas) and the values are an array of doubles
@@ -196,7 +198,9 @@ class EntityHistory:
         if state_value is None or state_value != state_value:
             # Keep non-numeric states (including NaN, which would break equality checks) as-is
             # Repeated string states (e.g. a status) then share one string object
-            self.state_exceptions[epoch] = sys.intern(state) if type(state) is str else state
+            if type(state) is str:
+                state = self.state_intern.setdefault(state, state)
+            self.state_exceptions[epoch] = state
             state_value = 0.0
         self.epochs.append(epoch)
         self.states.append(state_value)
@@ -285,6 +289,7 @@ class EntityHistory:
             self.epochs[0] = cutoff_epoch
         if self.state_exceptions:
             self.state_exceptions = self._prune_exceptions(self.state_exceptions, cutoff_epoch, anchor_epoch)
+            self.state_intern = {state: state for state in self.state_exceptions.values() if type(state) is str}
         if self.attribute_exceptions:
             self.attribute_exceptions = self._prune_exceptions(self.attribute_exceptions, cutoff_epoch, anchor_epoch)
 

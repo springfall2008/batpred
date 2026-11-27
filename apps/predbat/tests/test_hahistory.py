@@ -1390,6 +1390,26 @@ def test_entity_history_packed_attributes(my_predbat=None):
         else:
             print("✓ Pruning and rebuilding keep the packed attributes")
 
+    # Test 7: string states are shared through a per-store table, not the process-wide intern table, and
+    # prune() drops the strings it no longer holds so a sensor with a new string every record cannot grow it
+    unique_states = ["".join(["reading-", str(minute)]) for minute in (0, 5, 10)]
+    store = EntityHistory.from_records([{"state": state, "last_updated": stamp(minute), "attributes": {}} for state, minute in zip(unique_states, (0, 5, 10))])
+    if not hasattr(store, "state_intern") or sorted(store.state_intern) != sorted(unique_states):
+        print("ERROR: String states are not held in a per-store intern table")
+        failed += 1
+    else:
+        store.prune((base_time + timedelta(minutes=7)).timestamp())
+        if sorted(store.state_intern) != sorted(unique_states[1:]):
+            print(f"ERROR: Prune kept strings that no record holds: {sorted(store.state_intern)}")
+            failed += 1
+        else:
+            store.append_record({"state": "".join(["reading-", "10"]), "last_updated": stamp(15), "attributes": {}})
+            if store.state_exceptions[store.epochs[-1]] is not store.state_exceptions[store.epochs[-2]]:
+                print("ERROR: A string state appended after prune did not share the kept object")
+                failed += 1
+            else:
+                print("✓ String states share a per-store table that prune trims")
+
     return failed
 
 
