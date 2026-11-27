@@ -697,7 +697,7 @@ is valued the same way the planner values it, so extra load the battery covers i
 ### Cheap/moderate binary sensors
 
 For each load level name (`low`, `med`, `high`, `ev`) Predbat publishes two binary sensors based on whether the current marginal cost is cheap or moderate
-relative to the day's import rate range:
+relative to the import rate range over the forecast window:
 
 - **binary_sensor.predbat_marginal_rate_now_low_is_cheap** - `on` when the marginal cost for a low (1 kWh) extra load right now is at or below the cheap threshold
 - **binary_sensor.predbat_marginal_rate_now_low_is_moderate** - `on` when the marginal cost is above cheap but within the moderate threshold
@@ -708,9 +708,9 @@ relative to the day's import rate range:
 - **binary_sensor.predbat_marginal_rate_now_ev_is_cheap** - `on` when the marginal cost for an EV-scale (8 kWh) extra load right now is cheap
 - **binary_sensor.predbat_marginal_rate_now_ev_is_moderate** - `on` when it is moderate
 
-The cheap/moderate thresholds are computed relative to the current day's import rate range:
+The cheap/moderate thresholds are computed relative to the import rate range over the forecast window, which can include tomorrow's rates once they are published:
 
-- **Cheap threshold** = `rate_min × 1.2`
+- **Cheap threshold** = `rate_min × 1.2` when `rate_min` is above 0p. When it is 0p or negative (Agile plunge pricing), `rate_min + (rate_max − rate_min) × 0.05`, but never below 0p, so any marginal cost of 0p or less reads cheap; with a minimum just below or at 0p (above about −2p on a typical day), so does a cost a little above it. On a deeper plunge day the threshold is 0p. The marginal cost can sit above the slot's rate (when the extra energy would come from the battery instead), so the cheapest slot doesn't always read cheap
 - **Moderate threshold** = `max(rate_max × 0.5, rate_min × 1.5)`
 
 `rate_min` and `rate_max` are the base tariff's lowest and highest import rates, the same values as the sensor's `rate_min`/`rate_max` attributes.
