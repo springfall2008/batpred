@@ -19,6 +19,7 @@ from datetime import datetime, timedelta
 import pytz
 
 from octopus import OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME, decode_octopus_url_cache, encode_octopus_url_cache
+from utils import minute_data
 from tests.test_infra import run_async
 from tests.test_octopus_free import _attach_storage, _reset_free_cache
 
@@ -84,6 +85,40 @@ def _check_compact(failed):
         failed = True
     if not failed:
         print("PASS: cache encoded compactly")
+    return failed
+
+
+def _check_newest_first_download(failed):
+    """Rates built the way download_octopus_rates_func() builds them, from rows newest first as Octopus returns them, still encode compactly."""
+    midnight = pytz.utc.localize(datetime(2026, 11, 26, 0, 0, 0))
+    rows = []
+    for slot in range(4):
+        valid_from = midnight + timedelta(minutes=30 * slot)
+        valid_to = valid_from + timedelta(minutes=30)
+        rows.append({"valid_from": valid_from.strftime("%Y-%m-%dT%H:%M:%SZ"), "valid_to": valid_to.strftime("%Y-%m-%dT%H:%M:%SZ"), "value_inc_vat": 10.0 + slot})
+    rows.reverse()
+    rates, _ = minute_data(rows, 3, midnight, "value_inc_vat", "valid_from", backwards=False, to_key="valid_to")
+    if list(rates) == sorted(rates):
+        print("FAIL: test setup - newest-first rows should give a dict whose minutes are not in ascending order")
+        return True
+    cache = {_RATE_URL: {"stamp": datetime(2026, 11, 26, 10, 0, 0), "midnight_utc": midnight, "data": rates}}
+    encoded = encode_octopus_url_cache(cache)
+    run = encoded[_RATE_URL]["data"]
+    if set(run) != {"start", "rates"} or run["start"] != 0 or len(run["rates"]) != 120:
+        print("FAIL: newest-first download not encoded as start + rates, got keys {}".format(sorted(run)))
+        return True
+    decoded = decode_octopus_url_cache(json.loads(json.dumps(encoded)))[_RATE_URL]["data"]
+    if decoded != rates:
+        print("FAIL: newest-first download did not round trip")
+        failed = True
+    elif list(decoded) != sorted(rates):
+        print("FAIL: newest-first download should reload in ascending minute order")
+        failed = True
+    elif decoded[0] != 10.0 or decoded[119] != 13.0:
+        print("FAIL: rates landed on the wrong minutes: minute 0 {} minute 119 {}".format(decoded[0], decoded[119]))
+        failed = True
+    else:
+        print("PASS: newest-first download encoded compactly and reloads ascending")
     return failed
 
 
@@ -156,6 +191,7 @@ def test_octopus_url_cache(my_predbat):
     failed = False
     failed = _check_round_trip(failed)
     failed = _check_compact(failed)
+    failed = _check_newest_first_download(failed)
     failed = _check_storage(my_predbat, failed)
     print("**** Octopus URL cache JSON tests {} ****".format("FAILED" if failed else "PASSED"))
     return failed

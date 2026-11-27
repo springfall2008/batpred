@@ -90,14 +90,17 @@ OCTOPUS_URL_CACHE_NAME = "url_cache_json"
 def _encode_url_cache_data(data):
     """
     Encode one cache entry's data for JSON
-    A minute -> rate dict whose minutes run on one at a time becomes {"start", "rates"}, any other minute dict
-    {"minutes": [[minute, rate], ...]}, and anything else (the free session list) {"value": data}.
+    A minute -> rate dict that holds every minute from its first to its last becomes {"start", "rates"}, whatever
+    order the minutes were added in, any other minute dict {"minutes": [[minute, rate], ...]}, and anything else
+    (the free session list) {"value": data}. Downloaded rates arrive newest half hour first (the Octopus API's
+    order), so the run is written in ascending order and reloads ascending, as the old YAML cache did.
     """
     if isinstance(data, dict) and data and all(type(minute) is int for minute in data):
-        minutes = list(data)
-        start = minutes[0]
-        if minutes == list(range(start, start + len(minutes))):
-            return {"start": start, "rates": list(data.values())}
+        start = min(data)
+        end = max(data)
+        # The keys are distinct ints, so as many keys as minutes in the span means none is missing
+        if end - start + 1 == len(data):
+            return {"start": start, "rates": [data[minute] for minute in range(start, end + 1)]}
         return {"minutes": [[minute, rate] for minute, rate in data.items()]}
     return {"value": data}
 
