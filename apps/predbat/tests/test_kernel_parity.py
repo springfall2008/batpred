@@ -1452,6 +1452,105 @@ def run_clipping_parity_tests(my_predbat, count=250):
     return failed
 
 
+def make_multi_split_windows(rng, minutes_now, forecast_minutes):
+    """Build a layout where each charge window has two to four export windows strictly inside it.
+
+    make_intersecting_windows puts at most one export window against each charge window, so a charge
+    window there clips to at most two segments. With k export windows inside it a charge window clips
+    to k + 1 segments, which is the layout that overran the kernel's output buffers when they were
+    sized at two segments per charge window. Gaps between the export windows are mostly 5 minutes or
+    more, so most remnants survive the 5 minute minimum, with the odd short one to keep that rule in play.
+    """
+    charge_window = []
+    export_window = []
+    minute = minutes_now + rng.choice([0, 5, 30])
+    for _ in range(rng.randint(1, 3)):
+        length = rng.choice([120, 180, 240, 360])
+        end = min(minute + length, minutes_now + forecast_minutes)
+        if end - minute < 60:
+            break
+        charge_window.append({"start": minute, "end": end, "average": round(rng.uniform(0, 40), 2)})
+        cursor = minute + rng.choice([2, 5, 10, 30])
+        for _ in range(rng.randint(2, 4)):
+            dstart = cursor
+            dend = dstart + rng.choice([5, 10, 30])
+            if dend >= end - 2:
+                break
+            export_window.append({"start": dstart, "end": dend, "average": round(rng.uniform(0, 40), 2)})
+            cursor = dend + rng.choice([3, 5, 10, 30])
+        minute = end + rng.choice([0, 5, 30])
+        if minute >= minutes_now + forecast_minutes:
+            break
+    export_window.sort(key=lambda w: w["start"])
+    return charge_window, export_window
+
+
+def run_multi_split_parity_tests(my_predbat, count=80):
+    """Compare both engines when one charge window is split by several export windows, returns True on failure.
+
+    Pins clip_intersecting_charge_windows for layouts that clip to more than two segments per charge
+    window, both through pk_run and through pk_run_batch, whose window setup is carried between jobs.
+    """
+    failed = False
+    over_two = 0
+    layouts = 0
+    for seed in range(count):
+        rng = random.Random(700000 + seed)
+        reset_inverter(my_predbat)
+        reset_rates(my_predbat, 10.0, 5.0)
+        my_predbat.battery_rate_max_export = my_predbat.battery_rate_max_discharge
+        apply_random_scenario(my_predbat, rng)
+        pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, rng=rng)
+
+        charge_window, export_window = make_multi_split_windows(rng, my_predbat.minutes_now, my_predbat.forecast_minutes)
+        if not charge_window:
+            continue
+        charge_limit = [rng.choice([my_predbat.reserve, my_predbat.soc_max, round(rng.uniform(0.1, my_predbat.soc_max), 2)]) for _ in charge_window]
+        export_limits = [unpack_export_limit(rng.choice([99.0, 0.0, 0.0, round(rng.uniform(0, 100), 1)])) for _ in export_window]
+        end_record = my_predbat.forecast_minutes
+
+        layouts += 1
+        _, clipped_windows = remove_intersecting_windows(charge_limit, charge_window, export_limits, export_window)
+        if len(clipped_windows) > 2 * len(charge_window):
+            over_two += 1
+
+        for pv_scenario in (PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10):
+            name = "multi_split_{}_s{}".format(seed, pv_scenario)
+            failed |= dual_run(name, my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record)
+
+            # The batch path carries the clipped windows between jobs, so run the layout twice in one batch
+            prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+            my_predbat.prediction_kernel_enable = False
+            expect = prediction.run_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, save=None, cache=False, export_floor=False)
+            prediction.kernel_handle = create_kernel_context(prediction)
+            job = prediction_kernel.BatchJob(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, 5)
+            batched = prediction_kernel.run_prediction_kernel_batch(prediction, [job, job])
+            if batched is None:
+                print("ERROR: Scenario {} kernel batch run failed".format(name))
+                failed = True
+            else:
+                # A batch returns no predict_soc series, so compare only the result fields
+                for job_n, entry in enumerate(batched):
+                    for index, result_name in enumerate(RESULT_NAMES):
+                        tolerance = PARITY_TOLERANCE if result_name in UNROUNDED_RESULTS else ROUNDED_RESULT_TOLERANCE
+                        if entry[0] is None or abs(expect[index] - entry[0][index]) > tolerance:
+                            print("ERROR: Scenario {}_batch{} mismatch on {}: python {} kernel {}".format(name, job_n, result_name, expect[index], None if entry[0] is None else entry[0][index]))
+                            failed = True
+                            break
+            if failed:
+                print("Multi-split sweep failed at seed {} scenario {}".format(seed, pv_scenario))
+                print("   charge {} limits {}".format([(w["start"], w["end"]) for w in charge_window], charge_limit))
+                print("   export {} limits {}".format([(w["start"], w["end"]) for w in export_window], export_limits))
+                break
+        if failed:
+            break
+    print("Multi-split sweep ran {} layouts, {} of which clipped to more than two segments per charge window".format(layouts, over_two))
+    if over_two == 0:
+        print("ERROR: multi-split sweep never clipped past two segments per charge window - it is not exercising the case it exists for")
+        failed = True
+    return failed
+
+
 def build_batch_jobs(my_predbat, rng, count, window_variants=1):
     """Build a list of BatchJob scenarios plus the Prediction they run against.
 
@@ -1661,6 +1760,160 @@ def run_batch_window_variant_tests(my_predbat, count=30, window_variants=6):
     return failed
 
 
+def run_window_setup_cache_tests(my_predbat, seeds=(11, 22, 33), count=36):
+    """Check the kernel's window setup carried between jobs of a batch never leaks from one job to another, returns True on failure.
+
+    pk_run_one keeps a thread's window clipping and membership from one job to the next while the next
+    job's buffers and enabled-limit pattern are the same. Real fan-outs hand every job of a trial the very
+    same lists, so here jobs come in threes that share their charge and export limit lists (as a trial's
+    nominal, pv10 and pv90 scenarios do) while the window lists are shared by the whole batch. Between
+    trials the limits change the way a trial changes them: one limit moved but still enabled (the carried
+    setup applies), a window switched off, everything off, an export window made idle or a freeze (the
+    carried setup must not apply). Each batch is compared with the per-job pk_run reference, which never
+    carries anything, at every thread count; later seeds build new lists after the earlier ones are freed,
+    so a recycled buffer address with different contents is exercised too.
+    """
+    print("**** Running kernel window setup cache tests ****")
+    if not prediction_kernel.KERNEL_HAS_BATCH:
+        print("SKIP: kernel does not expose pk_run_batch")
+        return False
+
+    failed = False
+    checked = 0
+    for seed in seeds:
+        rng = random.Random(seed)
+        prediction, jobs = build_batch_jobs(my_predbat, rng, count)
+        if not prediction.kernel_handle:
+            print("ERROR: window setup cache kernel context creation failed")
+            return True
+        for group in range(0, len(jobs), 3):
+            trial = group // 3
+            charge_limit = list(jobs[group].charge_limit)
+            export_limits = list(jobs[group].export_limits)
+            charge_mode = trial % 5
+            if charge_limit:
+                position = rng.randrange(len(charge_limit))
+                if charge_mode == 1:
+                    charge_limit[position] = round(rng.uniform(0.1, prediction.soc_max), 2)
+                elif charge_mode == 2:
+                    charge_limit[position] = 0.0
+                elif charge_mode == 3:
+                    charge_limit = [0.0] * len(charge_limit)
+                elif charge_mode == 4:
+                    charge_limit = [round(rng.uniform(0.1, prediction.soc_max), 2) for _ in charge_limit]
+            export_mode = (trial // 2) % 4
+            if export_limits and export_mode:
+                position = rng.randrange(len(export_limits))
+                export_limits[position] = unpack_export_limit([0.0, 99.0, 100.0][export_mode - 1])
+            for job in jobs[group : group + 3]:
+                job.charge_limit = charge_limit
+                job.export_limits = export_limits
+        reference = build_batch_reference(prediction, jobs)
+        if reference is None:
+            return True
+        for n_threads in (1, 2, 4, 8):
+            batched = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, n_threads)
+            if batched is None:
+                print("ERROR: pk_run_batch failed at {} threads".format(n_threads))
+                return True
+            failed |= check_batch_results(jobs, reference, batched, n_threads)
+            checked += len(jobs)
+    if not failed:
+        print("Window setup cache: {} trial scenarios bit-identical to pk_run across limit, window-off and export-mode changes at 1, 2, 4 and 8 threads".format(checked))
+    return failed
+
+
+def run_batch_window_mutation_tests(my_predbat, count=12):
+    """Check a batch never reuses window arrays built for a window list before it was changed, returns True on failure.
+
+    run_prediction_kernel_batch takes each window list's start/end arrays from the identity-keyed bounds
+    cache, which outlives the batch, so the same list serves batch after batch. That is only sound while
+    every change to a window goes through set_window_start/set_window_end, which drop the cache. Here a
+    batch warms the cache, every window list is then moved through the setters, and the same list objects
+    are run again: the results must equal a fresh batch over deep copies (new lists, nothing cached for
+    them) and must differ from the first batch, or the move would not have exercised anything. Different
+    lists must also not share arrays, which the window variant tests already pin per batch.
+    """
+    print("**** Running kernel batch window mutation tests ****")
+    if not prediction_kernel.KERNEL_HAS_BATCH:
+        print("SKIP: kernel does not expose pk_run_batch")
+        return False
+
+    prediction, jobs = build_batch_jobs(my_predbat, random.Random(2468), count, window_variants=2)
+    if not prediction.kernel_handle:
+        print("ERROR: batch window mutation kernel context creation failed")
+        return True
+
+    def summary(results):
+        """The comparable part of a batch's results"""
+        return [(entry[0][:11], entry[1], entry[2]) if entry[0] is not None else None for entry in results]
+
+    before = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, 1)
+    if before is None:
+        print("ERROR: batch window mutation first batch failed")
+        return True
+    before = summary(before)
+
+    moved = set()
+    for job in jobs:
+        for windows in (job.charge_window, job.export_window):
+            if id(windows) in moved:
+                continue
+            moved.add(id(windows))
+            for window in windows[:2]:
+                prediction_kernel.set_window_start(window, window["start"] + 15)
+                prediction_kernel.set_window_end(window, window["end"] + 15)
+
+    after = prediction_kernel.run_prediction_kernel_batch(prediction, jobs, 1)
+    if after is None:
+        print("ERROR: batch window mutation second batch failed")
+        return True
+    after = summary(after)
+
+    copies = {}
+
+    def copied(windows):
+        """A deep copy of a window list, one per original so jobs that shared a list still share"""
+        if id(windows) not in copies:
+            copies[id(windows)] = [dict(window) for window in windows]
+        return copies[id(windows)]
+
+    fresh_jobs = []
+    for job in jobs:
+        fresh = prediction_kernel.BatchJob(
+            job.charge_limit,
+            copied(job.charge_window),
+            copied(job.export_window),
+            job.export_limits,
+            job.pv_scenario,
+            job.end_record,
+            5,
+            soc_range_start_step=job.soc_range_start_step,
+            soc_range_end_step=job.soc_range_end_step,
+            want_range=job.want_range,
+            range_window=job.range_window,
+            want_export_end_soc=job.want_export_end_soc,
+        )
+        fresh_jobs.append(fresh)
+    fresh = prediction_kernel.run_prediction_kernel_batch(prediction, fresh_jobs, 1)
+    if fresh is None:
+        print("ERROR: batch window mutation fresh batch failed")
+        return True
+    fresh = summary(fresh)
+
+    failed = False
+    if after != fresh:
+        bad = [index for index in range(len(jobs)) if after[index] != fresh[index]]
+        print("ERROR: after moving the windows through the setters {} job(s) differ from a fresh batch over copies, first job {}".format(len(bad), bad[0]))
+        failed = True
+    if after == before:
+        print("ERROR: moving the windows changed no result, so the test did not exercise the cache")
+        failed = True
+    if not failed:
+        print("Batch window mutation: {} jobs after set_window_start/end match a fresh batch over copies".format(len(jobs)))
+    return failed
+
+
 def kernel_available():
     """Ensure the kernel library is built and loaded, returns (available, required_failure)"""
     if not ensure_kernel_built():
@@ -1688,6 +1941,33 @@ def run_model_kernel_tests(my_predbat):
         return run_model_tests(my_predbat, prediction_kernel=True)
     finally:
         my_predbat.prediction_kernel_enable = False
+
+
+def run_soc_percent_walk_tests():
+    """Check the kernel's walk to a SoC's percent bucket gives exactly upper_bound's answer, returns True on failure.
+
+    The hot loop finds the bucket by walking from the previous step's percent instead of bisecting, which
+    is only legitimate if it lands on the same bucket from any starting point. pk_verify_soc_percent_walk
+    sweeps SoC densely, probes either side of every bucket boundary, and starts each lookup from the
+    extremes, a random percent and the previous lookup's answer.
+    """
+    print("**** Running SoC percent walk tests ****")
+    lib = prediction_kernel.KERNEL_LIB
+    if not lib or not hasattr(lib, "pk_verify_soc_percent_walk"):
+        print("SKIP: kernel does not expose pk_verify_soc_percent_walk")
+        return False
+    lib.pk_verify_soc_percent_walk.restype = ctypes.c_int32
+    lib.pk_verify_soc_percent_walk.argtypes = [ctypes.c_double, ctypes.c_int32, ctypes.c_uint64]
+    failed = False
+    for soc_max in (0.5, 2.0, 4.8, 5.0, 9.5, 10.0, 13.5, 20.0, 25.6, 30.0, 100.0):
+        for seed in (1, 987654321):
+            bad = lib.pk_verify_soc_percent_walk(ctypes.c_double(soc_max), 100000, seed)
+            if bad:
+                print("ERROR: SoC percent walk disagrees with upper_bound in {} places for soc_max {} (seed {})".format(bad, soc_max, seed))
+                failed = True
+    if not failed:
+        print("SoC percent walk matches upper_bound from every starting percent, boundaries included")
+    return failed
 
 
 def run_soc_percent_table_tests():
@@ -1719,6 +1999,84 @@ def run_soc_percent_table_tests():
             failed = True
     if not failed:
         print("SoC percent table matches round_py for every sampled SoC and every bucket boundary")
+    return failed
+
+
+def run_soc_table_memo_tests(my_predbat):
+    """Check contexts built with alternating battery sizes each hold their own size's SoC percent table.
+
+    pk_context_create copies the table from a memo keyed on soc_max instead of rebuilding it per
+    context (about half a millisecond each, ~31 times a plan). A memo that handed one size's table to
+    another would move SoC-to-percent bucket edges and so the charge curve the kernel reads. The sizes
+    are interleaved so each lookup follows a build for a different size, every context's table is
+    compared bit for bit with a fresh build, and each size is also run through both engines.
+    """
+    print("**** Running SoC table memo tests ****")
+    lib = prediction_kernel.KERNEL_LIB
+    if not lib or not hasattr(lib, "pk_verify_context_soc_table"):
+        print("SKIP: kernel does not expose pk_verify_context_soc_table")
+        return False
+    lib.pk_verify_context_soc_table.restype = ctypes.c_int32
+    lib.pk_verify_context_soc_table.argtypes = [ctypes.c_int64]
+
+    saved_soc_max = my_predbat.soc_max
+    saved_soc_kw = my_predbat.soc_kw
+    saved_enable = my_predbat.prediction_kernel_enable
+    failed = False
+    try:
+        pv_step, pv10_step, load_step, load10_step = make_step_data(my_predbat, pv_kw=2.0, load_kw=0.6)
+        charge_window = [{"start": my_predbat.minutes_now + 60, "end": my_predbat.minutes_now + 240, "average": 7.5}]
+        export_window = [{"start": my_predbat.minutes_now + 600, "end": my_predbat.minutes_now + 720, "average": 30.0}]
+        my_predbat.prediction_kernel_enable = True
+        for round_n in range(2):
+            for soc_max in (9.5, 13.5, 4.8, 13.5, 25.6, 9.5):
+                my_predbat.soc_max = soc_max
+                my_predbat.soc_kw = soc_max / 2
+                prediction = Prediction(my_predbat, pv_step, pv10_step, load_step, load10_step)
+                if not prediction.kernel_handle:
+                    print("ERROR: SoC table memo context creation failed for soc_max {}".format(soc_max))
+                    return True
+                bad = lib.pk_verify_context_soc_table(prediction.kernel_handle)
+                if bad:
+                    print("ERROR: round {} soc_max {}: context SoC table differs from a fresh build in {} entries".format(round_n, soc_max, bad))
+                    failed = True
+                charge_limit = [soc_max * 0.8]
+                export_limits = [30.0]
+                failed |= dual_run("soc_table_memo_{}_{}".format(round_n, soc_max), my_predbat, pv_step, pv10_step, load_step, load10_step, charge_limit, charge_window, export_window, export_limits, PV_SCENARIO_NOMINAL, my_predbat.forecast_minutes)
+                my_predbat.prediction_kernel_enable = True
+    finally:
+        my_predbat.soc_max = saved_soc_max
+        my_predbat.soc_kw = saved_soc_kw
+        my_predbat.prediction_kernel_enable = saved_enable
+    if not failed:
+        print("SoC table memo: every context held its own soc_max's table and matched the Python engine")
+    return failed
+
+
+def run_round_py_tests():
+    """Check the kernel's arithmetic round_py gives exactly the snprintf+strtod result it replaces.
+
+    round_py mirrors CPython's round(x, n) and feeds the SoC series, the SoC range of a charge window,
+    the window-end SoCs, iBoost and car SoCs. Its fast path is only legitimate if it is bit-identical to
+    the correctly-rounded string round trip for every value that can reach it, so the kernel's
+    pk_verify_round_py hook sweeps random values of every magnitude, probes a few representable steps either side of
+    each decimal tie, and checks exact binary ties and signed zeros, for 0 to 6 digits.
+    """
+    print("**** Running kernel round_py tests ****")
+    lib = prediction_kernel.KERNEL_LIB
+    if not lib or not hasattr(lib, "pk_verify_round_py"):
+        print("SKIP: kernel does not expose pk_verify_round_py")
+        return False
+    lib.pk_verify_round_py.restype = ctypes.c_int32
+    lib.pk_verify_round_py.argtypes = [ctypes.c_int32, ctypes.c_uint64]
+    failed = False
+    for seed in (1, 20260824, 987654321):
+        bad = lib.pk_verify_round_py(300000, seed)
+        if bad:
+            print("ERROR: kernel round_py differs from snprintf+strtod in {} cases (seed {})".format(bad, seed))
+            failed = True
+    if not failed:
+        print("Kernel round_py matches snprintf+strtod bit for bit, ties and signed zeros included")
     return failed
 
 
@@ -2054,6 +2412,9 @@ def run_kernel_parity_tests(my_predbat):
     try:
         failed = run_marshalling_tests()
         failed |= run_soc_percent_table_tests()
+        failed |= run_soc_percent_walk_tests()
+        failed |= run_soc_table_memo_tests(my_predbat)
+        failed |= run_round_py_tests()
         failed |= run_cancel_context_tests()
         failed |= run_edge_case_tests(my_predbat)
         failed |= run_export_floor_parity_tests(my_predbat)
@@ -2062,9 +2423,15 @@ def run_kernel_parity_tests(my_predbat):
         if not failed:
             failed |= run_clipping_parity_tests(my_predbat)
         if not failed:
+            failed |= run_multi_split_parity_tests(my_predbat)
+        if not failed:
             failed |= run_batch_parity_tests(my_predbat)
         if not failed:
             failed |= run_batch_window_variant_tests(my_predbat)
+        if not failed:
+            failed |= run_window_setup_cache_tests(my_predbat)
+        if not failed:
+            failed |= run_batch_window_mutation_tests(my_predbat)
         if not failed:
             failed |= run_scratch_reuse_tests(my_predbat)
         if not failed:

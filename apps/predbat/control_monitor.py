@@ -136,6 +136,7 @@ class ControlMonitor:
         self.events = []  # oldest first; also the durable store published in the sensor attributes
         self.total = 0  # lifetime count of failed slots
         self.restored = False  # True once the total has been read back from its entity, or first written
+        self.restored_added = 0  # how much restore() added to total, so a reader can tell it from new failures
         self.restore_attempts = 0  # restore reads made while unresolved, for the history cadence
 
     def _find_event(self, inverter_id, mode, slot_start):
@@ -259,6 +260,8 @@ class ControlMonitor:
         event = track["event"]
         if event is not None:
             event["failed_minutes"] += credited / 60.0
+            # Already counted; kept up so failing() can tell a slot still failing from one that cleared
+            track["consecutive"] += 1
             return None
 
         track["consecutive"] += 1
@@ -280,6 +283,23 @@ class ControlMonitor:
         track["event"] = event
         self.total += 1
         return event
+
+    def failing(self, now):
+        """
+        Whether any inverter's slot is confirmed failed and its latest judged reading is still failing.
+
+        A passing reading, or one that cannot be judged (the target reached), clears it, as does the
+        commanded end passing or the expectation being cleared.
+
+        Called from component threads while the plan thread adds and removes tracking, so it iterates a copy.
+
+        Args:
+            now (float): epoch seconds
+        """
+        for track in list(self.tracking.values()):
+            if track["event"] is not None and track["consecutive"] > 0 and now < track["deadline"]:
+                return True
+        return False
 
     def recent_events(self, now, window_s=DEFAULT_WINDOW_S):
         """Return the events confirmed within the last window_s seconds, oldest first."""
@@ -337,6 +357,7 @@ class ControlMonitor:
         if restored_total < 0:
             return False
         self.total += restored_total
+        self.restored_added += restored_total
         self.restored = True
         return True
 

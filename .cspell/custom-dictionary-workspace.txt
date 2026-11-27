@@ -71,6 +71,7 @@ batteri
 batteryb
 batusecap
 beforeunload
+benchid
 bierner
 bisectable
 Bitwarden
@@ -189,6 +190,7 @@ dlopen
 dmacwalter
 dnoregion
 docstrings
+DONT
 dschg
 dstamp
 dstart
@@ -207,6 +209,7 @@ edfenergy
 edfgb
 edgecolor
 efgh
+EINVAL
 elif
 elinter
 eload
@@ -252,11 +255,13 @@ EVDC
 evergen
 evilspringfall
 evse
+executemany
 exog
 expmsg
 exportlimit
 exportvalue
 facecolor
+faketime
 fdpwr
 fdsoc
 feedin
@@ -284,6 +289,8 @@ freephase
 frombuffer
 fromisoformat
 fronius
+frozenlist
+fsmonitor
 funcs
 futurerate
 gaierror
@@ -365,6 +372,7 @@ idxs
 iess
 iflux
 importlimit
+importtime
 inday
 Indevolt
 indra
@@ -414,8 +422,10 @@ labelnames
 ladybugdb
 Lanmate
 larr
+lastrowid
 libbi
 libc
+libfaketime
 libyaml
 LIFEPO
 linebreak
@@ -451,6 +461,7 @@ mdi
 mdlrc
 measurand
 measurands
+memray
 Meteo
 Meteoalarm
 meterpoint
@@ -478,6 +489,7 @@ Mixergy
 mkaiser
 mkdocs
 mletenay
+mktemp
 mlugg
 Modbus
 mogons
@@ -487,6 +499,7 @@ Mosquitto
 mousedown
 mpan
 mpans
+mpip
 mppt
 mprn
 mpxn
@@ -494,10 +507,12 @@ mqtt
 mtok
 mult
 multiarray
+multidict
 myaccount
 myenergi
 mypy
 nanmean
+nanosleep
 nanstd
 nattribute
 nbytes
@@ -572,6 +587,7 @@ percnt
 peterhaban
 pgrid
 photovoltaics
+pipefail
 pitem
 pkwh
 plenticore
@@ -598,6 +614,8 @@ predheat
 preseed
 preseeded
 prevs
+procps
+propcache
 protobuf
 pseudonymisation
 pseudonymise
@@ -623,6 +641,7 @@ pypi
 pyproject
 pytest
 pythonhashseed
+PYTHONPATH
 pytz
 Quattro
 Qwen
@@ -694,6 +713,7 @@ sigen
 sigencloud
 sigenergy
 sigenstor
+sitecustomize
 sizeof
 skynet
 Slee
@@ -735,6 +755,7 @@ stdlib
 stepline
 stevekirtley
 Storion
+strftime
 Stromligning
 strptime
 strtod
@@ -790,6 +811,7 @@ tmrw
 tojson
 topbar
 tottime
+tracemalloc
 trapezoidally
 trapz
 Trefor
@@ -805,6 +827,10 @@ tzdata
 tzfile
 tzpath
 tzset
+udfff
+ufeff
+ufffe
+uffff
 unasserted
 uncalibrated
 uncancellable
@@ -826,6 +852,7 @@ unpushed
 unreachability
 unredacted
 unregisters
+unrelate
 unrepresentable
 unreproduced
 unsmoothed
@@ -860,6 +887,7 @@ workstream
 workstreams
 worktree
 woutervg
+worktrees
 writeonly
 wrongsha
 WRONLY
@@ -876,6 +904,7 @@ xtest
 xticks
 xxabcdefyy
 yanchor
+yarl
 yaxis
 yaxistooltip
 yday

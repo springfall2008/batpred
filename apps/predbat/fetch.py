@@ -18,7 +18,7 @@ battery temperature, and other sensor inputs. Converts all data to per-minute
 dictionaries for use by the prediction engine.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from utils import (
     average_temperature_minutes,
     battery_temperature_entities,
@@ -33,6 +33,7 @@ from utils import (
     minute_data,
     get_now_from_cumulative,
     MinuteArray,
+    PackedRates,
     strptime_aware,
     is_entity_id,
     intelligent_device_is_charger,
@@ -52,6 +53,7 @@ from const import (
     LOAD_FORECAST_RECORDED_MIN_MINUTES,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
+    DISPATCH_SOURCE_CHARGER_SCHEDULE,
     CAR_CHARGING_NOW_POWER_W,
     CAR_MANUAL_SOC_LATE_MINUTES,
     CAR_MANUAL_SOC_UNPLUG_MINUTES,
@@ -77,7 +79,6 @@ from futurerate import FutureRate
 from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import ast
-import copy
 import math
 import re
 
@@ -1732,8 +1733,8 @@ class Fetch:
         if "rates_import_octopus_url" in self.args:
             # Fixed URL for rate import
             self.log("Downloading import rates directly from URL {}".format(self.get_arg("rates_import_octopus_url", indirect=False)))
-            # Need to take a copy, as saving sessions will repeatedly increment cached import rates
-            import_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False)))
+            # download_octopus_rates() returns a new dict each call, so the saving sessions added to it later cannot reach the cache
+            import_rates = self.download_octopus_rates(self.get_arg("rates_import_octopus_url", indirect=False))
         elif "metric_octopus_import" in self.args:
             # Octopus import rates
             entity_id = self.get_arg("metric_octopus_import", None, indirect=False)
@@ -1772,11 +1773,14 @@ class Fetch:
                 self.log("Warn: metric_octopus_gas is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Warn: rate_import_gas not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
             else:
-                self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
+                rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
+                # Only ever read from here on (get, in), so held packed rather than as a dict per minute
+                self.rate_gas = PackedRates.pack(rate_gas)
                 self.rate_scan_gas(self.rate_gas, print=True)
         elif "rates_gas" in self.args:
-            self.rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "rates_gas")
-            self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
+            rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "rates_gas")
+            rate_gas, self.rate_gas_replicated = self.rate_replicate(rate_gas, is_import=False, is_gas=False)
+            self.rate_gas = PackedRates.pack(rate_gas)
             self.rate_scan_gas(self.rate_gas, print=True)
 
         # Carbon intensity data
@@ -1819,8 +1823,8 @@ class Fetch:
         if "rates_export_octopus_url" in self.args:
             # Fixed URL for rate export
             self.log("Downloading export rates directly from URL {}".format(self.get_arg("rates_export_octopus_url", indirect=False)))
-            # Need to take a copy, as saving sessions will repeatedly increment cached export rates
-            export_rates = copy.deepcopy(self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False)))
+            # download_octopus_rates() returns a new dict each call, so the saving sessions added to it later cannot reach the cache
+            export_rates = self.download_octopus_rates(self.get_arg("rates_export_octopus_url", indirect=False))
         elif "metric_octopus_export" in self.args:
             # Octopus export rates
             entity_id = self.get_arg("metric_octopus_export", None, indirect=False)
@@ -1862,12 +1866,19 @@ class Fetch:
 
         # futurerate data
         futurerate = FutureRate(self)
-        self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis(import_rates, export_rates)
+        future_energy_rates_import, future_energy_rates_export = futurerate.futurerate_analysis(import_rates, export_rates)
+        # The per-minute series below are only read once built (get, [], in, iteration), so each is held packed
+        # (PackedRates) rather than as a dict per minute; one that is not a run of float minutes stays a dict
+        self.future_energy_rates_import = PackedRates.pack(future_energy_rates_import)
+        self.future_energy_rates_export = PackedRates.pack(future_energy_rates_export)
+        del future_energy_rates_import, future_energy_rates_export
 
         # Replicate and scan import rates
         if import_rates:
             self.rate_scan(import_rates, print=False)
-            self.rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
+            rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
+            self.rate_import_base = PackedRates.pack(rate_import_base)
+            del rate_import_base
             previous_surplus = self.octopus_surplus
             self.octopus_surplus = self.octopus_surplus_minutes()
             # The rates can move without the slots moving (the car's SoC changes how many half hours it needs)
@@ -1877,7 +1888,8 @@ class Fetch:
             import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
             import_rates = self.octopus_strip_withdrawn_feed_rates(import_rates, save=save)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True, use_future=True)
-            self.rate_import_no_io = import_rates.copy()
+            # A packed copy: import_rates goes on to have the dispatch slots and sessions added to it
+            self.rate_import_no_io = PackedRates.pack_copy(import_rates)
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
             # Snapshot the tariff as it stands AFTER the IOG/SmartFlex dispatch overlay but BEFORE any
@@ -1900,6 +1912,8 @@ class Fetch:
             # override active during a saving session). set_rate_thresholds() reads this frozen set,
             # not the live rate_import_replicated dict, so a later overwrite here can't erase the
             # "this was a saving minute" provenance it depends on (GH#5050).
+            # Compare.apply_axle_sessions() repeats the Axle part of this sequence for a compared tariff's own
+            # rates (#4042) - keep the two in step.
             self.rate_import_saving_minutes = {minute for minute, tag in self.rate_import_replicated.items() if tag == "saving"}
             import_rates, self.rate_import_pre_saving = self.apply_rate_overrides(
                 import_rates, self.rate_import_pre_saving, self.rate_import_saving_minutes, self.get_arg("rates_import_override", [], indirect=False), "rates_import_override", self.manual_import_rates, True, self.rate_import_replicated
@@ -1920,7 +1934,8 @@ class Fetch:
         if export_rates:
             self.rate_scan_export(export_rates, print=False)
             export_rates, self.rate_export_replicated = self.rate_replicate(export_rates, is_import=False, use_future=True)
-            self.rate_export_base = export_rates.copy()
+            # A packed copy: export_rates goes on to have the sessions and overrides added to it
+            self.rate_export_base = PackedRates.pack_copy(export_rates)
             # Built here, from the base rates, so the saving session and overrides applied below stay
             # out of it - battery_value_rate needs the tariff's own export price, not an event price
             self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
@@ -1928,8 +1943,8 @@ class Fetch:
             self.rate_export_min_base = self.rate_minmax(self.rate_export_base)[0]
             # Export has no IOG overlay, so the pre-saving tariff matches rate_export_base - copied
             # rather than aliased so the two can never be corrupted together by a future in-place
-            # mutation of either.
-            self.rate_export_pre_saving = self.rate_export_base.copy()
+            # mutation of either. export_rates still holds the base rates here: nothing above changes it.
+            self.rate_export_pre_saving = export_rates.copy()
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
@@ -1963,11 +1978,8 @@ class Fetch:
 
         # Find discharging windows
         if self.rate_export:
-            self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=self.rate_import)
-            # Update threshold automatically
-            self.log("High export rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
-            if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
-                self.rate_export_cost_threshold = lowest
+            lowest, highest = self.scan_export_windows(alt_rates=self.rate_import)
+            self.log("High export rate found rates in range {}{} to {}{}, {} export candidate window(s) for the optimiser".format(lowest, curr, highest, curr, len(self.high_export_rates)))
 
         # Find charging windows
         if self.rate_import:
@@ -1986,6 +1998,7 @@ class Fetch:
             self.log_replay_cars()
         # Publish the car plan
         self.publish_car_plan()
+        self.publish_octopus_cap()
 
         # Work out iBoost plan
         if self.iboost_enable and (((not self.iboost_solar) and (not self.iboost_charging)) or self.iboost_smart):
@@ -2111,6 +2124,56 @@ class Fetch:
             if (self.car_charging_planned[car_n] or self.car_charging_now[car_n]) and self.car_charging_exclusive[car_n] and self.car_charging_slots[car_n]:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
+
+    def octopus_smart_control_off(self, car_n, save=True):
+        """
+        Whether Octopus Smart Control is explicitly switched off for car_n, so its planned dispatches will not happen.
+
+        The switch is octopus_intelligent_smart_control (one per car), which the apps.yaml template points at the Octopus
+        Energy integration's intelligent smart charge switch. Only an explicit "off" counts - an unset, missing or
+        unavailable switch leaves the planned slots trusted as before.
+
+        The change is logged once, and only when save is True (not in compare.py's re-runs for other tariffs).
+        """
+        switch_config = self.get_arg("octopus_intelligent_smart_control", None, indirect=False)
+        if switch_config and not isinstance(switch_config, list):
+            switch_config = [switch_config]
+        switch_id = switch_config[car_n] if switch_config and car_n < len(switch_config) else None
+        # An unresolved 're:' template default or a fixed value names no switch
+        if not switch_id or not isinstance(switch_id, str) or switch_id.startswith("re:"):
+            return False
+        state = self.get_state_wrapper(entity_id=switch_id)
+        off = isinstance(state, str) and state.lower() == "off"
+        if save and off != self.octopus_smart_control_off_logged.get(car_n, False):
+            self.octopus_smart_control_off_logged[car_n] = off
+            if off:
+                self.log("Car {} Octopus Smart Control is now Off ({}), planned Octopus dispatches are ignored".format(car_n, switch_id))
+            else:
+                # Not necessarily On: unknown or unavailable is no evidence either way, so say what the switch reports
+                self.log("Car {} Octopus Smart Control is no longer Off ({} is {}), planned Octopus dispatches are used".format(car_n, switch_id, state))
+        return off
+
+    def smart_control_off_slots(self, slots, charger_plan):
+        """
+        The dispatches still used for a car while Octopus Smart Control is off (#5339).
+
+        A charger's own schedule is kept. Other dispatches, manual bump/boost ones included, are
+        Octopus's plan, which will not happen, as Octopus dispatches nothing to a suspended device
+        (matching planned_dispatches_for_state() in the built-in component), unless charger_plan says they came from the charger's
+        own sensor (octopus_intelligent_planned_slot): those are kept as car load but re-tagged as a
+        charger schedule, as Octopus is not dispatching them and so they are not off-peak. Kept slots
+        carry their source at the top level, which is where load_octopus_slots() reads it from.
+        """
+        used = []
+        for slot in slots or []:
+            if not isinstance(slot, dict):
+                continue
+            source = slot.get("source") or (slot.get("meta") or {}).get("source")
+            if source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
+                used.append(slot if slot.get("source") == source else dict(slot, source=source))
+            elif charger_plan:
+                used.append(dict(slot, source=DISPATCH_SOURCE_CHARGER_SCHEDULE))
+        return used
 
     def car_planned_slot_entity(self, planned_entity_id_list, car_n, slot_entity_id):
         """
@@ -2528,6 +2591,10 @@ class Fetch:
         iog_slot_cars = []
         # The planned dispatches each car's plan used this cycle, for octopus_held_update()
         self.octopus_slots_planned = {}
+        if save:
+            # Read below once the dispatches are in; none without Octopus Intelligent slots. A compare.py run (save False)
+            # keeps this cycle's, as the record is the same whatever the tariff
+            self.octopus_cap_idle = None
 
         if entity_id_list:
             # Process each car's intelligent slot configuration
@@ -2539,6 +2606,8 @@ class Fetch:
                 completed = []
                 planned = []
                 started = []
+                planned_entity_id = None
+                planned_completed = []
 
                 if entity_id and "octopus_intelligent_slot_action_config" in self.args:
                     config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
@@ -2569,21 +2638,41 @@ class Fetch:
                         # completed list: it covers a slot from when it ends until the slot sensor lists
                         # it, and load_octopus_slots() drops whatever of it the slot sensor has by then
                         try:
-                            planned = self.get_state_wrapper(entity_id=planned_entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="plannedDispatches")
+                            charger_planned = self.get_state_wrapper(entity_id=planned_entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="plannedDispatches")
                             planned_completed = self.get_state_wrapper(entity_id=planned_entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="completedDispatches")
-                            completed = (completed or []) + (planned_completed or [])
+                            # Only once both reads have worked, so a failure leaves the slot sensor's plan whole
+                            planned = charger_planned
+                            planned_completed = planned_completed or []
                         except (ValueError, TypeError):
-                            self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_planned_slot may not be set correctly in apps.yaml".format(planned_entity_id, car_n))
+                            # planned still holds the slot sensor's own plan, so treat it as that below
+                            planned_entity_id = None
+                            planned_completed = []
+                            self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_planned_slot may not be set correctly in apps.yaml".format(planned_entity_id_list[car_n], car_n))
                             self.record_status(message="Error: octopus_intelligent_planned_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
+                # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will act
+                # on it (#5339), bump/boost charges included: Octopus dispatches nothing to a suspended device, as the
+                # built-in component's planned_dispatches_for_state() assumes. Slots already delivered (completed) are
+                # real, so those are still counted. So is a charger's own schedule: the Ohme
+                # component wires that in when Octopus no longer drives the charger, and Smart Control has no say in it.
+                # Slots taken from octopus_intelligent_planned_slot are the charger's own plan, so they are kept as car
+                # load - but with Octopus no longer dispatching they are not off-peak, so they are re-tagged as a charger
+                # schedule (the Ohme component leaves them untagged while it follows Octopus's dispatches). The same goes
+                # for what that sensor has seen finish: one Octopus did dispatch is on the slot sensor's completed list,
+                # which is merged first and so wins in load_octopus_slots()
+                smart_control_off = self.octopus_smart_control_off(car_n, save=save)
+
+                if planned_completed:
+                    completed = (completed or []) + (self.smart_control_off_slots(planned_completed, True) if smart_control_off else planned_completed)
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
+                planned_kept = self.smart_control_off_slots(planned, bool(planned_entity_id)) if smart_control_off else planned
                 planned_used = []
-                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                if planned_kept and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
-                    planned_used = planned
+                    planned_used = planned_kept
                 # The half hours a planned dispatch has already run in, until the completed list has them (#5520).
                 # After the completed list, which is the record once it arrives, and ahead of the planned one
                 self.octopus_slots[car_n] += self.octopus_held_dispatches(car_n, completed or [], planned_used)
@@ -2686,6 +2775,14 @@ class Fetch:
             # Get rate for import to compute charging costs
             if self.rate_import:
                 self.rate_scan(self.rate_import, print=False)
+
+            # The past minutes no car charged in, which use none of the Octopus Intelligent daily cap (#6252): read once
+            # every car's dispatches are in, before the car plans below and the rates count the cap with them
+            if save:
+                # Stamped when read, not with the cycle's clock, which was taken before the fetch and the poll's last reading
+                self.octopus_cap_record(datetime.now(timezone.utc), save="cycle")
+                self.octopus_cap_idle = self.octopus_cap_idle_load()
+                self.octopus_cap_idle_midnight = self.midnight_utc
 
             # Use octopus slots for charging - process for each car
             if self.octopus_intelligent_charging:
@@ -3086,6 +3183,17 @@ class Fetch:
                 rate_last = rates[minute]
                 rate_last_valid = True
             minute += 1
+
+        # The rates can arrive out of minute order (basic_rates() seeds today before stamping yesterday), and a
+        # filled minute is added after the ones already held, so a feed starting later than -24h or with a gap ends
+        # up out of order too. Readers index by minute, so the order only matters to PackedRates.pack(), which holds
+        # a run of ascending minutes; sort in place so it can, keeping the dict the caller passed in
+        minutes = list(rates)
+        ascending = sorted(minutes)
+        if minutes != ascending:
+            ordered = [(minute, rates[minute]) for minute in ascending]
+            rates.clear()
+            rates.update(ordered)
 
         return rates, replicated_rates
 
@@ -3701,7 +3809,6 @@ class Fetch:
         Work out lowest rate from time forwards
         """
         rate_array = []
-        rate_min_forward = {}
         rate = self.rate_min
 
         for minute in range(self.forecast_minutes + self.minutes_now + 48 * 60):
@@ -3710,15 +3817,40 @@ class Fetch:
             rate_array.append(rate)
 
         # Work out the min rate going forward — O(n) right-to-left scan avoids O(n²) slice allocations
+        end_minute = self.forecast_minutes + 24 * 60 + self.minutes_now
         running_min = rate_array[-1] if rate_array else self.rate_min
+        forward = []
         for minute in range(len(rate_array) - 1, self.minutes_now - 1, -1):
             running_min = min(running_min, rate_array[minute])
-            if minute < self.forecast_minutes + 24 * 60 + self.minutes_now:
-                rate_min_forward[minute] = running_min
+            if minute < end_minute:
+                forward.append(running_min)
+        # Held packed, last minute first as it was built; only read from here on (get, [])
+        rate_min_forward = PackedRates.from_descending(end_minute - 1, forward)
 
         self.log("Rate min forward looking: now {}{} at end of forecast {}{}".format(dp2(rate_min_forward[self.minutes_now]), self.currency_symbols[1], dp2(rate_min_forward[self.forecast_minutes]), self.currency_symbols[1]))
 
         return rate_min_forward
+
+    def scan_export_windows(self, alt_rates=None):
+        """
+        Find the export windows, after set_rate_thresholds().
+
+        The export counterpart of find_low_rate_windows()'s low_rates / low_rates_tariff (GH#5050).
+        high_export_rates is what the optimiser is offered (calculate_plan() seeds export_window_best from it):
+        every window at or above rate_export_candidate_threshold, which in automatic mode is every export slot.
+        high_export_rates_tariff is the tariff's own high-rate windows, at or above rate_export_cost_threshold,
+        and drives the high_rate_export sensors - publishing the tariff's cheapest band as the next high rate
+        would be wrong. In automatic mode the threshold is then ratcheted to the cheapest high-rate window.
+        Returns the lowest and highest average of the high-rate windows.
+        """
+        self.high_export_rates_tariff, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=alt_rates)
+        if self.rate_export_candidate_threshold < self.rate_export_cost_threshold:
+            self.high_export_rates, _, _ = self.rate_scan_window(self.rate_export, 5, self.rate_export_candidate_threshold, True, alt_rates=alt_rates)
+        else:
+            self.high_export_rates = self.high_export_rates_tariff
+        if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
+            self.rate_export_cost_threshold = lowest
+        return lowest, highest
 
     def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False, alt_rates=None, pv_light_dark=None, start_minute=0):
         """
@@ -3875,12 +4007,19 @@ class Fetch:
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
             self.rate_export_cost_threshold = dp2(rate_export_average * self.rate_high_threshold)
+            self.rate_export_candidate_threshold = self.rate_export_cost_threshold
         else:
             # In automatic mode select the only rate or everything but the most cheapest
             if (rate_export_max == rate_export_min) or (rate_export_min > rate_min) or have_alerts:
                 self.rate_export_cost_threshold = rate_export_min - 0.1
             else:
                 self.rate_export_cost_threshold = rate_export_min + 0.5
+            # The optimiser is offered every export rate, the cheapest included (scan_export_windows). Leaving the
+            # cheapest out hid the one export a dual-rate tariff needs when the solar will clip: a battery still
+            # holding energy at dawn before an export-limited solar day earns the night rate by exporting it, or
+            # nothing once the solar that displaces it is clipped (#6214). Whether an export is worth making is the
+            # optimiser's decision. rate_export_cost_threshold above stays the high-rate one the entities publish.
+            self.rate_export_candidate_threshold = rate_export_min - 0.1
 
         self.log(
             "Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(
@@ -3913,7 +4052,6 @@ class Fetch:
         cannot sell a single kWh.
         """
         rate_array = []
-        rate_export_max_forward = {}
         rate = 0.0
 
         for minute in range(self.forecast_minutes + self.minutes_now + 48 * 60):
@@ -3922,13 +4060,16 @@ class Fetch:
             rate_array.append(rate)
 
         # Work out the max rate going forward — O(n) right-to-left scan avoids O(n²) slice allocations
+        end_minute = self.forecast_minutes + 24 * 60 + self.minutes_now
         running_max = rate_array[-1] if rate_array else 0.0
+        forward = []
         for minute in range(len(rate_array) - 1, self.minutes_now - 1, -1):
             running_max = max(running_max, rate_array[minute])
-            if minute < self.forecast_minutes + 24 * 60 + self.minutes_now:
-                rate_export_max_forward[minute] = running_max
+            if minute < end_minute:
+                forward.append(running_max)
 
-        return rate_export_max_forward
+        # Held packed, last minute first as it was built; only read from here on (get)
+        return PackedRates.from_descending(end_minute - 1, forward)
 
     def rate_scan_gas(self, rates, print=True):
         """

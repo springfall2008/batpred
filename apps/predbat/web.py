@@ -40,44 +40,29 @@ import io
 from io import StringIO
 import hashlib
 import copy
-from ruamel.yaml import YAML
-from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
-from web_helper import (
-    get_header_html,
-    get_plan_css,
-    get_plan_renderer_js,
-    get_editor_js,
-    get_editor_css,
-    get_log_css,
-    get_charts_css,
-    get_apps_css,
-    get_html_config_css,
-    get_apps_js,
-    get_apps_filter_js,
-    get_filter_css,
-    get_components_css,
-    get_discovery_css,
-    get_entity_modal_css,
-    get_component_edit_modal_css,
-    get_entity_modal_js,
-    get_component_edit_modal_js,
-    get_discovery_modal_js,
-    get_logfile_js,
-    get_entity_toggle_js,
-    get_entity_control_css,
-    get_entity_css,
-    get_entity_js,
-    get_refresh_inverter_js,
-    get_restart_button_js,
-    get_browse_css,
-    get_entity_detailed_row_js,
-    get_internals_css,
-    get_kraken_key_page_html,
-    get_internals_js,
-    get_dashboard_css,
-    get_dashboard_collapsible_js,
-)
+
+class LazyWebHelper:
+    """
+    Stands in for the web_helper module until a page first needs one of its HTML, CSS or JavaScript builders.
+
+    web_helper is almost all page text (hundreds of kilobytes of string literals), so importing it when the web
+    server starts holds that text in memory for a Predbat nobody has opened a page on. Looking an attribute up on
+    this object imports the module on the first call and returns the real function from then on.
+    """
+
+    def __getattr__(self, name):
+        """
+        Return the named builder from web_helper, importing the module the first time it is asked for
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        import web_helper as helper_module
+
+        return getattr(helper_module, name)
+
+
+web_helper = LazyWebHelper()
 
 from utils import (
     strptime_aware,
@@ -99,6 +84,7 @@ from utils import (
     log_line_included,
     predbat_log_file_prev,
     is_secret_key,
+    PackedRates,
 )
 from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import (
@@ -132,11 +118,87 @@ from battery_curve import charge_day
 from battery_rate_grid import rate_grid_curve, rate_grid_table
 from compare import check_compare_list
 import debug_history
-from web_annual import AnnualPage
-from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
+
+
+def YAML(*args, **kwargs):  # noqa: N802 - keeps the ruamel class name so every call site reads as before
+    """
+    Build a ruamel.yaml parser, importing ruamel only when the first one is needed.
+    Only the apps.yaml editor and the discovery download use it, so a Predbat that never serves those pages never loads ruamel.
+    """
+    from ruamel.yaml import YAML as RuamelYAML
+
+    return RuamelYAML(*args, **kwargs)
+
+
+class LazyPage:
+    """
+    Stands in for a web page object (the annual and chat pages) until a request first needs it.
+
+    The page's module, and everything that module imports, is loaded by the factory on first use rather than when the web
+    server starts, so a Predbat nobody opens those pages on never holds that code in memory.
+    """
+
+    def __init__(self, factory):
+        """
+        Keep the factory that builds the real page; nothing is imported or built yet
+        """
+        self._factory = factory
+        self._page = None
+
+    def loaded(self):
+        """
+        Return True once the real page has been built
+        """
+        return self._page is not None
+
+    def get(self):
+        """
+        Return the real page, building it (and importing its module) on the first call
+        """
+        if self._page is None:
+            self._page = self._factory()
+        return self._page
+
+    def __getattr__(self, name):
+        """
+        Route handlers (html_*) come back as coroutine functions that build the page on their first request,
+        so aiohttp can register them as routes without the page existing; any other attribute builds the page now
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name.startswith("html_"):
+
+            async def handler(request):
+                """
+                Hand the request to the real page's handler of the same name
+                """
+                return await getattr(self.get(), name)(request)
+
+            handler.__name__ = name
+            return handler
+        return getattr(self.get(), name)
+
+
+def make_annual_page(web_interface):
+    """
+    Build the annual page, importing web_annual (and the annual engine behind it) only now
+    """
+    from web_annual import AnnualPage
+
+    return AnnualPage(web_interface)
+
+
+def make_chat_page(web_interface):
+    """
+    Build the chat page, importing web_chat (and the chat agent and its tools behind it) only now
+    """
+    from web_chat import WebChat
+
+    return WebChat(web_interface)
+
 
 # How many of the newest debug-history snapshots the dashboard's one-click archive bundles.
 # debug_history_count reaches 500 since #5070 and the archive is built in memory, so this is the
@@ -530,8 +592,8 @@ class WebInterface(ComponentBase):
         # Plugin registration system
         self.registered_endpoints = []
 
-        self.annual_page = AnnualPage(self)
-        self.chat_page = WebChat(self)
+        self.annual_page = LazyPage(lambda: make_annual_page(self))
+        self.chat_page = LazyPage(lambda: make_chat_page(self))
 
     def web_auth_enabled(self):
         """Return True when a web username or password is configured, so the login gate is active."""
@@ -831,7 +893,9 @@ class WebInterface(ComponentBase):
         # orphaned - burning a CPU core for up to several minutes with nothing left
         # tracking it - while the fresh AnnualPage created on the next start() reports
         # idle and would happily let a second run be started alongside it.
-        await self.annual_page.job.cancel()
+        # A page nobody opened has no job to cancel, and must not be built just to find that out.
+        if self.annual_page.loaded():
+            await self.annual_page.job.cancel()
         await runner.cleanup()
 
         self.api_started = False
@@ -1303,7 +1367,7 @@ class WebInterface(ComponentBase):
             <span id="inverterRefreshStatus" style="font-size: 13px; color: #666;"></span>
         </div>
         """
-        text += get_refresh_inverter_js()
+        text += web_helper.get_refresh_inverter_js()
         text += self.get_power_flow_diagram()
 
         # Text description of the plan
@@ -1647,10 +1711,10 @@ class WebInterface(ComponentBase):
             </form>
         </div>"""
         # CSS
-        text += get_entity_css()
+        text += web_helper.get_entity_css()
 
         # Add JavaScript and CSS for entity list and search (with attribute selection support)
-        text += get_entity_js(selected_entities_json, entity_attributes_json)
+        text += web_helper.get_entity_js(selected_entities_json, entity_attributes_json)
 
         if entity_selections:
             # Group entities by unit of measurement
@@ -1799,7 +1863,7 @@ class WebInterface(ComponentBase):
 </script>"""
 
                 # Add JavaScript for toggling detail rows
-                text += get_entity_detailed_row_js()
+                text += web_helper.get_entity_detailed_row_js()
         else:
             text += "<h2>Select one or more entities</h2>\n"
 
@@ -1881,7 +1945,7 @@ class WebInterface(ComponentBase):
         html = '<div class="entity-edit-container" style="margin-top: 15px; padding: 15px; border: 1px solid var(--border-color, #ddd); border-radius: 5px; background-color: var(--background-secondary, #f9f9f9);">'
 
         # Add CSS for dark mode support
-        html += get_entity_control_css()
+        html += web_helper.get_entity_control_css()
 
         html += f'<form method="post" action="./entity" style="display: flex; align-items: center; gap: 10px;">'
         html += f'<input type="hidden" name="entity_id" value="{entity_id}">'
@@ -1897,7 +1961,7 @@ class WebInterface(ComponentBase):
             html += f"</div>"
 
             # Add JavaScript for toggle functionality
-            html += get_entity_toggle_js()
+            html += web_helper.get_entity_toggle_js()
 
         elif control_type == "number":
             min_val = self.get_state_wrapper(entity_id=entity_id, attribute="min", default=None)
@@ -1948,7 +2012,7 @@ class WebInterface(ComponentBase):
         if self.base.update_pending:
             calculating = True
         self.update_success_timestamp()
-        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
+        return web_helper.get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
 
     def get_chart_series(self, name, results, chart_type, color, hidden=False):
         """
@@ -2842,7 +2906,7 @@ chart.render();
         text = self.get_header("Predbat Plan", refresh=5 * 60)  # Set a long refresh interval just in case, but JS will handle it
 
         # Add CSS
-        text += get_plan_css()
+        text += web_helper.get_plan_css()
 
         # Add warning/error divs
         text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale</div>'
@@ -2919,7 +2983,7 @@ chart.render();
         text += "</script>"
 
         # Include renderer JavaScript (which declares newestDataTimestamp variable)
-        text += get_plan_renderer_js()
+        text += web_helper.get_plan_renderer_js()
 
         # Initialise newestDataTimestamp from the initial data loaded, and start automatic updates
         text += "<script>"
@@ -2966,7 +3030,7 @@ chart.render();
         # Remove refresh from header since we'll update dynamically
         text = self.get_header("Predbat Log", refresh=0)
         text += """<body>"""
-        text += get_log_css()
+        text += web_helper.get_log_css()
 
         if errors:
             active_all = ""
@@ -3019,7 +3083,7 @@ chart.render();
         text += "</table>"
 
         # Add JavaScript for dynamic updates
-        text += get_logfile_js(filter_type)
+        text += web_helper.get_logfile_js(filter_type)
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -3369,8 +3433,8 @@ chart.render();
 
         self.default_page = "./dash"
         text = self.get_header("Predbat Dashboard", refresh=0)
-        text += get_dashboard_css()
-        text += get_dashboard_collapsible_js()
+        text += web_helper.get_dashboard_css()
+        text += web_helper.get_dashboard_collapsible_js()
         text += """
 <script>
 (function() {
@@ -3984,7 +4048,7 @@ chart.render();
         self.default_page = "./charts?chart={}".format(chart)
         text = self.get_header("Predbat Charts", refresh=60 * 5)
         text += "<body>\n"
-        text += get_charts_css()
+        text += web_helper.get_charts_css()
 
         text += '<div class="charts-menu">'
         text += "<h3>Charts</h3> "
@@ -4371,15 +4435,15 @@ chart.render();
             all_states_json = "{}"
 
         # Add CSS styles for edit functionality and for the filter box
-        text += get_apps_css()
-        text += get_filter_css()
+        text += web_helper.get_apps_css()
+        text += web_helper.get_filter_css()
         text += "<body>\n"
 
         # JavaScript for edit functionality
-        text += get_apps_js(all_states_json)
+        text += web_helper.get_apps_js(all_states_json)
 
         # JavaScript for the filter box
-        text += get_apps_filter_js()
+        text += web_helper.get_apps_filter_js()
 
         # Add message container
         text += '<div id="messageContainer" class="message-container"></div>\n'
@@ -4823,7 +4887,7 @@ chart.render();
         self.default_page = "./config"
         text = self.get_header("Predbat Config", refresh=60)
         text += "<body>\n"
-        text += get_html_config_css()
+        text += web_helper.get_html_config_css()
 
         text += """
         <div class="filter-container">
@@ -5139,7 +5203,7 @@ chart.render();
         # Calculate MD5 checksum of the content for external change detection
         file_checksum = hashlib.md5(apps_yaml_content.encode("utf-8")).hexdigest() if apps_yaml_content else ""
 
-        text += get_editor_css()
+        text += web_helper.get_editor_css()
         text += """
 
 <div class="editor-container">
@@ -5182,7 +5246,7 @@ chart.render();
         text += """
     </div>
 </div>"""
-        text += get_editor_js()
+        text += web_helper.get_editor_js()
         text += """
 </div>"""
 
@@ -5666,7 +5730,7 @@ chart.render();
         self.default_page = "./discovery"
         text = self.get_header("Predbat Discovery", refresh=60)
         text += "<body>\n"
-        text += get_discovery_css()
+        text += web_helper.get_discovery_css()
         text += "<h2>Discovery Catalogue</h2>\n"
 
         coordinator = self._coordinator()
@@ -5894,13 +5958,13 @@ chart.render();
         self.default_page = "./components"
         text = self.get_header("Predbat Components", refresh=60)
         text += "<body>\n"
-        text += get_components_css()
-        text += get_entity_modal_css()
-        text += get_component_edit_modal_css()
-        text += get_entity_modal_js()
-        text += get_component_edit_modal_js()
-        text += get_discovery_css()
-        text += get_discovery_modal_js()
+        text += web_helper.get_components_css()
+        text += web_helper.get_entity_modal_css()
+        text += web_helper.get_component_edit_modal_css()
+        text += web_helper.get_entity_modal_js()
+        text += web_helper.get_component_edit_modal_js()
+        text += web_helper.get_discovery_css()
+        text += web_helper.get_discovery_modal_js()
 
         # Discovery status per component: the ones listed here get an info button (see html_component_discovery)
         discovery_status = self._discovery_status_map()
@@ -6129,7 +6193,7 @@ chart.render();
 </div>
 """
 
-        text += get_restart_button_js()
+        text += web_helper.get_restart_button_js()
 
         # Add JavaScript for toggling disabled components
         text += """
@@ -6386,6 +6450,8 @@ document.addEventListener('DOMContentLoaded', function() {
                                 converted_value = yaml_parser.load(stream)
                     else:
                         # String type - always quote strings for safety
+                        from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+
                         converted_value = DoubleQuotedScalarString(str(new_value))
 
                     data[ROOT_YAML_KEY][config_key] = converted_value
@@ -6445,7 +6511,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         text = self.get_header("Predbat File Browser", refresh=0)
         text += "<body>\n"
-        text += get_browse_css()
+        text += web_helper.get_browse_css()
 
         # Breadcrumb navigation
         text += '<div class="breadcrumb-container">\n'
@@ -6750,7 +6816,7 @@ document.addEventListener('DOMContentLoaded', function() {
         self.default_page = "./kraken_key"
         text = self.get_header("Predbat Kraken API Key", refresh=0)
         text += "<body>\n"
-        text += get_kraken_key_page_html()
+        text += web_helper.get_kraken_key_page_html()
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text, headers={"Cache-Control": "no-store"})
 
@@ -6804,8 +6870,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         text = self.get_header("Predbat Internals", refresh=0)
         text += "<body>\n"
-        text += get_internals_css()
-        text += get_internals_js()
+        text += web_helper.get_internals_css()
+        text += web_helper.get_internals_js()
 
         text += '<div class="internals-container">\n'
         text += '<div class="breadcrumb-container">\n'
@@ -7051,6 +7117,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         obj = getattr(obj, part)
                     else:
                         return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": f"Path not found: {path}"}))
+                    # A packed rate series is browsed as the dict it stands for
+                    obj = PackedRates.unpack(obj)
 
             # Get members of the object
             members = self._get_object_members(obj, path)
@@ -7143,6 +7211,9 @@ document.addEventListener('DOMContentLoaded', function() {
         # Handle None
         if obj is None:
             return None
+
+        # A packed rate series is written as the dict it stands for
+        obj = PackedRates.unpack(obj)
 
         # Handle primitives (no circular reference check needed)
         if isinstance(obj, (str, int, float, bool)):
@@ -7278,6 +7349,8 @@ document.addEventListener('DOMContentLoaded', function() {
         """
         Analyze a value and return information about it
         """
+        # A packed rate series is shown as the dict it stands for
+        value = PackedRates.unpack(value)
         value_type = type(value).__name__
         expandable = False
         display_value = None

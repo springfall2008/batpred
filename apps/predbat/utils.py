@@ -21,6 +21,7 @@ import re
 import array
 import ctypes
 import os
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone, time
 from email.utils import parsedate_to_datetime
 from io import StringIO
@@ -42,6 +43,7 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    POWER_SERVICES,
     OCTOPUS_API_URL,
     OCTOPUS_LEGACY_API_HOST,
     BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
@@ -284,6 +286,137 @@ class MinuteArray:
         new = MinuteArray.__new__(MinuteArray)
         new._data = array.array("d", self._data)
         return new
+
+
+class PackedRates(Mapping):
+    """
+    A read-only minute -> rate mapping held as a start minute and an array of C doubles.
+
+    A per-minute rate series held as a dict costs an int key, a float value and a hash slot for each
+    of thousands of minutes. This keeps just the 8 byte doubles. Readers get the same keys, values and
+    order through the Mapping interface (get, [], in, iteration, items, ==, dict()), and to_dict()
+    builds a fresh dict, so no reader can alter what is held. Anything that needs a real dict - a
+    caller that mutates it, a yaml or json dump - must convert it first (to_dict() or dict()).
+
+    descending=True holds a series a dict built from its last minute back to its first (the
+    forward-looking min/max rates), so iteration and to_dict() keep that order.
+    """
+
+    __slots__ = ("start", "rates", "descending")
+
+    def __init__(self, start, rates, descending=False):
+        """Hold the rate for minute `start + index` in rates[index] (an array of doubles; not called values, which is the Mapping method)."""
+        self.start = start
+        self.rates = rates
+        self.descending = descending
+
+    def _index(self, minute):
+        """
+        Return the array index holding a minute, or -1 when it is not held.
+
+        A dict finds an int key from any key equal to it (10.0, True, a numpy integer), so those are
+        looked up as the int they equal; anything else (10.5, "10", None, NaN) is not held.
+        """
+        if type(minute) is not int:
+            try:
+                as_int = int(minute)
+            except (TypeError, ValueError, OverflowError):
+                return -1
+            if as_int != minute:
+                return -1
+            minute = as_int
+        index = minute - self.start
+        return index if 0 <= index < len(self.rates) else -1
+
+    def __getitem__(self, minute):
+        """Return the rate for a minute, or raise KeyError as a dict would."""
+        index = self._index(minute)
+        if index < 0:
+            raise KeyError(minute)
+        return self.rates[index]
+
+    def get(self, minute, default=None):
+        """Return the rate for a minute, or default - the hot path, so an int minute skips _index() and Mapping.get's exception."""
+        if type(minute) is int:
+            index = minute - self.start
+            if 0 <= index < len(self.rates):
+                return self.rates[index]
+            return default
+        index = self._index(minute)
+        return self.rates[index] if index >= 0 else default
+
+    def __contains__(self, minute):
+        """True when the minute is held."""
+        if type(minute) is int:
+            return 0 <= minute - self.start < len(self.rates)
+        return self._index(minute) >= 0
+
+    def minutes(self):
+        """The minutes held, in iteration order."""
+        end = self.start + len(self.rates)
+        return range(end - 1, self.start - 1, -1) if self.descending else range(self.start, end)
+
+    def __iter__(self):
+        """Iterate the minutes, ascending unless the series is descending."""
+        return iter(self.minutes())
+
+    def __len__(self):
+        """Return the number of minutes held."""
+        return len(self.rates)
+
+    def __repr__(self):
+        """Show the series as the dict it stands for."""
+        return repr(self.to_dict())
+
+    def to_dict(self):
+        """Return a new plain minute -> rate dict holding the same data, in the same order."""
+        if self.descending:
+            return {minute: self.rates[minute - self.start] for minute in self.minutes()}
+        return dict(zip(range(self.start, self.start + len(self.rates)), self.rates))
+
+    @classmethod
+    def pack(cls, data):
+        """
+        Return PackedRates holding `data` if that is exactly representable: a dict of consecutive, ascending
+        int minutes to float rates. Anything else (gaps, other types, empty, free session lists) is returned unchanged.
+        """
+        if not isinstance(data, dict) or not data:
+            return data
+        expected = next(iter(data))
+        start = expected
+        values = array.array("d")
+        for minute, rate in data.items():
+            if type(minute) is not int or type(rate) is not float or minute != expected:
+                return data
+            values.append(rate)
+            expected += 1
+        return cls(start, values)
+
+    @classmethod
+    def from_descending(cls, last_minute, values):
+        """
+        Hold a series built from its last minute back: values[i] is the rate for minute last_minute - i.
+
+        Returns descending PackedRates, which iterate in that same order, when every value is a float, and
+        otherwise the dict {last_minute - i: values[i]} the series would have been built as.
+        """
+        if values and all(type(value) is float for value in values):
+            return cls(last_minute - len(values) + 1, array.array("d", reversed(values)), descending=True)
+        return {last_minute - index: value for index, value in enumerate(values)}
+
+    @classmethod
+    def pack_copy(cls, data):
+        """
+        Return an independent copy of the dict `data`: packed if pack() can hold it, otherwise data.copy().
+        For a snapshot of a dict that goes on being changed, without building a dict copy only to pack it.
+        """
+        packed = cls.pack(data)
+        return data.copy() if packed is data else packed
+
+    @staticmethod
+    def unpack(data):
+        """Return `data` as a plain dict if it is PackedRates, otherwise return it as it is."""
+        return data.to_dict() if isinstance(data, PackedRates) else data
 
 
 # Predbat member variables never included in a debug dump or served over MCP - live object
@@ -823,11 +956,58 @@ def redact_log_line(line, secret_pattern):
     return "".join(out)
 
 
+class SecretReference(str):
+    """The name in a '!secret name' reference, as secret_reference_yaml_loader() loads it: the reference, not the secret."""
+
+
+def secret_reference_yaml_loader():
+    """
+    Return a yaml.SafeLoader subclass that loads '!secret name' as a SecretReference('name')
+
+    The same parser and tags load_apps_yaml() reads apps.yaml with, but the reference is kept rather than
+    resolved, so find_unmasked_secret_paths() can tell a '!secret' value from one written inline. A new class
+    per call, so the constructor never lands on the process-wide yaml.SafeLoader.
+
+    Unlike yaml.SafeLoader it refuses a key written twice in one mapping, raising a ConstructorError that names
+    the key and both lines, as the ruamel loader this check used before refused it. Keys are compared as
+    Predbat's own load reads them (YAML 1.1, so 'yes' and 'true' are the same key). A key that only repeats
+    one merged in by '<<' is an override, and is allowed.
+    """
+    import yaml
+
+    def reference_constructor(loader, node):
+        """YAML constructor for the !secret tag, keeping the secret's name."""
+        return SecretReference(loader.construct_scalar(node))
+
+    class SecretReferenceYamlLoader(yaml.SafeLoader):
+        """SafeLoader with '!secret' kept as a SecretReference and duplicate keys refused."""
+
+        def construct_mapping(self, node, deep=False):
+            """Refuse a key written twice in this mapping, then construct it as SafeLoader does."""
+            if isinstance(node, yaml.MappingNode):
+                first_seen = {}
+                for key_node, _ in node.value:
+                    if key_node.tag == "tag:yaml.org,2002:merge":
+                        continue
+                    key = self.construct_object(key_node, deep=True)
+                    try:
+                        first = first_seen.setdefault(key, key_node)
+                    except TypeError:
+                        # An unhashable key: SafeLoader reports it as it always has
+                        continue
+                    if first is not key_node:
+                        raise yaml.constructor.ConstructorError("while constructing a mapping", node.start_mark, 'found duplicate key "{}", first written on line {}'.format(key, first.start_mark.line + 1), key_node.start_mark)
+            return super().construct_mapping(node, deep=deep)
+
+    SecretReferenceYamlLoader.add_constructor("!secret", reference_constructor)
+    return SecretReferenceYamlLoader
+
+
 def find_unmasked_secret_paths(node, path=""):
     """
-    Recursively walk a ruamel round-trip-loaded apps.yaml section and yield the dotted path
-    of every credential-like key (per is_secret_key()) whose value is a plain scalar rather
-    than a '!secret' reference into secrets.yaml (loaded as a ruamel TaggedScalar).
+    Recursively walk an apps.yaml section loaded with secret_reference_yaml_loader() and yield
+    the dotted path of every credential-like key (per is_secret_key()) whose value is a plain
+    scalar rather than a '!secret' reference into secrets.yaml (loaded as a SecretReference).
 
     Deliberately asks is_secret_key(registry=False): this drives the "stored in plain text,
     consider !secret" advice, which is about values that grant access. The registry additionally
@@ -835,23 +1015,32 @@ def find_unmasked_secret_paths(node, path=""):
     anything shared, but an inline octopus_api_account is the documented normal setup and
     warning every user about it would be noise rather than advice.
 
-    Only usable against a document loaded with ruamel's round-trip loader - a plain
-    yaml.safe_load() has already resolved '!secret' tags to their real value and lost the
-    distinction this depends on.
+    Only usable against a document that kept its '!secret' references - load_apps_yaml() has
+    already resolved them to their real value and lost the distinction this depends on.
     """
-    from ruamel.yaml.comments import TaggedScalar
-
     if isinstance(node, dict):
         for key, value in node.items():
             key_path = "{}.{}".format(path, key) if path else str(key)
             if is_secret_key(key, registry=False):
-                if value not in (None, "") and not isinstance(value, TaggedScalar):
-                    yield key_path
+                yield from _find_inline_secret_values(value, key_path)
             else:
                 yield from find_unmasked_secret_paths(value, key_path)
     elif isinstance(node, list):
         for index, item in enumerate(node):
             yield from find_unmasked_secret_paths(item, "{}[{}]".format(path, index))
+
+
+def _find_inline_secret_values(value, path):
+    """
+    Yield the path of every plain-text value held by a credential-like key. A list is judged entry
+    by entry, so a list of '!secret' references (solcast_api_key with one key per site) is not
+    flagged, while a mixed list flags only its inline entries.
+    """
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _find_inline_secret_values(item, "{}[{}]".format(path, index))
+    elif value not in (None, "") and not isinstance(value, SecretReference):
+        yield path
 
 
 def _mask_secrets_in_yaml_node(node):
@@ -1017,6 +1206,46 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             last_time = timekey
             prev_value = data[key]
     return results
+
+
+def services_send_power(args, direction=None, index=None):
+    """
+    Whether any start or freeze service (POWER_SERVICES) in apps.yaml sends the charge/discharge rate as {power}.
+
+    With a direction ("charge" or "discharge") only that direction's services count, as a rate sent
+    to a charge hook says nothing about what the discharge side was given.
+
+    A service given by name alone is passed every default option, power included. A template entry
+    passes only the keys it lists, so it sends the rate only where one of its values references {power}.
+    Only a string value is formatted, or each string in a per-inverter list; a nested mapping is passed
+    as it is, so a {power} inside one is never filled in and does not count. With an inverter index only
+    that inverter's entry of a per-inverter list counts, as it is the one that inverter is sent; without
+    one, any inverter's does.
+    """
+
+    def formats_power(value):
+        """Whether call_service_template() fills in {power} for this template value."""
+        # {power}, or with a format spec or conversion such as {power:.0f}, as str.format() takes it
+        if not isinstance(value, list):
+            items = [value]
+        elif index is None:
+            items = value
+        else:
+            items = value[index : index + 1]
+        return any(isinstance(item, str) and re.search(r"\{power[}:!]", item) for item in items)
+
+    for service in POWER_SERVICES:
+        if direction and not service.startswith(direction + "_"):
+            continue
+        templates = args.get(service)
+        if not templates:
+            continue
+        for template in templates if isinstance(templates, list) else [templates]:
+            if isinstance(template, str):
+                return True
+            if isinstance(template, dict) and any(formats_power(value) for key, value in template.items() if key != "service"):
+                return True
+    return False
 
 
 def is_entity_id(value):

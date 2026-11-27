@@ -14,6 +14,7 @@ making API requests. The edge function owns the refresh chain — PredBat never
 calls the provider's refresh endpoint directly.
 """
 
+import inspect
 import os
 import time
 import aiohttp
@@ -29,6 +30,30 @@ TOKEN_REFRESH_THRESHOLD = 30 * 60
 # an HTTP 502 has been seen in the wild — so a refresh is retried before being given up on.
 OAUTH_REFRESH_RETRIES = 3
 OAUTH_REFRESH_BACKOFF = 2  # seconds for the first retry, doubled each attempt
+
+# A refresh forced by a 401 can come back with the very token the provider just rejected: the
+# oauth-refresh service answers from its stored token while that token has not reached its own
+# expiry (GH#6284). Retrying with it achieves nothing, so a same-token answer backs off before the
+# next forced refresh, and enough of them in a row latch oauth_failed (the user must reconnect).
+OAUTH_SAME_TOKEN_BACKOFF = 5 * 60  # seconds before the first repeat forced refresh, doubled each time (so 5 min, then 10 min, then the latch)
+OAUTH_SAME_TOKEN_LIMIT = 3  # consecutive same-token answers to a forced refresh before latching oauth_failed
+
+
+def refresh_hook_kwargs(hook, reason):
+    """Keyword arguments that tell a host oauth_refresh_provider hook a refresh is forced.
+
+    The hook was first called with three positional arguments only, so the force flag is passed
+    only to a hook whose signature accepts it; an older host keeps working unchanged.
+    """
+    if not reason:
+        return {}
+    try:
+        params = inspect.signature(hook).parameters
+    except (TypeError, ValueError):
+        return {}
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()) or ("force" in params and "reason" in params):
+        return {"force": True, "reason": reason}
+    return {}
 
 
 class OAuthMixin:
@@ -49,6 +74,9 @@ class OAuthMixin:
         self.oauth_failed = False
         self._refresh_in_progress = False
         self.token_hash = ""  # server-computed hash, echoed to oauth-refresh for dedup
+        self.oauth_failed_reason = ""  # "needs_reauth" or "same_token" once oauth_failed is set
+        self._same_token_count = 0  # consecutive forced refreshes that returned the rejected token
+        self._forced_refresh_after = 0  # epoch seconds before which a 401 does not force another refresh
 
         if self.auth_method == "oauth":
             self.access_token = key  # In OAuth mode, 'key' config holds the access_token
@@ -88,7 +116,11 @@ class OAuthMixin:
             return True
 
         if self.oauth_failed:
-            return False
+            # A same-token latch is the one that can heal: once the rejected token reaches its own
+            # expiry an ordinary refresh is allowed, and a new token clears the latch. needs_reauth
+            # is the provider refusing the refresh token, which only a reconnect fixes.
+            if self.oauth_failed_reason != "same_token" or not self._token_needs_refresh():
+                return False
 
         if not self._token_needs_refresh():
             return True
@@ -96,7 +128,7 @@ class OAuthMixin:
         if self._refresh_in_progress:
             return True  # Another coroutine is refreshing
 
-        if await self._do_refresh():
+        if await self._do_refresh() and not self.oauth_failed:
             return True
 
         # A proactive refresh is an optimisation, not a gate. The edge function can fail
@@ -110,15 +142,19 @@ class OAuthMixin:
         self.log(f"Warn: OAuth refresh failed for {self.provider_name} but the existing token is still held, continuing with it")
         return True
 
-    async def _do_refresh(self):
-        """Call the oauth-refresh edge function to get a new access token."""
+    async def _do_refresh(self, reason=None):
+        """Call the oauth-refresh edge function to get a new access token.
+
+        reason is set when the refresh is forced (e.g. "401"), so the service refreshes even though
+        the token it holds has not reached its expiry.
+        """
         self._refresh_in_progress = True
         try:
             instance_id = getattr(self.base, "args", {}).get("user_id", "") if hasattr(self, "base") else ""
 
             refresh_provider = getattr(getattr(self, "base", None), "oauth_refresh_provider", None)
             if refresh_provider is not None:
-                data = await refresh_provider(instance_id, self.provider_name, self.token_hash)
+                data = await refresh_provider(instance_id, self.provider_name, self.token_hash, **refresh_hook_kwargs(refresh_provider, reason))
                 if data is None:
                     self.log(f"Warn: OAuth refresh provider returned no answer for {self.provider_name}")
                     return False
@@ -145,6 +181,9 @@ class OAuthMixin:
                 "provider": self.provider_name,
                 "token_hash": self.token_hash,
             }
+            if reason:
+                payload["force"] = True
+                payload["reason"] = reason
 
             self.log(f"Info: Refreshing OAuth token for {self.provider_name}")
 
@@ -187,16 +226,28 @@ class OAuthMixin:
     def _apply_refresh_data(self, data):
         """Apply an oauth-refresh JSON reply to the held token. Returns success."""
         if data.get("success"):
+            unchanged = data["access_token"] == self.access_token
             self.access_token = data["access_token"]
             self.token_expires_at = self._parse_expiry(data.get("expires_at"))
             self.token_hash = data.get("token_hash", self.token_hash)
+            if unchanged:
+                # Not a refresh: the service handed back the token already held
+                self.log(f"Info: OAuth refresh for {self.provider_name} returned the token already held, expires at {data.get('expires_at')}")
+                return True
             self.log(f"Info: OAuth token refreshed for {self.provider_name}, expires at {data.get('expires_at')}")
+            self._same_token_count = 0
+            self._forced_refresh_after = 0
+            if self.oauth_failed and self.oauth_failed_reason == "same_token":
+                self.log(f"Info: OAuth for {self.provider_name} recovered with a new token")
+                self.oauth_failed = False
+                self.oauth_failed_reason = ""
             return True
         else:
             error = data.get("error", "unknown")
             if error == "needs_reauth":
                 self.log(f"Warn: OAuth token for {self.provider_name} needs re-authorization. User must reconnect.")
                 self.oauth_failed = True
+                self.oauth_failed_reason = "needs_reauth"
                 return False
             else:
                 self.log(f"Warn: OAuth refresh failed for {self.provider_name}: {error}")
@@ -205,13 +256,39 @@ class OAuthMixin:
     async def handle_oauth_401(self):
         """Handle a 401 response when using OAuth. Attempts one refresh and retry.
 
-        Returns True if refresh succeeded (caller should retry the request).
-        Returns False if refresh failed.
+        Returns True if a new token was obtained (caller should retry the request).
+        Returns False if the refresh failed or handed back the token that was just rejected.
         """
         if self.auth_method != "oauth":
             return False
 
+        if self.oauth_failed:
+            return False
+
+        now = time.time()
+        if now < self._forced_refresh_after:
+            self.log(f"Warn: Got 401 with OAuth for {self.provider_name}; the last forced refresh did not produce a new token, not asking again for {int(self._forced_refresh_after - now)}s")
+            return False
+
         self.log(f"Info: Got 401 with OAuth for {self.provider_name}, attempting token refresh")
+        rejected_token = self.access_token
         # Force refresh regardless of expiry
         self.token_expires_at = 0
-        return await self._do_refresh()
+        if not await self._do_refresh(reason="401"):
+            return False
+        if self.access_token != rejected_token:
+            return True
+
+        # The service answered with the token the provider just rejected (or no refresh could be
+        # made at all). Retrying it now would only fail again, so back off; a run of these means
+        # the connection is gone.
+        self._same_token_count += 1
+        if self._same_token_count >= OAUTH_SAME_TOKEN_LIMIT:
+            self.log(f"Warn: OAuth refresh after 401 did not produce a new token for {self.provider_name} {self._same_token_count} times in a row. User must reconnect.")
+            self.oauth_failed = True
+            self.oauth_failed_reason = "same_token"
+            return False
+        backoff = OAUTH_SAME_TOKEN_BACKOFF * (2 ** (self._same_token_count - 1))
+        self._forced_refresh_after = now + backoff
+        self.log(f"Warn: OAuth refresh after 401 did not produce a new token for {self.provider_name} (the token that was just rejected is still held), not retrying; next forced refresh in {backoff}s")
+        return False
