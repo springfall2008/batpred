@@ -488,8 +488,8 @@ mispairing
 Mixergy
 mkaiser
 mkdocs
-mletenay
 mktemp
+mletenay
 mlugg
 Modbus
 mogons
@@ -886,8 +886,8 @@ workmode
 workstream
 workstreams
 worktree
-woutervg
 worktrees
+woutervg
 writeonly
 wrongsha
 WRONLY
