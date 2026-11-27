@@ -668,10 +668,12 @@ The Octopus Charge is Octopus Energy's own home charger. It has no local connect
 
 On Intelligent Octopus Go, the charger is the device Octopus dispatches. With Predbat's [Octopus Direct connection](components.md#octopus-energy-direct-octopus) (`octopus_api_key` and `octopus_api_account`) and **octopus_automatic** on, Predbat reads the Intelligent devices on your account. If Octopus lists the charger there, as it does for other Intelligent chargers, Predbat sets up **octopus_intelligent_slot**, **octopus_intelligent_smart_control**, **octopus_ready_time** and **octopus_charge_limit** for it (see [Multiple cars with Octopus Intelligent Go](#multiple-cars-with-octopus-intelligent-go-iog)). Nothing else about the charger needs setting up for the dispatches themselves.
 
-Predbat does not get a charging or plugged-in sensor from the charger, so set those yourself:
+Predbat does not get a charging or plugged-in sensor from the charger, so set those yourself. The community [Octopus Charge integration](https://github.com/lgladdy/ha-octopus-charge) for Home Assistant (not part of Predbat) provides both. It needs Home Assistant 2026.9 or later and installs from the Marketplace on 2026.11 or later, or through HACS before that. It reads Octopus's cloud about once a minute.
 
-- **car_charging_now**: a power meter on the charger's supply, such as a Shelly or a CT clamp, is the best source. It is read locally and at once, which the [dispatch checks](#checking-intelligent-dispatches-against-the-car) need. A power sensor in W or kW counts as charging from 200W.
-- **car_charging_planned** and **car_charging_plugged**: the community [Octopus Charge integration](https://github.com/lgladdy/ha-octopus-charge) for Home Assistant (installed from the Marketplace on Home Assistant 2026.11 or later, or through HACS before that; not part of Predbat) creates `sensor.octopus_charge_operational_state`, which reads `CHARGING`, `BOOST_CHARGING`, `NOT_CHARGING`, `SMART_CONTROL_SCHEDULED`, `UNPLUGGED` or `ONBOARDING`. It reads Octopus's cloud about once a minute. Check the entity ID on your system, then:
+- **car_charging_now**: a power meter on the charger's supply, such as a Shelly or a CT clamp, is the best source, because it is read locally and at once, which the [dispatch checks](#checking-intelligent-dispatches-against-the-car) need. Without one, use the integration's `sensor.octopus_charge_live_power`. A power sensor in W or kW counts as charging from 200W.
+- **car_charging_planned** and **car_charging_plugged**: the integration's `sensor.octopus_charge_operational_state`, which reads `CHARGING`, `BOOST_CHARGING`, `NOT_CHARGING`, `SMART_CONTROL_SCHEDULED`, `UNPLUGGED` or `ONBOARDING`.
+
+Check the entity IDs on your system, then set:
 
 ```yaml
   car_charging_now:
@@ -680,16 +682,24 @@ Predbat does not get a charging or plugged-in sensor from the charger, so set th
     - sensor.octopus_charge_operational_state
   car_charging_plugged:
     - sensor.octopus_charge_operational_state
+```
+
+Here `sensor.ev_charger_power` stands for your power meter. Then add these four values to the **car_charging_planned_response** list already in your `apps.yaml`, keeping the values that are there: the list is shared by every car's plug sensors, so replacing it can stop another car's sensor matching. Predbat matches them without regard to case.
+
+```yaml
   car_charging_planned_response:
+    # ... keep the existing values ...
     - 'charging'
     - 'boost_charging'
     - 'not_charging'
     - 'smart_control_scheduled'
 ```
 
-Here `sensor.ev_charger_power` stands for your own power meter. Predbat matches the responses without regard to case.
+If you have more than one Intelligent device, the charger may not be car 0: see [how Predbat picks which car goes in which slot](#how-predbat-picks-which-car-goes-in-which-slot-octopus_automatic), and put these sensors at the charger's place in each list.
 
-Off Intelligent Octopus Go, Predbat has no way to drive the charger itself. You can use [Predbat-led charging](#predbat-led-charging) with an automation that starts a boost when **binary_sensor.predbat_car_charging_slot** turns on and stops it when it turns off. The community integration's boost switch starts a one-hour boost, and turning it off stops the boost. For a longer slot, call its `octopus_charge.boost_charge_point` action on the boost switch with `hours` and `minutes` set to the slot's length, up to 12 hours 59 minutes. This has not been tested with Predbat.
+If Octopus's cloud is unreachable for more than about 15 minutes, the integration's sensors become unavailable and Predbat treats the car as not plugged in. With **switch.predbat_octopus_intelligent_ignore_unplugged** on, that drops the car's dispatches from the plan until the sensor comes back, unless **car_charging_now** shows the car charging.
+
+Off Intelligent Octopus Go, Predbat has no way to drive the charger itself. You can use [Predbat-led charging](#predbat-led-charging) with an automation that starts a boost when **binary_sensor.predbat_car_charging_slot** turns on and stops it when it turns off. The integration's boost switch starts a one-hour boost, and turning it off stops the boost. For a longer slot, call its `octopus_charge.boost_charge_point` action on the boost switch with `hours` and `minutes`. A boost lasts at most 12 hours 59 minutes, and the action editor in Home Assistant only offers minutes in steps of 15. The charger's own schedule, set in the Octopus app, may also start charges Predbat has not planned, so turn it off. None of this has been tested with Predbat.
 
 Built-in support for reading and controlling the charger is tracked in [#6371](https://github.com/springfall2008/batpred/issues/6371).
 
