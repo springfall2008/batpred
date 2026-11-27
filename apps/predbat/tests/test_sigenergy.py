@@ -1500,9 +1500,12 @@ def _oauth_sigenergy_api(answers):
     return api, calls
 
 
+OAUTH_CLOCK_WALL = VirtualClock().wall
+
+
 def _oauth_answer(token, token_hash, hours=6):
-    """A successful oauth-refresh reply for token, expiring in hours."""
-    expires = datetime.now(timezone.utc) + timedelta(hours=hours)
+    """A successful oauth-refresh reply for token, expiring hours after VirtualClock's starting wall time."""
+    expires = datetime.fromtimestamp(OAUTH_CLOCK_WALL, timezone.utc) + timedelta(hours=hours)
     return {"success": True, "access_token": token, "expires_at": expires.isoformat(), "token_hash": token_hash}
 
 
@@ -1587,7 +1590,7 @@ def test_sigenergy_oauth_401_after_another_task_refreshed(my_predbat):
     api, calls = _oauth_sigenergy_api([_oauth_answer("new", "h-new")])
     api.access_token = "new"
     api.token_hash = "h-new"
-    api.token_expires_at = time.time() + 6 * 3600
+    api.token_expires_at = OAUTH_CLOCK_WALL + 6 * 3600
     clock = VirtualClock()
     with _api_clock(api, clock):
         token = run_async_real(api._oauth_after_401("old"))
@@ -1659,7 +1662,7 @@ def test_sigenergy_oauth_throttled_renewal_keeps_held_token(my_predbat):
 
     api, calls = _oauth_sigenergy_api([{"success": False, "error": "rate_limited", "retry_after": 60}])
     api.access_token = "held"
-    api.token_expires_at = time.time() + 10 * 60
+    api.token_expires_at = OAUTH_CLOCK_WALL + 10 * 60
     clock = VirtualClock()
     with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
         for _ in range(6):
@@ -1667,7 +1670,28 @@ def test_sigenergy_oauth_throttled_renewal_keeps_held_token(my_predbat):
         assert len(calls) == 1, "one refresh per cooldown, got {}".format(len(calls))
         clock.mono += backoff[0]
         assert run_async_real(api.get_access_token()) == "held"
-    assert len(calls) == 2
+        assert len(calls) == 2
+        clock.wall += 10 * 60
+        assert run_async_real(api.get_access_token()) is None, "the held token expires on the component clock inside the cooldown"
+    assert len(calls) == 2, "no extra refresh inside the cooldown, got {}".format(len(calls))
+    return failed
+
+
+def test_sigenergy_oauth_needs_reauth_stops_refreshing(my_predbat):
+    """A needs_reauth answer is terminal: no further refreshes, after a cooldown or a 401, and no token handed out."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    api, calls = _oauth_sigenergy_api([{"success": False, "error": "needs_reauth"}, _oauth_answer("late", "h-late")])
+    clock = VirtualClock()
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
+        assert run_async_real(api.get_access_token()) is None
+        assert api.oauth_failed and api.oauth_failed_reason == "needs_reauth"
+        for _ in range(3):
+            clock.mono += backoff[0]
+            assert run_async_real(api.get_access_token()) is None
+            assert run_async_real(api._oauth_after_401("anything")) is None
+    assert len(calls) == 1, "needs_reauth is not retried, got {} calls".format(len(calls))
     return failed
 
 
@@ -1688,7 +1712,7 @@ def test_sigenergy_oauth_expired_held_token_not_used(my_predbat):
     failed = False
     api, calls = _oauth_sigenergy_api([{"success": False, "error": "rate_limited", "retry_after": 60}])
     api.access_token = "expired"
-    api.token_expires_at = time.time() - 1
+    api.token_expires_at = OAUTH_CLOCK_WALL - 1
     clock = VirtualClock()
     with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0):
         assert run_async_real(api.get_access_token()) is None
@@ -1705,6 +1729,10 @@ def test_sigenergy_app_secret_optional_in_component_args(my_predbat):
     args = COMPONENT_LIST["sigenergy"]["args"]
     assert args["app_secret"]["required"] is False
     assert args["auth_method"]["config"] == "sigenergy_auth_method" and args["auth_method"]["default"] == "api_key"
+    from config import APPS_SCHEMA
+
+    for spec in args.values():
+        assert spec["config"] in APPS_SCHEMA, "{} missing from APPS_SCHEMA".format(spec["config"])
     api = MockSigenergyAPI()
     assert api.auth_method == "api_key" and api.token_expires_at == 0.0, "api_key mode keeps the monotonic expiry"
     return failed
@@ -6708,6 +6736,7 @@ def run_sigenergy_tests(my_predbat):
         ("oauth_forced_refresh_same_token_keeps_asking", test_sigenergy_oauth_forced_refresh_same_token_keeps_asking),
         ("oauth_throttled_renewal_keeps_held_token", test_sigenergy_oauth_throttled_renewal_keeps_held_token),
         ("oauth_expired_held_token_not_used", test_sigenergy_oauth_expired_held_token_not_used),
+        ("oauth_needs_reauth_stops_refreshing", test_sigenergy_oauth_needs_reauth_stops_refreshing),
         ("oauth_near_expiry_answer_holds_off", test_sigenergy_oauth_near_expiry_answer_holds_off),
         ("app_secret_optional_in_component_args", test_sigenergy_app_secret_optional_in_component_args),
         ("listener_waits_out_login_cooldown", test_sigenergy_listener_waits_out_login_cooldown),

@@ -65,7 +65,6 @@ import math
 import random
 import ssl
 import tempfile
-import time
 import traceback
 import os
 
@@ -88,7 +87,7 @@ from axle import fetch_axle_active
 from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
-from oauth_mixin import OAuthMixin
+from oauth_mixin import OAuthMixin, TOKEN_REFRESH_THRESHOLD
 from predbat_metrics import record_api_call
 
 
@@ -662,22 +661,33 @@ class SigenergyAPI(ComponentBase, OAuthMixin):
     def _oauth_token_usable(self):
         """The held oauth token, unless it was refused with 401 or has reached its expiry (UNIX time in oauth mode)."""
         token = self.access_token
-        if token and token != self._oauth_rejected_token and self.token_expires_at and time.time() < self.token_expires_at:
+        if token and token != self._oauth_rejected_token and self.token_expires_at and self.wall_time() < self.token_expires_at:
             return token
         return None
+
+    def _oauth_needs_renewal(self):
+        """True once the held oauth token is inside the refresh window, on the component clock."""
+        return not self.token_expires_at or self.wall_time() > self.token_expires_at - TOKEN_REFRESH_THRESHOLD
+
+    def _oauth_needs_reauth(self):
+        """True once the refresh service answered needs_reauth: only a reconnect fixes that, so stop asking."""
+        return self.oauth_failed and self.oauth_failed_reason == "needs_reauth"
 
     async def _oauth_refresh(self, force):
         """One refresh through the refresh service; True if it produced a fresh token.
 
         Fresh means usable (not the token that was refused, not expired) and outside the refresh
         window. Anything else - a failure, no token, the refused token handed back, or one about to
-        expire - holds off further refreshes for a cooldown. That cooldown is the only backoff in
+        expire - holds off further refreshes for a cooldown. A needs_reauth answer is terminal
+        and stops refreshes altogether (see _oauth_needs_reauth). That cooldown is the only backoff in
         oauth mode, so the refresh service is asked at most once per cooldown however many requests,
         401s and MQTT reconnects want a token. force names the refused token to the service (its
         token_hash), so it logs in again rather than serving it back.
         """
         await self._do_refresh(reason="401" if force else None)
-        if self._oauth_token_usable() and not self._token_needs_refresh():
+        if self._oauth_needs_reauth():
+            return False
+        if self._oauth_token_usable() and not self._oauth_needs_renewal():
             self._oauth_rejected_token = None
             return True
         self._hold_off_oauth()
@@ -688,12 +698,12 @@ class SigenergyAPI(ComponentBase, OAuthMixin):
 
         While a cooldown runs, a held token that is still usable is handed out and nothing is asked.
         """
-        if self.monotonic() < self._auth_retry_at:
+        if self._oauth_needs_reauth() or self.monotonic() < self._auth_retry_at:
             return self._oauth_token_usable()
         async with self._auth_lock:
-            if self.monotonic() < self._auth_retry_at:
+            if self._oauth_needs_reauth() or self.monotonic() < self._auth_retry_at:
                 return self._oauth_token_usable()
-            if self._oauth_token_usable() and not self._token_needs_refresh():
+            if self._oauth_token_usable() and not self._oauth_needs_renewal():
                 return self.access_token
             # Still holding the refused token: keep asking for a replacement, not for the same one.
             await self._oauth_refresh(force=bool(self.access_token) and self.access_token == self._oauth_rejected_token)
@@ -708,7 +718,7 @@ class SigenergyAPI(ComponentBase, OAuthMixin):
                 # refused or expired since.
                 return self._oauth_token_usable()
             self._oauth_rejected_token = rejected_token
-            if self.monotonic() < self._auth_retry_at:
+            if self._oauth_needs_reauth() or self.monotonic() < self._auth_retry_at:
                 return None
             if await self._oauth_refresh(force=True):
                 return self.access_token
