@@ -712,6 +712,63 @@ def test_publish_history_read_cadence(my_predbat):
     return failed
 
 
+def test_failing_tracks_a_confirmed_failure():
+    """failing() is True only while a confirmed failure's latest reading still fails, and before the commanded end."""
+    monitor = ControlMonitor()
+    monitor.set_expectation(0, MODE_EXPORTING, SLOT_START, SLOT_END, 20.0, T0)
+    if monitor.failing(T0):
+        print("ERROR: failing() before anything was judged")
+        return True
+    # Two failing readings are not yet a confirmed failure
+    feed(monitor, [300, 360], power=0, discharge_w=2500)
+    if monitor.failing(T0 + 360):
+        print("ERROR: failing() before the failure was confirmed")
+        return True
+    events = feed(monitor, [420, 480], power=0, discharge_w=2500)
+    if len(events) != 1 or not monitor.failing(T0 + 480):
+        print("ERROR: failing() not True after a confirmed failure that keeps failing: events {}".format(events))
+        return True
+    # A passing reading clears it
+    feed(monitor, [540], power=2500, discharge_w=2500)
+    if monitor.failing(T0 + 540):
+        print("ERROR: failing() still True after a passing reading")
+        return True
+    # Failing again after it cleared is failing again, without counting the slot a second time
+    events = feed(monitor, [600], power=0, discharge_w=2500)
+    if events or not monitor.failing(T0 + 600) or monitor.total != 1:
+        print("ERROR: a failing reading after a pass: failing() {} events {} total {}".format(monitor.failing(T0 + 600), events, monitor.total))
+        return True
+    # Once the commanded end has passed nothing is failing, whatever the last reading said
+    monitor = ControlMonitor()
+    monitor.set_expectation(0, MODE_EXPORTING, SLOT_START, SLOT_END, 20.0, T0)
+    feed(monitor, [300, 360, 420], power=0, discharge_w=2500)
+    if not monitor.failing(T0 + 420) or monitor.failing(SLOT_END):
+        print("ERROR: failing() wrong around the slot end: {} at {}, {} at the end".format(monitor.failing(T0 + 420), T0 + 420, monitor.failing(SLOT_END)))
+        return True
+    # Cleared tracking is not failing
+    monitor.clear_expectation()
+    if monitor.failing(T0 + 420):
+        print("ERROR: failing() True after the expectation was cleared")
+        return True
+    return False
+
+
+def test_restored_added_counts_only_the_restore():
+    """restored_added holds what restore() added to total, once, and nothing a failure or the publish's restored flag adds."""
+    monitor = ControlMonitor()
+    monitor.restore([], None)
+    monitor.total += 1
+    if monitor.restored_added != 0:
+        print("ERROR: restored_added {} before anything was restored".format(monitor.restored_added))
+        return True
+    monitor.restore([], 36)
+    monitor.restore([], 99)
+    if monitor.restored_added != 36 or monitor.total != 37:
+        print("ERROR: restored_added {} total {} after a restore of 36, expected 36 and 37".format(monitor.restored_added, monitor.total))
+        return True
+    return False
+
+
 def run_control_monitor_tests(my_predbat):
     """Run all control failure monitor tests."""
     failed = False
@@ -742,6 +799,8 @@ def run_control_monitor_tests(my_predbat):
         ("nothing_after_slot_end", test_nothing_after_slot_end),
         ("shortened_slot_stops_judgement", test_shortened_slot_stops_judgement),
         ("format_failure", test_format_failure),
+        ("failing_tracks_confirmed_failure", test_failing_tracks_a_confirmed_failure),
+        ("restored_added_counts_restore", test_restored_added_counts_only_the_restore),
     ]:
         print("**** control_monitor: {} ****".format(name))
         if fn():
