@@ -2643,6 +2643,46 @@ def test_call_adjust_charge_immediate(test_name, my_predbat, ha, inv, dummy_item
     return failed
 
 
+def test_charge_immediate_stops_discharge_contract(my_predbat, ha, inv, dummy_items):
+    """
+    Inverter.charge_immediate_stops_discharge() must be True exactly when adjust_charge_immediate() sends the discharge stop.
+
+    The executor skips the cycle's idle-export stop on that answer (GH#6340), so if the two drift apart the duplicate
+    stop comes back (predicate True, no stop sent would instead leave a discharge running).
+    """
+    failed = False
+    original_args = dict(my_predbat.args)
+    original_enable = ha.service_store_enable
+    my_predbat.args.update(
+        {
+            "charge_start_service": "charge_start",
+            "charge_stop_service": "charge_stop",
+            "charge_freeze_service": "charge_freeze",
+            "discharge_stop_service": "discharge_stop",
+            "charge_rate": "number.charge_rate",
+            "device_id": "DID0",
+        }
+    )
+    ha.service_store_enable = True
+    try:
+        for target_soc, freeze in [(0, False), (0, True), (inv.soc_percent, False), (50, False), (50, True), (100, False)]:
+            ha.service_store = []
+            my_predbat.last_service_hash.pop("charge", None)
+            my_predbat.last_service_hash.pop("discharge", None)
+            inv.adjust_charge_immediate(target_soc, freeze=freeze)
+            sent_stop = any(call[0] == "discharge_stop" for call in ha.get_service_store())
+            predicate = Inverter.charge_immediate_stops_discharge(target_soc)
+            if sent_stop != predicate:
+                print("ERROR: charge_immediate_stops_discharge({}) is {} but adjust_charge_immediate({}, freeze={}) {} the discharge stop".format(target_soc, predicate, target_soc, freeze, "sent" if sent_stop else "did not send"))
+                failed = True
+    finally:
+        ha.service_store_enable = original_enable
+        ha.service_store = []
+        my_predbat.args.clear()
+        my_predbat.args.update(original_args)
+    return failed
+
+
 def test_charge_target_overshoot_hold(my_predbat, ha, inv, dummy_items):
     """An overshot software charge target should hold, preserving native targets and stop fallbacks."""
     failed = False
@@ -6870,6 +6910,10 @@ charge_start_service:
         return failed
 
     failed |= test_charge_target_overshoot_hold(my_predbat, ha, inv, dummy_items)
+    if failed:
+        return failed
+
+    failed |= test_charge_immediate_stops_discharge_contract(my_predbat, ha, inv, dummy_items)
     if failed:
         return failed
 

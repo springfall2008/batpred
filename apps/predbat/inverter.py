@@ -3447,6 +3447,16 @@ class Inverter(BatteryCurve):
         # transient failure would silently downgrade a freeze into a stop rather than retrying it.
         return True
 
+    @staticmethod
+    def charge_immediate_stops_discharge(target_soc):
+        """
+        True when adjust_charge_immediate(target_soc) stops any discharge itself before it starts the charge or freeze.
+
+        The executor reads this at queue time to skip the cycle's idle-export stop (GH#6340), so it must stay the
+        predicate that adjust_charge_immediate() branches on.
+        """
+        return target_soc > 0
+
     def adjust_charge_immediate(self, target_soc, freeze=False):
         """
         Adjust from charging or not charging based on passed target soc
@@ -3463,7 +3473,7 @@ class Inverter(BatteryCurve):
 
         service_data_stop = {"device_id": self.base.get_arg("device_id", index=self.id, default="")}
         extra_data = {"charge_start_time": self.base.get_arg("charge_start_time", index=self.id, default="00:00:00"), "charge_end_time": self.base.get_arg("charge_end_time", index=self.id, default="00:00:00")}
-        if target_soc > 0:
+        if self.charge_immediate_stops_discharge(target_soc):
             current_rate = self.get_current_charge_rate()
             service_data = {
                 "device_id": self.base.get_arg("device_id", index=self.id, default=""),
@@ -3507,8 +3517,8 @@ class Inverter(BatteryCurve):
         # FB00's Energy Storage Control Switch on an exporting cycle: Feed-in priority - No Grid Charging for a freeze
         # export (PV goes to the load then the grid ahead of the battery, which still covers the load - the plugin
         # offers no Feed-in priority with the Battery Reserve bit, so the inverter's own minimum SoC is the floor), and
-        # Backup/Reserve for a real export. The idle call (target 100) comes on the same cycle as adjust_charge_immediate,
-        # which owns it then.
+        # Backup/Reserve for a real export. The idle call (target 100) only comes on a cycle that is not exporting, where
+        # adjust_charge_immediate owns it - execute_plan skips the idle call when that cycle charged or froze (GH#6340).
         if self.inv_has_target_soc and self.inv_has_solis_energy_control and target_soc < 100:
             self.write_solis_energy_control(64 if freeze else 49, SOLAX_SOLIS_MODES_FB00, "freeze export" if freeze else "export")
 
