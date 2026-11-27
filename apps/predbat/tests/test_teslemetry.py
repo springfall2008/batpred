@@ -51,6 +51,11 @@ class MockTeslemetryAPI(TeslemetryAPI):
         self._last_forced_assert = 0
         self.site_info_done = False
         self.last_soc = None
+        self.last_live_status = {}
+        self._unplanned_export_polls = 0
+        self._unplanned_export_since = None
+        self._unplanned_export_checked = None
+        self._unplanned_export_peak_w = 0
         self.soc_max_real = False
         self.dashboard_items = {}
         self.log_messages = []
@@ -3730,6 +3735,180 @@ def test_teslemetry_round_trip_keeps_site_id_readable():
     print("  ✓ Discovery report round-trips with the site id readable")
 
 
+# The live_status shape of GH#6381: a Powerwall 3 at nameplate output into the grid, no solar, a small house load.
+UNPLANNED_EXPORT_LIVE = {"percentage_charged": 90.0, "battery_power": 8023, "solar_power": 0, "load_power": 351, "grid_power": -7672}
+
+
+def _make_unplanned_export_api(device_mode="autonomous", device_tariff=None):
+    """Build an API whose last-sent tuple is the GH#6381 idle state (pv_only, self_consumption, reserve 15, a flat signal tariff pushed).
+
+    site_info reads back device_mode and device_tariff (the pushed tariff when None), so a test can make the device
+    disagree with what was sent.
+    """
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    api.tbc_control = True
+    api.mock_responses["/api/1/energy_sites/123456/time_of_use_settings"] = {"response": {"code": 201}}
+    pushed = api.build_signal_tariff(None, None)
+    assert run_async(api.set_tariff(pushed))
+    api._last_sent.update({"export_rule": "pv_only", "grid_charging": False, "backup_reserve": 15, "operation_mode": "self_consumption"})
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = {
+        "response": {
+            "default_real_mode": device_mode,
+            "backup_reserve_percent": 15,
+            "components": {"customer_preferred_export_rule": "pv_only", "disallow_charge_from_grid_with_solar_installed": True},
+            "tariff_content_v2": copy.deepcopy(pushed) if device_tariff is None else device_tariff,
+        }
+    }
+    api.requests_made.clear()
+    return api, pushed
+
+
+def _site_info_reads(api):
+    """Count the site_info reads made so far."""
+    return sum(1 for method, path, _ in api.requests_made if method == "GET" and path.endswith("/site_info"))
+
+
+def test_teslemetry_battery_export_w_counts_only_battery_energy_beyond_solar_surplus():
+    """battery_export_w is the battery's share of the export: pv_only may export surplus solar, which must not count."""
+    assert TeslemetryAPI.battery_export_w(UNPLANNED_EXPORT_LIVE) == 7672
+    # Solar export with the battery idle, and the battery covering the house while solar exports: neither is the battery's export.
+    assert TeslemetryAPI.battery_export_w({"battery_power": 0, "solar_power": 4000, "load_power": 500, "grid_power": -3500}) == 0
+    assert TeslemetryAPI.battery_export_w({"battery_power": 800, "solar_power": 3000, "load_power": 1300, "grid_power": -2500}) == 800
+    assert TeslemetryAPI.battery_export_w({"battery_power": 800, "solar_power": 3000, "load_power": 1300, "grid_power": -1700}) == 0
+    # Charging, importing, or an unreadable response is never an export.
+    assert TeslemetryAPI.battery_export_w({"battery_power": -5000, "grid_power": 5400, "load_power": 400}) == 0
+    assert TeslemetryAPI.battery_export_w({"battery_power": "unknown", "grid_power": None}) == 0
+    assert TeslemetryAPI.battery_export_w(None) == 0
+
+
+def test_teslemetry_unplanned_export_reads_the_device_back():
+    """GH#6381: a battery export under pv_only is warned about on its second poll and the device's own settings read back.
+
+    The device here reports autonomous where self_consumption was sent, so the read-back names the mode as
+    differing. While the export lasts it is re-read only every UNPLANNED_EXPORT_RECHECK_SECONDS, and its end is
+    logged with its length and peak. Nothing is POSTed at any point: the check is evidence only.
+    """
+    from teslemetry import UNPLANNED_EXPORT_RECHECK_SECONDS
+
+    api, _ = _make_unplanned_export_api(device_mode="autonomous")
+    api.last_live_status = dict(UNPLANNED_EXPORT_LIVE)
+    run_async(api.check_unplanned_export(0))
+    assert _site_info_reads(api) == 0 and not any("Warn:" in msg for msg in api.log_messages), "one poll may be a device winding an export down"
+    run_async(api.check_unplanned_export(120))
+    warns = [msg for msg in api.log_messages if msg.startswith("Warn:")]
+    assert any("sending 7672 W to the grid" in msg and "pv_only" in msg and "mode self_consumption, reserve 15%" in msg for msg in warns), warns
+    assert _site_info_reads(api) == 1
+    readback = [msg for msg in warns if "device reports" in msg]
+    assert len(readback) == 1 and "differs in mode" in readback[0] and "matches the one last pushed" in readback[0], readback
+    # Within the recheck interval nothing more is read; at it, the device is read again.
+    for seconds in range(240, 120 + UNPLANNED_EXPORT_RECHECK_SECONDS, 120):
+        run_async(api.check_unplanned_export(seconds))
+    assert _site_info_reads(api) == 1
+    run_async(api.check_unplanned_export(120 + UNPLANNED_EXPORT_RECHECK_SECONDS))
+    assert _site_info_reads(api) == 2
+    assert any("still running after 30 minutes" in msg for msg in api.log_messages)
+    # The export stops: the episode ends with its length and peak, and the state resets.
+    api.last_live_status = {"percentage_charged": 32.0, "battery_power": 244, "solar_power": 0, "load_power": 244, "grid_power": 0}
+    run_async(api.check_unplanned_export(240 + UNPLANNED_EXPORT_RECHECK_SECONDS))
+    assert any("export ended after 32 minutes (peak 7672 W)" in msg for msg in api.log_messages), api.log_messages
+    assert api._unplanned_export_since is None and api._unplanned_export_polls == 0
+    assert not any(method == "POST" for method, _, _ in api.requests_made), "the check must never write to the device"
+
+
+def test_teslemetry_unplanned_export_ignores_planned_exports_and_read_only():
+    """An export while battery_ok was sent is a planned one, and in read-only mode Predbat is not setting the device."""
+    api, _ = _make_unplanned_export_api()
+    api._last_sent["export_rule"] = "battery_ok"
+    api.last_live_status = dict(UNPLANNED_EXPORT_LIVE)
+    for seconds in (0, 120, 240):
+        run_async(api.check_unplanned_export(seconds))
+    assert _site_info_reads(api) == 0 and not api.log_messages
+
+    api, _ = _make_unplanned_export_api()
+    api.base.get_arg = lambda a, d=None, **k: True if a == "set_read_only" else d
+    api.last_live_status = dict(UNPLANNED_EXPORT_LIVE)
+    for seconds in (0, 120, 240):
+        run_async(api.check_unplanned_export(seconds))
+    assert _site_info_reads(api) == 0 and not api.log_messages
+
+    # One flagged poll between two clean ones never builds an episode.
+    api, _ = _make_unplanned_export_api()
+    for seconds, live in ((0, UNPLANNED_EXPORT_LIVE), (120, {"battery_power": 0, "grid_power": 0}), (240, UNPLANNED_EXPORT_LIVE)):
+        api.last_live_status = dict(live)
+        run_async(api.check_unplanned_export(seconds))
+    assert _site_info_reads(api) == 0 and not api.log_messages
+
+
+def test_teslemetry_unplanned_export_compares_the_tariff_by_content():
+    """The read-back tariff matches the pushed one when it prices the same periods the same way, and differs when it does not.
+
+    Tesla may store a tariff in another order or with fields of its own, so a reordered copy with an extra key must
+    still match; a tariff with a sell band the pushed one does not have must be reported with both summaries.
+    """
+    api, pushed = _make_unplanned_export_api(device_mode="self_consumption")
+    reordered = copy.deepcopy(pushed)
+    reordered["tesla_added"] = True
+    for season in reordered["sell_tariff"]["seasons"].values():
+        for tier in season["tou_periods"].values():
+            tier["periods"].reverse()
+    api.mock_responses["/api/1/energy_sites/123456/site_info"]["response"]["tariff_content_v2"] = reordered
+    assert run_async(api.log_device_settings())
+    assert any("no setting differs" in msg and "matches the one last pushed" in msg for msg in api.log_messages), api.log_messages
+
+    stale = copy.deepcopy(pushed)
+    stale["sell_tariff"]["energy_charges"]["AllYear"]["rates"] = {tier: 1.0 for tier in stale["sell_tariff"]["energy_charges"]["AllYear"]["rates"]}
+    api.mock_responses["/api/1/energy_sites/123456/site_info"]["response"]["tariff_content_v2"] = stale
+    api.log_messages.clear()
+    assert run_async(api.log_device_settings())
+    assert any("DIFFERS from the one last pushed" in msg and "device holds" in msg and "last pushed" in msg for msg in api.log_messages), api.log_messages
+
+    api.mock_responses["/api/1/energy_sites/123456/site_info"] = None
+    api.log_messages.clear()
+    assert not run_async(api.log_device_settings())
+    assert any("could not read site_info back" in msg for msg in api.log_messages)
+
+
+def test_teslemetry_run_checks_for_unplanned_export_after_each_live_poll():
+    """run() feeds each live poll to check_unplanned_export, so an export under the idle tuple reaches a site_info read-back."""
+    api = _make_forced_assert_api()
+    run_async(api.run(seconds=0, first=True))
+    assert api._last_sent.get("export_rule") == "pv_only", "the boot assert of the idle state sends pv_only"
+    api.mock_responses["/api/1/energy_sites/123456/live_status"] = {"response": dict(UNPLANNED_EXPORT_LIVE)}
+    api.requests_made.clear()
+    for seconds in (120, 240):
+        run_async(api.run(seconds=seconds, first=False))
+    assert _site_info_reads(api) == 1
+    assert any("not following its settings" in msg for msg in api.log_messages)
+
+
+def test_teslemetry_request_logs_the_command_body():
+    """GH#6381: a command's body is logged with its response, so a log shows what the device was told; a pushed tariff as its summary."""
+    assert TeslemetryAPI._body_for_log(None) == ""
+    assert TeslemetryAPI._body_for_log({"default_real_mode": "self_consumption"}) == ' body: {"default_real_mode": "self_consumption"}'
+    api = MockTeslemetryAPI()
+    api.base = _rate_base(import_p=28.0, export_p=15.0)
+    tariff = api.build_signal_tariff(None, None)
+    logged = TeslemetryAPI._body_for_log({"tou_settings": {"optimization_strategy": "economics", "tariff_content_v2": tariff}})
+    summary = TeslemetryAPI.tariff_summary(tariff)
+    assert summary["buy"] and summary["sell"], summary
+    assert '"optimization_strategy": "economics"' in logged and summary["sell"][0] in logged and "sell_tariff" not in logged, logged
+
+    async def test():
+        """Drive the real _request with a POST body against a mocked 200 response."""
+        api = _make_real_request_api()
+        mock_response = create_aiohttp_mock_response(status=200, json_data={"response": {}})
+        mock_session = create_aiohttp_mock_session(mock_response)
+        mock_session.request = mock_session.get
+        with patch("aiohttp.ClientSession") as mock_session_class:
+            with patch("teslemetry.asyncio.sleep", new_callable=AsyncMock):
+                mock_session_class.return_value = mock_session
+                await api._request("POST", "/api/1/energy_sites/123456/backup", json_body={"backup_reserve_percent": 100})
+        assert any('backup body: {"backup_reserve_percent": 100} status 200' in msg for msg in api.log_messages), api.log_messages
+
+    run_async(test())
+
+
 def test_teslemetry(my_predbat=None):
     """Run all Teslemetry component tests (registry entry point).
 
@@ -3945,5 +4124,11 @@ def test_teslemetry(my_predbat=None):
     test_teslemetry_record_agrees_with_automatic_config()
     test_teslemetry_conditional_ratings_follow_entity_presence()
     test_teslemetry_round_trip_keeps_site_id_readable()
+    test_teslemetry_battery_export_w_counts_only_battery_energy_beyond_solar_surplus()
+    test_teslemetry_unplanned_export_reads_the_device_back()
+    test_teslemetry_unplanned_export_ignores_planned_exports_and_read_only()
+    test_teslemetry_unplanned_export_compares_the_tariff_by_content()
+    test_teslemetry_run_checks_for_unplanned_export_after_each_live_poll()
+    test_teslemetry_request_logs_the_command_body()
     print("**** Teslemetry tests passed ****")
     return 0
