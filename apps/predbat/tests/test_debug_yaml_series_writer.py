@@ -206,6 +206,10 @@ def test_debug_yaml_series_writer(my_predbat=None):
     failed = check("a shared object inside a key is written out each time, without anchors", "&id" not in aliased_text and write_debug_value("windows", aliased["windows"], io.StringIO()), failed)
     found = same(yaml.safe_load(aliased_text), yaml.safe_load(old_dump(aliased)))
     failed = check("a shared object inside a key loads back equal to yaml.dump's alias{}".format(" - " + found if found else ""), not found, failed)
+    # yaml.dump escapes everything outside printable ASCII, so the dump never depended on a file's encoding; nor may this
+    non_ascii = sorted({char for char in new_text if not " " <= char <= "~" and char != "\n"})
+    failed = check("the dump is printable ASCII, as yaml.dump's is{}".format(" - not: {!r}".format(non_ascii) if non_ascii else ""), not non_ascii, failed)
+    failed = check("yaml.dump's dump of the same data is printable ASCII too", all(" " <= char <= "~" or char == "\n" for char in old_text), failed)
     longest = max(len(line) for line in new_text.splitlines())
     failed = check("no line longer than 400 characters (longest {})".format(longest), longest <= 400, failed)
 

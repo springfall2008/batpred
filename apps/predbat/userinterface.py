@@ -306,10 +306,11 @@ DEBUG_PLAIN_RESOLVER = yaml.resolver.Resolver()
 # A run of numbers longer than this is written compactly as {...} or [...], this many to a line, so a
 # 31,680-minute history is ~2,000 lines rather than 31,680; a shorter one is laid out one per line as yaml.dump does
 DEBUG_SERIES_PER_LINE = 16
-# Characters a double-quoted string must escape: the quote and backslash, control characters, characters
-# PyYAML's reader refuses (C1 controls, lone surrogates, BOM, U+FFFE/U+FFFF) and the characters YAML reads as
-# line breaks (U+0085, U+2028, U+2029), which inside double quotes would be folded into spaces
-DEBUG_STRING_ESCAPE_RE = re.compile('[\\x00-\\x1f"\\\\\\x7f-\\x9f\\u2028\\u2029\\ud800-\\udfff\\ufeff\\ufffe\\uffff]')
+# Characters a double-quoted string escapes: the quote and backslash, and everything outside printable ASCII, as
+# yaml.dump does. That covers what must be escaped (control characters, the characters PyYAML's reader refuses and
+# U+0085/U+2028/U+2029, which YAML would fold into spaces) and keeps the dump ASCII, so, as with yaml.dump, no open()
+# that writes or reads it depends on the platform's default encoding
+DEBUG_STRING_ESCAPE_RE = re.compile("[^\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]")
 DEBUG_SURROGATE_RE = re.compile("[\\ud800-\\udfff]")
 DEBUG_STRING_ESCAPES = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\t": "\\t", "\r": "\\r"}
 
@@ -339,6 +340,20 @@ def debug_yaml_number(number):
     return text
 
 
+def debug_yaml_escape(match):
+    """The YAML escape for one character matched by DEBUG_STRING_ESCAPE_RE, in the form yaml.dump writes: \\x with 2 hex digits, \\u with 4 or \\U with 8"""
+    char = match.group(0)
+    escape = DEBUG_STRING_ESCAPES.get(char)
+    if escape:
+        return escape
+    code = ord(char)
+    if code < 0x100:
+        return "\\x{:02X}".format(code)
+    if code < 0x10000:
+        return "\\u{:04X}".format(code)
+    return "\\U{:08X}".format(code)
+
+
 def debug_yaml_string(text):
     """
     A YAML double-quoted scalar that reads back as exactly text
@@ -350,7 +365,7 @@ def debug_yaml_string(text):
         return '"' + text + '"'
     if DEBUG_SURROGATE_RE.search(text):
         raise DebugValueNotPlain("a lone surrogate")
-    return '"' + DEBUG_STRING_ESCAPE_RE.sub(lambda match: DEBUG_STRING_ESCAPES.get(match.group(0)) or "\\u{:04x}".format(ord(match.group(0))), text) + '"'
+    return '"' + DEBUG_STRING_ESCAPE_RE.sub(debug_yaml_escape, text) + '"'
 
 
 def debug_yaml_scalar(value):
@@ -425,7 +440,7 @@ def debug_value_lines(value, path_ids):
     if scalar is not None:
         return scalar, []
     kind = type(value)
-    if kind is MinuteArray and set(getattr(value, "__dict__", {})) == {"_data"}:
+    if kind is MinuteArray and set(value.__dict__) == {"_data"}:
         # Written as yaml.dump writes it, so the replay loader rebuilds the same MinuteArray
         inline, below = debug_value_lines(value._data, path_ids)
         return "!!python/object:utils.MinuteArray", ["_data: " + inline] + below
