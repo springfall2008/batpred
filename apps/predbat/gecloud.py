@@ -771,9 +771,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         self.control_reread_reason = None
         self.control_failures_seen = None
         self.control_failure_reread_stamp = None
-        # Whether the control monitor had restored its lifetime total when its count was last seen
-        self.control_monitor_restored_seen = None
-        # When to re-read once more if the latest control failure is still failing
+        # Set with control_reread_reason when Predbat has just left read only, for the eco check after the read
+        self.control_reread_left_read_only = False
+        # When to re-read once more if a control failure is still failing
         self.control_failure_follow_up_at = None
         self.read_only_seen = None
         self.default_options_stamp = None
@@ -2880,10 +2880,11 @@ class GECloudDirect(ComponentBase, CarChargerControl):
                     self.check_ems_inverter_slots(device, self.settings[device])
                 self.settings_read_stamps.setdefault(device, {})["control"] = settings_now
                 settings_updated = True
-                if reason == "left read only":
+                if self.control_reread_left_read_only:
                     # Eco may have been turned off while Predbat was not in control
                     await self.ensure_full_power_eco(device)
             self.control_reread_reason = None
+            self.control_reread_left_read_only = False
 
             if settings_updated and self.storage:
                 await self.save_settings_to_storage()
@@ -3172,35 +3173,35 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         Ask for the control registers to be read now when Predbat's control may no longer match the inverter.
 
         A new failure from the control monitor (Predbat's commands not taking effect) asks once, then not again for
-        CONTROL_FAILURE_REREAD_HOLD_OFF_SECONDS. Each new failure also asks once more CONTROL_FAILURE_FOLLOW_UP_SECONDS
-        later if it is still failing, whatever the hold-off. Leaving read only always asks, as anything may have
-        changed the controls meanwhile.
+        CONTROL_FAILURE_REREAD_HOLD_OFF_SECONDS. A failure also asks once more CONTROL_FAILURE_FOLLOW_UP_SECONDS later
+        if a slot is still failing then, whatever the hold-off; failures counted while that is pending share it.
+        Leaving read only always asks, as anything may have changed the controls meanwhile.
         """
         now = self.now_utc_exact
         monitor = getattr(self.base, "control_monitor", None)
         total = getattr(monitor, "total", None)
         if isinstance(total, int):
-            restored = getattr(monitor, "restored", None)
-            # The first count seen is a baseline. So is the count once the monitor restores its lifetime total: the
-            # plan cycle restores it after this first runs, and taking that jump for a failure started the hold-off
-            # at start-up, so a real failure within 4 hours was never re-read
-            restoring = restored is True and self.control_monitor_restored_seen is False
-            if self.control_failures_seen is not None and total > self.control_failures_seen and not restoring:
+            # Only failures this process counted: the plan cycle restores the lifetime total after this first runs,
+            # and taking that jump for a failure started the hold-off at start-up, so a real failure within 4 hours
+            # was never re-read. The first count seen is the baseline
+            counted = total - monitor.restored_added
+            if self.control_failures_seen is not None and counted > self.control_failures_seen:
                 held_off = self.control_failure_reread_stamp is not None and (now - self.control_failure_reread_stamp).total_seconds() < CONTROL_FAILURE_REREAD_HOLD_OFF_SECONDS
                 if not held_off:
                     self.control_failure_reread_stamp = now
                     self.control_reread_reason = "control failure"
-                self.control_failure_follow_up_at = now + timedelta(seconds=CONTROL_FAILURE_FOLLOW_UP_SECONDS)
-            self.control_failures_seen = total
-            self.control_monitor_restored_seen = restored
+                if self.control_failure_follow_up_at is None:
+                    self.control_failure_follow_up_at = now + timedelta(seconds=CONTROL_FAILURE_FOLLOW_UP_SECONDS)
+            self.control_failures_seen = counted
             if self.control_failure_follow_up_at is not None and now >= self.control_failure_follow_up_at:
                 self.control_failure_follow_up_at = None
-                failing = getattr(monitor, "failing", None)
-                if callable(failing) and failing(now.timestamp()):
+                if monitor.failing(now.timestamp()) and self.control_reread_reason is None:
                     self.control_reread_reason = "control failure follow-up"
         read_only = self.read_only_now()
         if self.read_only_seen and not read_only and not first:
-            self.control_reread_reason = "left read only"
+            # A flag of its own so the eco check after the read does not depend on the reason, which is kept for the log
+            self.control_reread_left_read_only = True
+            self.control_reread_reason = "left read only" if self.control_reread_reason is None else self.control_reread_reason + ", left read only"
         self.read_only_seen = read_only
 
     def control_register_keys(self, device):

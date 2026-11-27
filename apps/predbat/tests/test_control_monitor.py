@@ -753,6 +753,22 @@ def test_failing_tracks_a_confirmed_failure():
     return False
 
 
+def test_restored_added_counts_only_the_restore():
+    """restored_added holds what restore() added to total, once, and nothing a failure or the publish's restored flag adds."""
+    monitor = ControlMonitor()
+    monitor.restore([], None)
+    monitor.total += 1
+    if monitor.restored_added != 0:
+        print("ERROR: restored_added {} before anything was restored".format(monitor.restored_added))
+        return True
+    monitor.restore([], 36)
+    monitor.restore([], 99)
+    if monitor.restored_added != 36 or monitor.total != 37:
+        print("ERROR: restored_added {} total {} after a restore of 36, expected 36 and 37".format(monitor.restored_added, monitor.total))
+        return True
+    return False
+
+
 def run_control_monitor_tests(my_predbat):
     """Run all control failure monitor tests."""
     failed = False
@@ -784,6 +800,7 @@ def run_control_monitor_tests(my_predbat):
         ("shortened_slot_stops_judgement", test_shortened_slot_stops_judgement),
         ("format_failure", test_format_failure),
         ("failing_tracks_confirmed_failure", test_failing_tracks_a_confirmed_failure),
+        ("restored_added_counts_restore", test_restored_added_counts_only_the_restore),
     ]:
         print("**** control_monitor: {} ****".format(name))
         if fn():
