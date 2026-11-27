@@ -6,6 +6,8 @@
 board = "predbat-memory"
 scope = "predbat-devs"
 workspace = "~/predbat/batpred"
+# The GitHub repository: written into the goal as Repo:, so a fact's commit links to GitHub once pushed.
+repo = "springfall2008/batpred"
 
 goal = """Cut Predbat's memory use. On the standalone memory benchmark (coverage/memory_benchmark: Predbat run \
 standalone with db_primary and the dummy inverter, in a Linux container, for a fixed run of plan cycles), lower the \
