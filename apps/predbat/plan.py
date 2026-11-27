@@ -6295,7 +6295,7 @@ class Plan:
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best_h12",
                     state=dp3(self.predict_soc[60 * 12]),
-                    attributes={"friendly_name": "Predicted SoC kWh best + 12h", "state_class": "measurement", "unit _of_measurement": "kWh", "icon": "mdi:battery"},
+                    attributes={"friendly_name": "Predicted SoC kWh best + 12h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
                 )
                 self.dashboard_item(
                     self.prefix + ".best_soc_min_kwh",
