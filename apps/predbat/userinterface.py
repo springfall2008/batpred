@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate, MinuteArray
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate, MinuteArray, PackedRates
 import array
 import functools
 import io
@@ -278,6 +278,10 @@ class DebugYamlDumper(yaml.Dumper):
 # dump - io_slot_log_gate was one (#5569) and is in DEBUG_EXCLUDE_LIST for that reason.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
 
+# A packed rate series is written as the minute -> rate dict it stands for, so a dump reads exactly as it did
+# when these series were dicts, and loads with plain YAML tooling and on an older Predbat
+DebugYamlDumper.add_representer(PackedRates, lambda dumper, value: dumper.represent_dict(value.to_dict()))
+
 
 def represent_numpy_as_plain(dumper, value):
     """
@@ -309,10 +313,13 @@ def dump_debug_yaml(debug, stream):
     at idle. Dumping per key bounds the node tree by the largest key instead (~20MB here). The
     output is the same sorted single document; the only difference is that an object shared between
     two top-level keys is written out twice rather than aliased.
+
+    A packed rate series (PackedRates) is written as the minute -> rate dict it stands for, so the dump
+    reads exactly as it did when those series were dicts.
     """
     dumper = functools.partial(DebugYamlDumper, anchor_ids=itertools.count(1))
     for key in sorted(debug):
-        yaml.dump({key: debug[key]}, stream, Dumper=dumper)
+        yaml.dump({key: PackedRates.unpack(debug[key])}, stream, Dumper=dumper)
 
 
 class UserInterface:
