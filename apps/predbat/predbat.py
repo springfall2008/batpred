@@ -598,6 +598,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
+        self.car_energy_reported_load_warned = False
         # The record of the time no car charged in (octopus_cap_record()), as last saved, and its latest reading
         self.octopus_cap_runs = []
         self.octopus_cap_saved = None

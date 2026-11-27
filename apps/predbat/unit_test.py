@@ -40,6 +40,7 @@ from tests.test_execute import run_execute_tests
 from tests.test_inverter_rate_no_entity import run_inverter_rate_no_entity_tests, run_inverter_rate_no_entity_execute_tests, run_inverter_rate_no_entity_execute_10kw_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
 from tests.test_load_car_energy import test_load_car_energy_warns_when_configured_entity_has_no_data
+from tests.test_car_energy_reported_load import test_car_energy_reported_load
 from tests.test_predheat import (
     test_predheat,
     test_predheat_smart_thermostat,
@@ -636,6 +637,7 @@ def main():
         ("execute", run_execute_tests, "Execute tests", False),
         ("multi_inverter_status", test_multi_inverter_status, "Multi-inverter headline status resolution tests (#4446)", False),
         ("load_car_energy", test_load_car_energy_warns_when_configured_entity_has_no_data, "car_charging_energy configured-but-empty warning tests (#4458 follow-up)", False),
+        ("car_energy_reported_load", test_car_energy_reported_load, "car_energy_reported_load mismatch warning tests (#5318)", False),
         ("predheat", test_predheat, "Predheat scheduler and predheat_enable gate tests (#4670)", False),
         ("predheat_smart_thermostat", test_predheat_smart_thermostat, "Predheat smart thermostat pre-heat window tests", False),
         ("predheat_pr5767_regressions", test_predheat_pr5767_regressions, "Predheat fallback, hysteresis and COP regression tests (#5767)", False),
