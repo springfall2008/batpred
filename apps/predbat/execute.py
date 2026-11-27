@@ -1921,8 +1921,8 @@ class Execute:
         # inverter exists and is refreshed - on a fresh start the others are only created after inverter 0 - and after the
         # totals above, which size the manual grid. With battery_rate_grid_auto off they only gather evidence.
         if self.inverters:
-            self.battery_rate_grid_update(self.inverters[0], False)
-            self.battery_rate_grid_update(self.inverters[0], True)
+            self.battery_rate_grid_update(self.inverters[0], False, quick=quick)
+            self.battery_rate_grid_update(self.inverters[0], True, quick=quick)
             self.publish_battery_rate_grid_sensors()
 
         # Work out current charge limits and publish charge limit base

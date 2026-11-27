@@ -68,6 +68,11 @@ from const import (
     BATTERY_RATE_GRID_LOAD_ATTEMPTS,
     BATTERY_RATE_GRID_LOAD_WAIT_MINUTES,
     BATTERY_RATE_GRID_RESAVE_MINUTES,
+    BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE,
+    BATTERY_RATE_GRID_SCAN_VERSION,
+    BATTERY_RATE_GRID_KEY_SETTLE_MINUTES,
+    BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES,
+    BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE,
     BATTERY_RATE_GRID_MAX_AGE_DAYS,
     BATTERY_RATE_GRID_RETRY_MINUTES,
     BATTERY_RATE_GRID_SCAN_MINUTES,
@@ -79,6 +84,8 @@ from axle import fetch_axle_sessions, load_axle_slot, fetch_axle_active
 
 import ast
 import copy
+import hashlib
+import json
 import math
 import re
 
@@ -4310,7 +4317,7 @@ class Fetch:
         num_cars = min(self.get_arg("num_cars", 1), PREDBAT_MAX_CARS)
         self.car_charging_max_rate = [self.car_max_rate_cap(car_n) for car_n in range(max(num_cars, 1))]
 
-    def battery_rate_grid_update(self, inverter, discharge):
+    def battery_rate_grid_update(self, inverter, discharge, quick=False):
         """
         Update the charge (or discharge) rate grid the plan reads its ceiling from.
 
@@ -4328,6 +4335,8 @@ class Fetch:
         Args:
             inverter: the Inverter whose (fleet) history is scanned
             discharge: True for the discharge grid
+            quick: True for the quick update between plan cycles, which does not refresh the inverter values the scan key is
+                built from
         """
         from ha import run_async
 
@@ -4337,6 +4346,7 @@ class Fetch:
         manual, manual_key, configured = self.rate_grid_manual(discharge)
         today = charge_day(self.now_utc, 0, self.local_tz)
         merged_on_load = [False]
+        scan_key = self.rate_grid_scan_key(discharge)
 
         def load_store():
             """Read the stored samples; True when a read returned data."""
@@ -4351,7 +4361,8 @@ class Fetch:
             if not isinstance(data, dict):
                 return False
             self.battery_rate_grid_loaded[kind] = True
-            stored = clean_rate_grid_samples(data.get("samples"))
+            stored_samples = clean_rate_grid_samples(data.get("samples"))
+            stored = stored_samples
             current = self.battery_rate_grid_samples.get(kind)
             if current:
                 # Days scanned while the store could not be read are kept, the stored days merged under them, and saved
@@ -4361,6 +4372,78 @@ class Fetch:
             updated = data.get("updated")
             if isinstance(updated, str) and not self.battery_rate_grid_updated.get(kind):
                 self.battery_rate_grid_updated[kind] = updated
+            # The key the stored samples were measured against, and the last successful scan, so the first scan after a
+            # restart reads only the days since then rather than battery_rate_grid_history_days again (#6287). The stored key
+            # wins over one set before the store read back (from the no-evidence record, or a full read held in memory while the
+            # store could not be read), so a scan whose key differs re-measures the stored days. The last success only when
+            # cleaning dropped none of the store's own samples (an empty store is fine: a direction with no full-rate evidence
+            # yet still scanned successfully); whether the key still matches is decided when the scan runs
+            stored_key = self.rate_grid_stored_key(data.get("scan_key"))
+            measured_key = self.battery_rate_grid_scan_basis.get(kind)
+            if current and stored_samples and measured_key is not None and not (isinstance(stored_key, list) and self.rate_grid_scan_key_matches(measured_key, stored_key)):
+                # Days scanned while the store could not be read, under another key, are now mixed with the stored ones: no key
+                # describes them all, so the next scan (once the current key settles) reads the full window
+                self.battery_rate_grid_scan_basis[kind] = None
+            elif stored_samples and not (isinstance(stored_key, list) and self.rate_grid_scan_key_matches(measured_key, stored_key)):
+                self.battery_rate_grid_scan_basis[kind] = stored_key if isinstance(stored_key, list) else None
+            elif measured_key is None and isinstance(stored_key, list):
+                # An empty store holds no samples measured under its key, so it only stands in when nothing else is known
+                self.battery_rate_grid_scan_basis[kind] = stored_key
+            raw_samples = data.get("samples")
+            stored_intact = isinstance(raw_samples, dict) and len(stored_samples) == len(raw_samples) and all(isinstance(raw_samples.get(day), list) and len(raw_samples[day]) == len(entries) for day, entries in stored_samples.items())
+            restored = self.rate_grid_stored_time(data.get("last_success"))
+            if stored_intact and restored is not None and self.battery_rate_grid_last_success.get(kind) is None:
+                self.battery_rate_grid_last_success[kind] = restored
+            elif raw_samples and not stored_intact:
+                # Damaged samples read back after a last success came from elsewhere (the no-evidence record, or a scan while
+                # the store could not be read): the next scan reads the full window to re-measure what the history still holds
+                self.battery_rate_grid_last_success[kind] = None
+            return True
+
+        def load_empty_scan():
+            """
+            Restore the last success from the record a scan that found no evidence writes, as such a direction (often discharge,
+            on a system that never force-exports) has no evidence store to keep it in, with the key it was measured under (whether
+            that still matches is decided when the scan runs). Not a time ahead of the clock; a failed read leaves the first scan
+            reading the full window
+            """
+            data = None
+            try:
+                data = run_async(storage.load("predbat", key + "_empty_scan"))
+            except Exception as e:
+                self.log("Warn: {}_empty_scan: failed to load: {}".format(key, e))
+            if not isinstance(data, dict) or data.get("retired"):
+                return
+            self.battery_rate_grid_empty_scan_live[kind] = True
+            restored = self.rate_grid_stored_time(data.get("last_success"))
+            record_key = self.rate_grid_stored_key(data.get("scan_key"))
+            if restored is not None and record_key is not None:
+                self.battery_rate_grid_last_success[kind] = restored
+                if self.battery_rate_grid_scan_basis.get(kind) is None:
+                    self.battery_rate_grid_scan_basis[kind] = record_key
+
+        def save_empty_scan(retire=False):
+            """
+            Record a successful scan while no evidence is held, kept apart from the evidence store so it can never replace it;
+            with retire, mark the record unused once evidence has been saved, so a restart whose evidence read fails does not
+            fall back to it. True when saved
+            """
+            payload = {"retired": True} if retire else {"last_success": self.now_utc.strftime(TIME_FORMAT), "scan_key": self.battery_rate_grid_scan_basis.get(kind)}
+            try:
+                if not run_async(
+                    storage.save(
+                        "predbat",
+                        key + "_empty_scan",
+                        payload,
+                        format="json",
+                        expiry=self.now_utc + timedelta(days=BATTERY_RATE_GRID_STORE_EXPIRY_DAYS),
+                    )
+                ):
+                    self.log("Warn: {}_empty_scan: failed to save".format(key))
+                    return False
+            except Exception as e:
+                self.log("Warn: {}_empty_scan: failed to save: {}".format(key, e))
+                return False
             return True
 
         refit = kind not in self.battery_rate_grid_learned or self.battery_rate_grid_fit_key.get(kind) != manual_key
@@ -4373,15 +4456,56 @@ class Fetch:
         # A scan whose history read failed is tried again within the hour; one that succeeded, a day later
         succeeded = last_success is not None and last_scan is not None and last_success >= last_scan
         interval = BATTERY_RATE_GRID_SCAN_MINUTES if succeeded else BATTERY_RATE_GRID_RETRY_MINUTES
-        if last_scan is None or (self.now_utc - last_scan) >= timedelta(minutes=interval):
+        due = last_scan is None or (self.now_utc - last_scan) >= timedelta(minutes=interval)
+        if due and not quick and not self.battery_rate_grid_loaded.get(kind):
+            # Read again just before a scan, as the old learners did - before the settle check below, so a key it restores counts
+            refit |= load_store()
+        if self.battery_rate_grid_last_success.get(kind) is None and storage and not self.battery_rate_grid_loaded.get(kind) and not self.battery_rate_grid_empty_scan_read.get(kind):
+            # No evidence store has read back to restore the last success from (one that did, but whose samples were damaged,
+            # reads the full window): try the no-evidence scan record, once a run
+            self.battery_rate_grid_empty_scan_read[kind] = True
+            load_empty_scan()
+        last_success = self.battery_rate_grid_last_success.get(kind)
+        # A key that differs from the one the stored samples were measured under (or no key known yet) may be a passing value: a
+        # rated rate or battery size read as its default while an entity is unavailable, most likely just after a restart. It
+        # only counts once plan-cycle reads at least BATTERY_RATE_GRID_KEY_SETTLE_MINUTES apart agree on it - in time, as a
+        # plan cycle fetches twice a minute or so apart, and only on those fetches, as a quick update reuses the last cycle's
+        # values. A due scan waits for that, so one bad reading cannot re-measure every stored day against it, for at most
+        # BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES so a key that never settles is still scanned; a quick update never starts
+        # a scan under a changed key
+        if not quick:
+            if not self.rate_grid_scan_key_matches(self.battery_rate_grid_previous_basis.get(kind), scan_key):
+                self.battery_rate_grid_basis_since[kind] = self.now_utc
+            self.battery_rate_grid_previous_basis[kind] = scan_key
+        measured_key = self.battery_rate_grid_scan_basis.get(kind)
+        # No key known (a new install, a store written before keys were saved, or one not read back yet) counts as a change too
+        changed = not self.rate_grid_scan_key_matches(measured_key, scan_key)
+        since = self.battery_rate_grid_basis_since.get(kind)
+        settled = since is not None and self.rate_grid_scan_key_matches(self.battery_rate_grid_previous_basis.get(kind), scan_key) and (self.now_utc - since) >= timedelta(minutes=BATTERY_RATE_GRID_KEY_SETTLE_MINUTES)
+        if changed and settled and self.battery_rate_grid_basis_unconfirmed.get(kind) and not due and (self.now_utc - last_scan) >= timedelta(minutes=BATTERY_RATE_GRID_RETRY_MINUTES):
+            # The last full read ran under a key that never settled (the wait ran out): once the current one has, re-measure
+            # within the hour rather than at the next daily scan
+            due = True
+        if settled and not changed:
+            self.battery_rate_grid_basis_unconfirmed[kind] = False
+        if due and changed and not settled:
+            wait_since = self.battery_rate_grid_basis_wait_since.get(kind)
+            if wait_since is None:
+                wait_since = self.battery_rate_grid_basis_wait_since[kind] = self.now_utc
+                self.log("Info: battery {} rate grid scan waits for what it is measured against to settle".format(kind))
+            if (self.now_utc - wait_since) < timedelta(minutes=BATTERY_RATE_GRID_KEY_SETTLE_MAX_MINUTES):
+                due = False
+        if quick and changed:
+            due = False
+        if due:
             self.battery_rate_grid_last_scan[kind] = self.now_utc
-            if not self.battery_rate_grid_loaded.get(kind):
-                # Read again just before merging, as the old learners did
-                refit |= load_store()
             stored = self.battery_rate_grid_samples.get(kind, {})
             # Until a scan has succeeded, read as far back as battery_rate_grid_history_days; after that only the days since the
-            # last success with a day's overlap (battery_rate_grid_scan_days, more after a gap), as the per-day merge keeps the rest
-            if last_success is None:
+            # last success with a day's overlap (battery_rate_grid_scan_days, more after a gap), as the per-day merge keeps the rest.
+            # The full window again when what the samples are measured against has changed since the last full read, so the
+            # stored days the history still holds are re-measured
+            full_read = last_success is None or changed
+            if full_read:
                 days = self.battery_rate_grid_history_days
             else:
                 # The days since the last success, to the nearest day, plus a day's overlap (a scan a few minutes over a day late reads 2)
@@ -4389,16 +4513,27 @@ class Fetch:
                 days = min(max(self.battery_rate_grid_scan_days, gap_days), self.battery_rate_grid_history_days)
             scanned = inverter.find_rate_grid_samples(discharge, days=days)
             if scanned is not None:
-                # None means the settings or history were missing this time: the stored samples are left alone
+                # None means the settings or history were missing this time: the stored samples are left alone.
+                # Saved after every successful scan once the store has read back, so the stored last_success (and key) are current
+                # for a restart; while it hasn't, only new evidence is worth a pending save that may later replace it
                 self.battery_rate_grid_last_success[kind] = self.now_utc
+                # A failed read keeps the wait, so its hourly retry does not start a fresh one
+                self.battery_rate_grid_basis_wait_since.pop(kind, None)
+                if full_read:
+                    self.battery_rate_grid_scan_basis[kind] = scan_key
+                    self.battery_rate_grid_basis_unconfirmed[kind] = changed and not settled
                 merged = merge_rate_grid_samples(stored, scanned, today, BATTERY_RATE_GRID_MAX_AGE_DAYS, getattr(inverter, "curve_scan_coverage", {}).get("grid_" + kind))
-                save = save or merged != stored
+                save = save or merged != stored or bool(self.battery_rate_grid_loaded.get(kind))
                 self.battery_rate_grid_samples[kind] = merged
+                if not merged and storage and not self.battery_rate_grid_loaded.get(kind) and save_empty_scan():
+                    # Once the store has read back the evidence store itself is saved after every successful scan
+                    self.battery_rate_grid_empty_scan_live[kind] = True
             refit = True
         save = save or merged_on_load[0]
         if self.battery_rate_grid_loaded.get(kind):
             failures.clear()
-        else:
+        elif len(failures) < BATTERY_RATE_GRID_LOAD_ATTEMPTS:
+            # The first failures are all store_ready needs, so a direction that never reads back does not grow the list
             failures.append(self.now_utc)
 
         if refit:
@@ -4430,16 +4565,30 @@ class Fetch:
         self.battery_rate_grid_pending_save[kind] = bool(save and storage and not store_ready)
         if save and storage and store_ready:
             if store_ready and not self.battery_rate_grid_loaded.get(kind):
-                self.log("Info: {}: the stored evidence has not read back for {} cycles, treating the store as empty".format(key, len(failures)))
+                self.log("Info: {}: the stored evidence has not read back since {}, treating the store as empty".format(key, failures[0].strftime(TIME_FORMAT)))
                 self.battery_rate_grid_loaded[kind] = True
                 failures.clear()
             try:
                 if not run_async(
-                    storage.save("predbat", key, {"samples": self.battery_rate_grid_samples.get(kind, {}), "updated": self.battery_rate_grid_updated.get(kind)}, format="json", expiry=self.now_utc + timedelta(days=BATTERY_RATE_GRID_STORE_EXPIRY_DAYS))
+                    storage.save(
+                        "predbat",
+                        key,
+                        {
+                            "samples": self.battery_rate_grid_samples.get(kind, {}),
+                            "updated": self.battery_rate_grid_updated.get(kind),
+                            "last_success": self.battery_rate_grid_last_success[kind].strftime(TIME_FORMAT) if self.battery_rate_grid_last_success.get(kind) else None,
+                            "scan_key": self.battery_rate_grid_scan_basis.get(kind),
+                        },
+                        format="json",
+                        expiry=self.now_utc + timedelta(days=BATTERY_RATE_GRID_STORE_EXPIRY_DAYS),
+                    )
                 ):
                     self.log("Warn: {}: failed to save the evidence".format(key))
                 else:
                     self.battery_rate_grid_last_save[kind] = self.now_utc
+                    if self.battery_rate_grid_samples.get(kind) and self.battery_rate_grid_empty_scan_live.get(kind) and save_empty_scan(retire=True):
+                        # The evidence store now carries the last success: retire the no-evidence record read or written this run
+                        self.battery_rate_grid_empty_scan_live[kind] = False
             except Exception as e:
                 self.log("Warn: {}: failed to save the evidence: {}".format(key, e))
 
@@ -4462,6 +4611,101 @@ class Fetch:
             configured = bool(self.battery_charge_power_curve or self.battery_temperature_charge_curve)
         key = (tuple(sorted(soc_curve.items())), tuple(sorted(temperature_curve.items())), self.soc_max, rated)
         return soc_curve, temperature_curve, rated, configured, key
+
+    def rate_grid_scan_key(self, discharge):
+        """
+        What a rate grid sample is measured against for one direction, as a JSON-safe list: the rated rate (W), the
+        battery size (None with a soc_percent sensor), battery_loss and battery_rate_max_scaling (or _discharge), and for
+        discharge the export cap (W) the forced exports were written at.
+        find_rate_grid_samples() divides the battery power by the rated rate, loss and scaling, and a soc_kw reading by the
+        size, so samples stored under a different key are scaled differently and the stored days need re-reading.
+        battery_rate_grid_history_days is included too, so raising it reads the deeper window once. So are
+        BATTERY_RATE_GRID_SCAN_VERSION and a hash of the apps.yaml settings the scan reads (rate_grid_scan_settings()), so
+        a release that changes the scan, or a fix to one of those settings, re-measures the stored days the history still
+        holds; an upgrade that changes neither keeps the short scan.
+        """
+        rated = self.rate_grid_inputs(discharge)[2]
+        scaling = self.battery_rate_max_scaling_discharge if discharge else self.battery_rate_max_scaling
+        settings = hashlib.sha1(json.dumps(self.rate_grid_scan_settings(discharge), sort_keys=True, default=str).encode("utf-8")).hexdigest()[:16]
+        # The SoC of a sample is soc_kw / battery size, but a soc_percent sensor's is the percentage itself
+        size = None if "soc_percent" in self.args else round(self.soc_max, 3)
+        # Discharge evidence is forced exports, written at the export cap (inverter_limit_export), which sets what counts as full rate (#6247)
+        export_cap = round(self.battery_rate_max_export * MINUTE_WATT, 0) if discharge else None
+        return [round(rated * MINUTE_WATT, 1), size, round(self.battery_loss, 4), round(scaling, 4), self.battery_rate_grid_history_days, BATTERY_RATE_GRID_SCAN_VERSION, settings, export_cap]
+
+    def rate_grid_scan_settings(self, discharge):
+        """
+        The apps.yaml settings find_rate_grid_samples() reads for one direction, as configured (entity names, not their
+        states): per inverter its SoC sensor, written rate, battery_power and battery_power_invert, plus grid_power, its
+        invert (the first inverter's, which the scan reads), the battery temperature sensors and, for discharge, export_limit.
+        """
+        soc_name = "soc_percent" if "soc_percent" in self.args else "soc_kw"
+        rate_name = "discharge_rate" if discharge else "charge_rate"
+        names = [soc_name, rate_name, "battery_power", "battery_power_invert"] + (["export_limit"] if discharge else [])
+        # As configured: an API override (export_limit can be one) is a live value the scan applies itself
+        inverters = [{name: self.get_arg(name, None, indirect=False, index=index, can_override=False) for name in names} for index in range(max(int(self.get_arg("num_inverters", 1)), 1))]
+        # grid_power is read for the first inverter only, as the scan of the fleet's history reads it
+        grid = {name: self.get_arg(name, None, indirect=False, index=0, can_override=False) for name in ("grid_power", "grid_power_invert")}
+        return {"inverters": inverters, "grid": grid, "battery_temperature_history": self.get_arg("battery_temperature_history", None, indirect=False)}
+
+    @staticmethod
+    def rate_grid_scan_key_matches(stored, current):
+        """
+        True when samples measured under the rate_grid_scan_key() stored still match the current one. The rated rate (and the
+        discharge export cap, which by default is the same rate) and the battery size may drift by
+        BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE and BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE
+        (battery_scaling_auto and SoH move the size a little most days, and some inverters report their maximum rate live),
+        or every restart would read the full window again; the rest must be equal.
+        """
+        # A key read back from storage may be malformed (an older layout, or a damaged file): anything short or of another
+        # length is no match rather than an error
+        if not isinstance(stored, list) or not isinstance(current, list) or len(stored) != len(current) or len(current) < 8:
+            return False
+        # Key positions compared with a tolerance; battery_rate_grid_history_days (4) is compared one way below; every other
+        # position must be equal
+        tolerances = {0: BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE, 1: BATTERY_RATE_GRID_SCAN_KEY_SOC_MAX_TOLERANCE, 7: BATTERY_RATE_GRID_SCAN_KEY_RATE_TOLERANCE}
+        for index, tolerance in tolerances.items():
+            stored_value, current_value = stored[index], current[index]
+            if stored_value is None or current_value is None:
+                if stored_value is not current_value:
+                    return False
+                continue
+            if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in (stored_value, current_value)) or abs(stored_value - current_value) > abs(current_value) * tolerance:
+                return False
+        # battery_rate_grid_history_days: only a deeper window than the last full read needs reading again
+        if not isinstance(stored[4], int) or not isinstance(current[4], int) or stored[4] < current[4]:
+            return False
+        return all(stored[index] == current[index] for index in range(len(current)) if index not in tolerances and index != 4)
+
+    @staticmethod
+    def rate_grid_stored_key(key):
+        """
+        A rate_grid_scan_key() read back from storage, or None when it is not one (an older layout, or a damaged file): eight
+        positions, finite numbers where the key holds numbers (None allowed for the size and the export cap), whole numbers
+        for battery_rate_grid_history_days and the scan version, and text for the settings hash.
+        """
+
+        def number(value, allow_none=False):
+            """A finite number that is not a bool (or None, where allowed)."""
+            if value is None:
+                return allow_none
+            return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+
+        if not isinstance(key, list) or len(key) != 8:
+            return None
+        rated, size, loss, scaling, history_days, version, settings, export_cap = key
+        whole = all(isinstance(value, int) and not isinstance(value, bool) for value in (history_days, version))
+        if number(rated) and number(size, True) and number(loss) and number(scaling) and whole and isinstance(settings, str) and number(export_cap, True):
+            return key
+        return None
+
+    def rate_grid_stored_time(self, text):
+        """A stored rate grid scan time, or None when it is missing, malformed or ahead of the clock."""
+        try:
+            restored = strptime_aware(text, TIME_FORMAT)
+        except (ValueError, TypeError):
+            return None
+        return restored if restored <= self.now_utc else None
 
     def rate_grid_manual(self, discharge):
         """
