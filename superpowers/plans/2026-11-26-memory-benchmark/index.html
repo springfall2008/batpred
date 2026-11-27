@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Memory Benchmark Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Memory Benchmark Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-11-26-memory-benchmark.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Memory Benchmark Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="memory-benchmark-implementation-plan">Memory Benchmark Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Build <code>coverage/memory_benchmark &lt;tree&gt; &lt;out dir&gt;</code>, the frozen-clock, no-network, db_primary benchmark that the <code>predbat-memory</code> board needs, plus the export script that builds its local fixture from the maintainer's live Predbat.</p>
+<p><strong>Architecture:</strong> An export script (run by the maintainer, read-only against the live add-on config share) writes a gitignored fixture: a 7-day <code>predbat.db</code>, a scrubbed and re-keyed <code>cache/</code>, a generated <code>apps.yaml</code> and a manifest holding T0. A shell wrapper runs a pinned Linux image with <code>--network none</code>, builds the kernel from <code>&lt;tree&gt;</code> inside it, freezes the wall clock at T0 with libfaketime, and runs a Python driver that starts the real <code>PredBat</code>, waits for the components to publish once, runs N forced plan cycles, samples RSS and writes <code>result.json</code>.</p>
+<p><strong>Tech Stack:</strong> Python 3.13 (stdlib <code>unittest</code>, <code>sqlite3</code>, <code>yaml</code>), bash, Docker (<code>python:3.13-slim-bookworm</code>, libfaketime), the repo's own <code>apps/predbat</code> modules.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-11-26-memory-benchmark-design.md</code> (read it first; this plan only records the decisions it leaves open).</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Contract (do not change): <code>coverage/memory_benchmark &lt;tree&gt; &lt;out dir&gt;</code>, run from the main checkout; exit 0 when the run completed; writes <code>&lt;out dir&gt;/result.json</code> <code>{"ok": bool, "steady_rss_mb": float, "peak_rss_mb": float, "plan_digest": str}</code> and <code>&lt;out dir&gt;/predbat.log</code>. <code>boards/predbat-memory/measure.py</code> already consumes this and turns a non-zero exit into a harness error.</li>
+<li>Linux container, fixed pinned image; macOS RSS is not evidence. The run has <code>--network none</code>.</li>
+<li>Wall clock frozen at T0 (the fixture's extraction time) for the whole process; <code>time.monotonic()</code> and real sleeps keep running.</li>
+<li>MCP, Load ML and GivTCP off; the forecast (forecast.solar) and Octopus components on, served from seeded cache entries; web server at its default (on).</li>
+<li>Nothing from the live system is committed: no entity ids, serials, account numbers, tokens, coordinates or values in git, logs under git or board memories. Committed tests use synthetic names only. The fixture directory is gitignored.</li>
+<li>The live DB and live <code>apps.yaml</code> are opened read-only (SQLite <code>mode=ro</code>).</li>
+<li><code>ok</code> is false on any <code>Error:</code> log line, a stale-binary Python fallback, a <code>SolarAPI: Fetching</code> line, a missing result, or a skipped cycle; a short named list of Octopus <code>Warn:</code> lines is allowed.</li>
+<li>Repo rules: unit tests for all new code; 100% docstrings (<code>interrogate</code>); British English (cspell); line length 250; <code>lower_case_with_underscores</code>; any product-code edit starts with a GitNexus <code>impact</code> run on the symbol, reported to the maintainer, and <code>detect_changes()</code> before each commit.</li>
+<li>Run tests as <code>python3 -m unittest discover -s coverage/memory_benchmark_tools -v &gt; /tmp/claude-501/&lt;name&gt;.log 2&gt;&amp;1</code> and read the log file. Run pre-commit from the repo root, with the files <code>git add</code>ed first (it skips untracked files).</li>
+</ul>
+<h2 id="review-focus">Review Focus</h2>
+<ul>
+<li>A leak: a real account number, meter serial, token, postcode or coordinate surviving anywhere in the fixture or in a log. Pinned by <code>find_leaks</code> over the whole fixture (Task 5) and by a log scan (Task 8).</li>
+<li>A counter that jumps at T0: the dummy's lifetime counters not matching the fixture's last value. Pinned in Tasks 2 and 3.</li>
+<li>A run that quietly reaches for the network and is served by a stale or missing cache entry: <code>SolarAPI: Fetching</code> or an unlisted Octopus request must flip <code>ok</code>. Pinned in Task 7.</li>
+<li>A cache entry that is not fresh under the frozen clock, so the component refetches. Pinned in Task 4 (<code>created</code> equals T0) and Task 8 (no refetch lines).</li>
+<li>A digest that varies between runs or days (clock, threads, unordered dict output), or that fails to change when a plan does. Pinned in Tasks 7 and 8.</li>
+</ul>
+<hr />
+<h3 id="task-1-tools-package-scrub-helpers-test-hook-and-ignores">Task 1: Tools package, scrub helpers, test hook and ignores</h3>
+<p><strong>Files:</strong>
+- Create: <code>coverage/memory_benchmark_tools/scrub.py</code>, <code>coverage/memory_benchmark_tools/test_scrub.py</code>
+- Modify: <code>.pre-commit-config.yaml</code> (new hook after <code>triage-replay-tests</code>), <code>.gitignore</code>, <code>.cspell/custom-dictionary-workspace.txt</code> (as the spell check demands)</p>
+<p><strong>Interfaces:</strong>
+- Produces (in <code>scrub.py</code>):
+  - <code>FAKE_ACCOUNT = "A-BENCH0001"</code>, <code>FAKE_OCTOPUS_KEY = "sk_live_benchmark"</code>, <code>FAKE_FORECAST_KEY = "benchmark"</code>, <code>FAKE_POSTCODE = "SW1A 1AA"</code>, <code>FAKE_LATITUDE = 51.501</code>, <code>FAKE_LONGITUDE = -0.1419</code>
+  - <code>collect_sensitive(account_cache: dict) -&gt; dict[str, str]</code>: real value to fake value for the account number (the key under <code>account_data.account</code> that is not <code>gasAgreements</code>), every <code>mpan</code>, <code>mprn</code> and meter <code>serialNumber</code>, numbered <code>BENCH-MPAN-1</code>, <code>BENCH-MPRN-1</code>, <code>BENCH-MSN-1</code> and so on, in order of appearance.
+  - <code>replace_everywhere(obj, replacements: dict[str, str])</code>: returns a new structure with every dict key and string value having each real value substring-replaced; never mutates its input.
+  - <code>find_leaks(root: pathlib.Path, secrets: Iterable[str]) -&gt; list[str]</code>: relative paths of files under <code>root</code> (any type, searched as bytes) containing any secret.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests</strong> in <code>test_scrub.py</code> (<code>unittest.TestCase</code>, synthetic data only): <code>test_collect_sensitive_finds_account_mpan_mprn_and_serials</code> (a dict shaped like <code>{"account_data": {"account": {"A-1234": [{"meterPoint": {"mpan": "999", "meters": [{"serialNumber": "S1"}]}}], "gasAgreements": [{"meterPoint": {"mprn": "888"}}]}}}</code> returns <code>{"A-1234": FAKE_ACCOUNT, "999": "BENCH-MPAN-1", "S1": "BENCH-MSN-1", "888": "BENCH-MPRN-1"}</code>), <code>test_replace_everywhere_covers_keys_and_values_and_leaves_input_untouched</code>, <code>test_find_leaks_finds_a_secret_in_a_binary_file_and_not_in_clean_ones</code>.</li>
+<li>[ ] <strong>Step 2: Run to verify they fail</strong> (<code>ModuleNotFoundError: scrub</code>).</li>
+<li>[ ] <strong>Step 3: Implement</strong> the four names above in <code>scrub.py</code> (recursion over dict/list/str; <code>find_leaks</code> walks with <code>os.walk</code>).</li>
+<li>[ ] <strong>Step 4: Run to verify they pass.</strong></li>
+<li>[ ] <strong>Step 5: Add the hook</strong> <code>memory-benchmark-tools-tests</code> (language <code>python</code>, entry <code>python -m unittest discover -s coverage/memory_benchmark_tools</code>, <code>files: ^coverage/memory_benchmark_tools/</code>, <code>pass_filenames: false</code>), and ignore <code>coverage/memory_benchmark_data/</code> and <code>coverage/memory_benchmark_runs/</code> in <code>.gitignore</code>.</li>
+<li>[ ] <strong>Step 6: <code>git add</code>, run pre-commit from the repo root on the new files, fix, then commit</strong> <code>feat(boards): scrub helpers for the memory benchmark fixture</code>.</li>
+</ul>
+<hr />
+<h3 id="task-2-dummy-inverter-starting-totals">Task 2: Dummy inverter starting totals</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/dummy_inverter.py</code> (<code>DUMMY_DEFAULTS</code>, <code>DummyInverter.initialize</code>, the module docstring's apps.yaml block), <code>docs/components.md</code> (the dummy inverter settings table, if it lists them)
+- Test: <code>apps/predbat/tests/test_dummy_inverter.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: an optional <code>totals</code> mapping in the <code>dummy_inverter:</code> apps.yaml block, <code>{"pv": kWh, "load": kWh, "import": kWh, "export": kWh}</code>, each defaulting to 0.0, that seeds <code>self.totals</code> so the published <code>*_lifetime</code> sensors start there. Absent means zero: no behaviour change for existing users.</p>
+<ul>
+<li>[ ] <strong>Step 1: Run GitNexus <code>impact({target: "DummyInverter.initialize", direction: "upstream"})</code> and report the blast radius to the maintainer; stop and say so if it is HIGH or CRITICAL.</strong></li>
+<li>[ ] <strong>Step 2: Write failing tests</strong>: <code>test_dummy_totals_default_to_zero</code> (existing behaviour, <code>dummy.totals["load"] == 0.0</code>), <code>test_dummy_totals_seed_the_lifetime_sensors</code> (config <code>{"totals": {"load": 12.5, "pv": 3.25}}</code> gives <code>totals["load"] == 12.5</code>, <code>totals["pv"] == 3.25</code>, <code>totals["import"] == 0.0</code>, and after <code>dummy.publish()</code> the <code>sensor.predbat_dummy_load_lifetime</code> state is <code>12.5</code>), <code>test_dummy_totals_ignore_bad_values</code> (a non-numeric or negative entry is ignored, zero used). Register in the file's existing runner the way its neighbours are.</li>
+<li>[ ] <strong>Step 3: Run <code>./run_all --test dummy_inverter</code> from <code>coverage/</code> (log to a file) and see them fail.</strong></li>
+<li>[ ] <strong>Step 4: Implement</strong> in <code>initialize</code>: read <code>config.get("totals")</code> if a dict, take each of <code>pv</code>, <code>load</code>, <code>import</code>, <code>export</code> as a non-negative float, else 0.0. Document it in the module docstring block.</li>
+<li>[ ] <strong>Step 5: Run the dummy inverter tests, then <code>./run_all --quick</code> (log to a file) and see them pass.</strong></li>
+<li>[ ] <strong>Step 6: <code>detect_changes()</code>, <code>git add</code>, pre-commit from the repo root, commit</strong> <code>feat(dummy_inverter): optional starting totals for the lifetime sensors</code>.</li>
+</ul>
+<hr />
+<h3 id="task-3-fixture-database-export">Task 3: Fixture database export</h3>
+<p><strong>Files:</strong>
+- Create: <code>coverage/memory_benchmark_tools/fixture_db.py</code>, <code>coverage/memory_benchmark_tools/test_fixture_db.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>scrub.replace_everywhere</code>; <code>FAKE_*</code> constants.
+- Produces (in <code>fixture_db.py</code>):
+  - <code>@dataclass(frozen=True) class Remap: real_entity: str; dummy_entity: str; kind: str</code> where <code>kind</code> is one of <code>"lifetime"</code> (a daily-reset or lifetime energy counter), <code>"power_w"</code> (W, sign as the dummy publishes), <code>"gauge"</code> (copied as is).
+  - <code>build_remap(live_args: dict, prefix: str) -&gt; list[Remap]</code>: for each of <code>soc_kw</code>, <code>soc_max</code>, <code>battery_power</code>, <code>pv_power</code>, <code>grid_power</code>, <code>load_power</code>, <code>pv_today</code>, <code>load_today</code>, <code>import_today</code>, <code>export_today</code> present in the live <code>apps.yaml</code> args (value a list of one entity id), the real entity mapped to <code>sensor.&lt;prefix&gt;_dummy_&lt;name&gt;</code> using <code>dummy_inverter.DummyInverter.entity</code>'s naming: <code>battery_soc</code>, <code>battery_capacity</code>, <code>battery_power</code>, <code>pv_power</code>, <code>grid_power</code>, <code>load_power</code>, <code>pv_lifetime</code>, <code>load_lifetime</code>, <code>grid_import_lifetime</code>, <code>grid_export_lifetime</code>.
+  - <code>daily_to_lifetime(rows: list[tuple[datetime, float]]) -&gt; tuple[list[tuple[datetime, float]], float]</code>: input a time-ordered series of a counter that resets to near zero at midnight (or is already monotonic); returns the series rebased to start at 0 and rising across resets (a drop adds the previous value as carry), and the final total.
+  - <code>settings_entities(prefix: str) -&gt; set[str]</code>: the entity id of every <code>config.CONFIG_ITEMS</code> entry whose <code>type</code> is not <code>"update"</code>, formed <code>"{type}.{prefix}_{name}"</code> as <code>userinterface.py</code> sets <code>item["entity"]</code>; <code>"switch"</code> <code>"expert_mode"</code> with prefix <code>"predbat"</code> gives <code>"switch.predbat_expert_mode"</code>.
+  - <code>is_predbat_output(entity_id: str, prefix: str, settings: set[str]) -&gt; bool</code>: true for <code>predbat.*</code> and for any <code>*.&lt;prefix&gt;_*</code> entity that is not in <code>settings</code>.
+  - <code>export_db(live_db: Path, out_db: Path, t0: datetime, days: int, remap: list[Remap], prefix: str, dropped: Callable[[str], bool], replacements: dict[str, str]) -&gt; dict</code>: writes a new DB with the same schema <code>db_engine.DatabaseEngine._cleanup_db</code> creates (<code>entities</code>, <code>states</code>, <code>latest</code>, <code>idx_states_entity_datetime</code>, same columns), containing: every <code>latest</code> row of an entity not dropped, not a Predbat output (settings kept) and not a remapped real entity, with <code>replacements</code> applied; the <code>states</code> rows of the last <code>days</code> days up to <code>t0</code> for those entities; the remapped entities' history and latest under their dummy names (<code>lifetime</code> through <code>daily_to_lifetime</code>, <code>power_w</code> and <code>gauge</code> converted by the <code>unit_of_measurement</code> attribute to the dummy's unit); and returns <code>{"entities": int, "rows": int, "totals": {"pv": float, "load": float, "import": float, "export": float}, "dropped": int}</code>. <code>totals</code> are the final lifetime values, the seed for Task 2's <code>totals</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests</strong> with a small synthetic live DB built in <code>setUp</code> (three entities: a daily load counter with a midnight reset, a power sensor in kW, a switch that is a Predbat setting, plus <code>predbat.plan_history</code> and <code>sensor.predbat_cost_today</code> outputs): <code>test_daily_to_lifetime_carries_across_a_reset</code> (input 0, 1.0, 2.0, 0, 0.5 returns 0, 1.0, 2.0, 2.0, 2.5, total 2.5), <code>test_settings_entities_names</code>, <code>test_is_predbat_output_keeps_settings_and_drops_outputs</code>, <code>test_export_db_schema_matches_database_engine</code> (compare <code>sqlite_master</code> rows with a DB opened through a stub-base <code>DatabaseEngine</code> from <code>apps/predbat/db_engine.py</code>; put <code>apps/predbat</code> on <code>sys.path</code> in the test), <code>test_export_db_window_remap_and_drop</code> (rows older than <code>days</code> absent, the counter present under <code>sensor.predbat_dummy_load_lifetime</code> and ending at the returned total, the kW sensor converted to W, outputs gone, the setting kept with its value), <code>test_export_db_opens_live_db_read_only</code> (the live file's bytes and mtime unchanged).</li>
+<li>[ ] <strong>Step 2: Run and see them fail.</strong></li>
+<li>[ ] <strong>Step 3: Implement</strong> the names above. Open the live DB with <code>sqlite3.connect(f"file:{path}?mode=ro", uri=True)</code>. Read the sign convention of the dummy's <code>battery_power</code> and <code>grid_power</code> from <code>simulate_minute</code> in <code>apps/predbat/dummy_inverter.py</code> and from how <code>inverter.py</code> treats <code>DUMMY</code>, and pin it in a test (<code>test_remap_battery_power_sign_matches_the_dummy</code>) using the real inverter's <code>battery_power_invert</code> setting if the live args carry one.</li>
+<li>[ ] <strong>Step 4: Run and see them pass.</strong></li>
+<li>[ ] <strong>Step 5: <code>git add</code>, pre-commit, commit</strong> <code>feat(boards): fixture database export for the memory benchmark</code>.</li>
+</ul>
+<hr />
+<h3 id="task-4-fixture-cache-export-forecastsolar-and-octopus">Task 4: Fixture cache export (forecast.solar and Octopus)</h3>
+<p><strong>Files:</strong>
+- Create: <code>coverage/memory_benchmark_tools/fixture_cache.py</code>, <code>coverage/memory_benchmark_tools/test_fixture_cache.py</code></p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>scrub.*</code>; <code>apps/predbat/solcast.py</code> (<code>SolarAPI.solar_cache_key(url, params)</code>, <code>URL_PERSONAL</code>, the postcodes.io URL form) put on <code>sys.path</code>.
+- Produces (in <code>fixture_cache.py</code>):
+  - <code>write_entry(cache_dir: Path, module: str, key: str, data, fmt: str, t0: datetime) -&gt; None</code>: writes <code>&lt;module&gt;_&lt;key&gt;.&lt;ext&gt;</code> and the <code>.meta</code> sidecar <code>{"format", "expiry": t0 + 7 days, "module", "created": t0.isoformat()}</code> exactly as <code>storage.py</code>'s <code>StorageLocalFiles.save</code> does, so <code>age()</code> is 0 at T0.
+  - <code>export_forecast_cache(live_cache: Path, out_cache: Path, t0: datetime, arrays: int) -&gt; list[dict]</code>: reads the live <code>solar_*.json</code> entries, takes the forecast.solar responses (those with <code>result.watts</code>) in order of <code>created</code>, scrubs <code>message.info</code> (<code>latitude</code>, <code>longitude</code>, <code>place</code>, <code>distance</code> set to <code>FAKE_LATITUDE</code>, <code>FAKE_LONGITUDE</code>, <code>"Benchmark"</code>, 0) and drops the postcodes.io entry, then writes each response under the key the component computes for the neutral URL of array <em>i</em> (<code>FAKE_POSTCODE</code>, neutral <code>kwp</code>/<code>azimuth</code>/<code>declination</code>, <code>FAKE_FORECAST_KEY</code>), plus a synthesised postcodes.io response for <code>FAKE_POSTCODE</code> carrying the fake coordinates. Returns the neutral <code>forecast_solar</code> config list (<code>postcode</code>, <code>kwp</code>, <code>azimuth</code>, <code>declination</code>, <code>api_key</code>, <code>efficiency</code>) for the generated <code>apps.yaml</code>.
+  - <code>export_octopus_cache(live_cache: Path, out_cache: Path, t0: datetime) -&gt; dict[str, str]</code>: copies <code>octopus_user_account</code>, <code>octopus_&lt;hash&gt;</code> URL entries, <code>octopus_free_url_cache</code>, <code>octopus_user_billing</code> and <code>octopus_vehicle_catalogue</code>; computes <code>collect_sensitive</code> from the account entry and applies <code>replace_everywhere</code> to every copied entry; sets <code>kraken_token</code> to <code>None</code>; sets <code>tariff_fetched_at</code> and <code>device_fetched_at</code> in the account entry to <code>t0</code>; rewrites every <code>.meta</code> <code>created</code> to <code>t0</code>; returns the replacement map (the caller feeds it to the leak check and to the DB export).</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests</strong> with a synthetic live cache dir: <code>test_write_entry_meta_is_fresh_at_t0</code> (load it back through <code>StorageLocalFiles</code> from <code>apps/predbat/storage.py</code> with the clock at T0 and assert <code>age() == 0.0</code> and <code>load()</code> equals the data), <code>test_forecast_export_scrubs_location_and_rekeys</code> (the written entry sits at <code>SolarAPI.solar_cache_key(&lt;neutral url&gt;, &lt;neutral params&gt;)</code>, <code>message.info.latitude</code> is <code>FAKE_LATITUDE</code>, and no real <code>place</code> string survives anywhere in the output dir via <code>find_leaks</code>), <code>test_forecast_export_synthesises_the_postcode_lookup</code>, <code>test_octopus_export_scrubs_identifiers_and_token</code> (account number, mpan, serial absent from every output file; <code>kraken_token</code> is <code>None</code>; tariff and product codes unchanged; fetched-at timestamps equal T0), <code>test_octopus_export_keeps_url_cache_entries_byte_for_byte_except_meta</code> (rate entries have no identifiers, so their data is unchanged).</li>
+<li>[ ] <strong>Step 2: Run and see them fail.</strong></li>
+<li>[ ] <strong>Step 3: Implement.</strong> Build the neutral URLs with the component's own constants, not copies of them, so a change to <code>solcast.py</code> is caught by Task 8's no-fetch check.</li>
+<li>[ ] <strong>Step 4: Run and see them pass.</strong></li>
+<li>[ ] <strong>Step 5: <code>git add</code>, pre-commit, commit</strong> <code>feat(boards): fixture cache export for the memory benchmark</code>.</li>
+</ul>
+<hr />
+<h3 id="task-5-export-cli-template-and-generated-config">Task 5: Export CLI, template and generated config</h3>
+<p><strong>Files:</strong>
+- Create: <code>coverage/memory_benchmark_tools/export_fixture.py</code>, <code>coverage/memory_benchmark_tools/apps_template.yaml</code>, <code>coverage/memory_benchmark_tools/test_export_fixture.py</code>
+- Modify: <code>coverage/memory_benchmark_tools/</code> hook regex if needed</p>
+<p><strong>Interfaces:</strong>
+- Consumes: Tasks 1, 3, 4.
+- Produces:
+  - <code>export_fixture.py</code> CLI: <code>python3 coverage/memory_benchmark_tools/export_fixture.py --live &lt;live add-on config dir&gt; --out coverage/memory_benchmark_data [--days 7]</code>. It takes T0 as the current UTC time (rounded down to the second), writes <code>&lt;out&gt;/predbat.db</code>, <code>&lt;out&gt;/cache/</code>, <code>&lt;out&gt;/apps.yaml</code>, <code>&lt;out&gt;/manifest.json</code> (<code>t0</code>, <code>days</code>, <code>db_sha256</code>, <code>tool_version</code>), runs <code>find_leaks</code> over <code>&lt;out&gt;</code> with the real sensitive values and the live <code>octopus_api_key</code>/<code>octopus_api_account</code>/<code>forecast_solar</code> keys and postcodes, and exits non-zero (deleting <code>&lt;out&gt;</code>) if any leak is found.
+  - <code>build_apps_yaml(template: dict, live_apps: dict, forecast_config: list[dict], totals: dict, t0: datetime) -&gt; dict</code>: the template (committed: generic dummy values, <code>db_enable: true</code>, <code>db_primary: true</code>, <code>timezone</code>, <code>mcp_enable: false</code>, load ML off, GivTCP/Octopus-direct inverter settings absent, <code>octopus_api_key: FAKE_OCTOPUS_KEY</code>, <code>octopus_api_account: FAKE_ACCOUNT</code>, <code>forecast_solar</code> from the caller, <code>forecast_solar_max_age</code> very large) overlaid with: the live entity settings Predbat reads for rates and cars (every <code>metric_*</code>, <code>rates_*</code>, <code>car_*</code>, <code>octopus_*</code> entity setting and the user's tuning keys, minus anything pointing at a real inverter or Solcast entity, which are dropped), and the live inverter sizing for the <code>dummy_inverter:</code> block (<code>battery_size</code> from the real <code>soc_max</code>, <code>battery_rate_max</code>, <code>inverter_limit</code>, <code>export_limit</code>, <code>reserve</code>, <code>soc_initial</code> from the real SoC percentage at T0, plus <code>totals</code>). <code>timezone</code> is copied from the live config. The CLI passes <code>export_db</code> a <code>dropped</code> predicate that is true for every entity the live <code>apps.yaml</code> names in a <code>pv_forecast_*</code> setting (the Home Assistant Solcast integration's) and for any other entity the forecast and Octopus components republish from their seeded caches.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests</strong>: <code>test_build_apps_yaml_has_no_real_identifiers</code> (a synthetic live apps dict with a fake key and entity ids; none survive into the output except the entity-id settings that point at kept entities, which are named in the test), <code>test_build_apps_yaml_disables_mcp_load_ml_and_givtcp</code>, <code>test_build_apps_yaml_dummy_block_uses_live_sizing_and_totals</code>, <code>test_export_fixture_cli_end_to_end_on_synthetic_inputs</code> (builds a tiny synthetic live dir, runs <code>main([...])</code>, asserts the five outputs exist, the manifest <code>t0</code> parses, and a planted real identifier makes the CLI exit non-zero and remove <code>&lt;out&gt;</code>).</li>
+<li>[ ] <strong>Step 2: Run and see them fail.</strong></li>
+<li>[ ] <strong>Step 3: Implement</strong> the CLI and <code>build_apps_yaml</code>; <code>main(argv: list[str]) -&gt; int</code>.</li>
+<li>[ ] <strong>Step 4: Run and see them pass.</strong></li>
+<li>[ ] <strong>Step 5: Real export, read-only.</strong> Run the CLI against the live add-on config share into <code>coverage/memory_benchmark_data</code>. Expected: exit 0, no leak, entity count in the same range as the live mirror's 684 minus the dropped ones. Record the counts (not the names) in the commit message. If the live share is not mounted, stop and ask the maintainer.</li>
+<li>[ ] <strong>Step 6: <code>git add</code>, pre-commit, commit</strong> <code>feat(boards): export_fixture builds the memory benchmark fixture</code>.</li>
+</ul>
+<hr />
+<h3 id="task-6-container-image-and-wrapper">Task 6: Container image and wrapper</h3>
+<p><strong>Files:</strong>
+- Create: <code>coverage/memory_benchmark_tools/Dockerfile</code>, <code>coverage/memory_benchmark</code> (executable), <code>coverage/memory_benchmark_tools/test_wrapper.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces: <code>coverage/memory_benchmark</code> (executable bash): <code>memory_benchmark &lt;tree&gt; &lt;out dir&gt;</code>. Steps: check <code>coverage/memory_benchmark_data/manifest.json</code> exists, else print how to build it and exit 2 with no <code>result.json</code>; build the image if missing; copy <code>&lt;tree&gt;/apps/predbat</code> into the container's <code>/work</code> (tree mounted read-only at <code>/src</code>); build the kernel in <code>/work</code> with <code>bash apps/predbat/build_kernel.sh</code> <strong>without</strong> libfaketime; start the driver with <code>--network none</code>, <code>TZ=UTC</code>, <code>LD_PRELOAD=&lt;libfaketime path&gt;</code>, <code>FAKETIME="&lt;T0 as YYYY-MM-DD HH:MM:SS, no @ prefix, so the clock is frozen&gt;"</code>, <code>FAKETIME_DONT_FAKE_MONOTONIC=1</code>, a copy of the fixture as the working directory, fixed <code>--cpus</code> and <code>--memory</code>, and a hard <code>timeout</code> on the whole run; copy <code>result.json</code> and <code>predbat.log</code> to <code>&lt;out dir&gt;</code>; exit 0 only if a <code>result.json</code> was written.
+- Image: <code>Dockerfile</code> <code>FROM python:3.13-slim-bookworm@sha256:&lt;digest&gt;</code> (resolve the digest with <code>docker pull</code> then <code>docker inspect --format '{{index .RepoDigests 0}}'</code> and commit it), installs <code>g++</code>, <code>libfaketime</code> and the repo's <code>requirements.txt</code> packages; tag <code>predbat-memory-bench:&lt;first 12 chars of the sha256 of Dockerfile and requirements.txt&gt;</code>. The image build may use the network; a benchmark run may not.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests</strong> in <code>test_wrapper.py</code> for what runs without Docker: <code>test_wrapper_without_a_fixture_exits_2_and_says_how_to_build_it</code> (run the script with a temp <code>coverage/memory_benchmark_data</code> absent; assert exit code 2, the message names <code>export_fixture.py</code>, no <code>result.json</code>), <code>test_wrapper_rejects_a_missing_tree</code> (exit 2).</li>
+<li>[ ] <strong>Step 2: Run and see them fail.</strong></li>
+<li>[ ] <strong>Step 3: Implement</strong> the wrapper and Dockerfile.</li>
+<li>[ ] <strong>Step 4: Run the tests and see them pass.</strong></li>
+<li>[ ] <strong>Step 5: Smoke test with Docker</strong> (the driver is a stub that prints the date and <code>python3 -c "import time; print(time.time())"</code>): run twice a few seconds apart; the printed wall time is identical and equals T0, <code>time.monotonic()</code> advances, and a connection to <code>1.1.1.1:53</code> fails. Record the three results in the commit message.</li>
+<li>[ ] <strong>Step 6: <code>git add</code>, pre-commit, commit</strong> <code>feat(boards): memory_benchmark wrapper and pinned image</code>.</li>
+</ul>
+<hr />
+<h3 id="task-7-driver-and-result-rules">Task 7: Driver and result rules</h3>
+<p><strong>Files:</strong>
+- Create: <code>coverage/memory_benchmark_tools/driver.py</code>, <code>coverage/memory_benchmark_tools/test_driver.py</code></p>
+<p><strong>Interfaces:</strong>
+- Produces (in <code>driver.py</code>):
+  - <code>ALLOWED_WARNINGS: tuple[str, ...]</code>: the exact <code>Warn: OctopusAPI:</code> substrings the failed token mint and GraphQL poll produce (found in Task 8 step 1 and written here).
+  - <code>check_log(text: str, allowed_warnings=ALLOWED_WARNINGS) -&gt; list[str]</code>: the problems found, empty when clean: any line whose message starts <code>Error:</code>, any line containing <code>stale binary</code> or <code>using Python engine</code>, any line containing <code>SolarAPI: Fetching</code>, any <code>Warn:</code> line that is neither allowed nor a known benign start-up warning listed in the same module.
+  - <code>summarise_rss(samples_kb: list[int], hwm_kb: int, settle: int) -&gt; dict</code>: <code>{"steady_rss_mb": median of samples after the first settle cycles, in MB rounded to 0.1, "peak_rss_mb": hwm_kb in MB rounded to 0.1}</code>.
+  - <code>plan_digest(plans: list[dict]) -&gt; str</code>: sha256 hex of <code>json.dumps(plans, sort_keys=True, default=str)</code>; each <code>plans[i]</code> is the canonical plan dict of cycle <em>i</em>: the same dict <code>tests/test_single_debug.py</code> writes to <code>plan_final.json</code> (reuse its builder, do not copy it) with run-time stamps removed.
+  - <code>main(argv: list[str]) -&gt; int</code>: arguments <code>--out &lt;dir&gt; --cycles N</code>.
+- Behaviour of <code>main</code>: set <code>PREDBAT_APPS_FILE</code>, build <code>predbat.PredBat()</code> and call <code>initialize()</code> as <code>hass.py</code>'s <code>main()</code> does; pump <code>timer_tick()</code> only until the DB manager, dummy inverter, forecast and Octopus components have each published once (poll their entities in <code>ha_interface.state_data</code> with a deadline, fail with <code>ok: false</code> on timeout); then stop pumping and run N cycles of <code>update_pred(scheduled=False)</code>; after each, record <code>VmRSS</code> from <code>/proc/self/status</code>; at the end record <code>VmHWM</code>; write <code>result.json</code> (<code>ok</code> is <code>not check_log(...)</code> and every cycle returned non-<code>None</code>) and exit 0 if the file was written.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write failing tests</strong>: <code>test_check_log_flags_errors_stale_binary_and_solar_fetch</code>, <code>test_check_log_allows_only_the_named_octopus_warnings</code>, <code>test_summarise_rss_uses_median_after_settle_and_hwm_for_peak</code> (samples <code>[100000, 120000, 119000, 121000, 120000]</code>, settle 2 gives steady <code>120.0</code>, hwm <code>130000</code> gives peak <code>130.0</code>), <code>test_plan_digest_is_stable_and_order_insensitive_for_dicts_and_changes_with_a_plan</code>, <code>test_plan_digest_ignores_run_timestamps</code>.</li>
+<li>[ ] <strong>Step 2: Run and see them fail.</strong></li>
+<li>[ ] <strong>Step 3: Implement</strong> the four pure functions, then <code>main</code>.</li>
+<li>[ ] <strong>Step 4: Run and see the unit tests pass.</strong></li>
+<li>[ ] <strong>Step 5: First real run</strong> of <code>coverage/memory_benchmark &lt;main worktree&gt; /tmp/predbat-board/memory/bench1</code> (log to a file). Expected: a <code>result.json</code> with plausible numbers. Fix what the log shows; add every benign start-up warning you decide to allow to the module's list with a comment saying why. Iterate until <code>ok</code> is true with no <code>Error:</code> lines.</li>
+<li>[ ] <strong>Step 6: <code>git add</code>, pre-commit, commit</strong> <code>feat(boards): memory benchmark driver and result rules</code>.</li>
+</ul>
+<hr />
+<h3 id="task-8-acceptance-docs-and-baseline">Task 8: Acceptance, docs and baseline</h3>
+<p><strong>Files:</strong>
+- Modify: <code>boards/predbat-memory/README.md</code> (replace the "benchmark does not exist yet" section with how to build the fixture and run it), <code>docs/developing.md</code> (a short section beside the standalone scripts), <code>boards/predbat-memory/board.toml</code> and <code>boards/predbat-memory/measure.py</code> (<code>STEADY_CUT</code>) only if the measured baseline says the 25% target is wrong</p>
+<ul>
+<li>[ ] <strong>Step 1: Find the allowed Octopus warnings.</strong> Run the benchmark on main; copy the exact <code>Warn:</code> strings the failed token mint and poll produce into <code>ALLOWED_WARNINGS</code> (Task 7) with a test pinning them.</li>
+<li>[ ] <strong>Step 2: Determinism.</strong> Run main five times, two of them at least an hour apart. Expected: one <code>plan_digest</code> in all five. Record the five <code>steady_rss_mb</code> and <code>peak_rss_mb</code> and their spread in the README. If the spread makes a 25% target unreliable, report it to the maintainer, do not hide it.</li>
+<li>[ ] <strong>Step 3: No network and no refetch.</strong> In one run's log assert zero <code>SolarAPI: Fetching</code> lines and that the only Octopus network lines are the allowed warnings; from inside a container started the same way, a connection attempt fails.</li>
+<li>[ ] <strong>Step 4: Sensitivity controls.</strong> On a throwaway branch (not pushed), (a) keep a 20 MB list alive for the whole run and check <code>steady_rss_mb</code> rises by about 20; (b) make a one-line change that must change a plan (for example scale the import rates by 1% right after they are loaded in <code>fetch.py</code>) and check <code>plan_digest</code> differs from main's. Record both results in the README.</li>
+<li>[ ] <strong>Step 5: <code>measure.py</code> end to end.</strong> Run <code>BOARD_CANDIDATE=&lt;main commit&gt; python3 boards/predbat-memory/measure.py</code>. Expected: a clean harness result reporting a 0% saving (a fail on the target, not a <code>HARNESS ERROR</code>).</li>
+<li>[ ] <strong>Step 6: Leak scan of everything the runs wrote</strong> (<code>&lt;out dir&gt;</code>s and <code>predbat.log</code>) with <code>find_leaks</code> and the real sensitive values; expected none.</li>
+<li>[ ] <strong>Step 7: Docs.</strong> Write the README and <code>docs/developing.md</code> changes; re-check <code>STEADY_CUT</code> against the measured baseline and change it with the reason if needed.</li>
+<li>[ ] <strong>Step 8: Full checks.</strong> <code>./run_pre_commit</code> and <code>./run_all --quick</code> from <code>coverage/</code> (logs to files); expected pass.</li>
+<li>[ ] <strong>Step 9: Update the shared memory.</strong> <code>update</code> the PR #6367 memory (tag <code>pr:6367</code>, scope <code>predbat-devs</code>): benchmark built, the baseline figures and spread, and the next action (mark the PR ready, merge, run the board). Public-safe content only.</li>
+<li>[ ] <strong>Step 10: Commit</strong> <code>docs(boards): memory benchmark acceptance results and baseline</code>.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

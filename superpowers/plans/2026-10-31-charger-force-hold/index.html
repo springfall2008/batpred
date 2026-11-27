@@ -1,0 +1,431 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>Charger Force Hold Implementation Plan (Plan 1 of 3) - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "Charger Force Hold Implementation Plan (Plan 1 of 3)";
+        var mkdocs_page_input_path = "superpowers/plans/2026-10-31-charger-force-hold.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">Charger Force Hold Implementation Plan (Plan 1 of 3)</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="charger-force-hold-implementation-plan-plan-1-of-3">Charger Force Hold Implementation Plan (Plan 1 of 3)</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong> Let a charger component hold a car off for a cancelled-for-export slot and hand it back afterwards. Wallbox is the first implementation (switch OCPP off, then pause; switch OCPP back on to resume).</p>
+<p><strong>Architecture:</strong> <code>CarChargerControl</code> gains an optional force-hold capability: four hooks a component implements, plus a shared engine. The engine reads the cancelled windows from each car's slot sensor, starts a hold 5 minutes before a window, keeps it until the window ends (extending into a touching window), and persists it. It also tells <code>plan.py</code> which cars are held, so the "in a dispatch but not charging" check leaves them alone. Wallbox implements the hooks with the OCPP configuration endpoint and the existing pause/resume. Plan 2 (planner, kernel, publishing) produces the <code>cancelled_for_export</code> attribute this plan consumes; Plan 3 adds Zappi, Ohme and Hypervolt.</p>
+<p><strong>Tech Stack:</strong> Python 3, asyncio, aiohttp (Wallbox transport), Predbat's custom test runner (<code>coverage/run_all</code>).</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-10-30-cancel-car-slot-for-export-design.md</code>, sections "The force hold on the charger", "Wallbox force hold" and "Live test".</p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li>Line length: 256 (Black), 250 (Flake8).</li>
+<li>Every function and class has a docstring (<code>interrogate</code>, 100%).</li>
+<li>British English spelling (CSpell, <code>en-gb</code>). Add new valid words to <code>.cspell/custom-dictionary-workspace.txt</code>.</li>
+<li>Variable names: <code>lower_case_with_underscores</code>.</li>
+<li>Tests run from <code>coverage/</code>. Always save the output to a file, then grep it: <code>./run_all --test &lt;name&gt; &gt; /tmp/t.txt 2&gt;&amp;1; grep -E "FAIL|ERROR|PASS|✓" /tmp/t.txt</code>.</li>
+<li><code>./run_pre_commit</code> passes before every commit.</li>
+<li>Run <code>gitnexus impact</code> on every existing symbol before editing it, and report the blast radius. Run <code>detect_changes</code> before every commit.</li>
+<li>Tests share one <code>PredBat</code> fixture: restore every field a test changes.</li>
+<li>With the switch <code>car_charging_cancel_for_export</code> off, behaviour is unchanged. No hold ever starts, and no extra API calls are made.</li>
+<li>The OCPP password is never logged, never put in an exception message, and never saved to storage.</li>
+<li>Time constants (spec): start a hold <strong>5 minutes</strong> before a cancelled window, as <code>FORCE_HOLD_LEAD_MINUTES = 5</code>. Warn when a hand-back is still owed <strong>15 minutes</strong> after the hold's end, as <code>FORCE_HOLD_SAFETY_MINUTES = 15</code> (builder's call, recorded here). Wallbox OCPP connected is <code>connectionStatus</code> <strong>4</strong> (live test).</li>
+</ul>
+<h2 id="the-cross-plan-contract-plan-2-produces-it-this-plan-consumes-it">The cross-plan contract (Plan 2 produces it, this plan consumes it)</h2>
+<p><code>binary_sensor.&lt;prefix&gt;_car_charging_slot[_N]</code> gains the attribute <code>cancelled_for_export</code>. It's a list of <code>{"start": "%m-%d %H:%M:%S", "end": "%m-%d %H:%M:%S"}</code> windows, the same shape as <code>planned</code> (<code>CAR_PLAN_TIME_FORMAT</code>), parsed by <code>parse_car_plan_windows()</code>. A window in <code>cancelled_for_export</code> is not listed in <code>planned</code>. Tests in this plan set the attribute directly.</p>
+<h2 id="review-focus">Review Focus</h2>
+<ol>
+<li><strong>Stale Wallbox status.</strong> The cloud kept reporting "Charging" for minutes after a pause landed, and a second pause on an already paused charger may get a 409 (<code>WallboxStateError</code>). A refused pause while stopping must count as "not stopped yet", log once, and be retried, never crash the cycle. Test in Task 4.</li>
+<li><strong>Restart mid-hold with OCPP off.</strong> After a restart, a saved hold whose end has passed must hand the charger back at once (OCPP on), even if the plan no longer mentions the window. Tests in Tasks 2 and 4.</li>
+<li><strong>The user turns OCPP back on mid-hold</strong>, from the new switch. That ends the hold at the user's request: nothing is re-applied, and the hold is dropped with an Info log. Test in Task 4.</li>
+<li><strong>Car unplugged mid-hold.</strong> OCPP must still be restored when the hold ends, or the charger is left off Octopus. Test in Task 4.</li>
+<li><strong>Two chargers, one held.</strong> The other charger's Predbat-led control and status are untouched. Test in Task 2.</li>
+</ol>
+<hr />
+<h3 id="task-1-switch-base-hold-record-and-pausing-the-dispatch-check">Task 1: Switch, base hold record, and pausing the dispatch check</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/config.py</code>, a new item directly after <code>car_charging_from_battery</code>.
+- Modify: <code>apps/predbat/predbat.py</code>, in <code>reset()</code> next to <code>self.car_slot_owner = None</code> (line ~584).
+- Modify: <code>apps/predbat/plan.py</code>: <code>dynamic_load_car_target()</code> (line ~670), plus a new helper beside it.
+- Test: <code>apps/predbat/tests/test_dynamic_load_car.py</code>.</p>
+<p><strong>Interfaces:</strong>
+- Produces:
+  - Config switch <code>car_charging_cancel_for_export</code>: type <code>switch</code>, default <code>False</code>, friendly name "Allow export to cancel a car charging slot", <code>enable: num_cars</code>, <code>enable_condition: num_cars &gt; 0</code>.
+  - <code>self.car_force_hold_until: dict[int, datetime]</code>, car_n → the hold's end (UTC, aware). It's written by charger components (Task 2) and empty when no car is held.
+  - <code>PredBat.car_force_held(car_n: int, now: datetime) -&gt; bool</code>: True while <code>car_n</code> is in <code>car_force_hold_until</code> with an end after <code>now</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing test.</strong> Add <code>_run_force_hold(my_predbat)</code> to <code>test_dynamic_load_car.py</code>, call it from <code>test_dynamic_load_car_not_charging()</code> beside <code>_run()</code>, and add <code>"car_force_hold_until"</code> to <code>STATE_FIELDS</code>:</li>
+</ul>
+<pre><code class="language-python">def _run_force_hold(my_predbat):
+    &quot;&quot;&quot;A car a charger is force-holding is never cancelled for not charging, and the grace clock restarts after.&quot;&quot;&quot;
+    failed = False
+    _reset(my_predbat)
+    _sensor(my_predbat, &quot;off&quot;)
+    my_predbat.car_force_hold_until = {0: _at(my_predbat, 840) + timedelta(minutes=30)}
+    for minute, seconds in ((840, 10), (842, 10), (845, 0)):
+        changed = _cycle(my_predbat, minute, seconds)
+        failed |= _check(&quot;force hold {}&quot;.format(minute), not changed and _kwh(my_predbat) == [3.5, 3.5], &quot;changed {} kwh {}&quot;.format(changed, _kwh(my_predbat)))
+    failed |= _check(&quot;force hold clock&quot;, 0 not in my_predbat.dynamic_load_car_since, str(my_predbat.dynamic_load_car_since))
+    my_predbat.car_force_hold_until = {}
+    changed = _cycle(my_predbat, 846, 0)
+    failed |= _check(&quot;after hold first sighting&quot;, not changed and _kwh(my_predbat) == [3.5, 3.5])
+    changed = _cycle(my_predbat, 848, 10)
+    failed |= _check(&quot;after hold grace passed&quot;, changed and _kwh(my_predbat) == [0, 0])
+    return failed
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run it and confirm it fails.</strong> Run <code>./run_all --test dynamic_load_car_not_charging &gt; /tmp/t1.txt 2&gt;&amp;1; grep -E "ERROR|FAILED|PASSED" /tmp/t1.txt</code>. Expected: <code>ERROR: force hold 842</code> (the slots are cancelled after the grace period).</li>
+<li>[ ] <strong>Step 3: Implement.</strong> Add the config item and the <code>reset()</code> field. Add <code>car_force_held()</code>. In <code>dynamic_load_car_target()</code>, straight after <code>cancelled</code> is computed: if <code>self.car_force_held(car_n, now)</code>, pop <code>car_n</code> from <code>dynamic_load_car_since</code> (when <code>record</code> is set) and return <code>cancelled</code> unchanged.</li>
+<li>[ ] <strong>Step 4: Run it and confirm it passes.</strong> Same command. Expected: <code>PASSED</code>. Also run <code>./run_all --test dynamic_load_car_slot_cancellation</code> and expect <code>PASSED</code>.</li>
+<li>[ ] <strong>Step 5: Commit.</strong> <code>feat: add car_charging_cancel_for_export switch and pause slot confirmation for force-held cars</code></li>
+</ul>
+<hr />
+<h3 id="task-2-the-force-hold-engine-in-carchargercontrol">Task 2: The force-hold engine in CarChargerControl</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/car_charger_control.py</code>: <code>charger_control_setup()</code>, <code>charger_control_save()</code>, <code>charger_control_load_enabled()</code>, <code>charger_control_tick()</code>, <code>charger_control_release()</code>, <code>charger_control_release_inactive()</code>, <code>charger_control_drive_one()</code>, plus the new methods below.
+- Test: <code>apps/predbat/tests/test_car_charger_control.py</code>.</p>
+<p><strong>Interfaces:</strong>
+- Consumes: <code>car_force_hold_until</code> from Task 1. The <code>cancelled_for_export</code> attribute from the contract above.
+- Produces, the hooks a component overrides. Each default is the no-op shown:
+  - <code>charger_control_can_force_hold(handle) -&gt; bool</code>, default <code>False</code>.
+  - <code>async charger_control_force_pause(handle, saved: Optional[dict]) -&gt; dict</code>. It takes one step towards stopping the charger. <code>saved</code> is <code>None</code> on the first call; the call returns the pre-hold state to keep (JSON-serialisable, no secrets). It raises on a refusal.
+  - <code>charger_control_force_stopped(handle, saved: dict) -&gt; bool</code>. Is the charger confirmed stopped?
+  - <code>async charger_control_force_resume(handle, saved: dict) -&gt; None</code>. It takes one step towards handing back exactly what <code>force_pause</code> changed, and raises on a refusal.
+  - <code>async charger_control_force_handed_back(handle, saved: dict) -&gt; bool</code>. Is the hand-back confirmed?
+- Produces, the engine:
+  - Constants <code>FORCE_HOLD_LEAD_MINUTES = 5</code> and <code>FORCE_HOLD_SAFETY_MINUTES = 15</code>.
+  - <code>self.charger_control_force_holds: dict[str, dict]</code>, charger key → <code>{"car": int, "end": str (ISO 8601, aware), "saved": dict | None, "stopped": bool, "warned": bool}</code>. It's saved under <code>"force_holds"</code> in the same storage document as <code>"held"</code>, and restored by <code>charger_control_load_enabled()</code>.
+  - <code>charger_control_cancelled_windows(car_n: int, now: datetime) -&gt; list[tuple[datetime, datetime]]</code>. It parses <code>cancelled_for_export</code> and merges windows whose start ≤ the previous end.
+  - <code>charger_control_force_hold_wanted() -&gt; bool</code>, meaning <code>get_arg("car_charging_cancel_for_export", False)</code> and not <code>charger_control_read_only_now()</code>.
+  - <code>async charger_control_force_hold_tick(now: datetime) -&gt; None</code>.
+  - <code>charger_control_force_hold_busy(now: datetime) -&gt; bool</code>. True while any hold exists, or while a cancelled window starts within <code>FORCE_HOLD_LEAD_MINUTES + 5</code> minutes. Wallbox uses it to poll every cycle.
+  - <code>charger_control_end_force_hold(key: str, why: str) -&gt; None</code> (async). It drops a hold without a resume, logs <code>Info</code>, saves, and clears <code>base.car_force_hold_until</code>. Used by Task 4's switch.</p>
+<p>Engine rules for <code>charger_control_force_hold_tick()</code>. It runs per <code>(car_n, key, handle)</code> over <code>charger_control_chargers()[:car_count]</code>, each charger through <code>charger_control_each()</code>:
+1. <strong>No hold yet.</strong> A hold starts when all of these are true:
+   - <code>charger_control_force_hold_wanted()</code> is true;
+   - the charger can force-hold;
+   - <code>charger_control_unplugged(handle)</code> is false;
+   - a cancelled window has <code>start − FORCE_HOLD_LEAD_MINUTES ≤ now &lt; end</code>.</p>
+<p>The hold record is saved <strong>before</strong> the first <code>force_pause</code> call, then the tick continues with rule 2.
+2. <strong>Holding.</strong> The hold stays while <code>now &lt; end</code> and the switch is still wanted:
+   - It extends <code>end</code> to the end of any cancelled window with <code>start ≤ end &lt; window_end</code>.
+   - Until <code>stopped</code>: call <code>force_pause(handle, saved)</code>, store the returned <code>saved</code>, set <code>stopped = force_stopped(handle, saved)</code>, and save on any change.
+3. <strong>Handing back.</strong> This happens when <code>now ≥ end</code>, or the switch is no longer wanted (switch off or read only releases at once, my call): call <code>force_resume(handle, saved)</code>. If <code>await force_handed_back(handle, saved)</code>, drop the hold, log <code>Info</code>, and save. If <code>now ≥ end + FORCE_HOLD_SAFETY_MINUTES</code> and the hand-back isn't confirmed, log one <code>Warn</code> per hold naming the charger.
+4. Keep <code>self.base.car_force_hold_until[car_n] = end</code> while held, and delete it when the hold ends.</p>
+<p><code>charger_control_tick()</code> calls <code>charger_control_force_hold_tick(now)</code> right after the load and save-retry block, <strong>before</strong> the <code>charger_control_active</code> check, so holds run even when Predbat-led control is off. <code>charger_control_drive_one()</code>, <code>charger_control_release()</code> and <code>charger_control_release_inactive()</code> skip any key in <code>charger_control_force_holds</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests.</strong> Extend the fakes first:</li>
+<li><code>FakeBase</code> gains <code>car_force_hold_until = {}</code>.</li>
+<li><code>FakeComponent</code> gains <code>self.cancelled = {}</code> (entity → windows), returned by <code>get_state_wrapper</code> for <code>attribute="cancelled_for_export"</code>, and <code>self.args["car_charging_cancel_for_export"] = True</code>.</li>
+<li>The force hooks record <code>(key, "force_pause")</code> and <code>(key, "force_resume")</code> into <code>commands</code>.</li>
+<li><code>force_pause</code> adds 1 to <code>handle.pauses</code> and returns <code>{"was": "on"}</code>.</li>
+<li><code>force_stopped</code> returns <code>handle.pauses &gt;= handle.stop_after</code>.</li>
+<li><code>force_handed_back</code> returns <code>handle.handed_back</code>.</li>
+<li><code>FakeCharger</code> gains <code>can_force = True</code>, <code>pauses = 0</code>, <code>stop_after = 1</code> and <code>handed_back = True</code>.</li>
+<li>Add <code>_cancel(component, car_n, windows)</code>, mirroring <code>_plan</code>.</li>
+</ul>
+<p>Then add the tests below, all with <code>_now()</code> = 01:30 and a cancelled window 02:00–02:30 unless stated:</p>
+<pre><code class="language-python">def test_force_hold_waits_for_the_lead_time():          # at 01:54 no command; at 01:55 one force_pause, hold saved with saved == {&quot;was&quot;: &quot;on&quot;}
+def test_force_hold_needs_the_switch_and_no_read_only(): # switch False -&gt; no command; set_read_only True -&gt; no command
+def test_force_hold_skips_unplugged_and_incapable():     # unplugged -&gt; none; can_force False -&gt; none
+def test_force_hold_repeats_pause_until_stopped():       # stop_after=3 -&gt; force_pause at 3 ticks, none at the 4th
+def test_force_hold_is_committed():                      # cancelled list emptied at 02:10 -&gt; no force_resume until 02:30
+def test_force_hold_extends_into_a_touching_window():    # windows 02:00-02:30 and 02:30-03:00 -&gt; hold end 03:00, no resume at 02:30
+def test_force_hold_resume_retried_until_handed_back():  # handed_back False at 02:30 -&gt; force_resume each tick; True -&gt; hold gone, base.car_force_hold_until == {}
+def test_force_hold_refused_resume_is_retried():         # force_resume raises once -&gt; hold kept; next tick resumes
+def test_force_hold_survives_a_restart():                # saved storage with hold end 02:30; new component at 02:40 -&gt; force_resume on first tick with no plan published
+def test_force_hold_switch_off_hands_back_at_once():     # switch False at 02:10 -&gt; force_resume at 02:10
+def test_force_hold_warns_once_after_the_safety_margin():# handed_back False; at 02:45 one &quot;Warn:&quot; log, not repeated at 02:46
+def test_force_held_charger_is_not_driven_by_the_plan(): # planned window 02:00-03:00 + hold -&gt; no &quot;on&quot; command for the held key, second charger still driven
+def test_force_hold_sets_and_clears_base_hold_until():   # during hold base.car_force_hold_until == {0: end}; after hand-back {}
+</code></pre>
+<p>Register each in <code>run_car_charger_control_tests()</code>.
+- [ ] <strong>Step 2: Run them and confirm they fail.</strong> Run <code>./run_all --test car_charger_control &gt; /tmp/t2.txt 2&gt;&amp;1; grep -E "Error|FAIL|✓" /tmp/t2.txt</code>. Expected: <code>AttributeError</code> on <code>charger_control_force_holds</code> / <code>_cancel</code>.
+- [ ] <strong>Step 3: Implement</strong> the hooks, the engine, and the persistence and skip changes above.
+- [ ] <strong>Step 4: Run them and confirm they pass.</strong> Same command, plus <code>./run_all --test wallbox --test myenergi --test ohme --test hypervolt --test gecloud &gt; /tmp/t2b.txt 2&gt;&amp;1</code>. Expected: all PASS, since the existing components inherit the no-op defaults.
+- [ ] <strong>Step 5: Commit.</strong> <code>feat: add the force hold engine to CarChargerControl</code></p>
+<hr />
+<h3 id="task-3-wallbox-ocpp-configuration-and-the-ocpp-switch">Task 3: Wallbox OCPP configuration and the OCPP switch</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code>: <code>WallboxTransport</code>, <code>wallbox_attribute_table</code>, <code>publish_data()</code>, <code>switch_event_handler()</code>.
+- Test: <code>apps/predbat/tests/test_wallbox.py</code>.</p>
+<p><strong>Interfaces:</strong>
+- Produces:
+  - <code>WALLBOX_OCPP_CONNECTED = 4</code>.
+  - <code>WallboxTransport.get_ocpp_configuration(charger_id) -&gt; dict</code>, which is <code>GET v3/chargers/&lt;id&gt;/ocpp-configuration</code>.
+  - <code>WallboxTransport.set_ocpp_mode(charger_id, ocpp: bool) -&gt; dict</code>. It reads the configuration, then <code>POST</code>s the same path with body <code>{"address", "chargePointIdentity", "password", "type"}</code>, taken from the read, with <code>type</code> set to <code>"ocpp"</code> or <code>"wallbox"</code>. It is a write (<code>write=True</code>).
+  - The switch <code>switch.&lt;prefix&gt;_wallbox_&lt;id&gt;_ocpp</code>, with table key <code>"ocpp"</code>, friendly name "Wallbox OCPP Connection" and icon <code>mdi:lan-connect</code>. Its state is <code>on</code> when <code>charger.ocpp</code>. <code>turn_off</code> calls <code>set_ocpp_mode(id, False)</code> and <code>turn_on</code> calls <code>set_ocpp_mode(id, True)</code>, both queued like the other switches.
+  - <code>_StubTransport</code> gains <code>get_ocpp_configuration</code> (it returns <code>self.ocpp[charger_id]</code>, default <code>{"type": "ocpp", "address": "wss://ocpp.example", "chargePointIdentity": "id-1", "password": "pw", "connectionStatus": 4}</code>) and <code>set_ocpp_mode</code>, which records the call and updates the stub's <code>type</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests.</strong></li>
+</ul>
+<pre><code class="language-python">def test_transport_ocpp_requests():
+    # two calls: GET .../ocpp-configuration, then POST same URL with
+    # {&quot;address&quot;: &quot;wss://ocpp.octopus.energy&quot;, &quot;chargePointIdentity&quot;: &quot;id-1&quot;, &quot;password&quot;: &quot;pw&quot;, &quot;type&quot;: &quot;wallbox&quot;}
+    # and for set_ocpp_mode(101, True) the POST body has &quot;type&quot;: &quot;ocpp&quot;
+def test_transport_ocpp_error_hides_the_password():
+    # POST answers 502 -&gt; WallboxApiError raised; &quot;pw&quot; not in str(exc) and not in any logged line
+def test_ocpp_switch_published_and_controls():
+    # mode &quot;ocpp&quot; -&gt; switch.predbat_wallbox_101_ocpp == &quot;on&quot;; turn_off queued then run -&gt; (&quot;set_ocpp_mode&quot;, 101, False)
+</code></pre>
+<p>Add <code>test_transport_ocpp_requests</code> and the other two to <code>test_wallbox()</code>.
+- [ ] <strong>Step 2: Run them and confirm they fail.</strong> Run <code>./run_all --test wallbox &gt; /tmp/t3.txt 2&gt;&amp;1; grep -E "Error|✓" /tmp/t3.txt</code>. Expected: <code>AttributeError: ... get_ocpp_configuration</code>.
+- [ ] <strong>Step 3: Implement.</strong>
+- [ ] <strong>Step 4: Run them and confirm they pass.</strong> Same command. Expected: every <code>✓</code>, no error.
+- [ ] <strong>Step 5: Commit.</strong> <code>feat(wallbox): read and switch the OCPP connection</code></p>
+<hr />
+<h3 id="task-4-wallbox-force-hold">Task 4: Wallbox force hold</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code>: <code>WallboxAPI</code> (the four hooks, <code>run()</code> cadence, and <code>switch_event_handler()</code> for the OCPP switch during a hold).
+- Test: <code>apps/predbat/tests/test_wallbox.py</code>.</p>
+<p><strong>Interfaces:</strong>
+- Consumes: the Task 2 hooks and <code>charger_control_force_hold_busy()</code> / <code>charger_control_end_force_hold()</code>; the Task 3 transport calls.
+- Produces the Wallbox hook behaviour:
+  - <code>charger_control_can_force_hold(charger)</code> → <code>True</code>.
+  - <code>charger_control_force_pause(charger, saved)</code>:
+    - On the first call, <code>saved = {"ocpp": charger.ocpp}</code>.
+    - If <code>saved["ocpp"]</code> and <code>charger.ocpp</code>, call <code>set_ocpp_mode(id, False)</code> and stop there. The pause waits for a later cycle that reads the charger out of OCPP mode, because a pause sent before the mode change lands is ignored (live test).
+    - Otherwise, if <code>charger.charging</code>, call <code>transport.pause(id)</code>. A <code>WallboxStateError</code> here is logged once per hold at <code>Info</code> and swallowed, because a stale "Charging" status on a charger that is already paused answers 409.
+    - Return <code>saved</code>.
+  - <code>charger_control_force_stopped(charger, saved)</code>: the charger isn't stale, isn't charging, and, when <code>saved["ocpp"]</code>, isn't in OCPP mode.
+  - <code>charger_control_force_resume(charger, saved)</code>: if <code>saved["ocpp"]</code> and the charger isn't in OCPP mode, call <code>set_ocpp_mode(id, True)</code>. Errors, including HTTP 502, raise and are retried next cycle. No resume command is sent; Octopus restarts the charge. If not <code>saved["ocpp"]</code> and <code>charger.paused</code>, call <code>transport.resume(id)</code>.
+  - <code>charger_control_force_handed_back(charger, saved)</code>: with <code>saved["ocpp"]</code>, it reads <code>get_ocpp_configuration()</code> and returns <code>type == "ocpp" and connectionStatus == WALLBOX_OCPP_CONNECTED</code>. Otherwise it returns <code>not charger.paused</code>.
+  - <code>run()</code>: when <code>charger_control_force_hold_busy(now)</code> is true, poll every cycle instead of every <code>poll_seconds</code>.
+  - <code>switch_event_handler()</code>: if the OCPP switch is turned <strong>on</strong> while that charger is force-held, call <code>charger_control_end_force_hold(key, "the OCPP switch was turned on")</code> after sending the write.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests.</strong> These use <code>_control_component({}, ...)</code> with <code>wallbox_control=False</code>, <code>component.base.args["car_charging_cancel_for_export"] = True</code>, and <code>cancelled_for_export</code> set on the slot sensor through <code>component.base.set_state_wrapper(...)</code>. Drive each step with <code>_load_chargers()</code> and then <code>control_tick(now)</code>:</li>
+</ul>
+<pre><code class="language-python">def test_wallbox_force_hold_turns_ocpp_off_then_pauses():
+    # ocpp charging at lead time -&gt; calls == [(&quot;set_ocpp_mode&quot;, 101, False)] only (get_ocpp_configuration allowed)
+    # next tick, status mode &quot;wallbox&quot; charging -&gt; [(&quot;pause&quot;, 101)]
+    # next tick, status 182 power 0 -&gt; no calls; hold stopped
+def test_wallbox_force_hold_refused_pause_is_retried():
+    # pause raises WallboxStateError -&gt; no exception out of control_tick, one Info log; next tick pauses again
+def test_wallbox_force_hold_hands_back_by_ocpp_only():
+    # at end: set_ocpp_mode True raises WallboxApiError(&quot;HTTP 502&quot;) once -&gt; hold kept; next tick sets it;
+    # connectionStatus 2 -&gt; hold kept; connectionStatus 4 -&gt; hold gone; (&quot;resume&quot;, 101) never called
+def test_wallbox_force_hold_leaves_a_user_ocpp_off_alone():
+    # charger already mode &quot;wallbox&quot; at start -&gt; pause/resume only, set_ocpp_mode never called
+def test_wallbox_force_hold_restores_ocpp_after_unplug():
+    # status 161 (no car) mid-hold -&gt; at end set_ocpp_mode(101, True) still called
+def test_wallbox_force_hold_restart_with_ocpp_off():
+    # storage holds a hold for &quot;101&quot; with saved {&quot;ocpp&quot;: True}, end passed; status mode &quot;wallbox&quot; -&gt; first tick set_ocpp_mode(101, True)
+def test_wallbox_ocpp_switch_on_ends_the_hold():
+    # during hold, turn_on of switch.predbat_wallbox_101_ocpp -&gt; set_ocpp_mode True sent, hold dropped, no further pause
+def test_wallbox_force_hold_polls_every_cycle():
+    # with a hold in place, run(60, False) polls (get_status called) although 60 % poll_seconds != 0
+def test_wallbox_force_hold_off_by_default():
+    # switch not set -&gt; a cancelled window produces no calls at all
+</code></pre>
+<ul>
+<li>[ ] <strong>Step 2: Run them and confirm they fail.</strong> Run <code>./run_all --test wallbox &gt; /tmp/t4.txt 2&gt;&amp;1; grep -E "Error|✓" /tmp/t4.txt</code>. Expected: the first new test fails because no <code>set_ocpp_mode</code> was called.</li>
+<li>[ ] <strong>Step 3: Implement</strong> the hooks, the <code>run()</code> cadence and the switch override.</li>
+<li>[ ] <strong>Step 4: Run them and confirm they pass.</strong> Same command, then <code>./run_all --quick &gt; /tmp/t4q.txt 2&gt;&amp;1; grep -E "FAILED|passed|failed" /tmp/t4q.txt</code>. Expected: all pass.</li>
+<li>[ ] <strong>Step 5: Commit.</strong> <code>feat(wallbox): force hold by switching OCPP off and pausing</code></li>
+</ul>
+<hr />
+<h3 id="task-5-manual-control-from-the-command-line-docs-and-journal">Task 5: Manual control from the command line, docs and journal</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/wallbox.py</code>: <code>main()</code> / <code>run_wallbox_cli()</code> (<code># pragma: no cover</code>, like the existing command-line code).
+- Modify: <code>docs/components.md</code> (the Wallbox section) and <code>docs/car-charging.md</code>.
+- Modify: <code>tools/debug-journal.md</code>.</p>
+<p><strong>Interfaces:</strong>
+- Produces two new command-line arguments, in the existing mutually exclusive group:
+  - <code>--ocpp {on,off}</code> calls <code>set_ocpp_mode</code> and reads the charger back.
+  - <code>--force-hold MINUTES</code>:
+    - Set <code>car_charging_cancel_for_export</code> on the mock base, and publish <code>cancelled_for_export</code> with one window <code>[now, now + MINUTES]</code> for the chosen charger's car.
+    - Every 30 seconds, call <code>component.poll()</code> and print the charger table plus the hold record (with no <code>saved</code> secrets), until <code>charger_control_force_holds</code> is empty or 30 minutes after the end.
+    - Ctrl-C triggers a hand-back loop (set the window end to now and keep polling) rather than leaving OCPP off.</p>
+<ul>
+<li>[ ] <strong>Step 1: Implement the two arguments.</strong></li>
+<li>[ ] <strong>Step 2: Live-test on the user's Pulsar. The user runs this, outside a dispatch first.</strong> From <code>apps/predbat</code>, run <code>python3 wallbox.py --username &lt;email&gt; --force-hold 5</code>. Expected:</li>
+<li>OCPP turns off;</li>
+<li>a pause follows on a later loop;</li>
+<li><code>status_id</code> 182;</li>
+<li>at the end, OCPP comes back on and the loop exits once <code>connectionStatus</code> is 4.</li>
+<li>[ ] <strong>Step 3: Write the docs.</strong></li>
+<li><code>docs/components.md</code> Wallbox section: the OCPP connection switch, what force hold does, and that the first version needs <code>car_charging_cancel_for_export</code> (planner support arrives with Plan 2).</li>
+<li><code>docs/car-charging.md</code>: one paragraph naming the switch and which chargers can hold.</li>
+<li>[ ] <strong>Step 4: Add to the journal.</strong> Add a Wallbox row to <code>tools/debug-journal.md</code>:</li>
+<li>Octopus <code>SUSPEND</code> doesn't stop a Pulsar (it charges at full power).</li>
+<li>A pause under OCPP gets a 409.</li>
+<li>A pause sent before the OCPP-off lands is ignored.</li>
+<li>The OCPP-on write can get a 502 while the paused charger is quiet on the cloud; a retry works.</li>
+<li>The cloud status lags by minutes after a pause; trust <code>last_sync</code>.</li>
+<li>[ ] <strong>Step 5: Run the checks and commit.</strong> Run <code>./run_pre_commit</code>, then commit <code>docs(wallbox): OCPP switch, force hold and live-test findings</code>.</li>
+</ul>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>

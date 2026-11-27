@@ -1,0 +1,628 @@
+<!DOCTYPE html>
+<html class="writer-html5" lang="en" >
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+      <link rel="shortcut icon" href="../../../img/favicon.ico" />
+    <title>PV Calibration Shrink Implementation Plan - Predbat Documentation</title>
+    <link rel="stylesheet" href="../../../css/theme.css" />
+    <link rel="stylesheet" href="../../../css/theme_extra.css" />
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css" />
+    
+      <script>
+        // Current page data
+        var mkdocs_page_name = "PV Calibration Shrink Implementation Plan";
+        var mkdocs_page_input_path = "superpowers/plans/2026-11-16-pv-calibration-shrink.md";
+        var mkdocs_page_url = null;
+      </script>
+    
+    <!--[if lt IE 9]>
+      <script src="../../../js/html5shiv.min.js"></script>
+    <![endif]-->
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+      <script>hljs.highlightAll();</script> 
+</head>
+
+<body class="wy-body-for-nav" role="document">
+
+  <div class="wy-grid-for-nav">
+    <nav data-toggle="wy-nav-shift" class="wy-nav-side stickynav">
+    <div class="wy-side-scroll">
+      <div class="wy-side-nav-search">
+          <a href="../../.." class="icon icon-home"> Predbat Documentation
+        </a><div role="search">
+  <form id ="rtd-search-form" class="wy-form" action="../../../search.html" method="get">
+      <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" title="Type search term here" />
+  </form>
+</div>
+      </div>
+
+      <div class="wy-menu wy-menu-vertical" data-spy="affix" role="navigation" aria-label="Navigation menu">
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../..">Introduction</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../what-does-predbat-do/">What does Predbat do?</a>
+                </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../caution/">Words of caution</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Installing & configuring Predbat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../installation-summary/">Install summary</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../install/">Install details</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../inverter-setup/">Inverter setup</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../apps-yaml/">apps.yaml settings</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../energy-rates/">Energy rates</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../components/">Predbat Components</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../discovery-catalogue/">Discovery Catalogue</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../load-ml/">ML Load Prediction</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../car-charging/">Car charging</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../configuration-guide/">Configuration guide</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../customisation/">Customisation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../video-guides/">Video Guides</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../faq/">FAQ</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../devices/">Support 3rd party devices/integrations</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../manual-api/">Manual API</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Viewing Predbat data</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../output-data/">Output data</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../web-interface/">Web Interface</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predbat-plan-card/">Predbat Plan card</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../creating-charts/">Creating the charts</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../compare/">Comparing Energy Tariffs</a>
+                  </li>
+              </ul>
+              <ul>
+                <li class="toctree-l1"><a class="reference internal" href="../../../annual-prediction/">What If Annual Prediction</a>
+                </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predbat development</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../todo-list/">To-do list</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../developing/">Developing on Predbat</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../random-scenarios/">Random Scenario Benchmarking</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../rest_api/">Predbat REST API</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../plugins/">🚀 Feature: Plugin System Implementation</a>
+                  </li>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../hub-live-display/">Optional measured Hub display feed</a>
+                  </li>
+              </ul>
+              <p class="caption"><span class="caption-text">Predheat</span></p>
+              <ul>
+                  <li class="toctree-l1"><a class="reference internal" href="../../../predheat/">Predheat</a>
+                  </li>
+              </ul>
+      </div>
+    </div>
+    </nav>
+
+    <section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">
+      <nav class="wy-nav-top" role="navigation" aria-label="Mobile navigation menu">
+          <i data-toggle="wy-nav-top" class="fa fa-bars"></i>
+          <a href="../../..">Predbat Documentation</a>
+        
+      </nav>
+      <div class="wy-nav-content">
+        <div class="rst-content"><div role="navigation" aria-label="breadcrumbs navigation">
+  <ul class="wy-breadcrumbs">
+    <li><a href="../../.." class="icon icon-home" aria-label="Docs"></a></li>
+      <li class="breadcrumb-item active">PV Calibration Shrink Implementation Plan</li>
+    <li class="wy-breadcrumbs-aside">
+    </li>
+  </ul>
+  <hr/>
+</div>
+          <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
+            <div class="section" itemprop="articleBody">
+              
+                <h1 id="pv-calibration-shrink-implementation-plan">PV Calibration Shrink Implementation Plan</h1>
+<blockquote>
+<p><strong>For agentic workers:</strong> REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (<code>- [ ]</code>) syntax for tracking.</p>
+</blockquote>
+<p><strong>Goal:</strong>
+- Replace PV calibration's 7-day history read with a 28-day per-slot evidence store and a self-limiting (shrunk) estimator.
+- Replace the PVAccuracy chart with a PV Calibration page.</p>
+<p><strong>Architecture:</strong>
+- <strong>A pure module, <code>apps/predbat/pv_calibration.py</code></strong>, does the arithmetic: fit, band, merge, clean, scan window.
+- <strong><code>SolarAPI</code></strong> (<code>solcast.py</code>) gains:
+  - a synchronous history scan that builds day evidence;
+  - an async store update (load, scan, merge, save, with the battery rate grid's guards);
+  - a <code>pv_calibration()</code> whose factor stage reads the evidence and the fit. Everything after the factors is unchanged.
+- <strong><code>web.py</code></strong> gets a Curves-style page built from the solar component's state.</p>
+<p><strong>Tech Stack:</strong> Python 3 (Predbat); Plotly (already loaded by the Curves page); Predbat's <code>unit_test.py</code> registry.</p>
+<p><strong>Spec:</strong> <code>docs/superpowers/specs/2026-11-16-pv-calibration-shrink-design.md</code></p>
+<h2 id="global-constraints">Global Constraints</h2>
+<ul>
+<li><strong>Pre-commit:</strong> <code>cd coverage &amp;&amp; ./run_pre_commit</code> must pass.</li>
+<li>Line length 256 (Black) / 250 (Flake8).</li>
+<li>Every new function and class has a one-line docstring (interrogate, 100%).</li>
+<li>British English (CSpell). Add new words to <code>.cspell/custom-dictionary-workspace.txt</code>.</li>
+<li>Names are <code>lower_case_with_underscores</code>.</li>
+<li><strong>Tests:</strong> they run from <code>coverage/</code> (<code>./run_all --test &lt;name&gt;</code>); always save output to a file, then grep it. Each new test module exports <code>run_&lt;name&gt;_tests(my_predbat)</code> and is registered in <code>TEST_REGISTRY</code> in <code>apps/predbat/unit_test.py</code>.</li>
+<li><strong>GitNexus:</strong> run <code>impact</code> before editing any existing symbol and report HIGH/CRITICAL; run <code>detect_changes</code> before each commit.</li>
+<li><strong>Git:</strong> never <code>git add .</code> or <code>-A</code>; add explicit paths.</li>
+<li><strong>Defaults</strong> (<code>const.py</code>), exactly:</li>
+<li><code>PV_CALIBRATION_HISTORY_DAYS = 28</code></li>
+<li><code>PV_CALIBRATION_SCAN_DAYS = 2</code></li>
+<li><code>PV_CALIBRATION_HALF_LIFE_DAYS = 3.5</code></li>
+<li><code>PV_CALIBRATION_SHRINK = 0.20</code></li>
+<li><code>PV_CALIBRATION_SHRINK_SLOT = 0.20</code></li>
+<li><strong>Fixed behaviour</strong> (<code>const.py</code>), exactly:</li>
+<li><code>PV_CALIBRATION_MIN_DAYS = 3</code></li>
+<li><code>PV_CALIBRATION_BAND_DAYS = 7</code></li>
+<li><code>PV_CALIBRATION_LOG_CLAMP = 1.5</code></li>
+<li><code>PV_CALIBRATION_MIN_SLOT_KWH = 0.02</code></li>
+<li><code>PV_CALIBRATION_MIN_SLOT_POINTS = 3</code></li>
+<li><code>PV_CALIBRATION_STORE_EXPIRY_DAYS = 60</code></li>
+<li><code>PV_CALIBRATION_SCAN_MINUTES = 24 * 60</code></li>
+<li><code>PV_CALIBRATION_RETRY_MINUTES = 60</code></li>
+<li><code>PV_CALIBRATION_RESAVE_MINUTES = 24 * 60</code></li>
+<li><code>PV_CALIBRATION_LOAD_ATTEMPTS = 3</code></li>
+<li><code>PV_CALIBRATION_LOAD_WAIT_MINUTES = 10</code></li>
+<li><code>PV_CALIBRATION_LOWEST = 0.20</code> and <code>PV_CALIBRATION_HIGHEST = 4.0</code> move here from <code>solcast.py</code>. <code>solcast.py</code> imports them, so existing <code>from solcast import PV_CALIBRATION_*</code> keeps working.</li>
+<li><strong>Storage:</strong> namespace <code>"solcast"</code>, key <code>"pv_calibration_evidence"</code>. Document <code>{"slot_minutes": int, "days": {...}, "updated": iso, "last_scan": iso}</code>.</li>
+<li><strong>Unchanged after the factor stage:</strong> <code>days_use_scaling</code>, the array ceiling cap, the P10/P90 construction, <code>calibrate_band</code>, <code>impute_clipped_pv_history</code>, <code>metric_pv_calibration_enable</code>.</li>
+<li><strong>The store holds the forecast before <code>pv_scaling</code>;</strong> the fit multiplies by the current <code>pv_scaling</code>.</li>
+<li><strong>Long history reads</strong> pass <code>tracked=False</code>.</li>
+</ul>
+<h2 id="review-focus">Review Focus</h2>
+<ol>
+<li><strong><code>pv_scaling</code> set to 0</strong> (a user zeroing PV for unseen AC-coupled solar). The scan must not store anything, and stored days must survive. With no usable forecast, calibration turns off. Task 2 test <code>test_scan_pv_scaling_zero_stores_nothing</code>.</li>
+<li><strong>A partial first day</strong> (fresh install, or history that starts mid-day). That day must not be stored, or its low actual would read as forecast error. Task 2 test <code>test_scan_skips_partially_covered_day</code>.</li>
+<li><strong>A corrupt or foreign storage document,</strong> or one saved at a different <code>slot_minutes</code>. It is dropped without a crash, and the store is rebuilt by the next scan. Task 1 <code>test_clean_drops_malformed</code>, Task 3 <code>test_update_discards_other_slot_minutes</code>.</li>
+<li><strong>The clock moving backwards, or a stored day dated today or later.</strong> The merge drops it, so a future-dated day never counts as evidence. Task 1 <code>test_merge_drops_today_and_future</code>.</li>
+<li><strong><code>pv_calibration_history_days</code> smaller than <code>pv_calibration_scan_days</code>, or below 3.</strong> The scan days are clamped to the history days, and a warning says calibration needs at least 3 days. Task 2 <code>test_settings_clamp_and_warn</code>.</li>
+</ol>
+<hr />
+<h3 id="task-1-pure-calibration-module">Task 1: Pure calibration module</h3>
+<p><strong>Files:</strong>
+- Create: <code>apps/predbat/pv_calibration.py</code>
+- Modify: <code>apps/predbat/const.py</code> (add the constants in Global Constraints)
+- Modify: <code>apps/predbat/solcast.py:35-36</code> (import <code>PV_CALIBRATION_LOWEST</code>/<code>HIGHEST</code> from const instead of defining them)
+- Test: <code>apps/predbat/tests/test_pv_calibration.py</code>, registered as <code>("pv_calibration", run_pv_calibration_tests, "PV calibration: shrunk fit, band, evidence merge", False)</code></p>
+<p><strong>Interfaces:</strong>
+- Produces, all in <code>pv_calibration.py</code>:
+  - <strong>Evidence day shape:</strong> <code>{"slots": {minute_of_day:int: [forecast_kwh, actual_kwh]}, "peak_kw": float, "clipped_minutes": int}</code>.
+    - Keyed by local date <code>"YYYY-MM-DD"</code>.
+    - <code>forecast_kwh</code> is before <code>pv_scaling</code>.
+  - <code>clean_pv_calibration_evidence(data) -&gt; dict</code>: a stored or JSON <code>days</code> map with string minute keys gives the shape above, with int keys. Malformed days are dropped.
+  - <code>merge_pv_calibration_evidence(stored, scanned, today, max_age_days) -&gt; dict</code>:
+    - Scanned days replace stored ones.
+    - Days <code>&gt;= today</code>, or older than <code>today - max_age_days</code>, are dropped.
+  - <code>pv_calibration_scan_length(last_success, now, history_days, scan_days) -&gt; int</code>: <code>history_days</code> when <code>last_success</code> is None, else <code>min(max(scan_days, int(gap_days + 0.5) + 1), history_days)</code>. This is the same formula as <code>battery_rate_grid_update</code>.
+  - <code>day_age(day, today) -&gt; int</code>: whole days, where yesterday is 1.
+  - <code>fit_pv_calibration(evidence, today, pv_scaling, half_life, shrink_day, shrink_slot, slot_minutes) -&gt; dict | None</code>:
+    - Returns None when there are fewer than <code>PV_CALIBRATION_MIN_DAYS</code> valid days.
+    - Otherwise the dict has these keys:
+      - <code>total</code>, <code>raw_total</code>, <code>se_day</code>;
+      - <code>adj</code> and <code>raw_adj</code>, each <code>{minute_of_day: factor}</code> for every slot in <code>range(0, 1440, slot_minutes)</code>;
+      - <code>days_used</code> (a sorted list of dates) and <code>down_days</code> (a list);
+      - <code>day_points</code>, a list of <code>{"day", "forecast_kwh", "actual_kwh", "ratio", "weight", "down"}</code>;
+      - <code>slot_points</code>, a list of <code>{"day", "minute", "forecast_kwh", "actual_kwh", "ratio", "weight"}</code>.
+  - <code>band_scaling(evidence, today, pv_scaling, band_days) -&gt; tuple[float | None, float | None, float]</code>:
+    - Returns worst and best relative to the average, and the average. Both are None when no valid day is in the window.
+    - The arithmetic is today's <code>solcast.py:1363-1397</code>: linear weights <code>max(1.0 - 0.1 * (age - 1), 0.3)</code>, ratio of weighted sums clamped to [0.1, 2.0], worst clamped to [0.3, 1.0], best capped at 2.0.
+  - <code>evidence_peak_kw(evidence, today, days) -&gt; float</code>: the largest <code>peak_kw</code> over days with <code>1 &lt;= age &lt;= days</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> in <code>tests/test_pv_calibration.py</code>. Each is a <code>def test_*() -&gt; bool</code> (True means failed), using a helper <code>make_day(ratio, peak=4.0, scale=1.0, noise=None)</code>. That helper builds 48 slots with a bell-shaped <code>forecast_kwh</code> (about 20 kWh a day × scale) and <code>actual = forecast × ratio</code>, multiplied per slot by <code>noise[slot]</code> if given.</li>
+<li><code>test_fit_steady_bias</code>: 28 days at ratio 0.8 → <code>abs(total - 0.8) &lt; 0.03</code> and every daytime <code>adj</code> within 0.03 of 0.8.</li>
+<li><code>test_fit_calibrated_noise_stays_near_one</code>: 28 days whose day ratios alternate 0.6 / 1.4 (mean 1) → <code>abs(math.log(total)) &lt; 0.05</code>.</li>
+<li><code>test_fit_large_tau_is_ratio_of_sums</code>: <code>shrink_day = shrink_slot = 1e6</code> → <code>total</code> equals <code>Σw·a/Σw·f</code> computed in the test, within 1e-6.</li>
+<li><code>test_fit_down_days_excluded</code>: 10 days at 0.8, plus 5 days with <code>actual &lt; 0.1 × forecast</code> → those 5 are in <code>down_days</code>, and <code>total</code> is within 0.03 of 0.8.</li>
+<li><code>test_fit_needs_three_days</code>: 2 valid days → None.</li>
+<li><code>test_fit_pv_scaling_applied</code>: 28 days at ratio 0.8 with <code>pv_scaling=0.5</code> → <code>total</code> within 0.03 of 1.6.</li>
+<li><code>test_fit_sparse_slot_uses_day_factor</code>: a slot forecast ≥ 0.02 kWh on only 2 days → <code>adj[slot] == total</code>.</li>
+<li><code>test_fit_clamps</code>: ratio 10 → <code>total &lt;= PV_CALIBRATION_HIGHEST</code>.</li>
+<li><code>test_band_matches_old_arithmetic</code>: 7 days with ratios 0.5–1.1 → worst, best and average equal the formula of <code>solcast.py:1363-1397</code>, computed in the test.</li>
+<li><code>test_merge_replaces_and_ages</code>: stored <code>{d-30, d-5}</code> plus scanned <code>{d-5 (new), d-1}</code> with max age 28 → keys <code>{d-5, d-1}</code>, and d-5 is the scanned copy.</li>
+<li><code>test_merge_drops_today_and_future</code>: scanned days <code>today</code> and <code>today + 1</code> → both absent.</li>
+<li><code>test_clean_drops_malformed</code>: a mix of good days, a day with non-list slots, a non-dict and a string → only the good days come back, with int minute keys.</li>
+<li>
+<p><code>test_scan_length</code>: None → 28; 1 day after a success → 2; 5 days after → 6; 40 days after → 28.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run them to see them fail</strong></p>
+</li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --test pv_calibration &gt; /tmp/pvc1.log 2&gt;&amp;1; grep -n "ERROR\|Error\|failed" /tmp/pvc1.log | head</code></li>
+<li>
+<p>Expected: an import error for <code>pv_calibration</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement the module.</strong> The fit's shrink step is pinned by the spec:</p>
+</li>
+</ul>
+<pre><code class="language-python">def shrunk_log(values, prior_sd, center):
+    &quot;&quot;&quot;Log factor shrunk toward 0: centre x tau^2 / (tau^2 + se^2); se from the weighted spread of the per-day log ratios.&quot;&quot;&quot;
+    sw = sum(w for _, w in values)
+    if sw &lt;= 0 or len(values) &lt; PV_CALIBRATION_MIN_SLOT_POINTS:
+        return 0.0
+    mean = sum(v * w for v, w in values) / sw
+    var = sum(w * (v - mean) ** 2 for v, w in values) / sw
+    n_eff = sw * sw / sum(w * w for _, w in values)
+    se2 = var / max(n_eff - 1, 1)
+    return center * prior_sd**2 / (prior_sd**2 + se2)
+</code></pre>
+<ul>
+<li><strong>Day values:</strong> <code>(clamp(ln(max(a,0.01)/f), ±LOG_CLAMP), w·f)</code> with <code>center = ln(Σw·a / Σw·f)</code>.</li>
+<li><strong>Slot values:</strong> use only days with slot <code>f &gt;= PV_CALIBRATION_MIN_SLOT_KWH</code>. Each value is <code>(clamp(ln(max(a,0.005)/f/total), ±LOG_CLAMP), w·f)</code>, with <code>center = ln(Σw·a / Σw·f / total)</code>.</li>
+<li><strong>Weights:</strong> <code>w = 0.5 ** ((age - 1) / half_life)</code>; <code>f</code> is already × <code>pv_scaling</code>.</li>
+<li><strong>Down day:</strong> missing, <code>f &lt; 0.1</code>, or <code>a &lt; 0.1·f</code> (as <code>solcast.py:1297-1301</code>).</li>
+<li>
+<p>The unshrunk <code>raw_total</code>/<code>raw_adj</code> are <code>exp(center)</code>, clamped the same way.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Run them to see them pass</strong></p>
+</li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --test pv_calibration &gt; /tmp/pvc1.log 2&gt;&amp;1; tail -5 /tmp/pvc1.log</code></li>
+<li>
+<p>Expected: no ERROR lines; the suite reports pass.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/pv_calibration.py apps/predbat/const.py apps/predbat/solcast.py apps/predbat/tests/test_pv_calibration.py apps/predbat/unit_test.py
+git commit -m &quot;feat(solar): shrunk PV calibration fit and evidence helpers&quot;
+</code></pre>
+<h3 id="task-2-history-scan-settings-and-the-tracked-passthrough">Task 2: History scan, settings and the <code>tracked</code> passthrough</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/fetch.py:1055</code> <code>minute_data_import_export(..., tracked=True)</code>: pass <code>tracked</code> to <code>get_history_wrapper</code> (line ~1082).
+- Modify: <code>apps/predbat/solcast.py:1111</code> <code>pv_forecast_history(self, days, tracked=True)</code>: pass <code>tracked</code> to both <code>get_history_wrapper</code> calls.
+- Modify: <code>apps/predbat/solcast.py</code>: add <code>pv_calibration_settings()</code> and <code>pv_calibration_scan()</code>.
+- Modify: <code>apps/predbat/config.py</code> <code>APPS_SCHEMA</code>, next to <code>battery_rate_grid_scan_days</code>:
+  - <code>"pv_calibration_history_days": {"type": "integer", "zero": False}</code>
+  - <code>"pv_calibration_scan_days": {"type": "integer", "zero": False}</code>
+  - <code>"pv_calibration_half_life": {"type": "float", "zero": False}</code>
+  - <code>"pv_calibration_shrink": {"type": "float", "zero": False}</code>
+  - <code>"pv_calibration_shrink_slot": {"type": "float", "zero": False}</code>
+- Modify: <code>docs/apps-yaml.md</code> (a "PV calibration" block beside the rate grid settings: the five keys, defaults and meaning, as in the spec table) and the PV calibration section of <code>docs/customisation.md</code> (the new behaviour in plain words; the 7-day description is replaced).
+- Modify: the test mocks of <code>minute_data_import_export</code> / <code>pv_forecast_history</code> in <code>tests/test_pv_calibration_clipping.py</code> and <code>tests/test_solcast.py</code> now accept <code>**kwargs</code>.
+- Test: <code>apps/predbat/tests/test_pv_calibration_scan.py</code>, registered <code>("pv_calibration_scan", run_pv_calibration_scan_tests, "PV calibration: history scanned into per-slot day evidence", False)</code>.</p>
+<p><strong>Interfaces:</strong>
+- Consumes: the Task 1 evidence day shape.
+- Produces:
+  - <code>SolarAPI.pv_calibration_settings() -&gt; dict</code>:
+    - Keys <code>history_days</code>, <code>scan_days</code>, <code>half_life</code>, <code>shrink</code>, <code>shrink_slot</code>, read by <code>self.get_arg(&lt;apps.yaml key&gt;, default)</code>.
+    - Plus <code>overridden</code> (a set of the keys the user set).
+    - A non-positive or non-numeric value falls back to the default with a <code>Warn:</code> log.
+    - <code>scan_days</code> is clamped to <code>history_days</code>.
+    - <code>history_days &lt; 3</code> logs a <code>Warn:</code> that calibration needs at least 3 days.
+  - <code>SolarAPI.pv_calibration_scan(days, tracked=True) -&gt; dict | None</code>:
+    - Returns complete past days as <code>{date: evidence_day}</code>, or None when the history read failed (no <code>pv_today</code> history).
+    - Reads <code>minute_data_import_export(days + 1, self.now_utc, "pv_today", required_unit="kWh", pad=False, tracked=tracked)</code> and <code>pv_forecast_history(days + 1, tracked=tracked)</code>. It converts them exactly as <code>solcast.py:1245-1263</code> does today: power from increments, <code>history_attribute_to_minute_data</code>, then <code>impute_clipped_pv_history</code>.
+    - The day of a minute-ago is <code>charge_day(self.now_utc, minute, self.base.local_tz)</code> (from <code>battery_curve</code>). The slot is <code>((self.minutes_now - minute) % 1440)</code> floored to <code>self.plan_interval_minutes</code>.
+    - <code>forecast_kwh</code> is divided by <code>self.pv_scaling</code>.
+    - <code>actual_kwh</code> comes from the imputed series. <code>peak_kw</code> is the day's measured maximum, and <code>clipped_minutes</code> counts the minutes where imputed and measured differ.
+    - A day is stored only when the forecast covers ≥ 40 of its slots and the <code>pv_today</code> history starts before that day's local midnight.
+    - With <code>self.pv_scaling &lt;= 0</code> it returns <code>{}</code> and logs why.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests.</strong> Use <code>create_predbat()</code>'s solar component, as <code>test_pv_calibration_clipping.calibrate()</code> builds it, with mocked readers.</li>
+<li><code>test_scan_builds_days</code>: 5 days of a 4 kW bell forecast at 0.9 actual → 5 dates.<ul>
+<li>Each has 48 slots.</li>
+<li>The summed <code>actual_kwh / forecast_kwh</code> is within 0.01 of 0.9.</li>
+<li><code>peak_kw</code> is within 0.05 of 3.6.</li>
+</ul>
+</li>
+<li><code>test_scan_forecast_before_pv_scaling</code>: <code>pv_scaling = 2.0</code> and a mocked <code>pv_forecast_history</code> that returns kW already × 2 → the stored <code>forecast_kwh</code> equals the unscaled bell's kWh.</li>
+<li><code>test_scan_pv_scaling_zero_stores_nothing</code>: <code>pv_scaling = 0</code> → <code>{}</code>.</li>
+<li><code>test_scan_skips_partially_covered_day</code>: <code>pv_today</code> history starting at 12:00 three days ago → that date is absent, the two later dates are present.</li>
+<li><code>test_scan_tracked_false_passed</code>: the mocks record kwargs → <code>tracked is False</code> reaches both readers.</li>
+<li><code>test_scan_history_missing_returns_none</code>: <code>minute_data_import_export</code> returns <code>{}</code> → None.</li>
+<li><code>test_settings_defaults_and_overrides</code>: no args gives <code>{28, 2, 3.5, 0.20, 0.20}</code> and an empty <code>overridden</code>; with <code>pv_calibration_shrink: 0.3</code> set, <code>shrink == 0.3</code> and <code>"shrink" in overridden</code>.</li>
+<li>
+<p><code>test_settings_clamp_and_warn</code>: <code>history_days=2, scan_days=5</code> → <code>scan_days == 2</code>, and both a <code>Warn:</code> about 3 days and a <code>Warn:</code> for an invalid <code>half_life=-1</code> (falling back to 3.5) are logged.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run them to see them fail</strong></p>
+</li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --test pv_calibration_scan &gt; /tmp/pvc2.log 2&gt;&amp;1; grep -n "ERROR\|Error" /tmp/pvc2.log | head</code></li>
+<li>
+<p>Expected: <code>AttributeError</code> for <code>pv_calibration_scan</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement</strong> the two <code>tracked</code> passthroughs, the schema entries, <code>pv_calibration_settings()</code>, <code>pv_calibration_scan()</code> and the doc changes.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Run them to see them pass.</strong> Also run the suites whose mocks changed.</p>
+</li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --test pv_calibration_scan --test pv_calibration_clipping --test solcast &gt; /tmp/pvc2.log 2&gt;&amp;1; grep -n "ERROR" /tmp/pvc2.log | head; tail -3 /tmp/pvc2.log</code></li>
+<li>
+<p>Expected: no ERROR lines.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/fetch.py apps/predbat/solcast.py apps/predbat/config.py docs/apps-yaml.md docs/customisation.md apps/predbat/tests/test_pv_calibration_scan.py apps/predbat/tests/test_pv_calibration_clipping.py apps/predbat/tests/test_solcast.py apps/predbat/unit_test.py
+git commit -m &quot;feat(solar): scan PV history into per-slot calibration evidence; pv_calibration_* settings&quot;
+</code></pre>
+<h3 id="task-3-evidence-store-update">Task 3: Evidence store update</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/solcast.py</code>: add <code>async pv_calibration_update_evidence()</code>; initialise its state in the component's init; call it in <code>fetch_pv_forecast</code> immediately before <code>self.pv_calibration(...)</code> (~line 1965).
+- Test: <code>apps/predbat/tests/test_pv_calibration_update.py</code>, registered <code>("pv_calibration_update", run_pv_calibration_update_tests, "PV calibration: evidence storage, scan schedule and save guards", False)</code>.</p>
+<p><strong>Interfaces:</strong>
+- Consumes:
+  - <code>pv_calibration_settings()</code> and <code>pv_calibration_scan()</code> (Task 2);
+  - <code>clean_pv_calibration_evidence</code>, <code>merge_pv_calibration_evidence</code>, <code>pv_calibration_scan_length</code> (Task 1).
+- Produces these <code>SolarAPI</code> attributes, read by Tasks 4 and 5:
+  - <code>pv_calibration_evidence: dict | None</code>. None until the first update has run.
+  - <code>pv_calibration_last_scan: datetime | None</code> and <code>pv_calibration_last_success: datetime | None</code>.
+  - <code>pv_calibration_next_scan: datetime | None</code>.
+  - <code>pv_calibration_scan_status: str</code>, one of <code>"not run"</code>, <code>"ok: N days"</code>, <code>"history unavailable, retry at HH:MM"</code>.
+  - <code>pv_calibration_loaded: bool</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests.</strong> Use a fake storage object with async <code>load</code>/<code>save</code> that records calls and can be set to return None or raise; mock <code>pv_calibration_scan</code>; drive <code>now_utc</code> forward between calls.</li>
+<li><code>test_update_first_scan_reads_history_days</code>: an empty store → the scan is called with <code>days == 28</code> and <code>tracked=False</code>, and a save happens with expiry <code>now + 60 days</code>, namespace <code>"solcast"</code>, key <code>"pv_calibration_evidence"</code>, <code>slot_minutes == 30</code>.</li>
+<li><code>test_update_daily_scan_reads_two</code>: a second call 24 h later → <code>days == 2</code>. A call 1 h later → no scan.</li>
+<li><code>test_update_failed_scan_retries_after_an_hour</code>:<ul>
+<li>The scan returns None → <code>next_scan == now + 60 min</code>, and the stored evidence is unchanged.</li>
+<li>At +59 min there is no scan; at +60 min there is one.</li>
+</ul>
+</li>
+<li><code>test_update_save_waits_for_load</code>:<ul>
+<li><code>load</code> returns None twice, 5 minutes apart → no save.</li>
+<li>A third failure ≥ 10 minutes after the first → a save is allowed.</li>
+<li>This matches <code>battery_rate_grid_update</code>.</li>
+</ul>
+</li>
+<li><code>test_update_merges_with_stored</code>: a stored document with days d-10..d-3 plus a scanned d-2, d-1 → <code>pv_calibration_evidence</code> holds all of them.</li>
+<li><code>test_update_discards_other_slot_minutes</code>: a stored document with <code>slot_minutes = 15</code> → it is ignored (logged), and the next save writes 30.</li>
+<li><code>test_update_resaves_daily</code>: unchanged evidence 24 h after the last save → it is saved again (the expiry moves, #6225).</li>
+<li>
+<p><code>test_update_without_storage</code>: <code>storage = None</code> → the evidence is kept in memory, and the scan schedule still applies.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run them to see them fail</strong></p>
+</li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --test pv_calibration_update &gt; /tmp/pvc3.log 2&gt;&amp;1; grep -n "ERROR\|Error" /tmp/pvc3.log | head</code></li>
+<li>
+<p>Expected: <code>AttributeError</code> for <code>pv_calibration_update_evidence</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement it</strong> by following the shape of <code>fetch.py</code> <code>battery_rate_grid_update</code> (lines 4199-4330): the load closure, failure timestamps, the <code>store_ready</code> rule, the resave interval and <code>pending_save</code>. Use the PV constants.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Run them to see them pass</strong></p>
+</li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --test pv_calibration_update &gt; /tmp/pvc3.log 2&gt;&amp;1; grep -n "ERROR" /tmp/pvc3.log; tail -3 /tmp/pvc3.log</code></li>
+<li>
+<p>Expected: no ERROR lines.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/solcast.py apps/predbat/tests/test_pv_calibration_update.py apps/predbat/unit_test.py
+git commit -m &quot;feat(solar): keep 28 days of PV calibration evidence in storage&quot;
+</code></pre>
+<h3 id="task-4-pv_calibration-uses-the-evidence-and-the-shrunk-fit">Task 4: <code>pv_calibration()</code> uses the evidence and the shrunk fit</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/solcast.py:1219-1434</code> (the history read and factor computation inside <code>pv_calibration</code>)
+- Modify: <code>apps/predbat/tests/test_solcast.py</code>, <code>tests/test_pv_calibration_clipping.py</code>, <code>tests/test_pv_calibration_day_scaling.py</code>, where an expectation came from the 7-day estimator
+- Test: new cases in <code>apps/predbat/tests/test_pv_calibration_scan.py</code> (they share its harness)</p>
+<p><strong>Interfaces:</strong>
+- Consumes:
+  - <code>fit_pv_calibration</code>, <code>band_scaling</code>, <code>evidence_peak_kw</code> (Task 1);
+  - <code>pv_calibration_scan</code>, <code>pv_calibration_settings</code> (Task 2);
+  - <code>pv_calibration_evidence</code> (Task 3).
+- Produces these <code>SolarAPI</code> attributes, read by Task 5:
+  - <code>pv_calibration_model: dict | None</code> (the fit result);
+  - <code>pv_calibration_settings_used: dict</code>;
+  - the existing <code>pv_calibration_worst_scaling</code>, <code>pv_calibration_best_scaling</code>, <code>pv_calibration_average_scaling</code> and <code>pv_calibration_total_adjustment</code>, with unchanged meaning.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests</strong> in <code>test_pv_calibration_scan.py</code>.</li>
+<li><code>test_calibration_sunny_after_dull_not_cut</code>:<ul>
+<li>The evidence is 23 days at ratio 0.95 (sunny bell, 20 kWh forecast), then the last 5 days forecast 12 kWh with actual 6 kWh (ratio 0.5): sunny forecasts that turned out dull.</li>
+<li>Assert <code>total_adjustment &gt;= 0.72</code>. A hand calculation gives about 0.76; today's 7-day estimator gives about 0.62. Print it.</li>
+<li>Tomorrow's calibrated total is still raw × <code>total_adjustment</code>.</li>
+</ul>
+</li>
+<li><code>test_calibration_uses_store_not_history</code>: with <code>pv_calibration_evidence</code> set, the history readers are never called (the mocks raise).</li>
+<li><code>test_calibration_falls_back_to_scan</code>: with <code>pv_calibration_evidence = None</code>, <code>pv_calibration_scan</code> runs once with <code>days == settings["history_days"]</code>.</li>
+<li><code>test_calibration_band_from_last_seven_days</code>: the evidence has 20 days at 0.9, then the last 7 days at 0.6–1.0 → <code>pv_calibration_worst_scaling</code> and <code>best_scaling</code> equal <code>band_scaling(..., 7)</code>.</li>
+<li><code>test_calibration_off_under_three_days</code>: 2 valid days → the factors are all 1.0, and worst/best are 0.7/1.3, as today.</li>
+<li>
+<p><code>test_calibration_peak_from_last_seven_days</code>: a 6 kW peak 20 days ago and 3 kW in the last 7 → the existing log line reads <code>max historical power 3.0</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run them to see them fail</strong></p>
+</li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --test pv_calibration_scan &gt; /tmp/pvc4.log 2&gt;&amp;1; grep -n "ERROR" /tmp/pvc4.log | head</code></li>
+<li>
+<p>Expected: failures on the new tests.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement it.</strong></p>
+</li>
+<li>Replace the history pull and the slot, day and band sums (current lines 1239-1434) with:<ol>
+<li><code>settings = self.pv_calibration_settings()</code>;</li>
+<li><code>evidence = self.pv_calibration_evidence</code>, or <code>self.pv_calibration_scan(settings["history_days"])</code> when None;</li>
+<li><code>today = charge_day(self.now_utc, 0, self.base.local_tz)</code>;</li>
+<li><code>fit_pv_calibration(...)</code>, <code>band_scaling(..., PV_CALIBRATION_BAND_DAYS)</code>, <code>evidence_peak_kw(..., PV_CALIBRATION_BAND_DAYS)</code>.</li>
+</ol>
+</li>
+<li>Map the model onto the existing variable names: <code>slot_adjustment</code>, <code>total_adjustment</code>, <code>worst_day_scaling</code>, <code>best_day_scaling</code>, <code>average_day_scaling</code>, <code>max_pv_power_hist</code>. The code from <code>days_forecast_total</code> onwards then runs unchanged.</li>
+<li>
+<p>Keep the existing log lines and the <code>metrics()</code> sets. Add one log line: <code>"SolarAPI: PV Calibration: day factor {applied} (unshrunk {raw}, se {se}) from {n} days, half-life {h}, shrink {s}/{ss}"</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Run all the calibration suites.</strong> For each failure in the pre-existing suites, decide:</p>
+</li>
+<li><strong>The expectation came from the 7-day estimator</strong> (a mixed-ratio week): update the expected value with a comment naming this design, and record a <code>Ruling:</code> in the ledger.</li>
+<li><strong>A genuine regression</strong> (constant-ratio weeks must still give exact ratios; the cap and band tests must still hold): fix the code.</li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --test pv_calibration_scan --test pv_calibration --test pv_calibration_clipping --test pv_calibration_day_scaling --test solcast &gt; /tmp/pvc4.log 2&gt;&amp;1; grep -n "ERROR" /tmp/pvc4.log; tail -3 /tmp/pvc4.log</code></li>
+<li>
+<p>Expected: no ERROR lines.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/solcast.py apps/predbat/tests/test_pv_calibration_scan.py apps/predbat/tests/test_solcast.py apps/predbat/tests/test_pv_calibration_clipping.py apps/predbat/tests/test_pv_calibration_day_scaling.py
+git commit -m &quot;feat(solar): PV calibration from the 28-day store with shrunk factors&quot;
+</code></pre>
+<h3 id="task-5-pv-calibration-page-replaces-pvaccuracy">Task 5: PV Calibration page replaces PVAccuracy</h3>
+<p><strong>Files:</strong>
+- Modify: <code>apps/predbat/web.py</code>:
+  - <strong><code>get_chart</code> (~3497):</strong> <code>chart in ("PVCalibration", "PVAccuracy")</code> returns <code>self.get_pv_calibration_chart()</code> before <code>now_str</code>, as Curves does.
+  - <strong>The old PVAccuracy branch (~3677-3695):</strong> removed.
+  - <strong>The menu (~4008):</strong> the PVAccuracy link becomes <code>PVCalibration</code>, active for either name.
+  - <strong><code>html_charts</code>:</strong> <code>if chart not in (...)</code> also excludes <code>"PVCalibration"</code> and <code>"PVAccuracy"</code>.
+  - <strong>New:</strong> <code>get_pv_calibration_chart()</code>, beside <code>get_curves_chart</code>.
+- Modify: <code>docs/web-interface.md:140</code> (the PVAccuracy line becomes a PVCalibration description).
+- Test: <code>apps/predbat/tests/test_web_pv_calibration_chart.py</code>, registered <code>("web_pv_calibration_chart", run_web_pv_calibration_chart_tests, "PV Calibration page: status table, slot and day evidence charts", False)</code>.</p>
+<p><strong>Interfaces:</strong>
+- Consumes the solar component, <code>self.base.components.get_component("solar")</code> (None-safe), and its attributes:
+  - <code>pv_calibration_model</code>, <code>pv_calibration_evidence</code>;
+  - <code>pv_calibration_last_scan</code>, <code>pv_calibration_next_scan</code>, <code>pv_calibration_scan_status</code>;
+  - <code>pv_calibration_settings_used</code>;
+  - <code>pv_calibration_worst_scaling</code>, <code>pv_calibration_best_scaling</code>;
+  - <code>pv_clipping_ceiling_kw()</code>;
+  - and <code>self.base.get_arg("metric_pv_calibration_enable", True)</code>.
+- Produces, embedded in the page for tests and Plotly:
+  - <code>var pv_calibration_slot_data = &lt;json&gt;;</code>: <code>{"points": [[minute, ratio, forecast_kwh, weight], ...], "raw_adj": {...}, "adj": {...}}</code>;
+  - <code>var pv_calibration_day_data = &lt;json&gt;;</code>: <code>{"points": [[day, ratio, forecast_kwh, down], ...], "raw_total": x, "total": y}</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Write the failing tests.</strong> Use the <code>_make_web</code> and <code>_check</code> pattern from <code>tests/test_web_curves_chart.py</code>, with a stub solar component whose attributes are set directly.</li>
+<li><code>test_page_with_model</code>: the status table contains:<ul>
+<li>"On";</li>
+<li>the applied and unshrunk day factors formatted to 2 dp;</li>
+<li>"3.5" and "0.20";</li>
+<li>the last scan time.</li>
+</ul>
+</li>
+<li><code>test_page_slot_data</code>: parse <code>pv_calibration_slot_data</code> → the points count equals the model's <code>slot_points</code>, and <code>adj["720"]</code> equals the model value.</li>
+<li><code>test_page_day_data</code>: parse <code>pv_calibration_day_data</code> → a down day carries <code>down: true</code>.</li>
+<li><code>test_page_overridden_marked</code>: <code>"shrink" in overridden</code> → the shrink cell shows "(apps.yaml)".</li>
+<li><code>test_page_without_evidence</code>: model None and evidence <code>{}</code> → it shows "not enough evidence" and the reason, with no exception and no Plotly data blocks.</li>
+<li><code>test_page_without_solar_component</code>: <code>components = None</code> → it shows "Solar forecast component is not running".</li>
+<li><code>test_pvaccuracy_alias</code>: <code>web.get_chart("PVAccuracy") == web.get_chart("PVCalibration")</code>.</li>
+<li>
+<p><code>test_page_wraps</code>: the html contains <code>.pv-calibration-page p { white-space: normal; }</code> and <code>max-width:960px</code>.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 2: Run them to see them fail</strong></p>
+</li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --test web_pv_calibration_chart &gt; /tmp/pvc5.log 2&gt;&amp;1; grep -n "ERROR" /tmp/pvc5.log | head</code></li>
+<li>
+<p>Expected: failures, because <code>get_pv_calibration_chart</code> is missing.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 3: Implement the page.</strong></p>
+</li>
+<li><strong>Layout:</strong> a scoped <code>&lt;style&gt;.pv-calibration-page p { white-space: normal; }&lt;/style&gt;</code>, then a <code>div.pv-calibration-page</code> capped at 960 px.</li>
+<li><strong>The status table rows</strong> are as in spec §5.</li>
+<li><strong>Plotly</strong> loads via <code>PLOTLY_GL3D_URL</code>, which includes 2D scatter.</li>
+<li><strong>Slot chart:</strong><ul>
+<li>x axis: <code>HH:MM</code>; y axis clamped 0–3 for display.</li>
+<li>Points sized <code>6 + 10 × forecast_kwh / max</code>, with opacity <code>max(weight, 0.15)</code>.</li>
+<li>Lines: unshrunk and applied, plus a dashed line at 1.0.</li>
+</ul>
+</li>
+<li><strong>Day chart:</strong> the same styling. Down days are drawn hollow and grey.</li>
+<li>
+<p><strong>Two-hour band table:</strong> columns <code>Time</code>, <code>Forecast kWh</code>, <code>Actual kWh</code>, <code>Unshrunk</code>, <code>Applied</code>, <code>Points</code>. The means are over valid days.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 4: Run it together with the existing web suites</strong></p>
+</li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --test web_pv_calibration_chart --test web_charts --test web_curves_chart &gt; /tmp/pvc5.log 2&gt;&amp;1; grep -n "ERROR" /tmp/pvc5.log; tail -3 /tmp/pvc5.log</code></li>
+<li>
+<p>Expected: no ERROR lines.</p>
+</li>
+<li>
+<p>[ ] <strong>Step 5: Commit</strong></p>
+</li>
+</ul>
+<pre><code class="language-bash">git add apps/predbat/web.py docs/web-interface.md apps/predbat/tests/test_web_pv_calibration_chart.py apps/predbat/unit_test.py
+git commit -m &quot;feat(web): PV Calibration page replaces PVAccuracy&quot;
+</code></pre>
+<h3 id="task-6-whole-suite-verification">Task 6: Whole-suite verification</h3>
+<p><strong>Files:</strong> only those a failing check points to. Typical candidates are <code>coverage/cases/random_results.json</code> and <code>.cspell/custom-dictionary-workspace.txt</code>.</p>
+<ul>
+<li>[ ] <strong>Step 1: Run the quick suite</strong></li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_all --quick &gt; /tmp/pvc6.log 2&gt;&amp;1; grep -n "ERROR\|FAILED\|failed" /tmp/pvc6.log | head -30; tail -5 /tmp/pvc6.log</code></li>
+<li>Expected: all pass. For any golden or baseline difference (<code>debug_cases</code>, <code>random_results</code>), confirm it comes from the new factors (calibration now differs on mixed weeks). Then regenerate it the way that suite's docs say, and record a <code>Ruling:</code> with the before and after day factor.</li>
+<li>[ ] <strong>Step 2: Run pre-commit</strong></li>
+<li>Run: <code>cd coverage &amp;&amp; ./run_pre_commit &gt; /tmp/pvc6pc.log 2&gt;&amp;1; tail -20 /tmp/pvc6pc.log</code></li>
+<li>Expected: all hooks pass. Re-stage whatever the hooks rewrite (the dictionary is auto-sorted).</li>
+<li>[ ] <strong>Step 3: Check the blast radius.</strong> Run <code>detect_changes({scope: "compare", base_ref: "main"})</code> and confirm the changed symbols are limited to:</li>
+<li><code>solcast.py</code> <code>SolarAPI.*calibration*</code>, <code>pv_forecast_history</code>, <code>fetch_pv_forecast</code>;</li>
+<li><code>fetch.py</code> <code>minute_data_import_export</code>;</li>
+<li><code>web.py</code> <code>get_chart</code>, <code>html_charts</code>, <code>get_pv_calibration_chart</code>;</li>
+<li><code>config.py</code> and <code>const.py</code>;</li>
+<li>the new module and the tests.</li>
+<li>[ ] <strong>Step 4: Commit any fixes</strong></li>
+</ul>
+<pre><code class="language-bash">git add &lt;paths the checks touched&gt;
+git commit -m &quot;test: regenerate baselines for the shrunk PV calibration&quot;
+</code></pre>
+              
+            </div>
+          </div><footer>
+
+  <hr/>
+
+  <div role="contentinfo">
+    <!-- Copyright etc -->
+  </div>
+
+  Built with <a href="https://www.mkdocs.org/">MkDocs</a> using a <a href="https://github.com/readthedocs/sphinx_rtd_theme">theme</a> provided by <a href="https://readthedocs.org">Read the Docs</a>.
+</footer>
+          
+        </div>
+      </div>
+
+    </section>
+
+  </div>
+
+  <div class="rst-versions" role="note" aria-label="Versions">
+  <span class="rst-current-version" data-toggle="rst-current-version">
+    
+    
+    
+  </span>
+</div>
+    <script src="../../../js/jquery-3.6.0.min.js"></script>
+    <script>var base_url = "../../..";</script>
+    <script src="../../../js/theme_extra.js"></script>
+    <script src="../../../js/theme.js"></script>
+      <script src="../../../search/main.js"></script>
+    <script>
+        jQuery(function () {
+            SphinxRtdTheme.Navigation.enable(true);
+        });
+    </script>
+
+</body>
+</html>
