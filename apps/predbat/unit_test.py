@@ -36,6 +36,7 @@ from tests.test_solar_surplus import run_solar_surplus_tests
 from tests.test_kernel_parity import run_kernel_parity_tests, run_model_kernel_tests
 from tests.test_prediction_batch import run_prediction_batch_tests
 from tests.test_kernel_static_cache import run_kernel_static_cache_tests
+from tests.test_prediction_release_caches import run_prediction_release_caches_tests
 from tests.test_execute import run_execute_tests
 from tests.test_inverter_rate_no_entity import run_inverter_rate_no_entity_tests, run_inverter_rate_no_entity_execute_tests, run_inverter_rate_no_entity_execute_10kw_tests
 from tests.test_execute_multi_inverter_status import test_multi_inverter_status
@@ -909,6 +910,7 @@ def main():
         ("levels_block_replay", run_levels_block_replay_tests, "Levels pass block replay matches a full rebuild", False),
         ("window_selection", run_window_selection_tests, "Window selection picker tests", False),
         ("kernel_static_cache", run_kernel_static_cache_tests, "Kernel static context cache tests", False),
+        ("prediction_release_caches", run_prediction_release_caches_tests, "Prediction caches released after the plan search", False),
         ("optimise_export_copy", run_optimise_export_copy_tests, "Optimise export window copying tests", False),
         ("inverter_multi", run_inverter_multi_tests, "Inverter multi tests", False),
         ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),
