@@ -35,7 +35,7 @@ from utils import (
 from car_cancel import cancelled_mask, step_reverted
 from prediction_batch import EXPORT_FLOOR_SCENARIOS, PredictionBatch, export_end_soc_from_series, floor_export_limits, prediction_cache_key
 from battery_rate_grid import rate_grid_curve
-from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
+from prediction_kernel import create_kernel_context, kernel_supported, release_export_limit_buffers, run_prediction_kernel
 
 # The limit an inactive export window reads as. Built once at import rather than per minute:
 # run_prediction consults it on every step of the horizon for every simulation.
@@ -235,6 +235,19 @@ class Prediction(PredictionBatch):
         # Window-end SoCs for cached results that were asked for them, keyed on the same hash as
         # prediction_cache (whose entries drop the SoC series)
         self.prediction_cache_export_end = {}
+
+    def release_caches(self):
+        """Drop the memoised results of the plan search once it is over.
+
+        The caches only serve the search that built them: calculate_plan builds a new Prediction every cycle, so
+        nothing reads them in a later cycle, and a run after this simply simulates again (the same engine gives the
+        same result). Dropping them now, rather than when the next cycle replaces this object, lets the rest of
+        the cycle reuse their memory - about 8 MB of small tuples and SoC lists on a typical plan.
+        """
+        self.prediction_cache = {}
+        self.prediction_cache_export_end = {}
+        self.trial_memo = {}
+        release_export_limit_buffers()
 
     def _prepare_single(self, charge_limit, export_limits):
         """Copy the caller's limit lists for a single-scenario trial - shared by thread_run_prediction_single and the batch path.

@@ -91,6 +91,7 @@ def test_db_manager(my_predbat=None):
         ("error_handling", _test_db_manager_error_handling, "Error handling (corrupted files, missing dirs)"),
         ("persistence", _test_db_manager_persistence, "Data persistence across restarts"),
         ("commit_throttle", _test_db_manager_commit_throttling, "Commit throttling (5 second interval)"),
+        ("page_cache", _test_db_engine_page_cache, "SQLite page cache capped, results unchanged"),
     ]
 
     print("\n" + "=" * 70)
@@ -123,6 +124,34 @@ def test_db_manager(my_predbat=None):
     print("=" * 70)
 
     return failed > 0
+
+
+def _test_db_engine_page_cache(my_predbat=None):
+    """The engine caps SQLite's page cache at 256 KiB (the default is 2 MiB) and still stores and returns the same history"""
+    print("\n=== Testing DatabaseEngine page cache ===")
+    from db_engine import DatabaseEngine
+
+    mock_base = MockBase()
+    engine = None
+    try:
+        engine = DatabaseEngine(mock_base, 30)
+        cache_size = engine.db_cursor.execute("PRAGMA cache_size").fetchone()[0]
+        assert cache_size == -256, "Expected a 256 KiB page cache (cache_size -256), got {}".format(cache_size)
+        print("✓ Page cache capped at {} KiB".format(-cache_size))
+
+        # A history bigger than the cache must read back complete and in order
+        now = mock_base.now_utc_real
+        engine.db_cursor.execute("CREATE TABLE IF NOT EXISTS cache_probe (datetime TEXT KEY, state TEXT, attributes TEXT)")
+        engine.db_cursor.executemany("INSERT INTO cache_probe VALUES (?, ?, ?)", [((now - timedelta(minutes=minute)).strftime(TIME_FORMAT_DB), str(minute), "x" * 400) for minute in range(2000)])
+        engine.db.commit()
+        read = engine.db_cursor.execute("SELECT state FROM cache_probe ORDER BY datetime ASC").fetchall()
+        assert [int(state[0]) for state in read] == list(range(1999, -1, -1)), "History read back in the wrong order or incomplete"
+        print("✓ {} rows larger than the cache read back complete and in order".format(len(read)))
+    finally:
+        if engine is not None:
+            engine._close()
+        shutil.rmtree(mock_base.config_root, ignore_errors=True)
+    return False
 
 
 def _test_db_manager_set_get_state(my_predbat=None):
