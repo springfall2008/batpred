@@ -91,6 +91,7 @@ from utils import (
     dp2,
     dp3,
     find_unmasked_secret_paths,
+    secret_reference_yaml_loader,
     is_entity_id,
     mask_secret_args,
     malloc_trim,
@@ -2373,8 +2374,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
     def check_apps_yaml_secrets(self, apps_yaml_path=None):
         """
-        Re-read apps.yaml with the ruamel round-trip loader (the same one the web config
-        editors use) and warn about credential-like values stored in plain text instead of
+        Re-read apps.yaml with the parser Predbat loads it with, keeping '!secret' references
+        unresolved, and warn about credential-like values stored in plain text instead of
         via a '!secret' reference into secrets.yaml.
 
         By the time apps.yaml reaches self.args, '!secret' has already been resolved to its
@@ -2382,13 +2383,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         this re-reads the raw file to recover that distinction. Populates self.arg_warnings
         rather than self.arg_errors: an inline credential is not an invalid configuration, so
         it should not turn the same red "apps.yaml has N errors" banner on for a large
-        fraction of existing installs.
+        fraction of existing installs. PyYAML rather than ruamel, which Predbat has loaded
+        already: only the web config editors need ruamel, so a Predbat that never opens one
+        never loads it.
         """
+        import yaml
+
         self.arg_warnings = {}
-        try:
-            from ruamel.yaml import YAML
-        except ImportError:
-            return
 
         if apps_yaml_path is None:
             apps_yaml_path = hass.resolve_apps_yaml_path(self.apps_file)
@@ -2396,9 +2397,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
 
         try:
-            yaml_loader = YAML(typ="rt")
             with open(apps_yaml_path, "r") as handle:
-                data = yaml_loader.load(handle)
+                data = yaml.load(handle, Loader=secret_reference_yaml_loader())  # nosec B506 - a SafeLoader subclass
         except Exception as e:
             self.log("Warn: Unable to re-read {} to check for unmasked secrets: {}".format(apps_yaml_path, e))
             return
