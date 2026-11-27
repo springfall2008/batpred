@@ -58,6 +58,7 @@ def test_find_charge_window(my_predbat):
     old_combine_export = my_predbat.combine_export_slots
     old_combine_thresh = my_predbat.combine_rate_threshold
     old_manual_charge_times = my_predbat.manual_charge_times
+    old_manual_export_times = my_predbat.manual_export_times
     old_charge_slot_split = my_predbat.charge_slot_split
     old_export_slot_split = my_predbat.export_slot_split
     old_plan_interval = my_predbat.plan_interval_minutes
@@ -188,6 +189,82 @@ def test_find_charge_window(my_predbat):
     s, e, _ = my_predbat.find_charge_window(rates_d, 0, thresh_lo, find_high=False)
     failed |= _assert_window("path D manual split", s, e, _, 0, 30)
     my_predbat.manual_charge_times = []
+
+    # -----------------------------------------------------------------------
+    # Test: Path D — a rate step inside a manual slot does not cut the slot short (#6399)
+    # Manual charge at 16:30 and 17:00, combine_rate_threshold=0 (its default), threshold 8p.
+    # The 16:30 slot steps rate at 16:40 (e.g. an Intelligent dispatch cancelled mid-slot):
+    # the window must still run 16:30-17:00, priced at the slot's average rate.
+    # -----------------------------------------------------------------------
+    print("Test find_charge_window: rate step inside a manual slot keeps the whole slot (Path D, #6399)")
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.combine_rate_threshold = 0.0
+    my_predbat.manual_charge_times = [990, 1020]
+    peak = 36.51
+    split_cases = [
+        ("uniform peak", peak, peak, peak),
+        ("cheap then peak from 16:40", 8.0, peak, round((8.0 * 2 + peak * 4) / 6, 2)),
+        ("peak then cheap from 16:40", peak, 8.0, round((peak * 2 + 8.0 * 4) / 6, 2)),
+    ]
+    for label, first_rate, second_rate, expected_average in split_cases:
+        rates_m = {m: high_rate for m in range(0, 990, 5)}
+        for m in range(990, 1000, 5):
+            rates_m[m] = first_rate
+        for m in range(1000, 1020, 5):
+            rates_m[m] = second_rate
+        for m in range(1020, scan_end, 5):
+            rates_m[m] = peak
+
+        s, e, avg = my_predbat.find_charge_window(rates_m, 990, 8.0, find_high=False)
+        failed |= _assert_window("manual slot {} (16:30)".format(label), s, e, avg, 990, 1020, expected_average)
+        s, e, avg = my_predbat.find_charge_window(rates_m, 1020, 8.0, find_high=False)
+        failed |= _assert_window("manual slot {} (17:00)".format(label), s, e, avg, 1020, 1050, peak)
+
+        # Once now is past the step the 16:30 slot must still be a live window, not dropped by rate_scan_window
+        my_predbat.minutes_now = 1005
+        found_m, _, _ = my_predbat.rate_scan_window(rates_m, 5, 8.0, find_high=False)
+        my_predbat.minutes_now = 12 * 60
+        found_spans = [(w["start"], w["end"]) for w in found_m]
+        if found_spans[:2] != [(990, 1020), (1020, 1050)]:
+            print("ERROR: manual slot {}: rate_scan_window expected [(990, 1020), (1020, 1050)] first, got {}".format(label, found_spans))
+            failed = 1
+
+    # Without a manual slot the same step still splits the window as before
+    my_predbat.manual_charge_times = []
+    rates_n = {m: high_rate for m in range(0, scan_end, 5)}
+    for m in range(990, 1000, 5):
+        rates_n[m] = 4.0
+    for m in range(1000, 1020, 5):
+        rates_n[m] = 6.0
+    s, e, avg = my_predbat.find_charge_window(rates_n, 990, 8.0, find_high=False)
+    failed |= _assert_window("rate step without a manual slot still splits", s, e, avg, 990, 1000, 4.0)
+
+    # The same rule applies to the export scan (find_high=True): a manual export slot at 16:30 whose export
+    # rate drops from 50p to 10p at 16:40 stays one 16:30-17:00 window at the slot average. Before #6399 it
+    # ended at 16:40, and once now passed 16:40 rate_scan_window dropped it, ending the forced export early.
+    print("Test find_charge_window: export rate step inside a manual export slot keeps the whole slot (Path D, #6399)")
+    my_predbat.manual_export_times = [990]
+    rates_x = {m: 1.0 for m in range(0, scan_end, 5)}
+    for m in range(990, 1000, 5):
+        rates_x[m] = 50.0
+    for m in range(1000, 1020, 5):
+        rates_x[m] = 10.0
+    s, e, avg = my_predbat.find_charge_window(rates_x, 990, 30.0, find_high=True)
+    failed |= _assert_window("manual export slot with a rate step", s, e, avg, 990, 1020, round((50.0 * 2 + 10.0 * 4) / 6, 2))
+    my_predbat.minutes_now = 1005
+    found_x, _, _ = my_predbat.rate_scan_window(rates_x, 5, 30.0, find_high=True)
+    my_predbat.minutes_now = 12 * 60
+    found_spans = [(w["start"], w["end"]) for w in found_x]
+    if found_spans[:1] != [(990, 1020)]:
+        print("ERROR: manual export slot with a rate step: rate_scan_window expected [(990, 1020)] first, got {}".format(found_spans))
+        failed = 1
+
+    # Without the manual export slot the export window still ends at the step
+    my_predbat.manual_export_times = []
+    s, e, avg = my_predbat.find_charge_window(rates_x, 990, 30.0, find_high=True)
+    failed |= _assert_window("export rate step without a manual slot still splits", s, e, avg, 990, 1000, 50.0)
+    my_predbat.manual_export_times = old_manual_export_times
+    my_predbat.combine_rate_threshold = old_combine_thresh
 
     # -----------------------------------------------------------------------
     # Test: Path E — alternate_rate_boundary splits export window
