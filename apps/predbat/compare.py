@@ -104,6 +104,7 @@ COMPARE_PLAN_STATE = (
     "rate_best_cost_threshold_charge",
     "rate_best_cost_threshold_export",
     "io_confirmed_tiebreak",
+    "plan_replace_forced",
     # The live plan's PV10 and PV90 series behind its scenario tooltips (#5871). calculate_plan() replaces them only on a
     # publishing run or a debug-mode pass, and a comparison makes neither, so this is a safeguard - listed because
     # calculate_plan() assigns them, which the compare tests require to be accounted for

@@ -965,10 +965,15 @@ class Plan:
                 # Whole minutes stay ints, as the slots they are compared with are
                 self.dynamic_load_car_run[car_n] = {name: int(value) if value == int(value) else value for name, value in run.items()}
                 self.dynamic_load_car_cancelled[car_n] = bool(car.get("cancelled", False))
+                if self.dynamic_load_car_cancelled[car_n]:
+                    # The restored cancellation is no transition, so dynamic_load_car_check() will not arm the forced
+                    # replan, and the restored plan may predate it - made at the withdrawn rate (#6361). Re-arm it: if the
+                    # plan was already remade after the cancellation, this only costs one replan on the same rates
+                    self.plan_replace_forced = True
             if confirmed_current or run_current or periods:
                 restored.append(car_n)
         if restored:
-            self.log("Octopus Intelligent: restored the dispatch state of car(s) {} from storage".format(restored))
+            self.log("Octopus Intelligent: restored the dispatch state of car(s) {} from storage{}".format(restored, ", the next plan replaces the saved one as a dispatch is cancelled" if self.plan_replace_forced else ""))
 
     def dynamic_load_car_refresh_sensors(self):
         """
@@ -1057,6 +1062,8 @@ class Plan:
                     changed = True
                     if cancelled and self.dynamic_load_car_dispatch(car_n, minute) is not None:
                         reason = "is in a dispatch but not charging, cancelling its slots"
+                        # The incumbent plan was optimised while this dispatch's cheap rate applied (#6361)
+                        self.plan_replace_forced = True
                     elif cancelled:
                         reason = "has not been seen charging in its dispatches yet, not trusting them"
                     else:
@@ -2211,7 +2218,15 @@ class Plan:
         (cost_prev/cost_new, to a hundredth of a penny): the incumbent was optimised before the score-only
         credit existed, and the credit is far smaller than the band, so it would otherwise never take effect.
         Only that once - later in the run both plans carry the credit, and the band keeps the plan steady.
+
+        When dynamic_load_car_check() has just cancelled a dispatch (plan_replace_forced) the incumbent was
+        optimised at the dispatch's cheap rate, which has now been withdrawn, so its metric is not comparable:
+        metric_keep credits it for the early charge by more than the new plan saves in cost, and it would win
+        every cycle for the rest of the run while the battery grid-charges at the full rate (#6361). The new
+        plan, built on the rates as they now stand, is taken unconditionally - once, as with the tie-break.
         """
+        if self.plan_replace_forced:
+            return True
         improvement = metric_prev - metric_new
         if improvement >= self.metric_min_improvement_plan:
             return True
@@ -2741,6 +2756,8 @@ class Plan:
                     # Keeping the incumbent keeps its pre-clip snapshot too, so the next cycle still compares
                     # like for like
                     preclip_new = preclip_prev
+                elif self.plan_replace_forced:
+                    self.log("Octopus Intelligent dispatch was cancelled, so the previous plan was made at a rate that no longer applies - using new plan")
                 elif (metric_prev - metric) >= self.metric_min_improvement_plan:
                     self.log("New plan metric is significantly better from previous plan, using new plan")
                 elif fragmentation_new >= fragmentation_prev:
@@ -2754,6 +2771,8 @@ class Plan:
             self.plan_made_by_version = self.running_version
             # The plan now in force has been weighed with the bird-in-hand credit, so its one-off tie-break is spent
             self.io_confirmed_tiebreak = False
+            # ...and a cancelled dispatch has had its one replan
+            self.plan_replace_forced = False
 
             # Plan is now valid
             self.log("Plan valid is now true after recompute was {}".format(self.plan_valid))

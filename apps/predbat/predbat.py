@@ -548,6 +548,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.io_confirmed_active = False
         # One replan may take a same-cost plan once a run becomes boosted (should_replace_plan)
         self.io_confirmed_tiebreak = False
+        # The next replan takes the new plan over the incumbent, set when a dispatch is cancelled (dynamic_load_car_check)
+        self.plan_replace_forced = False
         # Target % of the charge running when the planner started, kept by optimise_charge_limit (calculate_plan)
         self.charge_keep_target = None
         # Repeated Intelligent slot lists are logged briefly between full logs (rate_add_io_slots)

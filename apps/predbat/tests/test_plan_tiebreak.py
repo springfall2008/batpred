@@ -103,6 +103,22 @@ def _boost_tiebreak_tests(my_predbat, failures):
         my_predbat.io_confirmed_tiebreak = saved_tiebreak
 
 
+def _forced_replace_tests(my_predbat, failures):
+    """should_replace_plan: after a dispatch is cancelled the new plan wins however the incumbent scores (#6361)."""
+    my_predbat.metric_min_improvement_plan = 1.0
+    saved_forced = my_predbat.plan_replace_forced
+    try:
+        # The log's own numbers: incumbent metric 1732.65 (cost 1198.37) against a cheaper new plan scoring 1890.16 (cost 1146.78)
+        my_predbat.plan_replace_forced = False
+        _check(my_predbat.should_replace_plan(1732.65, 1890.16, 3, 3, cost_prev=1198.37, cost_new=1146.78) is False, "without a cancelled dispatch the better-scoring incumbent is kept", failures)
+        my_predbat.plan_replace_forced = True
+        _check(my_predbat.should_replace_plan(1732.65, 1890.16, 3, 3, cost_prev=1198.37, cost_new=1146.78) is True, "after a cancelled dispatch the new plan replaces a better-scoring incumbent", failures)
+        # Also without costs, as other callers pass none
+        _check(my_predbat.should_replace_plan(1732.65, 1890.16, 3, 3) is True, "forced replace does not need the costs", failures)
+    finally:
+        my_predbat.plan_replace_forced = saved_forced
+
+
 def _scoring_pair_tests(my_predbat, failures):
     """plan_scoring_pair: selection scores the pre-clip plans, and never mixes a clipped side with a pre-clip one.
 
@@ -135,5 +151,6 @@ def run_plan_tiebreak_tests(my_predbat):
     _fragmentation_tests(my_predbat, failures)
     _tiebreak_decision_tests(my_predbat, failures)
     _boost_tiebreak_tests(my_predbat, failures)
+    _forced_replace_tests(my_predbat, failures)
     _scoring_pair_tests(my_predbat, failures)
     return len(failures) > 0
