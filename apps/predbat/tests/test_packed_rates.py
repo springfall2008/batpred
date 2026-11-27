@@ -14,6 +14,7 @@ import copy
 import io
 import sys
 
+from futurerate import FutureRate
 from utils import PackedRates
 from userinterface import dump_debug_yaml
 from agent_tools import measure_state_value, summarise_state_value
@@ -220,6 +221,15 @@ def test_packed_rates(my_predbat):
         if not isinstance(packed, PackedRates) or as_packed.getvalue() != as_dict.getvalue():
             print("ERROR: test 9: the debug dump of a packed series differs from the dict's:\n{}\nagainst\n{}".format(as_packed.getvalue()[:300], as_dict.getvalue()[:300]))
             failed = True
+        # dump_debug_yaml() unpacks only the top-level value, so a series nested inside one reaches the dumper itself,
+        # and only DebugYamlDumper's PackedRates representer keeps it a plain map rather than a !!python/object tag
+        nested_as_dict = io.StringIO()
+        dump_debug_yaml({"rates": {"nested": series}}, nested_as_dict)
+        nested_as_packed = io.StringIO()
+        dump_debug_yaml({"rates": {"nested": packed}}, nested_as_packed)
+        if nested_as_packed.getvalue() != nested_as_dict.getvalue() or "!!python" in nested_as_packed.getvalue():
+            print("ERROR: test 9: the debug dump of a nested packed series differs from the dict's:\n{}\nagainst\n{}".format(nested_as_packed.getvalue()[:300], nested_as_dict.getvalue()[:300]))
+            failed = True
 
     # --- Test 10: the MCP state description of the unpacked series matches the dict's ---
     series = _series(0, 2000)
@@ -228,6 +238,125 @@ def test_packed_rates(my_predbat):
         print("ERROR: test 10: MCP describes an unpacked series differently from the dict")
         failed = True
 
+    # --- Test 11: the real fetch_sensor_data() leaves its finished series packed ---
+    failed |= _check_fetch_packs_series(my_predbat)
+
     if not failed:
         print("PackedRates tests passed")
+    return failed
+
+
+# The series fetch_sensor_data() holds packed, and the ones it must leave as dicts because later code changes them in place
+FETCH_PACKED_SERIES = (
+    "rate_import_base",
+    "rate_import_no_io",
+    "rate_min_forward",
+    "rate_export_base",
+    "rate_export_max_forward",
+    "rate_gas",
+    "future_energy_rates_import",
+    "future_energy_rates_export",
+)
+FETCH_DICT_SERIES = ("rate_import", "rate_export")
+# Every apps.yaml rate source fetch_sensor_data() tries ahead of the basic rates_* lists this test sets
+FETCH_RATE_SOURCES = (
+    "rates_import_octopus_url",
+    "metric_octopus_import",
+    "metric_energidataservice_import",
+    "metric_stromligning_import_today",
+    "metric_stromligning_import_tomorrow",
+    "rates_export_octopus_url",
+    "metric_octopus_export",
+    "metric_energidataservice_export",
+    "metric_stromligning_export_today",
+    "metric_stromligning_export_tomorrow",
+    "metric_octopus_gas",
+    "futurerate_url",
+)
+
+
+class _StopFetch(Exception):
+    """Raised by the test's hook to stop fetch_sensor_data() once every rate series is built."""
+
+
+def _fetch_series(my_predbat, rates_import):
+    """
+    Run the real fetch_sensor_data() with basic import, export and gas rates, stop it at set_rate_thresholds() (which
+    follows the last of the series being built) and return {name: series}. Restores the instance and its args afterwards.
+    """
+    saved_state = dict(my_predbat.__dict__)
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_analysis = FutureRate.futurerate_analysis
+    seen = {}
+
+    def stop(*args, **kwargs):
+        """Record every series as fetch_sensor_data() left it, then stop the fetch."""
+        for name in FETCH_PACKED_SERIES + FETCH_DICT_SERIES:
+            seen[name] = getattr(my_predbat, name, None)
+        raise _StopFetch()
+
+    try:
+        for key in FETCH_RATE_SOURCES:
+            my_predbat.args.pop(key, None)
+        my_predbat.args["rates_import"] = rates_import
+        my_predbat.args["rates_export"] = [{"rate": 15.0}]
+        my_predbat.args["rates_gas"] = [{"rate": 6.5}]
+        my_predbat.set_rate_thresholds = stop
+        # A predicted price for every minute ahead, as a configured futurerate source gives, without fetching one
+        FutureRate.futurerate_analysis = lambda self, rate_import_real, rate_export_real: (
+            {minute: 20.0 + (minute // 30) % 3 for minute in range(48 * 60)},
+            {minute: 12.0 + (minute // 30) % 2 for minute in range(48 * 60)},
+        )
+        # The shared fixture's sensor history can't feed the load and energy reads ahead of the rates, and they play no part in them
+        my_predbat.minute_data_load = lambda *args, **kwargs: ({}, 0)
+        my_predbat.minute_data_import_export = lambda *args, **kwargs: {}
+        # Nor do free electricity sessions, and the fixture's octopus_free_url would otherwise fetch the live page
+        my_predbat.download_octopus_free = lambda url: []
+        try:
+            my_predbat.fetch_sensor_data(save=False)
+            print("ERROR: test 11: fetch_sensor_data() returned without reaching set_rate_thresholds()")
+        except _StopFetch:
+            pass
+    finally:
+        FutureRate.futurerate_analysis = saved_analysis
+        for name in [name for name in my_predbat.__dict__ if name not in saved_state]:
+            delattr(my_predbat, name)
+        my_predbat.__dict__.update(saved_state)
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+    return seen
+
+
+def _check_fetch_packs_series(my_predbat):
+    """Every series fetch_sensor_data() holds packed is PackedRates after a real fetch, and a whole-pence tariff gap leaves its series a dict."""
+    failed = False
+    # A day split into a cheap night and a day rate, so every minute is covered by a float rate. basic_rates() builds
+    # minutes 0 on and rate_replicate() fills in the day before, so this also checks that fill leaves the minutes in order
+    seen = _fetch_series(my_predbat, [{"start": "00:00:00", "end": "07:00:00", "rate": 7.5}, {"start": "07:00:00", "end": "00:00:00", "rate": 28.0}])
+    if not seen:
+        return True
+    for name in FETCH_PACKED_SERIES:
+        if not isinstance(seen[name], PackedRates):
+            print("ERROR: test 11: fetch_sensor_data() should leave {} packed, got {}".format(name, type(seen[name]).__name__))
+            failed = True
+    for name in FETCH_DICT_SERIES:
+        if type(seen[name]) is not dict:
+            print("ERROR: test 11: fetch_sensor_data() must leave {} a dict (later code changes it in place), got {}".format(name, type(seen[name]).__name__))
+            failed = True
+    if not failed and (seen["rate_import_base"].get(my_predbat.minutes_now) is None or seen["rate_gas"].get(my_predbat.minutes_now) != 6.5):
+        print("ERROR: test 11: the packed series do not hold the fetched rates")
+        failed = True
+
+    # Minutes no rates_import entry covers are the int 0 basic_rates() starts from, so the import series cannot be
+    # packed and stays the dict it is, with that int intact; export and gas are untouched by it and still pack
+    seen = _fetch_series(my_predbat, [{"start": "07:00:00", "end": "00:00:00", "rate": 28.0}])
+    if not seen:
+        return True
+    if type(seen["rate_import_base"]) is not dict or not any(type(rate) is int for rate in seen["rate_import_base"].values()):
+        print("ERROR: test 11: an import tariff with an int-rate gap should leave rate_import_base the dict it was built as, got {}".format(type(seen["rate_import_base"]).__name__))
+        failed = True
+    for name in ("rate_export_base", "rate_gas"):
+        if not isinstance(seen[name], PackedRates):
+            print("ERROR: test 11: {} should still be packed when only the import tariff has a gap, got {}".format(name, type(seen[name]).__name__))
+            failed = True
     return failed

@@ -3183,6 +3183,17 @@ class Fetch:
                 rate_last_valid = True
             minute += 1
 
+        # The rates can arrive out of minute order (basic_rates() seeds today before stamping yesterday), and a
+        # filled minute is added after the ones already held, so a feed starting later than -24h or with a gap ends
+        # up out of order too. Readers index by minute, so the order only matters to PackedRates.pack(), which holds
+        # a run of ascending minutes; sort in place so it can, keeping the dict the caller passed in
+        minutes = list(rates)
+        ascending = sorted(minutes)
+        if minutes != ascending:
+            ordered = [(minute, rates[minute]) for minute in ascending]
+            rates.clear()
+            rates.update(ordered)
+
         return rates, replicated_rates
 
     def carbon_replicate(self, carbon_data):
