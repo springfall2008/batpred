@@ -133,7 +133,7 @@ Each line shows that battery's SoC so far today as a percentage of its own capac
 There is no predicted SoC per battery, as Predbat plans all your batteries as one
 - **Power** - Shows predicted Power for the plan duration. This includes battery charge and discharge, solar generation (PV), house load, iBoost load, car charging load, and grid import/export
 - **Cost** - Shows the historic import, export and net total cost incurred for today and the predicted cost for the plan duration under the Base/Base10/Best and Best10 scenarios
-- **Rates** - Shows historic and future import and export rates along with historic hourly and today pence per kWh so you can see where you have earned or spent the most on electricity during today
+- **Rates** - Shows historic and future import and export rates along with historic hourly and today currency minor unit (pence, cents, etc) per kWh so you can see where you have earned or spent the most on electricity during today
 - **InDay** - Shows Predbat's predicted house load for today, the actual house load that has occurred so far today, and then Predbat's adjusted house load prediction based on the variance of today's actual load to predicted load
 - **PV** - Shows today's predicted solar power generation under the PV, PV10 and PV90 scenarios alongside today's actual solar power generation
 - **PV7** - Similar to the PV chart, but shows actual solar power generation and forecast for the last 7 days including today

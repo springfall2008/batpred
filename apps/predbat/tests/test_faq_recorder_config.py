@@ -19,6 +19,7 @@ views were empty and PV calibration was disabled on every cycle, both because th
 storing the predbat.* entities those features read.
 """
 
+import fnmatch
 import os
 import re
 
@@ -75,20 +76,21 @@ def _entities_read_from_history():
 def _is_recorded(entity_id, recorder):
     """Return True if Home Assistant would record this entity under the given filter.
 
-    Mirrors the "exclude domains, include entities" case of Home Assistant's own recorder entity
-    filter: an entity in an excluded domain is recorded only when it is named in include.entities,
-    and an entity in any other domain is recorded unless it is named in exclude.entities. Note that
-    include.entities does *not* rescue an entity that exclude.entities names in a domain which
-    isn't itself excluded.
+    Mirrors the "exclude domains and/or globs, include entities" case of Home Assistant's own recorder
+    entity filter: an entity in an excluded domain, or matched by an excluded glob, is recorded only when
+    it is named in include.entities, and any other entity is recorded unless it is named in
+    exclude.entities. Note that include.entities does *not* rescue an entity that exclude.entities names
+    when neither its domain nor a glob excludes it.
     """
     exclude = recorder.get("exclude", {}) or {}
     include = recorder.get("include", {}) or {}
     exclude_domains = exclude.get("domains", []) or []
+    exclude_globs = exclude.get("entity_globs", []) or []
     exclude_entities = exclude.get("entities", []) or []
     include_entities = include.get("entities", []) or []
 
     domain = entity_id.split(".")[0]
-    if domain in exclude_domains:
+    if domain in exclude_domains or any(fnmatch.fnmatchcase(entity_id, glob) for glob in exclude_globs):
         return entity_id in include_entities
     return entity_id not in exclude_entities
 
@@ -102,6 +104,26 @@ def test_faq_recorder_config(my_predbat):
     if recorder is None:
         print("ERROR: docs/faq.md no longer contains a recorder filter example to check")
         return True
+
+    # A domains or entity_globs rule under include puts Home Assistant's recorder into allowlist mode,
+    # so every entity not listed (inverter, energy meter and other non-Predbat sensors) stops being
+    # recorded (#5507). Only include.entities is safe in this example.
+    print("Test: the FAQ recorder example has no domains or entity_globs under include")
+    include = recorder.get("include", {}) or {}
+    for key in ("domains", "entity_globs"):
+        if include.get(key):
+            print("ERROR: docs/faq.md recorder example has include.{}, which switches the recorder to allowlist mode and stops it recording every unlisted entity (#5507)".format(key))
+            failed = True
+
+    # _is_recorded() itself must treat an exclude.entity_globs match as not recorded, or a future
+    # history read of a sensor.predbat_octopus_* / sensor.predbat_kraken_* entity would pass unnoticed
+    print("Test: an entity matched by an exclude glob counts as not recorded unless include.entities names it")
+    for glob in (recorder.get("exclude", {}) or {}).get("entity_globs", []) or []:
+        probe = glob.replace("*", "probe")
+        include_entities = (recorder.get("include", {}) or {}).get("entities", []) or []
+        if probe not in include_entities and _is_recorded(probe, recorder):
+            print("ERROR: {} matches exclude glob {} but _is_recorded() says it is recorded".format(probe, glob))
+            failed = True
 
     needed = _entities_read_from_history()
     if not needed:
