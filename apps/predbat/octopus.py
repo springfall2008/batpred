@@ -79,6 +79,75 @@ DATE_TIME_STR_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 # since both would otherwise look the same (falsy) to callers.
 _ATTRIBUTE_UNSET = object()
 
+# Where the URL cache (rate series and free sessions per URL) is kept between restarts. It used to be a YAML
+# mapping with one line per minute under "url_cache"; that file is no longer read and expires and is removed
+# by the storage cleanup. JSON with each run of minutes held as a start and a list loads without building a
+# YAML node per value, which took tens of MB at startup and left that memory with the process.
+OCTOPUS_URL_CACHE_MODULE = "octopus_free"
+OCTOPUS_URL_CACHE_NAME = "url_cache_json"
+
+
+def _encode_url_cache_data(data):
+    """
+    Encode one cache entry's data for JSON
+    A minute -> rate dict whose minutes run on one at a time becomes {"start", "rates"}, any other minute dict
+    {"minutes": [[minute, rate], ...]}, and anything else (the free session list) {"value": data}.
+    """
+    if isinstance(data, dict) and data and all(type(minute) is int for minute in data):
+        minutes = list(data)
+        start = minutes[0]
+        if minutes == list(range(start, start + len(minutes))):
+            return {"start": start, "rates": list(data.values())}
+        return {"minutes": [[minute, rate] for minute, rate in data.items()]}
+    return {"value": data}
+
+
+def _decode_url_cache_data(encoded):
+    """
+    Decode what _encode_url_cache_data() produced, back to the dict or value it was made from
+    """
+    if "rates" in encoded:
+        start = encoded["start"]
+        return {start + index: rate for index, rate in enumerate(encoded["rates"])}
+    if "minutes" in encoded:
+        return {minute: rate for minute, rate in encoded["minutes"]}
+    return encoded["value"]
+
+
+def encode_octopus_url_cache(cache):
+    """
+    Return the URL cache as JSON-ready data: the stamp and midnight_utc as ISO strings and the data compacted
+    """
+    encoded = {}
+    for url, entry in cache.items():
+        midnight_utc = entry.get("midnight_utc")
+        encoded[url] = {
+            "stamp": entry["stamp"].isoformat(),
+            "midnight_utc": midnight_utc.isoformat() if midnight_utc is not None else None,
+            "data": _encode_url_cache_data(entry.get("data")),
+        }
+    return encoded
+
+
+def decode_octopus_url_cache(encoded, log=None):
+    """
+    Rebuild the URL cache from encode_octopus_url_cache() output, skipping (and logging) any entry that cannot be read
+    """
+    cache = {}
+    for url, entry in encoded.items():
+        try:
+            midnight_utc = entry.get("midnight_utc")
+            cache[url] = {
+                "stamp": datetime.fromisoformat(entry["stamp"]),
+                "midnight_utc": datetime.fromisoformat(midnight_utc) if midnight_utc is not None else None,
+                "data": _decode_url_cache_data(entry["data"]),
+            }
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            if log:
+                log("Warn: Octopus: Skipping unreadable URL cache entry for {}: {}".format(url, e))
+    return cache
+
+
 # Night-rate window definitions: start time, end time, whether the window crosses midnight.
 # Keys: "eco7" (Economy 7), "go" (Octopus GO / generic day-night), "iog" (Intelligent GO TOU).
 # "utc" says which clock the window is fixed to. Octopus documents the Economy 7 smart-meter window
@@ -3520,10 +3589,10 @@ class Octopus:
             return
         try:
             self.octopus_url_cache_loaded = True
-            data = run_async(storage.load("octopus_free", "url_cache"))
+            data = run_async(storage.load(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME))
             if data:
-                self.octopus_url_cache = data
-                self.log("Octopus: Loaded URL cache from storage ({} entries)".format(len(data)))
+                self.octopus_url_cache = decode_octopus_url_cache(data, log=self.log)
+                self.log("Octopus: Loaded URL cache from storage ({} entries)".format(len(self.octopus_url_cache)))
         except Exception as e:
             self.log("Warn: Octopus: Failed to load URL cache from storage: {}".format(e))
 
@@ -3543,7 +3612,7 @@ class Octopus:
             self.log("Octopus: Pruned {} stale URL cache entries (older than 2 days)".format(len(stale)))
 
         try:
-            run_async(storage.save("octopus_free", "url_cache", self.octopus_url_cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(hours=8)))
+            run_async(storage.save(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME, encode_octopus_url_cache(self.octopus_url_cache), format="json", expiry=datetime.now(timezone.utc) + timedelta(hours=8)))
         except Exception as e:
             self.log("Warn: Octopus: Failed to save URL cache to storage: {}".format(e))
 
