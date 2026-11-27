@@ -681,6 +681,45 @@ class Execute:
             if event is not None:
                 self.log(format_failure(event, self.local_tz))
 
+    def charge_rate_ahead_of_window(self, inverter, window):
+        """Work out the low-power charge rate (W) a not-yet-started charge window will open with (#6190).
+
+        The same find_charge_rate() call the running window makes, taken as at the window's start: the
+        SoC is today's, as the SoC at the start is not known yet, and the PV is forecast over the whole
+        window. The running window re-solves it every cycle from the real SoC, so this only has to be
+        close enough to open at the right order of rate rather than at the inverter's maximum.
+        """
+        target_soc = calc_percent_limit(self.charge_limit_best[0], self.soc_max)
+        pv_window_kwh = 0.0
+        for pv_minute in range(window["start"], window["end"]):
+            pv_window_kwh += self.pv_forecast_minute.get(pv_minute, 0.0)
+        new_charge_rate, new_charge_rate_real = find_charge_rate(
+            window["start"],
+            inverter.soc_kw,
+            window,
+            target_soc * inverter.soc_max / 100.0,
+            inverter.battery_rate_max_charge,
+            inverter.soc_max,
+            rate_grid_curve(self.rate_grids()[0], inverter.battery_temperature, rated=inverter.battery_rate_max_charge),
+            self.set_charge_low_power,
+            self.charge_low_power_margin,
+            self.battery_rate_min,
+            self.battery_rate_max_scaling,
+            self.battery_loss,
+            self.log,
+            current_charge_rate=inverter.get_current_charge_rate() / MINUTE_WATT,
+            pv_window_kwh=pv_window_kwh,
+            low_power_pv_threshold_w=self.low_power_pv_threshold_w,
+            solar_full_rate=self.set_charge_low_power_solar_full_rate,
+        )
+        new_charge_rate = int(new_charge_rate * MINUTE_WATT)
+        self.log(
+            "Inverter {} charge window starts at {}: setting the low-power charge rate {}W (real {}W) with it, target SoC {}%".format(
+                inverter.id, self.time_abs_str(window["start"]), new_charge_rate, dp0(new_charge_rate_real * MINUTE_WATT), dp0(target_soc)
+            )
+        )
+        return new_charge_rate
+
     def queue_immediate(self, immediate_calls, call):
         """
         Make an immediate charge/export call now, or add it to immediate_calls to make after the rates are set.
@@ -1075,6 +1114,20 @@ class Execute:
                                         self.log("IOG action latency: {:.1f} seconds from slot start".format(latency))
 
                                 inverter.adjust_charge_window(charge_start_time, charge_end_time, self.minutes_now)
+
+                                if self.set_charge_low_power and inverter.inv_charge_rate_ahead_of_window:
+                                    # Low power otherwise works out its rate only once the window is running, and until
+                                    # then nothing claims the rate, so it sits at maximum and the window opens at full
+                                    # power until the first cycle inside it writes the lower rate (#6190). Where the rate
+                                    # does not throttle solar charging while no charge slot is running, write it now with
+                                    # the window instead: no slot is running yet (this is the lead-in, before
+                                    # charge_window_best[0]), so solar charging is not held back, and the window opens at
+                                    # the low-power rate. The running window re-solves the rate every cycle from the real SoC.
+                                    # rate_owner stays "demand": the fleet is not charging yet, and claiming "charge" would
+                                    # make balance_inverters() treat batteries covering the house in the lead-in as
+                                    # cross-charging and zero their discharge rate. apply_inverter_rates() writes
+                                    # charge_rate whatever the owner.
+                                    charge_rate = self.charge_rate_ahead_of_window(inverter, window)
                         else:
                             # If there is a previous set charge window, but its more than the set window minutes in the future but we are not close to it then we can leave it enabled for now
                             # saves register writes and avoids turning off the window before the inverter knows it finished

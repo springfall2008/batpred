@@ -10,7 +10,7 @@
 
 import predbat  # noqa: F401  (import first - avoids circular import: config.py does `from predbat import THIS_VERSION`)
 from config import INVERTER_DEF
-from coordinator import CAPABILITY_KEYS
+from coordinator import CAPABILITY_KEYS, OPTIONAL_CAPABILITY_DEFAULTS
 from hanchu import HANCHU_CAPABILITIES
 from hanchu_const import HANCHU_KEY_CHARGE_END, HANCHU_KEY_CHARGE_POWER, HANCHU_KEY_CHARGE_START, HANCHU_KEY_DISCHARGE_SOC
 from tests.discovery_contract import assert_definition_complete, assert_record_agrees, assert_record_binds_nothing_extra, capture_automatic_config, validated_inverters
@@ -317,7 +317,13 @@ def test_hanchu_capabilities_match_the_inverter_def_row():
         if HANCHU_CAPABILITIES.get(key) != expected:
             print(f"ERROR: capability {key} = {HANCHU_CAPABILITIES.get(key)} != INVERTER_DEF's {expected}")
             failed = True
-    extra = set(HANCHU_CAPABILITIES) - set(CAPABILITY_KEYS)
+    # An optional capability (one inverter.py defaults when a row leaves it out) must agree too, when stated.
+    for key, default in OPTIONAL_CAPABILITY_DEFAULTS.items():
+        expected = row.get(key, default)
+        if HANCHU_CAPABILITIES.get(key, default) != expected:
+            print(f"ERROR: optional capability {key} = {HANCHU_CAPABILITIES.get(key, default)} != INVERTER_DEF's {expected}")
+            failed = True
+    extra = set(HANCHU_CAPABILITIES) - set(CAPABILITY_KEYS) - set(OPTIONAL_CAPABILITY_DEFAULTS)
     if extra:
         print(f"ERROR: HANCHU_CAPABILITIES carries keys the catalogue does not know: {sorted(extra)}")
         failed = True
