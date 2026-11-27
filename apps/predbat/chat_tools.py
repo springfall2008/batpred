@@ -31,8 +31,6 @@ import socket
 import time
 from urllib.parse import urljoin, urlparse
 
-from ruamel.yaml import YAML
-
 from component_base import new_http_session
 from utils import ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, find_redacted_secret_overwrite, is_secret_key, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value
 
@@ -715,6 +713,8 @@ def set_apps_config(base, key, value, apps_yaml_path=APPS_YAML_PATH, backup_path
             return {"success": False, "error": "'{}' looks like a credential (matches Predbat's secret-key heuristic) and cannot be changed through chat. Edit apps.yaml directly if it needs to change.".format(segment), "data": None}
         if is_endpoint_key(segment):
             return {"success": False, "error": "'{}' decides where Predbat sends its credentials, so it cannot be changed through chat. Edit apps.yaml directly if it needs to change.".format(segment), "data": None}
+
+    from ruamel.yaml import YAML  # only a chat edit of apps.yaml needs it, and the chat agent is always loaded
 
     yaml = YAML()
     yaml.preserve_quotes = True
