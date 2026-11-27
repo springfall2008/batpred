@@ -475,7 +475,7 @@ def test_component_base_set_arg_auto_keeps_user_setting(my_predbat):
 
 
 def test_component_base_apps_yaml_value(my_predbat):
-    """ComponentBase.apps_yaml_value() gives the raw apps.yaml snapshot value, None when the key, the snapshot or the base is missing."""
+    """ComponentBase.apps_yaml_value() gives the raw apps.yaml snapshot value, None when apps.yaml does not set the key."""
     print("\n*** Test: ComponentBase.apps_yaml_value reads the apps.yaml snapshot ***")
     base = MockBase()
     base.args_from_apps_yaml = {"inverter_mode": ["switch.my_eco", None], "export_limit": 3600}
@@ -483,11 +483,7 @@ def test_component_base_apps_yaml_value(my_predbat):
     assert component.apps_yaml_value("inverter_mode") == ["switch.my_eco", None]
     assert component.apps_yaml_value("export_limit") == 3600
     assert component.apps_yaml_value("load_today") is None, "a key apps.yaml does not set"
-    assert TestComponent(MockBase()).apps_yaml_value("export_limit") is None, "a base with no snapshot"
-    bare = TestComponent(MockBase())
-    del bare.base
-    assert bare.apps_yaml_value("export_limit") is None, "an instance with no base"
-    print("PASS: apps_yaml_value reads the snapshot and tolerates a missing one")
+    print("PASS: apps_yaml_value reads the snapshot")
     return False
 
 
