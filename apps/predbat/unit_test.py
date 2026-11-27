@@ -397,6 +397,7 @@ from tests.test_download import test_download
 from tests.test_ohme import test_ohme
 from tests.test_givtcp_component import test_givtcp_component
 from tests.test_debug_yaml_scope import run_debug_yaml_scope_tests
+from tests.test_debug_yaml_series_writer import test_debug_yaml_series_writer
 from tests.test_log_replay_inputs import run_log_replay_inputs_tests
 from tests.test_replay_roundtrip import run_replay_roundtrip_tests, run_replay_roundtrip_day_tests
 from tests.test_memory_release import run_memory_release_tests
@@ -985,6 +986,7 @@ def main():
         ("ohme", test_ohme, "Ohme EV charger comprehensive tests (helper functions, client methods, API operations, event handlers)", False),
         ("givtcp_component", test_givtcp_component, "GivTCP component tests (entity publishing, automatic_config, event handlers)", False),
         ("debug_yaml_scope", run_debug_yaml_scope_tests, "create_debug_yaml() reachability/scope tests", False),
+        ("debug_yaml_series_writer", test_debug_yaml_series_writer, "Debug dump writes minute series directly and reads back as yaml.dump would", False),
         ("dummy_inverter", run_dummy_inverter_tests, "Simulated inverter and battery component (model physics, controls, automatic config)", False),
         ("replay_forward", run_replay_forward_tests, "Forward replay of a log from a debug yaml (log parsing, history shifting, window comparison)", False),
         ("replay_roundtrip", run_replay_roundtrip_tests, "Round trip: an hour of the main loop against the dummy inverter, then a replay of its log must match line for line", False),

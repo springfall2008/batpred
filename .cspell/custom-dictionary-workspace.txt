@@ -808,6 +808,10 @@ tzdata
 tzfile
 tzpath
 tzset
+udfff
+ufeff
+ufffe
+uffff
 unasserted
 uncalibrated
 uncancellable
