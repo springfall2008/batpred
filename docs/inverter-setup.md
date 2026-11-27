@@ -4005,6 +4005,9 @@ If however, you want the service to be called on each Predbat run then you shoul
       repeat: True
 ```
 
+When Predbat changes the start or end time of the export window it waits 30 seconds before calling **discharge_start_service**.
+If your services do their own sequencing you can shorten or remove this wait with [discharge_window_service_write_delay](#discharge_window_service_write_delay).
+
 #### charge_start_service
 
 Called to start a charge
@@ -4199,6 +4202,21 @@ Defines the units of the SoC setting (currently not used), it defaults to "%".
 ### write_and_poll_sleep
 
 Sets the number of seconds between polls of inverter settings.
+
+### discharge_window_service_write_delay
+
+Optional, defaults to 30. The number of seconds Predbat waits after it has rewritten the start or end time of the export (discharge) window, before it changes the inverter mode
+and calls **discharge_start_service**. The wait gives GivTCP time to apply the new window, and you will see `Sleeping (workaround) 30 seconds as start/end of discharge window was just adjusted` in the log while it happens.
+
+If you control the inverter through the [Service API](#has_service_api) with your own scripts, which do their own sequencing and settling, you can set this lower, or to 0 to skip the wait, so that
+**discharge_start_service** is called as soon as the window has been written. Add it to the `inverter:` block in `apps.yaml`, alongside the other options there:
+
+```yaml
+  inverter:
+    discharge_window_service_write_delay: 0
+```
+
+Leave it at the default for GivEnergy inverters controlled through GivTCP.
 
 ### rate_step_percent_of_capacity
 

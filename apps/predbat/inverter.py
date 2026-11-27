@@ -627,6 +627,13 @@ class Inverter(BatteryCurve):
         self.inv_has_ge_eco_toggle = INVERTER_DEF[self.inverter_type].get("has_ge_eco_toggle", False)
         self.inv_num_load_entities = INVERTER_DEF[self.inverter_type]["num_load_entities"]
         self.inv_write_and_poll_sleep = INVERTER_DEF[self.inverter_type]["write_and_poll_sleep"]
+        # Seconds to wait after the export window times are rewritten, before the mode write and discharge_start_service (#4180)
+        discharge_window_service_write_delay = INVERTER_DEF[self.inverter_type].get("discharge_window_service_write_delay", 30)
+        try:
+            self.inv_discharge_window_service_write_delay = max(0.0, float(discharge_window_service_write_delay))
+        except (TypeError, ValueError):
+            self.log("Warn: Inverter {}: discharge_window_service_write_delay {} is not a number of seconds, using 30".format(self.id, discharge_window_service_write_delay))
+            self.inv_discharge_window_service_write_delay = 30.0
         # Only take effect when a row sets them explicitly - currently only GWMQTT does
         self.inv_write_max_retry = INVERTER_DEF[self.inverter_type].get("write_max_retry", INVERTER_MAX_RETRY)
         self.inv_write_backoff = INVERTER_DEF[self.inverter_type].get("write_backoff", False)
@@ -2861,10 +2868,10 @@ class Inverter(BatteryCurve):
 
         """
         inverter_mode_configured = "inverter_mode" in self.base.args
-        if changed_start_end:
+        if changed_start_end and self.inv_discharge_window_service_write_delay > 0:
             # XXX: Workaround for GivTCP window state update time to take effort
-            self.base.log("Sleeping (workaround) as start/end of discharge window was just adjusted")
-            self.sleep(30)
+            self.base.log("Sleeping (workaround) {:g} seconds as start/end of discharge window was just adjusted".format(self.inv_discharge_window_service_write_delay))
+            self.sleep(self.inv_discharge_window_service_write_delay)
         old_inverter_mode = self.base.get_arg("inverter_mode", index=self.id)
 
         if self.inv_has_ge_eco_toggle:

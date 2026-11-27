@@ -1678,6 +1678,55 @@ def test_custom_inverter_def_drops_rate_step(test_name, my_predbat, ha):
     return failed
 
 
+def test_discharge_window_service_write_delay(test_name, my_predbat, ha):
+    """
+    The settle sleep after an export window rewrite comes from discharge_window_service_write_delay, default 30 (#4180).
+
+    Each case builds a custom inverter type from its own inverter: block, then asks adjust_inverter_mode for the mode
+    already on the inverter, so the only sleep left is the settle sleep. The custom row is dropped between cases,
+    because INVERTER_DEF keeps every key an earlier inverter: block wrote into it.
+    """
+    failed = False
+    print("Test: {}".format(test_name))
+    saved_args = copy.deepcopy(my_predbat.args)
+    saved_items = copy.deepcopy(ha.dummy_items)
+    unset = object()
+    # (inverter: value, expected sleeps after a window rewrite)
+    cases = [(unset, [30]), (5, [5]), ("2.5", [2.5]), (0, []), (-10, []), ("soon", [30])]
+    try:
+        for value, expect_sleeps in cases:
+            INVERTER_DEF.pop("CUSTOM4180", None)
+            definition = {"name": "Custom", "has_rest_api": False}
+            if value is not unset:
+                definition["discharge_window_service_write_delay"] = value
+            my_predbat.args["inverter_type"] = ["CUSTOM4180"]
+            my_predbat.args["inverter"] = definition
+            my_predbat.args["inverter_mode"] = "select.inverter_mode"
+            ha.dummy_items["select.inverter_mode"] = "Timed Export"
+            inv = Inverter(my_predbat, 0, quiet=True)
+            inv.rest_data = None
+            sleep_calls = []
+            inv.sleep = sleep_calls.append
+
+            inv.adjust_inverter_mode(True, changed_start_end=True)
+            if sleep_calls != expect_sleeps:
+                print("ERROR: {} delay {} expected sleeps {} after a window rewrite got {}".format(test_name, "unset" if value is unset else repr(value), expect_sleeps, sleep_calls))
+                failed = True
+
+            sleep_calls.clear()
+            inv.adjust_inverter_mode(True, changed_start_end=False)
+            if sleep_calls:
+                print("ERROR: {} delay {} expected no sleep without a window rewrite got {}".format(test_name, "unset" if value is unset else repr(value), sleep_calls))
+                failed = True
+    finally:
+        INVERTER_DEF.pop("CUSTOM4180", None)
+        my_predbat.args.clear()
+        my_predbat.args.update(saved_args)
+        ha.dummy_items.clear()
+        ha.dummy_items.update(saved_items)
+    return failed
+
+
 def test_rate_control_is_per_inverter(test_name, my_predbat, ha):
     """
     An inverter reads and writes its rate through the control its own entry is bound to, whichever settings exist
@@ -6504,6 +6553,7 @@ def run_inverter_tests(my_predbat_dummy):
     # #5324: GivEnergy stores the rate as a whole percent of capacity, so 1300W reads back 1206W
     failed |= test_rate_tolerances("rate_tolerances", inv)
     failed |= test_custom_inverter_def_drops_rate_step("custom_inverter_def_drops_rate_step", my_predbat, ha)
+    failed |= test_discharge_window_service_write_delay("discharge_window_service_write_delay", my_predbat, ha)
     failed |= test_hub_midnight_capability_from_entity("hub_midnight_capability_from_entity", my_predbat, ha)
     failed |= test_rate_step_from_charge_rate_entity("rate_step_from_charge_rate_entity", my_predbat, ha)
     failed |= test_grid_charge_only_disables_discharge_freeze("grid_charge_only_disables_discharge_freeze", my_predbat, ha)
