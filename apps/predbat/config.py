@@ -2927,6 +2927,7 @@ APPS_SCHEMA = {
     "axle_control": {"type": "boolean"},
     "sigenergy_app_key": {"type": "string", "empty": False},
     "sigenergy_app_secret": {"type": "string", "empty": False},
+    "sigenergy_auth_method": {"type": "string", "empty": False},
     "sigenergy_base_url": {"type": "string", "empty": False},
     "sigenergy_mqtt_host": {"type": "string", "empty": False},
     "sigenergy_system_id": {"type": "string|string_list", "empty": False},
