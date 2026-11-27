@@ -38,6 +38,7 @@ OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30 min)
 HIDDEN_SIZES = [512, 256, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Batch size
+ADAM_CHUNK = 131072  # Elements per chunk of the optimiser step (1 MB of float64): few enough calls to cost little, small enough to keep its buffers small
 MAX_BATCHES_PER_EPOCH = 200  # Cap on SGD batches per epoch - with importance sampling this keeps training
 # cost constant regardless of how many days of history are loaded
 
@@ -428,20 +429,13 @@ class LoadPredictor:
         correction1 = 1 - beta1**self.adam_t
         correction2 = 1 - beta2**self.adam_t
 
+        # AdamW-style weight decay (L2 regularisation) on the weights; none on the biases
+        decay = 1 - effective_lr * self.weight_decay if self.weight_decay > 0 else None
         for i in range(len(self.weights)):
-            # Weights, with AdamW-style weight decay (L2 regularisation); then biases, with none
-            self.m_weights[i], self.v_weights[i] = self._adam_step(("w", i), self.weights[i], self.m_weights[i], self.v_weights[i], weight_grads[i], beta1, beta2, epsilon, correction1, correction2, effective_lr)
-            if self.weight_decay > 0:
-                self.weights[i] *= 1 - effective_lr * self.weight_decay
-            self.m_biases[i], self.v_biases[i] = self._adam_step(("b", i), self.biases[i], self.m_biases[i], self.v_biases[i], bias_grads[i], beta1, beta2, epsilon, correction1, correction2, effective_lr)
+            self.m_weights[i], self.v_weights[i] = self._adam_step(self.weights[i], self.m_weights[i], self.v_weights[i], weight_grads[i], beta1, beta2, epsilon, correction1, correction2, effective_lr, decay)
+            self.m_biases[i], self.v_biases[i] = self._adam_step(self.biases[i], self.m_biases[i], self.v_biases[i], bias_grads[i], beta1, beta2, epsilon, correction1, correction2, effective_lr, None)
 
-            # Ensure weights and biases remain finite. A finite sum means every element is finite, so the
-            # several passes and masks of nan_to_num are only paid when something is not
-            for param in (self.weights[i], self.biases[i]):
-                if not np.isfinite(param.sum()):
-                    np.nan_to_num(param, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-
-    def _adam_step(self, key, param, m, v, grad, beta1, beta2, epsilon, correction1, correction2, lr):
+    def _adam_step(self, param, m, v, grad, beta1, beta2, epsilon, correction1, correction2, lr, decay):
         """
         Apply one Adam step to param in place, and return its new moments (m, v).
 
@@ -451,18 +445,24 @@ class LoadPredictor:
             m = beta1 * m + (1 - beta1) * grad
             v = beta2 * v + (1 - beta2) * grad**2
             param -= lr * (m / correction1) / (sqrt(v / correction2) + epsilon)
+            param *= decay                      (weights only)
+            param = nan_to_num(param)           (non-finite values to 0)
 
-        but into reused buffers instead of about ten fresh arrays the size of param per step.
-        The step's dtype is whatever NumPy gives lr * m: float64 when lr is a NumPy float64
-        (as train()'s cosine schedule passes), float32 for a Python float.
+        Every operation is element-wise, so it runs over ADAM_CHUNK elements at a time through
+        small reused buffers: about ten fresh arrays the size of param per step become none,
+        and each element's sixteen operations run while its chunk is in cache. nan_to_num's
+        several masked passes are only paid for a chunk whose sum is not finite (a finite sum
+        means every element is finite). The step's dtype is whatever NumPy gives lr * m:
+        float64 when lr is a NumPy float64 (as train()'s cosine schedule passes), float32 for a
+        Python float.
 
-        The in-place form needs m, v and grad to share one dtype, which is how training runs
-        once under way (float64 throughout, from the He initialisation). Otherwise, as on a
-        float32 bias's first step, when the expression form promotes its moments to float64,
-        the expression form itself runs, so the promotion and its rounding are kept.
+        The in-place form needs m, v and grad to share one dtype and shape, and every array to be
+        contiguous, which is how training runs once under way (float64 throughout, from the He
+        initialisation). Otherwise, as on a float32 bias's first step, when the expression form
+        promotes its moments to float64, the expression form itself runs, so the promotion and
+        its rounding are kept.
 
         Args:
-            key: Identifies param's buffers, e.g. ("w", 0)
             param: Weight or bias array, updated in place
             m: First moment, updated in place
             v: Second moment, updated in place
@@ -473,46 +473,62 @@ class LoadPredictor:
             correction1: 1 - beta1**t
             correction2: 1 - beta2**t
             lr: Learning rate for this step
+            decay: Weight-decay factor to multiply param by after the step, or None
 
         Returns:
             The new (m, v): the arrays passed in, updated in place, or new ones from the expression form
         """
-        if not (m.dtype == v.dtype == grad.dtype and m.shape == grad.shape):
+        if not (m.dtype == v.dtype == grad.dtype and m.shape == grad.shape == param.shape and all(a.flags.c_contiguous for a in (param, m, v, grad))):
             m = beta1 * m + (1 - beta1) * grad
             v = beta2 * v + (1 - beta2) * (grad**2)
             param -= lr * (m / correction1) / (np.sqrt(v / correction2) + epsilon)
+            if decay is not None:
+                param *= decay
+            if not np.isfinite(param.sum()):
+                np.nan_to_num(param, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
             return m, v
 
-        scratch = self._adam_buffer(key, "scratch", m.shape, m.dtype)
-        np.multiply(m, beta1, out=m)
-        np.multiply(grad, 1 - beta1, out=scratch)
-        m += scratch
-        np.square(grad, out=scratch)
-        np.multiply(scratch, 1 - beta2, out=scratch)
-        np.multiply(v, beta2, out=v)
-        v += scratch
-
-        # Denominator: sqrt(v_hat) + epsilon
-        denominator = scratch
-        np.divide(v, correction2, out=denominator)
-        np.sqrt(denominator, out=denominator)
-        denominator += epsilon
-        # Step: (lr * m_hat) / denominator, in the dtype NumPy promotes lr * m_hat to. m_hat itself is
-        # rounded to m's dtype first, as the expression form computed it before promoting
-        step = self._adam_buffer(key, "step", m.shape, np.result_type(m, lr))
-        m_hat = step if step.dtype == m.dtype else self._adam_buffer(key, "m_hat", m.shape, m.dtype)
-        np.divide(m, correction1, out=m_hat)
-        np.multiply(m_hat, lr, out=step)
-        np.divide(step, denominator, out=step)
-        np.subtract(param, step, out=param)
+        step_dtype = np.result_type(m, lr)
+        scratch_full = self._adam_buffer("scratch", m.dtype)
+        step_full = self._adam_buffer("step", step_dtype)
+        m_hat_full = step_full if step_dtype == m.dtype else self._adam_buffer("m_hat", m.dtype)
+        flat_param, flat_m, flat_v, flat_grad = param.reshape(-1), m.reshape(-1), v.reshape(-1), grad.reshape(-1)
+        size = flat_m.size
+        for start in range(0, size, ADAM_CHUNK):
+            stop = min(start + ADAM_CHUNK, size)
+            p, mc, vc, g = flat_param[start:stop], flat_m[start:stop], flat_v[start:stop], flat_grad[start:stop]
+            scratch, step, m_hat = scratch_full[: stop - start], step_full[: stop - start], m_hat_full[: stop - start]
+            np.multiply(mc, beta1, out=mc)
+            np.multiply(g, 1 - beta1, out=scratch)
+            mc += scratch
+            np.square(g, out=scratch)
+            np.multiply(scratch, 1 - beta2, out=scratch)
+            np.multiply(vc, beta2, out=vc)
+            vc += scratch
+            # Denominator: sqrt(v_hat) + epsilon
+            denominator = scratch
+            np.divide(vc, correction2, out=denominator)
+            np.sqrt(denominator, out=denominator)
+            denominator += epsilon
+            # Step: (lr * m_hat) / denominator, in the dtype NumPy promotes lr * m_hat to; m_hat itself is
+            # rounded to m's dtype first, as the expression form computed it before promoting
+            np.divide(mc, correction1, out=m_hat)
+            np.multiply(m_hat, lr, out=step)
+            np.divide(step, denominator, out=step)
+            np.subtract(p, step, out=p)
+            if decay is not None:
+                p *= decay
+            if not np.isfinite(p.sum()):
+                np.nan_to_num(p, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
         return m, v
 
-    def _adam_buffer(self, key, name, shape, dtype):
-        """Return a reusable scratch array for one parameter's optimiser step, made on first use and when its shape or dtype changes."""
-        buffer = self.adam_buffers.get((key, name))
-        if buffer is None or buffer.shape != shape or buffer.dtype != dtype:
-            buffer = np.empty(shape, dtype=dtype)
-            self.adam_buffers[(key, name)] = buffer
+    def _adam_buffer(self, name, dtype):
+        """Return a reusable ADAM_CHUNK-element scratch array of dtype for the optimiser step, made on first use."""
+        key = (name, np.dtype(dtype))
+        buffer = self.adam_buffers.get(key)
+        if buffer is None:
+            buffer = np.empty(ADAM_CHUNK, dtype=dtype)
+            self.adam_buffers[key] = buffer
         return buffer
 
     def _create_time_features(self, minute_of_day, day_of_week, day_of_year=1):
