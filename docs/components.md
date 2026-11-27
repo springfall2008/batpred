@@ -540,7 +540,7 @@ Connects directly to the GivEnergy Cloud to control your GivEnergy inverter and 
 | `automatic_evc` | Boolean | No | false | `ge_cloud_automatic_evc` | Set to `true` to wire your GivEnergy EV chargers into `car_charging_energy`, `car_charging_planned`, `car_charging_plugged` and `num_cars` — see [EV chargers](#ev-chargers-gecloud). Separate from `ge_cloud_automatic` because it registers a car |
 | `evc_control` | Boolean | No | false | `ge_cloud_evc_control` | Set to `true` to let Predbat start and stop your EV charger from its car charging plan — see [Charger control](#charger-control-gecloud). Needs `ge_cloud_automatic_evc` |
 | `inverter_control` | Boolean | No | true | `ge_cloud_inverter_control` | Set to `false` to monitor the inverter without Predbat controlling it — see [Monitoring and control](#monitoring-and-control-gecloud). Predbat writes no default settings and `ge_cloud_automatic` is ignored; changes you make to the `_gecloud_` entities are still sent |
-| `poll_settings` | Boolean | No | false | `ge_cloud_poll_settings` | Set to `true` to read every inverter register every 10 minutes. Off, the registers Predbat controls are read at startup and every 12 hours (and again on leaving read only mode, or after a control failure at most every 4 hours), and the rest only when there is no stored copy from the last 7 days — see [Register reads](#register-reads-gecloud) |
+| `poll_settings` | Boolean | No | false | `ge_cloud_poll_settings` | Set to `true` to read every inverter register every 10 minutes. Off, the registers Predbat controls are read at startup and every 12 hours (and again on leaving read only mode, or after a control failure at most every 4 hours and once more 30 minutes later if a slot is still failing), and the rest only when there is no stored copy from the last 7 days — see [Register reads](#register-reads-gecloud) |
 | `load_today_ignore` | Boolean | No | false | `ge_cloud_load_today_ignore` | Set to `true` to ignore GE Cloud load_today data and use the `load_today` sensor from `apps.yaml` instead |
 | `automatic_shared_ct` | Boolean | No | false | `ge_cloud_automatic_shared_ct` | Set to `true` to force shared CT clamp mode — only the first inverter's grid and load readings are used, preventing double-counting on multi-inverter systems with a single shared CT |
 | `automatic_split_ct` | Boolean | No | false | `ge_cloud_automatic_split_ct` | Set to `true` to force split CT clamp mode — each inverter's readings are summed independently. Takes priority over `ge_cloud_automatic_shared_ct` if both are set |
@@ -593,6 +593,9 @@ they are for, for every device including an EMS or Gateway:
   a device the hourly device check has just found.
 - **Straight away** — the control registers are read again when Predbat leaves read only mode, and when a
   [control failure](output-data.md#control-failure-data) shows the inverter is not doing what Predbat asked (at most once every 4 hours).
+  30 minutes after a control failure they are read once more if a slot is still failing, whatever the 4 hours, as a
+  setting can revert after the first read; failures in between share that read. Predbat then rewrites anything that no
+  longer matches its plan.
 
 Predbat keeps its copy of each register up to date when it writes one, so its own changes need no re-read. A change made
 elsewhere, such as in the GivEnergy app, can take up to 12 hours to be seen (7 days for a register Predbat does not control).

@@ -17,6 +17,7 @@ from gecloud import ems_load_balance, ems_today_counters
 from gecloud import DEVICE_HOLD_INITIAL_SECONDS, DEVICE_HOLD_MAX_SECONDS, DEVICE_TIMEOUT_ATTEMPTS
 from gecloud import GE_CLOUD_CONFIGURATION_SETTINGS, GE_CLOUD_KEEP_USER_SETTINGS, apply_legacy_bindings, discovery_review_lines
 from utils import dp4, givenergy_model_is_hybrid
+from control_monitor import CONFIRM_READINGS, GRACE_S, MODE_EXPORTING, ControlMonitor
 import asyncio
 import copy
 import json
@@ -87,6 +88,8 @@ class MockGECloudDirect(GECloudDirect):
         self.control_reread_reason = None
         self.control_failures_seen = None
         self.control_failure_reread_stamp = None
+        self.control_reread_left_read_only = False
+        self.control_failure_follow_up_at = None
         self.read_only_seen = None
         self.last_success_timestamp = None
         self.devices_dict = {}
@@ -367,6 +370,12 @@ def test_ge_cloud(my_predbat=None):
         ("device_timeout_capped", _test_device_timeout_retries_capped, "Device timeouts are retried a capped number of times"),
         ("api_bare_code", _test_async_get_inverter_data_terminal_code_without_success_flag, "Terminal code without a success flag is a failure"),
         ("api_negative_value", _test_async_get_inverter_data_negative_value_other_endpoint, "Negative value outside the setting endpoints is data"),
+        ("reread_restored_total", _test_control_reread_restored_total_is_not_a_failure, "Restored control failure total is not a new failure"),
+        ("reread_follow_up", _test_control_reread_follow_up, "Control failure still failing after 30 minutes is re-read once more"),
+        ("reread_follow_up_hold_off", _test_control_reread_follow_up_ignores_hold_off, "Follow-up re-read is not blocked by the 4 hour hold-off"),
+        ("reread_unrestored_total", _test_control_reread_unrestored_total_still_a_failure, "First failure on a fresh install is re-read though the publish marks the monitor restored"),
+        ("reread_follow_up_not_pushed_back", _test_control_reread_follow_up_not_pushed_back, "Failures counted while a follow-up is pending do not push it back"),
+        ("reread_reason_left_read_only", _test_control_reread_reason_kept_on_leaving_read_only, "Control failure reason kept when Predbat leaves read only in the same cycle"),
         ("switch_event", _test_switch_event, "Switch event handler"),
         ("switch_event_writeonly_action", _test_switch_event_writeonly_action, "Write-only action register writes its exact value, nothing on turn_off"),
         ("number_event", _test_number_event, "Number event handler"),
@@ -4878,6 +4887,181 @@ def _test_async_get_inverter_data_negative_value_other_endpoint(my_predbat):
 # =============================================================================
 # Event Handler Tests
 # =============================================================================
+
+
+def _reread_trigger_setup(start):
+    """A GE Cloud mock with a real control monitor, Predbat not in read only, its clock at start"""
+    ge_cloud = MockGECloudDirect()
+    monitor = ControlMonitor()
+    ge_cloud.base.control_monitor = monitor
+    ge_cloud.base.set_read_only = False
+    ge_cloud._now_utc_exact = start
+    return ge_cloud, monitor
+
+
+def _reread_check_at(ge_cloud, when, first=False):
+    """Run the re-read triggers at when and return the reason they set, clearing it as the control read does"""
+    ge_cloud._now_utc_exact = when
+    ge_cloud.check_control_reread_triggers(first)
+    reason = ge_cloud.control_reread_reason
+    ge_cloud.control_reread_reason = None
+    return reason
+
+
+def _confirm_export_failure(monitor, start):
+    """Fail an Exporting slot for inverter 0 from start (epoch seconds) and return when it was confirmed"""
+    monitor.set_expectation(0, MODE_EXPORTING, start, start + 3 * 60 * 60, 15.0, start)
+    confirmed = None
+    for reading in range(CONFIRM_READINGS):
+        confirmed = start + GRACE_S + reading * 60
+        monitor.observe(0, 0, 60.0, 0, 2525, confirmed)
+    return confirmed
+
+
+def _test_control_reread_restored_total_is_not_a_failure(my_predbat):
+    """
+    The lifetime failure total read back after a restart is not a new control failure.
+
+    GE Cloud takes its baseline on its first run, which comes before the plan cycle restores the
+    total. Counting the jump to the restored total as a failure started the 4 hour hold-off at
+    start-up, so a real failure 2.5 hours later was never re-read and a reverted reserve stayed wrong
+    for hours.
+    """
+    start = datetime(2026, 11, 27, 13, 55, tzinfo=timezone.utc)
+    ge_cloud, monitor = _reread_trigger_setup(start)
+    if _reread_check_at(ge_cloud, start, first=True) is not None:
+        print("ERROR: start-up asked for a control re-read")
+        return 1
+    monitor.restore([], 36)
+    reason = _reread_check_at(ge_cloud, start + timedelta(minutes=1))
+    if reason is not None or ge_cloud.control_failure_reread_stamp is not None:
+        print("ERROR: the restored total was taken as a control failure: reason {} stamp {}".format(reason, ge_cloud.control_failure_reread_stamp))
+        return 1
+    # A real failure that afternoon is re-read straight away
+    monitor.total += 1
+    reason = _reread_check_at(ge_cloud, start + timedelta(hours=2, minutes=33))
+    if reason != "control failure":
+        print("ERROR: a control failure after the restore was not re-read, reason {}".format(reason))
+        return 1
+    return 0
+
+
+def _test_control_reread_unrestored_total_still_a_failure(my_predbat):
+    """
+    A first failure on a fresh install is re-read, though the publish then marks the monitor restored.
+
+    publish_control_failures() sets restored when it first writes a total it never read back, so
+    restored flipping is not a sign of a restore; only what restore() added is.
+    """
+    start = datetime(2026, 11, 27, 13, 55, tzinfo=timezone.utc)
+    ge_cloud, monitor = _reread_trigger_setup(start)
+    _reread_check_at(ge_cloud, start, first=True)
+    # The total entity read unknown, so nothing was restored, and a real failure is counted
+    monitor.restore([], None)
+    monitor.total += 1
+    # As publish_control_failures() does once it writes a total above zero
+    monitor.restored = True
+    reason = _reread_check_at(ge_cloud, start + timedelta(minutes=10))
+    if reason != "control failure" or ge_cloud.control_failure_follow_up_at is None:
+        print("ERROR: a first failure on a fresh install was not re-read: reason {} follow-up {}".format(reason, ge_cloud.control_failure_follow_up_at))
+        return 1
+    return 0
+
+
+def _test_control_reread_follow_up_not_pushed_back(my_predbat):
+    """Failures counted while a follow-up is pending do not push it back - a stream of new slots must not postpone it forever."""
+    start = datetime(2026, 11, 27, 16, 20, tzinfo=timezone.utc)
+    ge_cloud, monitor = _reread_trigger_setup(start)
+    _reread_check_at(ge_cloud, start, first=True)
+    confirmed = _confirm_export_failure(monitor, start.timestamp())
+    seen = datetime.fromtimestamp(confirmed, timezone.utc)
+    _reread_check_at(ge_cloud, seen)
+    # New failures every 10 minutes, as a mode flip between Exporting and Freeze exporting makes
+    for minutes in (10, 20):
+        monitor.total += 1
+        _reread_check_at(ge_cloud, seen + timedelta(minutes=minutes))
+    monitor.observe(0, 0, 60.0, 0, 2525, confirmed + 25 * 60)
+    reason = _reread_check_at(ge_cloud, seen + timedelta(minutes=30))
+    if reason != "control failure follow-up":
+        print("ERROR: later failures pushed the follow-up back: reason at 30 minutes {}".format(reason))
+        return 1
+    return 0
+
+
+def _test_control_reread_reason_kept_on_leaving_read_only(my_predbat):
+    """A control failure seen as Predbat leaves read only keeps its reason in the log, and the eco check still runs."""
+    start = datetime(2026, 11, 27, 13, 55, tzinfo=timezone.utc)
+    ge_cloud, monitor = _reread_trigger_setup(start)
+    ge_cloud.base.set_read_only = True
+    _reread_check_at(ge_cloud, start, first=True)
+    _reread_check_at(ge_cloud, start + timedelta(minutes=1))
+    monitor.total += 1
+    ge_cloud.base.set_read_only = False
+    ge_cloud._now_utc_exact = start + timedelta(minutes=2)
+    ge_cloud.check_control_reread_triggers(False)
+    if ge_cloud.control_reread_reason != "control failure, left read only" or not ge_cloud.control_reread_left_read_only:
+        print("ERROR: leaving read only replaced the control failure reason: reason {} left read only {}".format(ge_cloud.control_reread_reason, ge_cloud.control_reread_left_read_only))
+        return 1
+    return 0
+
+
+def _test_control_reread_follow_up(my_predbat):
+    """A control failure still failing 30 minutes after it was first seen is re-read once more; one that cleared is not."""
+    for cleared in (False, True):
+        start = datetime(2026, 11, 27, 16, 20, tzinfo=timezone.utc)
+        ge_cloud, monitor = _reread_trigger_setup(start)
+        _reread_check_at(ge_cloud, start, first=True)
+        confirmed = _confirm_export_failure(monitor, start.timestamp())
+        seen = datetime.fromtimestamp(confirmed, timezone.utc)
+        if _reread_check_at(ge_cloud, seen) != "control failure":
+            print("ERROR: the control failure was not re-read")
+            return 1
+        # Clears, or goes on failing, before the follow-up is due
+        monitor.observe(0, 2525 if cleared else 0, 60.0, 0, 2525, confirmed + 10 * 60)
+        if _reread_check_at(ge_cloud, seen + timedelta(minutes=29)) is not None:
+            print("ERROR: a follow-up re-read came before 30 minutes (cleared {})".format(cleared))
+            return 1
+        reason = _reread_check_at(ge_cloud, seen + timedelta(minutes=30))
+        expected = None if cleared else "control failure follow-up"
+        if reason != expected:
+            print("ERROR: 30 minutes after a failure that {} the re-read reason was {}, expected {}".format("cleared" if cleared else "kept failing", reason, expected))
+            return 1
+        # Once only - the 12 hour cadence and later failures take it from there
+        monitor.observe(0, 0, 60.0, 0, 2525, confirmed + 60 * 60)
+        reason = _reread_check_at(ge_cloud, seen + timedelta(hours=1, minutes=1))
+        if reason is not None:
+            print("ERROR: a second follow-up re-read, reason {} (cleared {})".format(reason, cleared))
+            return 1
+    return 0
+
+
+def _test_control_reread_follow_up_ignores_hold_off(my_predbat):
+    """A new failure inside the 4 hour hold-off is not re-read at once, but is followed up if still failing 30 minutes later."""
+    start = datetime(2026, 11, 27, 13, 0, tzinfo=timezone.utc)
+    ge_cloud, monitor = _reread_trigger_setup(start)
+    _reread_check_at(ge_cloud, start, first=True)
+    # An earlier failure, long cleared, started the hold-off
+    monitor.total += 1
+    if _reread_check_at(ge_cloud, start + timedelta(minutes=1)) != "control failure":
+        print("ERROR: the first control failure was not re-read")
+        return 1
+    # Its follow-up falls due with nothing failing, so it reads nothing
+    if _reread_check_at(ge_cloud, start + timedelta(minutes=31)) is not None:
+        print("ERROR: a follow-up re-read with nothing failing")
+        return 1
+    # The real one, two hours later, inside the hold-off
+    later = start + timedelta(hours=2)
+    confirmed = _confirm_export_failure(monitor, later.timestamp())
+    seen = datetime.fromtimestamp(confirmed, timezone.utc)
+    if _reread_check_at(ge_cloud, seen) is not None:
+        print("ERROR: a failure inside the hold-off was re-read at once")
+        return 1
+    monitor.observe(0, 0, 60.0, 0, 2525, confirmed + 20 * 60)
+    reason = _reread_check_at(ge_cloud, seen + timedelta(minutes=30))
+    if reason != "control failure follow-up":
+        print("ERROR: a failure inside the hold-off still failing after 30 minutes was not followed up, reason {}".format(reason))
+        return 1
+    return 0
 
 
 def _test_switch_event(my_predbat):
