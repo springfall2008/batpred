@@ -11,6 +11,7 @@ not by the key filter alone.
 
 import io
 import os
+from datetime import datetime, timezone
 import re
 import tracemalloc
 
@@ -144,9 +145,12 @@ def _dict_with_aliases():
     wrong: each dumper numbers its anchors from one, so the second key repeats "&id001".
     """
     tariff = [0.1, 0.2, 0.3]
+    # A datetime in each aliased key keeps it on the yaml.dump path: plain data is written directly by
+    # write_debug_value(), which writes a shared object out each time rather than aliasing it
+    stamp = datetime(2026, 11, 27, 12, 0, tzinfo=timezone.utc)
     return {
-        "rate_import": {"today": tariff, "tomorrow": tariff, "windows": [tariff]},
-        "rate_export": {"today": tariff, "tomorrow": tariff},
+        "rate_import": {"today": tariff, "tomorrow": tariff, "windows": [tariff], "updated": stamp},
+        "rate_export": {"today": tariff, "tomorrow": tariff, "updated": stamp},
         "plan_ready": True,
     }
 

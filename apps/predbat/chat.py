@@ -1594,6 +1594,8 @@ class ChatAgent(ComponentBase):
                 slot = accumulator.setdefault(fragment.get("index", 0), {"id": None, "type": "function", "function": {"name": "", "arguments": ""}})
                 if fragment.get("id"):
                     slot["id"] = fragment["id"]
+                if fragment.get("extra_content"):
+                    slot["extra_content"] = fragment["extra_content"]
                 function = fragment.get("function") or {}
                 if function.get("name"):
                     slot["function"]["name"] += function["name"]
