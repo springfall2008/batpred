@@ -725,8 +725,8 @@ class Compare:
                 attributes = {
                     "friendly_name": "Compare " + name,
                     "state_class": "measurement",
-                    "unit_of_measurement": "p",
-                    "icon": "mdi::compare-horizontal",
+                    "unit_of_measurement": self.currency_symbols[1],
+                    "icon": "mdi:compare-horizontal",
                 }
                 for item in result:
                     if item == "raw":  # skip writing raw compare plan data to the compare entity

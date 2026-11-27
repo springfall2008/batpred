@@ -25,6 +25,47 @@ from const import OPTIONS_TIME, PREDBAT_MODE_OPTIONS, PREDBAT_MODE_CONTROL_CHARG
 PREDBAT_UPDATE_OPTIONS = [f"{THIS_VERSION} Loading..."]
 PREDBAT_SAVE_RESTORE = ["save current", "restore default"]
 
+# Icons for currency-valued config items, keyed by the primary currency symbol
+# (currency_symbols[0] in apps.yaml). CONFIG_ITEMS declare mdi:currency-usd as the placeholder.
+CURRENCY_ICON_PLACEHOLDER = "mdi:currency-usd"
+CURRENCY_ICON_DEFAULT = "mdi:cash"  # generic icon for symbols not listed below. At present no MDI currency symbols for Danish, Norwegian or Swedish Crown so they will all get the default
+CURRENCY_ICONS = {
+    "£": "mdi:currency-gbp",
+    "$": "mdi:currency-usd",
+    "€": "mdi:currency-eur",
+    "¥": "mdi:currency-jpy",
+    "₹": "mdi:currency-inr",
+    "₩": "mdi:currency-krw",
+    "₽": "mdi:currency-rub",
+    "₺": "mdi:currency-try",
+    "₪": "mdi:currency-ils",
+    "₦": "mdi:currency-ngn",
+    "₱": "mdi:currency-php",
+    "฿": "mdi:currency-thb",
+    "₸": "mdi:currency-kzt",
+    "R$": "mdi:currency-brl",
+}
+# Units of the CONFIG_ITEMS input_numbers that hold an amount of money in the minor currency unit.
+# Only items with one of these units have the placeholder icon replaced by the currency icon, as a
+# guard against a future non-money item copying the placeholder. Their min/max are also multiplied by
+# apps.yaml currency_scale so a currency with a much smaller minor unit than the penny (e.g. CZK haléř,
+# ~29 to 1p) can still set a meaningful threshold (#6155, #3683).
+CURRENCY_UNITS = ("p", "p/kWh", "p/kg")
+
+
+def currency_icon(symbol):
+    """Return the MDI icon for a primary currency symbol, or a generic one if unknown."""
+    return CURRENCY_ICONS.get(str(symbol).strip(), CURRENCY_ICON_DEFAULT)
+
+
+def apply_currency_icon(config_items, symbol):
+    """Point the currency-valued items in config_items at the icon for the given symbol."""
+    icon = currency_icon(symbol)
+    for item in config_items:
+        if item.get("icon") == CURRENCY_ICON_PLACEHOLDER and item.get("unit") in CURRENCY_UNITS:
+            item["icon"] = icon
+
+
 # Configuration options inside HA
 CONFIG_ITEMS = [
     {
@@ -1445,7 +1486,7 @@ CONFIG_ITEMS = [
         "max": 10,
         "step": 0.1,
         "unit": "kWh",
-        "icon": "mdi:currency-usd",
+        "icon": "mdi:flash",
         "default": 0.5,
     },
     {
@@ -1641,7 +1682,7 @@ CONFIG_ITEMS = [
         "max": 120,
         "step": 30,
         "unit": "minutes",
-        "icon": "mdi:currency-usd",
+        "icon": "mdi:timer-outline",
         "enable": "iboost_enable",
         "default": 30,
     },
@@ -2745,11 +2786,6 @@ SOLAX_SOLIS_MODES_FB00 = {
     "Feed-in priority - No Grid Charging": 64,
     "Feed-in priority": 96,
 }
-
-# Units of the CONFIG_ITEMS input_numbers that hold an amount of money in the minor currency unit.
-# Their min/max are multiplied by apps.yaml currency_scale so a currency with a much smaller minor
-# unit than the penny (e.g. CZK haléř, ~29 to 1p) can still set a meaningful threshold (#6155, #3683).
-CURRENCY_UNITS = ("p", "p/kWh", "p/kg")
 
 # Apps.yaml validation schema
 APPS_SCHEMA = {

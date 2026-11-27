@@ -846,10 +846,22 @@ class PredHeat:
                 state=self.display_temperature(next_volume_temp),
                 attributes={"results": self.display_series(volume_temp_stamp), "friendly_name": "Volume temperature", "state_class": "measurement", "unit_of_measurement": self.display_unit},
             )
-            self.set_state(self.prefix + ".cost", state=dp2(cost), attributes={"results": cost_stamp, "friendly_name": "Predicted cost", "state_class": "measurement", "unit_of_measurement": "p"})
-            self.set_state(self.prefix + ".cost_h1", state=dp2(cost_minute[60]), attributes={"friendly_name": "Predicted cost +1hr", "state_class": "measurement", "unit_of_measurement": "p"})
-            self.set_state(self.prefix + ".cost_h2", state=dp2(cost_minute[60 * 2]), attributes={"friendly_name": "Predicted cost +2hrs", "state_class": "measurement", "unit_of_measurement": "p"})
-            self.set_state(self.prefix + ".cost_h8", state=dp2(cost_minute[60 * 8]), attributes={"friendly_name": "Predicted cost +8hrs", "state_class": "measurement", "unit_of_measurement": "p"})
+            self.set_state(
+                self.prefix + ".cost",
+                state=dp2(cost),
+                attributes={"results": cost_stamp, "friendly_name": "Predicted cost", "state_class": "measurement", "unit_of_measurement": self.base.currency_symbols[1], "icon": self.base.currency_icon},
+            )
+            self.set_state(self.prefix + ".cost_h1", state=dp2(cost_minute[60]), attributes={"friendly_name": "Predicted cost +1hr", "state_class": "measurement", "unit_of_measurement": self.base.currency_symbols[1], "icon": self.base.currency_icon})
+            self.set_state(
+                self.prefix + ".cost_h2",
+                state=dp2(cost_minute[60 * 2]),
+                attributes={"friendly_name": "Predicted cost +2hrs", "state_class": "measurement", "unit_of_measurement": self.base.currency_symbols[1], "icon": self.base.currency_icon},
+            )
+            self.set_state(
+                self.prefix + ".cost_h8",
+                state=dp2(cost_minute[60 * 8]),
+                attributes={"friendly_name": "Predicted cost +8hrs", "state_class": "measurement", "unit_of_measurement": self.base.currency_symbols[1], "icon": self.base.currency_icon},
+            )
         return next_volume_temp, internal_temp_predict_minute
 
     def today_cost(self, import_today):
@@ -857,7 +869,6 @@ class PredHeat:
         Work out energy costs today (approx)
         """
         day_cost = 0
-        day_cost_import = 0
         day_energy = 0
         day_cost_time = {}
 
@@ -880,8 +891,10 @@ class PredHeat:
                 stamp = minute_timestamp.strftime(TIME_FORMAT)
                 day_cost_time[stamp] = dp2(day_cost)
 
-        self.set_state(self.prefix + ".cost_today", state=dp2(day_cost), attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": "p", "icon": "mdi:currency-usd"})
-        self.log("Predheat: Todays energy import {} kwh cost {} p".format(dp2(day_energy), dp2(day_cost), dp2(day_cost_import)))
+        self.set_state(
+            self.prefix + ".cost_today", state=dp2(day_cost), attributes={"results": day_cost_time, "friendly_name": "Cost so far today", "state_class": "measurement", "unit_of_measurement": self.base.currency_symbols[1], "icon": self.base.currency_icon}
+        )
+        self.log("Predheat: Todays energy {} kWh, cost {} {}".format(dp2(day_energy), dp2(day_cost), self.base.currency_symbols[1]))
         return day_cost
 
     def get_smart_thermostat_max_minutes(self):
