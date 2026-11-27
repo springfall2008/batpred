@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 import pytz
 
-from octopus import OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME, PackedUrlCacheRates, decode_octopus_url_cache, encode_octopus_url_cache
+from octopus import OCTOPUS_URL_CACHE_LEGACY_NAME, OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME, PackedUrlCacheRates, adopt_legacy_octopus_url_cache, decode_octopus_url_cache, encode_octopus_url_cache
 from utils import minute_data
 from tests.test_infra import run_async
 from tests.test_octopus_free import _attach_storage, _reset_free_cache
@@ -231,7 +231,7 @@ def _check_newest_first_download(failed):
 
 
 def _check_storage(my_predbat, failed):
-    """The cache saves as JSON under its own name, reloads equal after a restart, ignores the old YAML file and skips bad entries."""
+    """The cache saves as JSON under its own name, reloads equal after a restart and skips bad entries."""
     temp_dir = tempfile.mkdtemp()
     original_config_root = my_predbat.config_root
     try:
@@ -264,18 +264,6 @@ def _check_storage(my_predbat, failed):
         else:
             print("PASS: cache saved as JSON and reloaded after a restart")
 
-        # The cache Predbat wrote before this change: a YAML mapping under the old name. It is never parsed.
-        shutil.rmtree(cache_dir)
-        os.makedirs(cache_dir)
-        run_async(storage.save(OCTOPUS_URL_CACHE_MODULE, "url_cache", _sample_cache(), format="yaml", expiry=None))
-        _reset_free_cache(my_predbat)
-        my_predbat._load_octopus_url_cache_from_storage()
-        if my_predbat.octopus_url_cache != {}:
-            print("FAIL: the old YAML cache was loaded")
-            failed = True
-        else:
-            print("PASS: the old YAML cache is not read")
-
         # One bad entry is dropped, the rest load
         good = encode_octopus_url_cache({_FREE_URL: {"stamp": now, "midnight_utc": None, "data": []}})
         good["https://octopus.energy/broken"] = {"stamp": "not a time", "data": {"value": []}}
@@ -296,6 +284,111 @@ def _check_storage(my_predbat, failed):
     return failed
 
 
+def _check_legacy_yaml(my_predbat, failed):
+    """
+    With no JSON cache, the YAML cache an earlier version wrote is read once: its entries are held as the JSON
+    cache would hold them and saved straight away as JSON, so the next restart reads JSON. A JSON cache, when
+    there is one, wins; an expired YAML file and its unreadable entries are ignored.
+    """
+    temp_dir = tempfile.mkdtemp()
+    original_config_root = my_predbat.config_root
+    try:
+        storage = _attach_storage(my_predbat, temp_dir)
+        cache_dir = os.path.join(temp_dir, "cache")
+        json_path = os.path.join(cache_dir, "{}_{}.json".format(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME))
+        now = datetime.now()
+
+        def fresh_cache():
+            """The sample cache stamped now, so the 2-day prune on save keeps every entry."""
+            cache = _sample_cache()
+            for entry in cache.values():
+                entry["stamp"] = now
+            return cache
+
+        def reset_dir():
+            """Start each case with an empty cache directory."""
+            shutil.rmtree(cache_dir, ignore_errors=True)
+            os.makedirs(cache_dir)
+
+        # Upgrade from a version that wrote the YAML file under the old name: it is read and converted
+        reset_dir()
+        run_async(storage.save(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_LEGACY_NAME, fresh_cache(), format="yaml", expiry=pytz.utc.localize(datetime.utcnow()) + timedelta(hours=8)))
+        _reset_free_cache(my_predbat)
+        my_predbat._load_octopus_url_cache_from_storage()
+        if my_predbat.octopus_url_cache != fresh_cache():
+            print("FAIL: the old YAML cache was not loaded when there is no JSON cache, got {}".format(sorted(my_predbat.octopus_url_cache)))
+            failed = True
+        elif not isinstance(my_predbat.octopus_url_cache[_RATE_URL]["data"], PackedUrlCacheRates):
+            print("FAIL: the old YAML cache's run of minutes should be held packed")
+            failed = True
+        elif not os.path.exists(json_path):
+            print("FAIL: the old YAML cache was not saved as JSON once loaded")
+            failed = True
+        else:
+            print("PASS: the old YAML cache is read once when there is no JSON cache, and saved as JSON")
+
+        # The next restart reads the JSON written above, even with the YAML file still there
+        _reset_free_cache(my_predbat)
+        with patch("octopus.adopt_legacy_octopus_url_cache", side_effect=AssertionError("legacy YAML read twice")) as adopt:
+            my_predbat._load_octopus_url_cache_from_storage()
+        if adopt.called or my_predbat.octopus_url_cache != fresh_cache():
+            print("FAIL: the restart after converting should read the JSON cache, not the YAML")
+            failed = True
+        else:
+            print("PASS: the restart after converting reads the JSON cache")
+
+        # A JSON cache wins over a YAML file that is also there
+        reset_dir()
+        json_cache = {_FREE_URL: {"stamp": now, "midnight_utc": None, "data": []}}
+        run_async(storage.save(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME, encode_octopus_url_cache(json_cache), format="json", expiry=None))
+        run_async(storage.save(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_LEGACY_NAME, fresh_cache(), format="yaml", expiry=None))
+        _reset_free_cache(my_predbat)
+        my_predbat._load_octopus_url_cache_from_storage()
+        if my_predbat.octopus_url_cache != json_cache:
+            print("FAIL: the JSON cache should win over the old YAML, got {}".format(sorted(my_predbat.octopus_url_cache)))
+            failed = True
+        else:
+            print("PASS: a JSON cache wins over the old YAML file")
+
+        # An expired YAML file is not used
+        reset_dir()
+        run_async(storage.save(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_LEGACY_NAME, fresh_cache(), format="yaml", expiry=pytz.utc.localize(datetime.utcnow()) - timedelta(minutes=1)))
+        _reset_free_cache(my_predbat)
+        my_predbat._load_octopus_url_cache_from_storage()
+        if my_predbat.octopus_url_cache != {} or os.path.exists(json_path):
+            print("FAIL: an expired old YAML cache was used")
+            failed = True
+        else:
+            print("PASS: an expired old YAML cache is ignored")
+
+        # Unreadable YAML entries are skipped, the rest load
+        reset_dir()
+        legacy = fresh_cache()
+        legacy["https://octopus.energy/no-stamp"] = {"data": []}
+        legacy["https://octopus.energy/bad-stamp"] = {"stamp": "not a time", "data": []}
+        legacy["https://octopus.energy/bad-midnight"] = {"stamp": now, "midnight_utc": 5, "data": []}
+        legacy["https://octopus.energy/not-a-dict"] = [1, 2, 3]
+        run_async(storage.save(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_LEGACY_NAME, legacy, format="yaml", expiry=None))
+        _reset_free_cache(my_predbat)
+        my_predbat._load_octopus_url_cache_from_storage()
+        if my_predbat.octopus_url_cache != fresh_cache():
+            print("FAIL: expected only the readable old YAML entries, got {}".format(sorted(my_predbat.octopus_url_cache)))
+            failed = True
+        else:
+            print("PASS: unreadable old YAML entries are skipped")
+
+        # A YAML file that is not a mapping at all loads nothing
+        if adopt_legacy_octopus_url_cache(["not", "a", "mapping"]) != {}:
+            print("FAIL: an old YAML cache that is not a mapping should give an empty cache")
+            failed = True
+    finally:
+        shutil.rmtree(temp_dir)
+        my_predbat.components = None
+        my_predbat.config_root = original_config_root
+        _reset_free_cache(my_predbat)
+    return failed
+
+
 def test_octopus_url_cache(my_predbat):
     """The Octopus URL cache round-trips exactly through compact JSON storage and is held packed in memory."""
     print("**** Running Octopus URL cache JSON and packing tests ****")
@@ -306,5 +399,6 @@ def test_octopus_url_cache(my_predbat):
     failed = _check_packed_holder(failed)
     failed = _check_download_reads(my_predbat, failed)
     failed = _check_storage(my_predbat, failed)
+    failed = _check_legacy_yaml(my_predbat, failed)
     print("**** Octopus URL cache JSON and packing tests {} ****".format("FAILED" if failed else "PASSED"))
     return failed
