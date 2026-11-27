@@ -228,11 +228,11 @@ This is used only for the plan; it is never added as a car charging slot, so it 
 **input_number.predbat_battery_rate_max_scaling** is a percentage factor to adjust your maximum charge rate from that reported by the inverter.
 For example, a value of 0.95 would be 95% and indicate charging at 5% slower than reported.
 For GivEnergy inverters the charge rate reports the max AC rate and thus needs to be reduced by inverter losses.
-You can try [computing your charge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
+The [charge rate grid](apps-yaml.md#battery-rate-grids) divides this scaling out of what it learns, so changing it does not invalidate the learned grid.
 The default is 1.0, i.e. no scaling.
 
 **input_number.predbat_battery_rate_max_scaling_discharge** is a percentage factor to adjust your maximum discharge rate from that reported by the inverter.
-You can try [computing your discharge curve](apps-yaml.md#battery-chargedischarge-curves) and check recommendations for changing this figure in the logfile.
+The [discharge rate grid](apps-yaml.md#battery-rate-grids) divides this scaling out of what it learns.
 The default is 1.05, i.e. battery discharges at 5% more power than the inverter reports.
 
 **input_number.predbat_charge_scaling10** (_expert mode_) is a percentage factor applied to the battery charge rate specifically for the pessimistic (PV10%) scenario.
@@ -315,9 +315,14 @@ If `pv_metric10_weight` and `pv_metric90_weight` together exceed 1.0 they are sc
 
 **switch.predbat_metric_pv_calibration_enable** When turned On (the default), Predbat will use your historical solar generation data to calibrate your PV production estimates on a slot duration (default 30 minute) basis.<BR>
 This can be useful to adjust for your systems real performance.<BR>
+Predbat keeps up to 28 days of evidence - each half hour's forecast and actual generation - in its cache, adding the latest days once a day, and calibrates from it:
+a day factor (how much of the forecast your system really produces) and a half-hour shape (for example morning shading). Recent days count for more: a day's weight halves every 3.5 days.
+Each factor only moves as far as the evidence supports. When your actual generation scatters either side of the forecast with no consistent direction, as it does when your forecast provider already calibrates for your site,
+the factor stays close to 1 and the forecast is left almost alone. A consistent difference, such as shading, a misconfigured array or inverter losses, is corrected.
+A few dull days in a row therefore no longer pull down the forecast for the next sunny day. The settings are described under PV calibration in [apps.yaml](apps-yaml.md#pv-calibration), and the **PVCalibration** chart in the web interface shows the evidence against the calibration.<BR>
 The comparison is made against the forecast your solar provider gave, recorded in `sensor.predbat_pv_forecast_h0_uncalibrated`, rather than against Predbat's own calibrated figure,
-so the scaling factor settles on the full measured ratio of actual to forecast generation.<BR>
-Until that sensor has a week of history, for example just after upgrading, the older days are read from `sensor.predbat_pv_forecast_h0` instead.<BR>
+so the scaling factor settles on the measured ratio of actual to forecast generation.<BR>
+Where that sensor's history does not reach back far enough, for example just after upgrading, the older days are read from `sensor.predbat_pv_forecast_h0` instead.<BR>
 The history is scaled by `pv_scaling` before the comparison, so both sides are on the same basis - to sanity-check the calibration factor by hand, divide your actual generation by the raw provider forecast **multiplied by** `pv_scaling`
 (equivalently, divide your actual-over-raw ratio by `pv_scaling`); comparing against the raw figure on its own leaves your answer out by a factor of `pv_scaling`.<BR>
 When your forecast provider supplies its own 10% and 90% figures (Solcast, or Open-Meteo's ensemble), they are scaled by the same calibration as the central forecast, so they keep the provider's spread around it.<BR>
@@ -360,6 +365,7 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots in time order (default On)
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - when On, allows the car to drain the home battery when charging; when Off (the default), Predbat holds the battery while the car charges
+- **switch.predbat_car_charging_cancel_for_export** - when On, lets the plan export over a car charging slot, which cancels the slot, when the export is worth more than buying the car's energy back (default Off), see [Cancelling a car slot for an export](car-charging.md#cancelling-a-car-slot-for-an-export)
 - **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` and use the manual SoC instead (car 0)
 - **switch.predbat_car_charging_manual_soc_1/2/3** - ignore the **car_charging_soc** car SoC sensor for cars 1/2/3
 - **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC in kWh (car 0), used when the switch above is on, or when **car_charging_soc** is not set for the car and its charger has energy and plugged-in (**car_charging_plugged**) sensors. Otherwise, with a car SoC sensor, it shows the sensor's reading
@@ -476,8 +482,11 @@ e.g. setting to 0.8 = 80% of the average rate.<BR>
 If you set this too low you might not get enough charge slots. If it's too high you might get too many in the
 24-hour period which makes optimisation harder.
 
-**input_number.predbat_rate_high_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future export rates in the plan
-and determine the threshold above which a slot can be considered a potential exporting slot.<BR>
+**input_number.predbat_rate_high_threshold** (_expert mode_) When set to 0 (the default) every future export slot, the cheapest included, is a potential
+exporting slot, and the optimiser decides which are worth using. The cheapest rate matters on a dual-rate export tariff with an export limit: a battery
+still holding energy at dawn before a sunny day can export it at the night rate rather than have the solar that displaces it clipped later.
+Predbat still works out a high-rate threshold automatically, and only the slots above it are published as high-rate export slots
+(**predbat.high_rate_export_start** and the related entities).<BR>
 If rate_high_threshold is set to a non-zero value this will set the threshold above future average export rates as the minimum export rate to consider exporting for,
 e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
@@ -539,7 +548,7 @@ Set the list of [devices to notify](apps-yaml.md#notify_devices) in `apps.yaml`.
 
 **switch.predbat_set_charge_low_power** Enables low-power charging mode where the max charge rate will be automatically determined by Predbat to be the
 lowest possible rate to meet the charge target. This is only really effective for charge windows longer than a single slot.
-If this setting is turned on, it is strongly recommended that you create a [battery_power_charge_curve in apps.yaml](apps-yaml.md#battery-chargedischarge-curves)
+If this setting is turned on, it is strongly recommended that you create a [charge rate grid](apps-yaml.md#battery-rate-grids) (learned automatically, or set a battery_charge_power_curve in apps.yaml)
 as otherwise the low power charge may not reach the charge target in time.
 The minimum requested charge rate used in this mode is 400 watts (subject to inverter/battery minimum rate limits).
 This setting is off by default.
@@ -710,7 +719,7 @@ Predbat has an 'iBoost model' that, instead of exporting excess solar to the gri
 
 - **switch.predbat_iboost_on_export** Whether iBoost will run when the battery is forced to export to the grid - default False.
 
-- **switch.predbat_iboost_prevent_discharge** Stops the battery from discharging to the diverter when iBoost is active. Not recommended when iBoost solar mode is enabled as battery discharge will be prevented during excess solar periods. This could cause additional imports due to passing clouds - default False.
+- **switch.predbat_iboost_prevent_discharge** Stops the battery from discharging to the diverter when iBoost is active. Not recommended when iBoost solar mode is enabled as battery discharge will be prevented during excess solar periods. This could cause additional imports due to passing clouds. The hold does not apply while the battery is charging or exporting, so it does not stop a planned export window draining the battery, and it should not be combined with **switch.predbat_iboost_on_export** - default False.
 
 - **switch.predbat_iboost_smart** Whether Predbat will pick the lowest import rate slots within the forecast horizon (48 hours by default) to achieve the desired energy for each day, as specified by **input_number.predbat_iboost_max_energy**. Can be combined with the Solar and Battery modes - default False.
 

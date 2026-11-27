@@ -426,20 +426,8 @@ class TestInverter:
         """
         pass
 
-    def find_charge_curve(self, discharge=False):
-        """No curve history, so no curve."""
-        return None
-
-    def find_charge_curve_samples(self, discharge=False):
-        """No curve history (the curve learners gather evidence every cycle, auto mode or not)."""
-        return None
-
-    def learn_charge_curve(self, samples, discharge=False):
-        """Nothing to learn from."""
-        return {}
-
-    def find_battery_temperature_samples(self, discharge=False):
-        """No temperature history."""
+    def find_rate_grid_samples(self, discharge=False, days=None):
+        """No rate grid history (the grids gather evidence every cycle, auto mode or not)."""
         return None
 
 

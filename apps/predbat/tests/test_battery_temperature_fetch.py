@@ -15,7 +15,10 @@ predict_battery_temperature() looks back at most 24 hours plus one step, so hold
 max_days_previous days of per-minute temperatures (about 3 MB at 22 days) was dead weight.
 """
 
+import os
 from datetime import timedelta
+
+import yaml
 
 from const import PREDICT_STEP, TIME_FORMAT
 from fetch import BATTERY_TEMPERATURE_HISTORY_DAYS
@@ -94,6 +97,70 @@ def test_battery_temperature_fetch(my_predbat):
 
     if not failed:
         print("✓ {} days fetched ({} minutes kept, was {}), prediction unchanged".format(BATTERY_TEMPERATURE_HISTORY_DAYS, len(history), len(full_history)))
+    return failed
+
+
+def _constant_history(now_utc, days, temperature):
+    """HA-style history at one temperature, one record every 30 minutes, oldest first."""
+    records = []
+    for minutes_ago in range(days * 24 * 60, -1, -30):
+        stamp = now_utc - timedelta(minutes=minutes_ago)
+        records.append({"state": str(temperature), "last_updated": stamp.strftime(TIME_FORMAT), "attributes": {}})
+    return [records]
+
+
+def test_battery_temperature_fetch_average(my_predbat):
+    """
+    battery_temperature_history given as a list (one sensor per inverter) is the fleet's average temperature, as the
+    plan models one combined battery: not the sum, and a sensor reading exactly 0 (a missing reading) is left out.
+    """
+    print("\n*** Test: battery temperature history from several sensors is their average ***")
+    failed = False
+    sensors = {"sensor.battery_temperature_a": 10.0, "sensor.battery_temperature_b": 20.0, "sensor.battery_temperature_missing": 0, "sensor.battery_temperature_missing_2": 0}
+
+    def fake_history(entity_id, days=30, required=True, tracked=True):
+        """Each sensor reads its own constant temperature."""
+        if entity_id not in sensors:
+            return None
+        return _constant_history(my_predbat.now_utc, days, sensors[entity_id])
+
+    saved_history = my_predbat.get_history_wrapper
+    saved_arg = my_predbat.args.get("battery_temperature_history", None)
+    my_predbat.get_history_wrapper = fake_history
+    try:
+        my_predbat.args["battery_temperature_history"] = ["sensor.battery_temperature_a", "sensor.battery_temperature_b", "sensor.battery_temperature_missing"]
+        my_predbat.fetch_battery_temperature()
+        averaged = dict(my_predbat.battery_temperature_history)
+        my_predbat.args["battery_temperature_history"] = ["sensor.battery_temperature_missing"]
+        my_predbat.fetch_battery_temperature()
+        only_zero = dict(my_predbat.battery_temperature_history)
+        my_predbat.args["battery_temperature_history"] = ["sensor.battery_temperature_missing", "sensor.battery_temperature_missing_2"]
+        my_predbat.fetch_battery_temperature()
+        all_zero = dict(my_predbat.battery_temperature_history)
+        my_predbat.args["battery_temperature_history"] = "sensor.battery_temperature_a"
+        my_predbat.fetch_battery_temperature()
+        single = dict(my_predbat.battery_temperature_history)
+    finally:
+        my_predbat.get_history_wrapper = saved_history
+        if saved_arg is None:
+            my_predbat.args.pop("battery_temperature_history", None)
+        else:
+            my_predbat.args["battery_temperature_history"] = saved_arg
+
+    if not averaged or any(abs(value - 15.0) > 1e-6 for value in averaged.values()):
+        print("ERROR: expected the average 15°C at every minute, got {}".format(sorted(set(averaged.values()))[:5]))
+        failed = True
+    if not only_zero or any(value != 0 for value in only_zero.values()):
+        print("ERROR: a lone sensor reading 0 should still read 0 (so the stuck warning sees it), got {}".format(sorted(set(only_zero.values()))[:5]))
+        failed = True
+    if not all_zero or any(value != 0 for value in all_zero.values()):
+        print("ERROR: sensors that all read 0 should read 0 (the learners ignore it later), got {}".format(sorted(set(all_zero.values()))[:5]))
+        failed = True
+    if not single or any(abs(value - 10.0) > 1e-6 for value in single.values()):
+        print("ERROR: a single sensor should read as it is, got {}".format(sorted(set(single.values()))[:5]))
+        failed = True
+    if not failed:
+        print("✓ several sensors averaged, a missing one left out, all-zero kept as 0, a single sensor unchanged")
     return failed
 
 
@@ -275,4 +342,42 @@ def test_battery_temperature_history_stuck_warning_once(my_predbat):
 
     if not failed:
         print("✓ reported once, re-armed on recovery, plan effect named only when a curve is set")
+    return failed
+
+
+def test_templates_set_battery_temperature_history(my_predbat):
+    """
+    Every apps.yaml template that sets battery_temperature also sets battery_temperature_history to the same sensors.
+    Without it the plan reads the current temperature but the rate grids are learned with no temperature, and the
+    Curves page draws every sample at its 20 °C placeholder (GH#6270, the Sigenergy template).
+    """
+    print("\n*** Test: apps.yaml templates that set battery_temperature also set battery_temperature_history (#6270) ***")
+    failed = False
+    templates_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "templates")
+
+    checked = []
+    for name in sorted(os.listdir(templates_dir)):
+        if not name.endswith(".yaml"):
+            continue
+        with open(os.path.join(templates_dir, name), encoding="utf-8") as handle:
+            data = yaml.safe_load(handle)
+        if not isinstance(data, dict):
+            continue
+        for section in data.values():
+            if not isinstance(section, dict) or "battery_temperature" not in section:
+                continue
+            checked.append(name)
+            history = section.get("battery_temperature_history", None)
+            if history is None:
+                print("ERROR: {} sets battery_temperature but not battery_temperature_history".format(name))
+                failed = True
+            elif history != section["battery_temperature"]:
+                print("ERROR: {} battery_temperature_history {} does not name the battery_temperature sensors {}".format(name, history, section["battery_temperature"]))
+                failed = True
+
+    if "sigenergy_sigenstor.yaml" not in checked:
+        print("ERROR: expected sigenergy_sigenstor.yaml to be checked, only saw {}".format(checked))
+        failed = True
+    elif not failed:
+        print("✓ {} templates set battery_temperature_history alongside battery_temperature: {}".format(len(checked), ", ".join(checked)))
     return failed

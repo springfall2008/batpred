@@ -16,10 +16,12 @@ dictionaries, time string parsing, data filtering/pruning, rounding,
 and historical data extraction from incrementing energy counters.
 """
 
+import math
 import re
 import array
 import ctypes
 import os
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone, time
 from email.utils import parsedate_to_datetime
 from io import StringIO
@@ -41,6 +43,9 @@ from const import (
     EXPORT_MODE_FREEZE,
     EXPORT_MODE_IDLE,
     FULL_EXPORT_POWER,
+    POWER_SERVICES,
+    OCTOPUS_API_URL,
+    OCTOPUS_LEGACY_API_HOST,
     BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
     BATTERY_TEMPERATURE_CURVE_TEMP_FALLBACK,
 )
@@ -283,11 +288,148 @@ class MinuteArray:
         return new
 
 
+class PackedRates(Mapping):
+    """
+    A read-only minute -> rate mapping held as a start minute and an array of C doubles.
+
+    A per-minute rate series held as a dict costs an int key, a float value and a hash slot for each
+    of thousands of minutes. This keeps just the 8 byte doubles. Readers get the same keys, values and
+    order through the Mapping interface (get, [], in, iteration, items, ==, dict()), and to_dict()
+    builds a fresh dict, so no reader can alter what is held. Anything that needs a real dict - a
+    caller that mutates it, a yaml or json dump - must convert it first (to_dict() or dict()).
+
+    descending=True holds a series a dict built from its last minute back to its first (the
+    forward-looking min/max rates), so iteration and to_dict() keep that order.
+    """
+
+    __slots__ = ("start", "rates", "descending")
+
+    def __init__(self, start, rates, descending=False):
+        """Hold the rate for minute `start + index` in rates[index] (an array of doubles; not called values, which is the Mapping method)."""
+        self.start = start
+        self.rates = rates
+        self.descending = descending
+
+    def _index(self, minute):
+        """
+        Return the array index holding a minute, or -1 when it is not held.
+
+        A dict finds an int key from any key equal to it (10.0, True, a numpy integer), so those are
+        looked up as the int they equal; anything else (10.5, "10", None, NaN) is not held.
+        """
+        if type(minute) is not int:
+            try:
+                as_int = int(minute)
+            except (TypeError, ValueError, OverflowError):
+                return -1
+            if as_int != minute:
+                return -1
+            minute = as_int
+        index = minute - self.start
+        return index if 0 <= index < len(self.rates) else -1
+
+    def __getitem__(self, minute):
+        """Return the rate for a minute, or raise KeyError as a dict would."""
+        index = self._index(minute)
+        if index < 0:
+            raise KeyError(minute)
+        return self.rates[index]
+
+    def get(self, minute, default=None):
+        """Return the rate for a minute, or default - the hot path, so an int minute skips _index() and Mapping.get's exception."""
+        if type(minute) is int:
+            index = minute - self.start
+            if 0 <= index < len(self.rates):
+                return self.rates[index]
+            return default
+        index = self._index(minute)
+        return self.rates[index] if index >= 0 else default
+
+    def __contains__(self, minute):
+        """True when the minute is held."""
+        if type(minute) is int:
+            return 0 <= minute - self.start < len(self.rates)
+        return self._index(minute) >= 0
+
+    def minutes(self):
+        """The minutes held, in iteration order."""
+        end = self.start + len(self.rates)
+        return range(end - 1, self.start - 1, -1) if self.descending else range(self.start, end)
+
+    def __iter__(self):
+        """Iterate the minutes, ascending unless the series is descending."""
+        return iter(self.minutes())
+
+    def __len__(self):
+        """Return the number of minutes held."""
+        return len(self.rates)
+
+    def __repr__(self):
+        """Show the series as the dict it stands for."""
+        return repr(self.to_dict())
+
+    def to_dict(self):
+        """Return a new plain minute -> rate dict holding the same data, in the same order."""
+        if self.descending:
+            return {minute: self.rates[minute - self.start] for minute in self.minutes()}
+        return dict(zip(range(self.start, self.start + len(self.rates)), self.rates))
+
+    @classmethod
+    def pack(cls, data):
+        """
+        Return PackedRates holding `data` if that is exactly representable: a dict of consecutive, ascending
+        int minutes to float rates. Anything else (gaps, other types, empty, free session lists) is returned unchanged.
+        """
+        if not isinstance(data, dict) or not data:
+            return data
+        expected = next(iter(data))
+        start = expected
+        values = array.array("d")
+        for minute, rate in data.items():
+            if type(minute) is not int or type(rate) is not float or minute != expected:
+                return data
+            values.append(rate)
+            expected += 1
+        return cls(start, values)
+
+    @classmethod
+    def from_descending(cls, last_minute, values):
+        """
+        Hold a series built from its last minute back: values[i] is the rate for minute last_minute - i.
+
+        Returns descending PackedRates, which iterate in that same order, when every value is a float, and
+        otherwise the dict {last_minute - i: values[i]} the series would have been built as.
+        """
+        if values and all(type(value) is float for value in values):
+            return cls(last_minute - len(values) + 1, array.array("d", reversed(values)), descending=True)
+        return {last_minute - index: value for index, value in enumerate(values)}
+
+    @classmethod
+    def pack_copy(cls, data):
+        """
+        Return an independent copy of the dict `data`: packed if pack() can hold it, otherwise data.copy().
+        For a snapshot of a dict that goes on being changed, without building a dict copy only to pack it.
+        """
+        packed = cls.pack(data)
+        return data.copy() if packed is data else packed
+
+    @staticmethod
+    def unpack(data):
+        """Return `data` as a plain dict if it is PackedRates, otherwise return it as it is."""
+        return data.to_dict() if isinstance(data, PackedRates) else data
+
+
 # Predbat member variables never included in a debug dump or served over MCP - live object
 # graphs, the HA interface, loaded secrets, the URL caches, locks (which can't be serialised) and
 # log-repeat bookkeeping. Shared with is_debug_excluded_key(). io_slot_log_gate keys its history by
 # tuples, which a dump writes as YAML sequences that cannot be loaded back as dict keys, so a dump
 # carrying it cannot be replayed (#5569) - and a replay has no use for which log lines were already written.
+# The rate grid evidence (a year of samples) and the grids derived from the learned ones are rebuilt on replay
+# (rate_grids()), so only battery_rate_grid_learned is dumped - every debug_history snapshot would otherwise carry them.
+# control_ledger and control_monitor are execution-side runtime state: a replay only re-plans (calculate_plan), so it
+# never reads them, and the events they hold already reach predbat.log and the control_conflicts/control_failures
+# sensors. As Python objects they were the only !!python/object tags in a fresh dump, and a newer dump on an older
+# tree failed to load on them (GH#5719).
 DEBUG_EXCLUDE_LIST = [
     "ha_interface",
     "components",
@@ -310,6 +452,13 @@ DEBUG_EXCLUDE_LIST = [
     "secrets",
     "status_lock",
     "io_slot_log_gate",
+    "battery_rate_grid_samples",
+    "battery_rate_grid_cache",
+    "battery_rate_grid_manual",
+    "battery_charge_rate_grid",
+    "battery_discharge_rate_grid",
+    "control_ledger",
+    "control_monitor",
 ]
 
 
@@ -807,11 +956,58 @@ def redact_log_line(line, secret_pattern):
     return "".join(out)
 
 
+class SecretReference(str):
+    """The name in a '!secret name' reference, as secret_reference_yaml_loader() loads it: the reference, not the secret."""
+
+
+def secret_reference_yaml_loader():
+    """
+    Return a yaml.SafeLoader subclass that loads '!secret name' as a SecretReference('name')
+
+    The same parser and tags load_apps_yaml() reads apps.yaml with, but the reference is kept rather than
+    resolved, so find_unmasked_secret_paths() can tell a '!secret' value from one written inline. A new class
+    per call, so the constructor never lands on the process-wide yaml.SafeLoader.
+
+    Unlike yaml.SafeLoader it refuses a key written twice in one mapping, raising a ConstructorError that names
+    the key and both lines, as the ruamel loader this check used before refused it. Keys are compared as
+    Predbat's own load reads them (YAML 1.1, so 'yes' and 'true' are the same key). A key that only repeats
+    one merged in by '<<' is an override, and is allowed.
+    """
+    import yaml
+
+    def reference_constructor(loader, node):
+        """YAML constructor for the !secret tag, keeping the secret's name."""
+        return SecretReference(loader.construct_scalar(node))
+
+    class SecretReferenceYamlLoader(yaml.SafeLoader):
+        """SafeLoader with '!secret' kept as a SecretReference and duplicate keys refused."""
+
+        def construct_mapping(self, node, deep=False):
+            """Refuse a key written twice in this mapping, then construct it as SafeLoader does."""
+            if isinstance(node, yaml.MappingNode):
+                first_seen = {}
+                for key_node, _ in node.value:
+                    if key_node.tag == "tag:yaml.org,2002:merge":
+                        continue
+                    key = self.construct_object(key_node, deep=True)
+                    try:
+                        first = first_seen.setdefault(key, key_node)
+                    except TypeError:
+                        # An unhashable key: SafeLoader reports it as it always has
+                        continue
+                    if first is not key_node:
+                        raise yaml.constructor.ConstructorError("while constructing a mapping", node.start_mark, 'found duplicate key "{}", first written on line {}'.format(key, first.start_mark.line + 1), key_node.start_mark)
+            return super().construct_mapping(node, deep=deep)
+
+    SecretReferenceYamlLoader.add_constructor("!secret", reference_constructor)
+    return SecretReferenceYamlLoader
+
+
 def find_unmasked_secret_paths(node, path=""):
     """
-    Recursively walk a ruamel round-trip-loaded apps.yaml section and yield the dotted path
-    of every credential-like key (per is_secret_key()) whose value is a plain scalar rather
-    than a '!secret' reference into secrets.yaml (loaded as a ruamel TaggedScalar).
+    Recursively walk an apps.yaml section loaded with secret_reference_yaml_loader() and yield
+    the dotted path of every credential-like key (per is_secret_key()) whose value is a plain
+    scalar rather than a '!secret' reference into secrets.yaml (loaded as a SecretReference).
 
     Deliberately asks is_secret_key(registry=False): this drives the "stored in plain text,
     consider !secret" advice, which is about values that grant access. The registry additionally
@@ -819,23 +1015,32 @@ def find_unmasked_secret_paths(node, path=""):
     anything shared, but an inline octopus_api_account is the documented normal setup and
     warning every user about it would be noise rather than advice.
 
-    Only usable against a document loaded with ruamel's round-trip loader - a plain
-    yaml.safe_load() has already resolved '!secret' tags to their real value and lost the
-    distinction this depends on.
+    Only usable against a document that kept its '!secret' references - load_apps_yaml() has
+    already resolved them to their real value and lost the distinction this depends on.
     """
-    from ruamel.yaml.comments import TaggedScalar
-
     if isinstance(node, dict):
         for key, value in node.items():
             key_path = "{}.{}".format(path, key) if path else str(key)
             if is_secret_key(key, registry=False):
-                if value not in (None, "") and not isinstance(value, TaggedScalar):
-                    yield key_path
+                yield from _find_inline_secret_values(value, key_path)
             else:
                 yield from find_unmasked_secret_paths(value, key_path)
     elif isinstance(node, list):
         for index, item in enumerate(node):
             yield from find_unmasked_secret_paths(item, "{}[{}]".format(path, index))
+
+
+def _find_inline_secret_values(value, path):
+    """
+    Yield the path of every plain-text value held by a credential-like key. A list is judged entry
+    by entry, so a list of '!secret' references (solcast_api_key with one key per site) is not
+    flagged, while a mixed list flags only its inline entries.
+    """
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _find_inline_secret_values(item, "{}[{}]".format(path, index))
+    elif value not in (None, "") and not isinstance(value, SecretReference):
+        yield path
 
 
 def _mask_secrets_in_yaml_node(node):
@@ -953,14 +1158,6 @@ def parse_log_timestamp(line):
     return None
 
 
-# Helper to make dict hashable for caching
-def charge_curve_to_tuple(d):
-    """Convert dict to tuple for use as cache key"""
-    if not d:
-        return ()
-    return tuple(sorted(d.items()))
-
-
 def get_now_from_cumulative(data, minutes_now, backwards):
     """
     Get current value from cumulative data
@@ -1009,6 +1206,46 @@ def prune_today(data, now_utc, midnight_utc, prune=True, group=15, prune_future=
             last_time = timekey
             prev_value = data[key]
     return results
+
+
+def services_send_power(args, direction=None, index=None):
+    """
+    Whether any start or freeze service (POWER_SERVICES) in apps.yaml sends the charge/discharge rate as {power}.
+
+    With a direction ("charge" or "discharge") only that direction's services count, as a rate sent
+    to a charge hook says nothing about what the discharge side was given.
+
+    A service given by name alone is passed every default option, power included. A template entry
+    passes only the keys it lists, so it sends the rate only where one of its values references {power}.
+    Only a string value is formatted, or each string in a per-inverter list; a nested mapping is passed
+    as it is, so a {power} inside one is never filled in and does not count. With an inverter index only
+    that inverter's entry of a per-inverter list counts, as it is the one that inverter is sent; without
+    one, any inverter's does.
+    """
+
+    def formats_power(value):
+        """Whether call_service_template() fills in {power} for this template value."""
+        # {power}, or with a format spec or conversion such as {power:.0f}, as str.format() takes it
+        if not isinstance(value, list):
+            items = [value]
+        elif index is None:
+            items = value
+        else:
+            items = value[index : index + 1]
+        return any(isinstance(item, str) and re.search(r"\{power[}:!]", item) for item in items)
+
+    for service in POWER_SERVICES:
+        if direction and not service.startswith(direction + "_"):
+            continue
+        templates = args.get(service)
+        if not templates:
+            continue
+        for template in templates if isinstance(templates, list) else [templates]:
+            if isinstance(template, str):
+                return True
+            if isinstance(template, dict) and any(formats_power(value) for key, value in template.items() if key != "service"):
+                return True
+    return False
 
 
 def is_entity_id(value):
@@ -1348,9 +1585,13 @@ def get_override_time_from_string(now_utc, time_str, plan_interval_minutes):
     return override_time
 
 
-def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None):
+def minute_data_state(history, days, now, state_key, last_updated_key, prev_last_updated_time=None, pad=True):
     """
     Get historical data for state (e.g. predbat status)
+
+    Every minute from the oldest record to now is filled with the state in force then. With pad (the default) the minutes
+    of the window older than the oldest record are filled too, with the newest state; pad=False leaves them out, so the
+    result only covers the history that exists.
     """
     mdata = {}
     last_state = "unknown"
@@ -1401,17 +1642,23 @@ def minute_data_state(history, days, now, state_key, last_updated_key, prev_last
             newest_state = state
 
     state = newest_state
-    for minute in range(0, 60 * 24 * days):
-        rindex = 60 * 24 * days - minute - 1
+    oldest = 60 * 24 * days - 1
+    if not pad:
+        oldest = min(max(mdata), oldest) if mdata else -1
+    for rindex in range(oldest, -1, -1):
         state = mdata.get(rindex, state)
         mdata[rindex] = state
 
     return mdata
 
 
-def history_attribute_to_minute_data(now_utc, data, backwards=True):
+def history_attribute_to_minute_data(now_utc, data, backwards=True, whole_span=False):
     """
     Get historical data for an attribute with history attribute filtering first
+
+    The minute data covers the whole days the history spans, rounded down, so a history 2 days 22 hours long gives 2 days.
+    whole_span=True covers all of it instead, back to the first record and no further (minute_data would otherwise copy the
+    first record back over the minutes before it).
     """
     history = []
     oldest_date = now_utc
@@ -1426,8 +1673,25 @@ def history_attribute_to_minute_data(now_utc, data, backwards=True):
         history.append({"last_updated": key, "state": value})
     max_age = now_utc - oldest_date
     max_days = max(max_age.days, 1)
+    if whole_span:
+        max_days = max(math.ceil(max_age.total_seconds() / (24 * 60 * 60)), 1)
     mdata, _ = minute_data(history, max_days, now_utc, "state", "last_updated", backwards=backwards, smoothing=False, scale=1.0, clean_increment=False, required_unit=None)
+    if whole_span:
+        first_minute = int(max_age.total_seconds() / 60)
+        mdata = {minute: value for minute, value in mdata.items() if minute <= first_minute}
     return [mdata, max_days]
+
+
+OCTOPUS_LEGACY_API_RE = re.compile(r"^https?://" + re.escape(OCTOPUS_LEGACY_API_HOST) + r"(?=[/?#:]|$)", re.IGNORECASE)
+
+
+def migrate_octopus_url(url):
+    """Return url with the retired Octopus API host (api.octopus.energy) replaced by its successor (GH#5786).
+
+    Anything else - another host, a non-string, None - is returned unchanged."""
+    if not isinstance(url, str):
+        return url
+    return OCTOPUS_LEGACY_API_RE.sub(OCTOPUS_API_URL, url, count=1)
 
 
 def filter_payment_method(rates, preferred="DIRECT_DEBIT"):
@@ -1509,10 +1773,15 @@ def minute_data(
     interpolate=False,
     debug=False,
     can_modify_history=False,
+    pad=True,
 ):
     """
     Turns data from HA into a hash of data indexed by minute with the data being the value
     Can be backwards in time for history (N minutes ago) or forward in time (N minutes in the future)
+
+    Backwards history is filled minute by minute between records. With pad (the default) the minutes of the window older
+    than the oldest record are filled too, with that record's value; pad=False leaves them out, so the result only covers
+    the history that exists.
     """
     if accumulate is None:
         accumulate = []
@@ -1805,6 +2074,7 @@ def minute_data(
 
         # Find the first value
         state = 0
+        first_index = None
         for minute in range(60 * 24 * days):
             if backwards:
                 rindex = 60 * 24 * days - minute - 1
@@ -1812,12 +2082,16 @@ def minute_data(
                 rindex = minute
             if rindex in mdata:
                 state = mdata[rindex]
+                first_index = rindex
                 break
 
         # Fill gaps in the middle
         for minute in range(60 * 24 * days):
             if backwards:
                 rindex = 60 * 24 * days - minute - 1
+                if not pad and (first_index is None or rindex > first_index):
+                    # Older than the oldest record: not padded, the history does not reach that far
+                    continue
             else:
                 rindex = minute
             state = mdata.get(rindex, state)
@@ -2631,54 +2905,77 @@ def remove_intersecting_windows(charge_limit_best, charge_window_best, export_li
     return new_limit_best, new_window_best
 
 
-@lru_cache(maxsize=8192)
-def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple):
+def rate_curve_ceiling(soc, soc_max, rate_max, rate_curve):
     """
-    Cached computation of true charging rate from SoC and charge rate setting
+    The highest rate at this SoC on a path whose own maximum is rate_max.
+
+    rate_curve is battery_rate_grid.rate_grid_curve(): the battery's ceiling by SoC percent in kW per minute (101
+    entries), then the rated rate it was scaled from, then the absolute temperature cap. On a path at or below the rated
+    rate (AC charge, export) the ceiling is absolute - a cold battery's limit is the same kW whichever path asks. History
+    only measures the battery up to its rated rate, so on a path above it (a hybrid's DC charge from PV) the curve scales
+    with the path instead, under the absolute temperature cap (a manual cold curve stays in kW).
     """
-    battery_charge_power_curve = dict(battery_charge_power_curve_tuple) if battery_charge_power_curve_tuple else {}
-    battery_temperature_curve = dict(battery_temperature_curve_tuple) if battery_temperature_curve_tuple else {}
-
-    soc_percent = calc_percent_limit(soc, soc_max)
-    max_charge_rate = battery_rate_max_charge * get_curve_value(battery_charge_power_curve, soc_percent, 1.0)
-
-    # Temperature cap
-    max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_charge)
-    max_charge_rate = min(max_charge_rate, max_rate_cap)
-
-    return max(min(charge_rate_setting, max_charge_rate), battery_rate_min)
+    if not rate_curve:
+        return rate_max
+    soc_percent = max(min(calc_percent_limit(soc, soc_max), 100), 0)
+    rated = rate_curve[101]
+    if rate_max <= rated or rated <= 0:
+        return min(rate_max, rate_curve[soc_percent])
+    return min(rate_curve[soc_percent] * (rate_max / rated), rate_curve[102])
 
 
-def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, battery_charge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
+@lru_cache(maxsize=64)
+def rate_curve_function(rate_curve):
+    """
+    A cached rate lookup bound to one battery ceiling curve: lookup(soc, rate_setting, soc_max, rate_max, rate_min).
+
+    The plan's hot path makes millions of these lookups; keying one shared cache on the 101-entry curve would hash it on
+    every call, so each distinct curve gets its own small-keyed cache instead and is hashed once, here. Both caches are
+    bounded (64 curves of 2048 lookups): a new curve appears for each forecast degree each time a grid is refitted. Gives the same
+    answer as get_charge_rate_curve_cached() (charge) and get_discharge_rate_curve_cached() (discharge).
+    """
+
+    @lru_cache(maxsize=2048)
+    def lookup(soc, rate_setting, soc_max, rate_max, rate_min):
+        """The true rate for this SoC and setting under the bound curve."""
+        return max(min(rate_setting, rate_curve_ceiling(soc, soc_max, rate_max, rate_curve)), rate_min)
+
+    return lookup
+
+
+def get_charge_rate_curve_cached(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_rate_curve, battery_rate_min):
+    """
+    True charging rate from SoC and charge rate setting
+
+    No longer behind an lru_cache: the work is a percent and two comparisons, cheaper than hashing a 101-entry curve
+    for the cache key on every call (the name is kept for its many callers).
+
+    charge_rate_curve is the battery's charge ceiling by SoC percent in kW per minute for the current temperature
+    (battery_rate_grid.rate_grid_curve(grid, temperature, rated=...)), a tuple so it can key the cache; the path's own
+    maximum (battery_rate_max_charge) is a separate limit, and a setting below both is used as it is.
+    """
+    return max(min(charge_rate_setting, rate_curve_ceiling(soc, soc_max, battery_rate_max_charge, charge_rate_curve)), battery_rate_min)
+
+
+def get_charge_rate_curve(soc, charge_rate_setting, soc_max, battery_rate_max_charge, charge_rate_curve, battery_rate_min):
     """
     Compute true charging rate from SoC and charge rate setting
     """
-    return get_charge_rate_curve_cached(round(soc, 1), charge_rate_setting, soc_max, battery_rate_max_charge, charge_curve_to_tuple(battery_charge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve))
+    return get_charge_rate_curve_cached(round(soc, 1), charge_rate_setting, soc_max, battery_rate_max_charge, tuple(charge_rate_curve) if charge_rate_curve else (), battery_rate_min)
 
 
-@lru_cache(maxsize=8192)
-def get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple):
+def get_discharge_rate_curve_cached(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, discharge_rate_curve, battery_rate_min):
     """
-    Cached computation of true discharging rate from SoC and charge rate setting
+    True discharging rate from SoC and discharge rate setting, as get_charge_rate_curve_cached()
     """
-    battery_discharge_power_curve = dict(battery_discharge_power_curve_tuple) if battery_discharge_power_curve_tuple else {}
-    battery_temperature_curve = dict(battery_temperature_curve_tuple) if battery_temperature_curve_tuple else {}
-
-    soc_percent = calc_percent_limit(soc, soc_max)
-    max_discharge_rate = battery_rate_max_discharge * get_curve_value(battery_discharge_power_curve, soc_percent, 1.0)
-    max_rate_cap = find_battery_temperature_cap(battery_temperature, battery_temperature_curve, soc_max, battery_rate_max_discharge)
-    max_discharge_rate = min(max_discharge_rate, max_rate_cap)
-
-    return max(min(discharge_rate_setting, max_discharge_rate), battery_rate_min)
+    return max(min(discharge_rate_setting, rate_curve_ceiling(soc, soc_max, battery_rate_max_discharge, discharge_rate_curve)), battery_rate_min)
 
 
-def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, battery_discharge_power_curve, battery_rate_min, battery_temperature, battery_temperature_curve):
+def get_discharge_rate_curve(soc, discharge_rate_setting, soc_max, battery_rate_max_discharge, discharge_rate_curve, battery_rate_min):
     """
-    Compute true discharging rate from SoC and charge rate setting
+    Compute true discharging rate from SoC and discharge rate setting
     """
-    return get_discharge_rate_curve_cached(
-        round(soc, 1), discharge_rate_setting, soc_max, battery_rate_max_discharge, charge_curve_to_tuple(battery_discharge_power_curve), battery_rate_min, battery_temperature, charge_curve_to_tuple(battery_temperature_curve)
-    )
+    return get_discharge_rate_curve_cached(round(soc, 1), discharge_rate_setting, soc_max, battery_rate_max_discharge, tuple(discharge_rate_curve) if discharge_rate_curve else (), battery_rate_min)
 
 
 """
@@ -2690,15 +2987,50 @@ def get_curve_value(curve, index, default=1.0):
     return curve.get(index, default)
 
 
-def battery_temperature_index(battery_temperature):
+def battery_temperature_entities(value):
+    """
+    The entity ids battery_temperature_history names: one sensor, or a list of them (one per inverter). Literals and
+    blanks are left out, as minute_data_import_export() leaves them out.
+    """
+    if not isinstance(value, list):
+        value = [value]
+    return [entity_id for entity_id in value if is_entity_id(entity_id)]
+
+
+def average_temperature_minutes(series_list):
+    """
+    The per-minute average of several battery temperature series, one per sensor, for the one combined battery the
+    plan models (summing them, as an energy total would be, reads two 15 degree batteries as 30 degrees).
+
+    A reading of exactly 0 is how several integrations report a missing one, so it is left out of a minute's average
+    when another sensor has a real reading there. A minute every sensor reads 0 stays 0, so the stuck-sensor check
+    still sees a dead sensor. A single series is returned as it is.
+
+    Args:
+        series_list: {minute: temperature} dicts
+
+    Returns:
+        {minute: average temperature} over every minute any series has
+    """
+    series_list = [series for series in series_list if series]
+    if len(series_list) <= 1:
+        return series_list[0] if series_list else {}
+    average = {}
+    for minute in sorted(set().union(*series_list)):
+        readings = [series[minute] for series in series_list if minute in series and series[minute] != 0]
+        average[minute] = sum(readings) / len(readings) if readings else 0
+    return average
+
+
+def battery_temperature_index(battery_temperature, temp_max=BATTERY_TEMPERATURE_CURVE_TEMP_MAX):
     """
     The whole degree a battery temperature reading is looked up (and learned) at.
 
-    The reading is clamped to -20..BATTERY_TEMPERATURE_CURVE_TEMP_MAX and truncated, except that a reading between -1 and
-    1 that is not exactly 0 goes to 1 (or -1): an exact 0 is how several integrations report a missing reading, so only
-    it keeps the 0 entry, and a real reading just either side of freezing is capped like its neighbours.
+    The reading is clamped to -20..temp_max (BATTERY_TEMPERATURE_CURVE_TEMP_MAX unless given) and truncated, except that a
+    reading between -1 and 1 that is not exactly 0 goes to 1 (or -1): an exact 0 is how several integrations report a
+    missing reading, so only it keeps the 0 entry, and a real reading just either side of freezing is capped like its neighbours.
     """
-    temperature = max(min(battery_temperature, BATTERY_TEMPERATURE_CURVE_TEMP_MAX), -20)
+    temperature = max(min(battery_temperature, temp_max), -20)
     index = int(temperature)
     if index == 0 and temperature != 0:
         index = 1 if temperature > 0 else -1
@@ -2750,15 +3082,13 @@ def find_charge_rate(
     target_soc,
     max_rate,
     soc_max,
-    battery_charge_power_curve,
+    charge_rate_curve,
     set_charge_low_power,
     charge_low_power_margin,
     battery_rate_min,
     battery_rate_max_scaling,
     battery_loss,
     log_to,
-    battery_temperature=20,
-    battery_temperature_curve=None,
     current_charge_rate=None,
     pv_window_kwh=0.0,
     low_power_pv_threshold_w=0.0,
@@ -2780,9 +3110,11 @@ def find_charge_rate(
     forecast can answer - a user charging in a free or very cheap daytime window loses nothing by
     throttling, while on a normal tariff the exported surplus has to be bought back later. Defaults to
     True, the behaviour of #4373.
+
+    charge_rate_curve is the battery's charge ceiling by SoC percent for the window's temperature
+    (battery_rate_grid.rate_grid_curve), as get_charge_rate_curve_cached() takes it.
     """
-    if battery_temperature_curve is None:
-        battery_temperature_curve = {}
+    charge_rate_curve = tuple(charge_rate_curve) if charge_rate_curve else ()
     margin = charge_low_power_margin
     target_soc = round(target_soc, 2)
 
@@ -2790,11 +3122,8 @@ def find_charge_rate(
     if current_charge_rate is None:
         current_charge_rate = max_rate
 
-    battery_temperature_curve_tuple = charge_curve_to_tuple(battery_temperature_curve)
-    battery_charge_power_curve_tuple = charge_curve_to_tuple(battery_charge_power_curve)
-
     # Real achieved max rate
-    max_rate_real = get_charge_rate_curve_cached(round(soc, 1), max_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
+    max_rate_real = get_charge_rate_curve_cached(round(soc, 1), max_rate, soc_max, max_rate, charge_rate_curve, battery_rate_min) * battery_rate_max_scaling
 
     min_battery_rate = max(400, int(round(battery_rate_min * MINUTE_WATT)))
     if set_charge_low_power:
@@ -2861,7 +3190,7 @@ def find_charge_rate(
                 rate_scale_max = 0
                 # Compute over the time period, include the completion time
                 for _minute in range(0, minutes_left, PREDICT_STEP):
-                    rate_scale = get_charge_rate_curve_cached(round(charge_now, 1), rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple)
+                    rate_scale = get_charge_rate_curve_cached(round(charge_now, 1), rate, soc_max, max_rate, charge_rate_curve, battery_rate_min)
                     highest_achievable_rate = max(highest_achievable_rate, rate_scale)
                     rate_scale *= battery_rate_max_scaling
                     rate_scale_max = max(rate_scale_max, rate_scale)
@@ -2888,11 +3217,11 @@ def find_charge_rate(
                     )
                 )
 
-        best_rate_real = get_charge_rate_curve_cached(round(soc, 1), best_rate, soc_max, max_rate, battery_charge_power_curve_tuple, battery_rate_min, battery_temperature, battery_temperature_curve_tuple) * battery_rate_max_scaling
+        best_rate_real = get_charge_rate_curve_cached(round(soc, 1), best_rate, soc_max, max_rate, charge_rate_curve, battery_rate_min) * battery_rate_max_scaling
         if log_to:
             log_to(
-                "Low Power mode: minutes left: {}, absolute: {}, SoC: {}kW, Target SoC: {}kW, Charge left: {}kW, Max rate: {}W, Min rate: {}W, Best rate: {}W, Best rate real: {}W, Battery temp {}°C".format(
-                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, dp0(max_rate * MINUTE_WATT), dp0(min_rate * MINUTE_WATT), dp0(best_rate * MINUTE_WATT), dp0(best_rate_real * MINUTE_WATT), battery_temperature
+                "Low Power mode: minutes left: {}, absolute: {}, SoC: {}kW, Target SoC: {}kW, Charge left: {}kW, Max rate: {}W, Min rate: {}W, Best rate: {}W, Best rate real: {}W".format(
+                    minutes_left, abs_minutes_left, soc, target_soc, charge_left, dp0(max_rate * MINUTE_WATT), dp0(min_rate * MINUTE_WATT), dp0(best_rate * MINUTE_WATT), dp0(best_rate_real * MINUTE_WATT)
                 )
             )
         return best_rate, best_rate_real

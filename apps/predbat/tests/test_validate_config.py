@@ -30,6 +30,10 @@ Types covered (see APPS_SCHEMA in config.py):
 import os
 import tempfile
 
+import yaml
+
+from utils import SecretReference, secret_reference_yaml_loader
+
 
 def _run(my_predbat, extra_args, extra_states=None, expect_errors=(), expect_clean=()):
     """Inject args/states, run validate_config, assert per-field expectations.
@@ -587,9 +591,9 @@ def test_validate_config(my_predbat):
 
 def test_validate_config_secrets(my_predbat):
     """
-    Tests check_apps_yaml_secrets() (#4787) - re-reads apps.yaml with the ruamel round-trip
-    loader and flags credential-like values that are stored in plain text rather than
-    referenced via the '!secret' mechanism.
+    Tests check_apps_yaml_secrets() (#4787) - re-reads apps.yaml with PyYAML, keeping '!secret'
+    references as SecretReference, and flags credential-like values that are stored in plain
+    text rather than referenced via the '!secret' mechanism.
 
     Writes a real temp apps.yaml so the round-trip loader has something genuine to parse:
     provenance (whether a value came from a '!secret' tag or was written inline) only
@@ -609,6 +613,15 @@ pred_bat:
   kraken_key: ""
   forecast_solar:
     api_key: plaintext_nested_key
+  solar_sites:
+    - api_key: !secret solcast_key
+    - api_key: plaintext_list_key
+  solcast_api_key:
+    - !secret solcast_key_1
+    - !secret solcast_key_2
+  fox_key:
+    - !secret fox_key_1
+    - plaintext_fox_key
   gateway_mqtt_host: mqtt.example.com
   rates_import:
     - start: "00:00"
@@ -639,8 +652,40 @@ pred_bat:
         print("  Non-credential key is not flagged")
         assert "gateway_mqtt_host" not in warnings, f"Non-credential key must not be flagged, got {warnings}"
         assert not any(w.startswith("rates_import") for w in warnings), f"Non-credential nested list must not be flagged, got {warnings}"
+
+        print("  Inside a list, only the inline credential is flagged")
+        assert "solar_sites[1].api_key" in warnings, f"Expected inline solar_sites[1].api_key to be flagged, got {warnings}"
+        assert "solar_sites[0].api_key" not in warnings, f"'!secret'-referenced solar_sites[0].api_key must not be flagged, got {warnings}"
+
+        print("  A credential key holding a list of '!secret' references is not flagged")
+        assert not any(w.startswith("solcast_api_key") for w in warnings), f"A list of '!secret' references under solcast_api_key must not be flagged, got {warnings}"
+
+        print("  A credential key holding a mixed list flags only its inline entries")
+        assert "fox_key[1]" in warnings, f"Expected inline fox_key[1] to be flagged, got {warnings}"
+        assert "fox_key[0]" not in warnings and "fox_key" not in warnings, f"Only the inline entry of fox_key may be flagged, got {warnings}"
+        assert len(warnings) == 4, f"Expected exactly 4 warnings, got {warnings}"
+
+        print("  The '!secret' reference loads as its name, and stays off the shared SafeLoader")
+        with open(temp_path) as handle:
+            loaded = yaml.load(handle, Loader=secret_reference_yaml_loader())  # nosec B506 - a SafeLoader subclass
+        reference = loaded["pred_bat"]["mcp_secret"]
+        assert isinstance(reference, SecretReference) and reference == "my_mcp_secret", f"Expected SecretReference('my_mcp_secret'), got {reference!r}"
+        assert "!secret" not in yaml.SafeLoader.yaml_constructors, "secret_reference_yaml_loader() must not register !secret on yaml.SafeLoader"
     finally:
         os.remove(temp_path)
+
+    print("  An apps.yaml that will not parse warns and flags nothing")
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+        bad_path = f.name
+        f.write("pred_bat:\n  ohme_password: [unclosed\n")
+    try:
+        my_predbat.check_apps_yaml_secrets(apps_yaml_path=bad_path)
+        assert my_predbat.arg_warnings == {}, f"Expected no warnings for a file that will not parse, got {my_predbat.arg_warnings}"
+    finally:
+        os.remove(bad_path)
+
+    print("  A key written twice fails the check, naming the key and the line it was first written on")
+    check_duplicate_keys_refused(my_predbat)
 
     print("  A missing apps.yaml is handled without error")
     my_predbat.check_apps_yaml_secrets(apps_yaml_path="/tmp/does_not_exist_predbat_test_4787.yaml")
@@ -648,6 +693,66 @@ pred_bat:
 
     print("**** test_validate_config_secrets PASSED ****")
     return False
+
+
+# Each refused as a key written twice, with the line it was first written on
+DUPLICATE_KEY_APPS_YAML = {
+    "a credential written twice": ("pred_bat:\n  module: predbat\n  ohme_password: first\n  ohme_password: second\n", "ohme_password", 3, 4),
+    "a nested key written twice": ("pred_bat:\n  forecast_solar:\n    api_key: !secret one\n    api_key: plaintext\n", "api_key", 3, 4),
+    "a key written twice inside a list item": ("pred_bat:\n  solar_sites:\n    - api_key: a\n      api_key: b\n", "api_key", 3, 4),
+    "the pred_bat section written twice": ("pred_bat:\n  ohme_password: first\npred_bat:\n  module: predbat\n", "pred_bat", 1, 3),
+    "a key written twice in a flow mapping": ("pred_bat: {ohme_password: a, ohme_password: b}\n", "ohme_password", 1, 1),
+    "a member written twice in a !!set": ("pred_bat:\n  names: !!set\n    ? a\n    ? a\n", "a", 3, 4),
+    "an inner duplicate inside an outer one": ("pred_bat:\n  m:\n    a: 1\n    a: 2\n  m: 3\n", "m", 2, 5),
+    "a key written twice with YAML 1.1 boolean values": ("pred_bat:\n  a: yes\n  a: no\n", "a", 2, 3),
+    # Predbat reads apps.yaml as YAML 1.1, where yes, true and on are all the key True
+    "boolean keys that YAML 1.1 reads as the same key": ("pred_bat:\n  yes: 1\n  true: 2\n  on: 3\n", "True", 2, 3),
+}
+
+# Loaded as Predbat loads them: a key that overrides one merged in by '<<', and two '<<' merge keys
+MERGE_OVERRIDE_APPS_YAML = "base: &base\n  ohme_password: merged\npred_bat:\n  <<: *base\n  ohme_password: explicit\n"
+TWO_MERGE_KEYS_APPS_YAML = "base: &base\n  module: predbat\nother: &other\n  ohme_password: merged\npred_bat:\n  <<: *base\n  <<: *other\n"
+
+
+def check_duplicate_keys_refused(my_predbat):
+    """
+    The re-read must refuse an apps.yaml with a key written twice, naming the key and the line it was first on
+
+    Predbat's own load keeps the last value of a duplicate key without a word, so this check is where a duplicate
+    gets reported: check_apps_yaml_secrets() logs "Unable to re-read" with the key and both lines, and flags
+    nothing, as it did when the ruamel loader refused the file. A key that only overrides one merged in by '<<',
+    and a second '<<', load as Predbat loads them.
+    """
+
+    def run_check(content):
+        """Run the check on content written to a temporary file; return the file's path and the lines logged."""
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            path = f.name
+            f.write(content)
+        logged = []
+        original_log = my_predbat.log
+        my_predbat.log = logged.append
+        try:
+            my_predbat.check_apps_yaml_secrets(apps_yaml_path=path)
+        finally:
+            my_predbat.log = original_log
+            os.remove(path)
+        return path, logged
+
+    for description, (content, key, first_line, second_line) in DUPLICATE_KEY_APPS_YAML.items():
+        path, logged = run_check(content)
+        assert len(logged) == 1 and logged[0].startswith("Warn: Unable to re-read {} to check for unmasked secrets: ".format(path)), f"For {description} expected one 'Unable to re-read' warning, got {logged}"
+        assert 'found duplicate key "{}", first written on line {}'.format(key, first_line) in logged[0], f"For {description} expected key {key} first on line {first_line}, got {logged[0]}"
+        assert "line {},".format(second_line) in logged[0], f"For {description} expected the duplicate on line {second_line}, got {logged[0]}"
+        assert my_predbat.arg_warnings == {}, f"For {description} expected no warnings, got {my_predbat.arg_warnings}"
+
+    _, logged = run_check(MERGE_OVERRIDE_APPS_YAML)
+    assert not any("Unable to re-read" in line for line in logged), f"A key overriding a merged one must load, got {logged}"
+    assert list(my_predbat.arg_warnings) == ["ohme_password"], f"Expected the inline ohme_password flagged, got {my_predbat.arg_warnings}"
+
+    _, logged = run_check(TWO_MERGE_KEYS_APPS_YAML)
+    assert not any("Unable to re-read" in line for line in logged), f"Two '<<' merge keys must load, as Predbat loads them, got {logged}"
+    assert list(my_predbat.arg_warnings) == ["ohme_password"], f"Expected the merged inline ohme_password flagged, got {my_predbat.arg_warnings}"
 
 
 def test_validate_config_retry(my_predbat):

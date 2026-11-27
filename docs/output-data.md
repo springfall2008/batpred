@@ -298,10 +298,11 @@ Use it in an automation that follows Predbat's status, e.g. `state_attr('predbat
 
 Predbat outputs the values it read from your inverters as totals, this gives the current power flow:
 
-- predbat.load_power - The current house load in Watts
-- predbat.battery_power - The current power of your battery (charging or discharging) in Watts
-- predbat.pv_power - The current power of your PV system in Watts
-- predbat.grid_power - The current grid power flow (import or export) in Watts
+- predbat.load_power - The current house load in kW
+- predbat.battery_power - The current power of your battery in kW, positive when discharging and negative when charging
+- predbat.pv_power - The current power of your PV system in kW
+- predbat.grid_power - The current grid power flow in kW, positive when exporting and negative when importing
+- predbat.solar_surplus_power - The power in kW a flexible load (a car charger, an immersion heater or anything else you can divert to) could take right now without importing or draining the battery, capped at your current PV generation. Attributes give the **grid_power**, **battery_power**, **pv_power** and **car_charging_power** it was calculated from, plus **car_charging_power_configured** and **car_charging_power_included** - see [charging from solar surplus](car-charging.md#charging-from-solar-surplus)
 - predbat.car_charging_power - The current power drawn by your car charger in kW. Only published when **car_charging_power** is set in `apps.yaml`, or wired up automatically by a supported charger integration (Ohme, myenergi Zappi, GivEnergy EV charger, AlphaESS or the Predbat gateway) - see [car charging](car-charging.md#configure-appsyaml-for-your-car-charging)
 
 ## Baseline data
@@ -441,6 +442,9 @@ The following sensors are set based on what Predbat is currently controlling the
 
 - binary_sensor.predbat_charging - Set to 'on' when Predbat is force charging the battery (from solar, or if that is insufficient, from grid import), or 'off' otherwise
 - binary_sensor.predbat_exporting - Set to 'on' when Predbat is force discharging the battery for export income, 'off' otherwise.
+- binary_sensor.predbat_force_export_slot - Set to 'on' when the plan has a force export slot running now, 'off' otherwise.
+Unlike the two sensors above this comes from the plan rather than from what is being commanded, so it stays on for the whole slot,
+includes freeze export slots, and still reports when Predbat is in read-only mode - see [charging from solar surplus](car-charging.md#charging-from-solar-surplus)
 
 These are useful for automations if for example, you want to turn off car charging when the battery is being exported.
 
@@ -561,6 +565,7 @@ as described in [Predbat led car charging](car-charging.md#car-charging-planning
 The *planned* attribute of the binary_sensor contains details of all planned car charging activity with start and end dates and times, kWh to charge and charging cost.
 Note that the start and ends are expressed in 'MM-DD HH:MM:SS" format, use the template sensor below if you want to convert these to full date format, e.g. to display on an Apex chart
 - predbat.car_charging_start - The time that car charging is planned to start at, in HH:MM:SS format
+- predbat.octopus_cap_used - On a tariff with the Octopus Intelligent daily cap ([octopus_slot_max](car-charging.md#planned-car-charging)), the minutes of the cap used so far in the current midday-to-midday period, leaving out the minutes Predbat saw no car charging in. Attributes give the dispatch minutes planned from now that fit what is left (*planned_minutes*), the cap (*cap_minutes*), what would still be left after them (*remaining_minutes*) and when the period started (*period_start*). It reads 0 with `octopus_slot_low_rate` off, as no dispatch is priced cheap then
 - predbat.car_soc_best - Predicted charge level of your car in the best plan at the end of the plan using the proposed car charging SoC% and charge window. Can also be charted
 - predbat.cost_today_car - Current cost in pence so far today of charging all cars, with attribute of the projected future car charging costs and slots. Predbat calculates car charging cost based upon your energy rates and the [car_charging_energy](car-charging.md#filtering-car-charging-energy-from-house-load) sensors set in `apps.yaml`
 - predbat.cost_total_car - A running total in pence of the below cost_yesterday_car sensor, with attribute of the total in pounds
@@ -652,7 +657,7 @@ vs not having a PV and battery system at all and all house load being met from g
 The state is the most recent complete day's billed energy cost in pence (import less export, standing charge excluded); with an export meter a day only counts as complete once its export billing has been read too.
 Attributes: `supplier`, `legs` (whether import and export billing were read: true, false if the last read failed, or null if not configured), `complete_until` (the end of the last billed half hour, UTC),
 `days` (a summary per day: billed import and export cost and kWh, standing charge and the cost and kWh in each rate bucket) and `slots` (every billed half hour of the last week, with its rate buckets).
-It is refreshed every three hours; billing usually appears one to two days after the half hour. The attributes are too large for Home Assistant's recorder to store, so only the current value is kept.
+It is refreshed every three hours (give or take up to 27 minutes with [plan_random_delay](apps-yaml.md#plan_random_delay) set); billing usually appears one to two days after the half hour. The supplier can re-price a half hour after publishing it, so each day is read again once a day until it is five days old, and a day's figures can change until then. The attributes are too large for Home Assistant's recorder to store, so only the current value is kept.
 - predbat.plan_history - The 'History' view for each of the older days in the [web interface](web-interface.md#plan-view) day picker, rebuilt once a day and again when new billing arrives. The state is the number of days available. A day that had a saving session, free electricity session, Axle event or rate override lists them in its `history_events`.
 
 Note: predbat.savings_yesterday_predbat's own displayed state is the *adjusted* saving (it factors in the change in battery value across the day, via the `saving_adjusted` attribute), while predbat.savings_total_predbat accumulates the *real*, unadjusted `saving_real` attribute from that same sensor. This is deliberate - the running total is meant to track real money saved, not a figure that includes the battery-value adjustment - but it means the two numbers are not simply "yesterday's bar vs the running total plus that bar", and the daily figure can legitimately be negative on a day the total still rises. Both `saving_real` and `saving_adjusted` are published as attributes on predbat.savings_yesterday_predbat if you want to chart either one explicitly.

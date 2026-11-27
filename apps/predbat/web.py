@@ -28,6 +28,8 @@ import sys
 import re
 from datetime import datetime, timedelta, timezone
 import json
+import math
+from collections import Counter
 import shutil
 import html as html_module
 import urllib.parse
@@ -38,44 +40,29 @@ import io
 from io import StringIO
 import hashlib
 import copy
-from ruamel.yaml import YAML
-from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
-from web_helper import (
-    get_header_html,
-    get_plan_css,
-    get_plan_renderer_js,
-    get_editor_js,
-    get_editor_css,
-    get_log_css,
-    get_charts_css,
-    get_apps_css,
-    get_html_config_css,
-    get_apps_js,
-    get_apps_filter_js,
-    get_filter_css,
-    get_components_css,
-    get_discovery_css,
-    get_entity_modal_css,
-    get_component_edit_modal_css,
-    get_entity_modal_js,
-    get_component_edit_modal_js,
-    get_discovery_modal_js,
-    get_logfile_js,
-    get_entity_toggle_js,
-    get_entity_control_css,
-    get_entity_css,
-    get_entity_js,
-    get_refresh_inverter_js,
-    get_restart_button_js,
-    get_browse_css,
-    get_entity_detailed_row_js,
-    get_internals_css,
-    get_kraken_key_page_html,
-    get_internals_js,
-    get_dashboard_css,
-    get_dashboard_collapsible_js,
-)
+
+class LazyWebHelper:
+    """
+    Stands in for the web_helper module until a page first needs one of its HTML, CSS or JavaScript builders.
+
+    web_helper is almost all page text (hundreds of kilobytes of string literals), so importing it when the web
+    server starts holds that text in memory for a Predbat nobody has opened a page on. Looking an attribute up on
+    this object imports the module on the first call and returns the real function from then on.
+    """
+
+    def __getattr__(self, name):
+        """
+        Return the named builder from web_helper, importing the module the first time it is asked for
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        import web_helper as helper_module
+
+        return getattr(helper_module, name)
+
+
+web_helper = LazyWebHelper()
 
 from utils import (
     strptime_aware,
@@ -97,7 +84,7 @@ from utils import (
     log_line_included,
     predbat_log_file_prev,
     is_secret_key,
-    find_battery_temperature_cap,
+    PackedRates,
 )
 from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import (
@@ -106,29 +93,112 @@ from const import (
     TIME_FORMAT_HA,
     MANUAL_RATE_MAX_MINUTES,
     MANUAL_TIME_MAX_MINUTES,
-    BATTERY_POWER_CURVE_HALF_LIFE_DAYS,
-    BATTERY_POWER_CURVE_MIN_DAYS,
-    BATTERY_POWER_CURVE_MIN_MINUTES,
-    BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS,
-    BATTERY_TEMPERATURE_CURVE_MIN_DAYS,
-    BATTERY_TEMPERATURE_CURVE_MIN_MINUTES,
-    BATTERY_TEMPERATURE_CURVE_SOC_MAX,
-    BATTERY_TEMPERATURE_CURVE_TEMP_MAX,
-    BATTERY_TEMPERATURE_DISCHARGE_SOC_MIN,
+    BATTERY_RATE_GRID_HALF_LIFE_DAYS,
+    BATTERY_RATE_GRID_MAX,
+    PV_CALIBRATION_MIN_DAYS,
+    PV_CALIBRATION_HALF_LIFE_DAYS,
+    PV_CALIBRATION_HISTORY_DAYS,
+    PV_CALIBRATION_MIN_SLOT_POINTS,
+    BATTERY_RATE_GRID_MIN_CELLS,
+    BATTERY_RATE_GRID_MIN_DAYS,
+    BATTERY_RATE_GRID_RUN_MINUTES,
+    BATTERY_RATE_GRID_SEGMENT_MINUTES,
+    BATTERY_RATE_GRID_TEMP_MAX,
+    BATTERY_RATE_GRID_TEMP_MIN,
+    BATTERY_RATE_GRID_UNKNOWN_TEMP,
 )
 
-CURVE_EVIDENCE_RECENT_DAYS = 14  # Curves chart: evidence days up to this old are drawn solid, older ones faded
+CURVE_EVIDENCE_DAYS = 90  # Curves page: evidence segments up to this old are drawn on the grids
+CURVE_TEMPERATURE_MARGIN = 5  # Curves page: the grids are drawn this many degrees either side of the evidence
+PLOTLY_GL3D_URL = "https://cdn.jsdelivr.net/npm/plotly.js-gl3d-dist-min@2.35.2/plotly-gl3d.min.js"  # loaded on the Curves page only
 from predbat import THIS_VERSION_DISPLAY
 from component_base import ComponentBase
 from config import APPS_SCHEMA
-from battery_curve import charge_day, power_curve_evidence, temperature_curve_evidence
+from battery_curve import charge_day
+from battery_rate_grid import rate_grid_curve, rate_grid_table
 from compare import check_compare_list
 import debug_history
-from web_annual import AnnualPage
-from web_chat import WebChat
 from web_metrics_dashboard import get_metrics_dashboard_css, get_metrics_dashboard_body
 from predbat_metrics import metrics_handler, metrics_json_handler, metrics, PROMETHEUS_AVAILABLE
 from marginal import MARGINAL_EXTRA_KWH_LEVEL_NAMES, MARGINAL_EXTRA_KWH_LEVELS, MARGINAL_TIME_OFFSETS
+
+
+def YAML(*args, **kwargs):  # noqa: N802 - keeps the ruamel class name so every call site reads as before
+    """
+    Build a ruamel.yaml parser, importing ruamel only when the first one is needed.
+    Only the apps.yaml editor and the discovery download use it, so a Predbat that never serves those pages never loads ruamel.
+    """
+    from ruamel.yaml import YAML as RuamelYAML
+
+    return RuamelYAML(*args, **kwargs)
+
+
+class LazyPage:
+    """
+    Stands in for a web page object (the annual and chat pages) until a request first needs it.
+
+    The page's module, and everything that module imports, is loaded by the factory on first use rather than when the web
+    server starts, so a Predbat nobody opens those pages on never holds that code in memory.
+    """
+
+    def __init__(self, factory):
+        """
+        Keep the factory that builds the real page; nothing is imported or built yet
+        """
+        self._factory = factory
+        self._page = None
+
+    def loaded(self):
+        """
+        Return True once the real page has been built
+        """
+        return self._page is not None
+
+    def get(self):
+        """
+        Return the real page, building it (and importing its module) on the first call
+        """
+        if self._page is None:
+            self._page = self._factory()
+        return self._page
+
+    def __getattr__(self, name):
+        """
+        Route handlers (html_*) come back as coroutine functions that build the page on their first request,
+        so aiohttp can register them as routes without the page existing; any other attribute builds the page now
+        """
+        if name.startswith("_"):
+            raise AttributeError(name)
+        if name.startswith("html_"):
+
+            async def handler(request):
+                """
+                Hand the request to the real page's handler of the same name
+                """
+                return await getattr(self.get(), name)(request)
+
+            handler.__name__ = name
+            return handler
+        return getattr(self.get(), name)
+
+
+def make_annual_page(web_interface):
+    """
+    Build the annual page, importing web_annual (and the annual engine behind it) only now
+    """
+    from web_annual import AnnualPage
+
+    return AnnualPage(web_interface)
+
+
+def make_chat_page(web_interface):
+    """
+    Build the chat page, importing web_chat (and the chat agent and its tools behind it) only now
+    """
+    from web_chat import WebChat
+
+    return WebChat(web_interface)
+
 
 # How many of the newest debug-history snapshots the dashboard's one-click archive bundles.
 # debug_history_count reaches 500 since #5070 and the archive is built in memory, so this is the
@@ -522,8 +592,8 @@ class WebInterface(ComponentBase):
         # Plugin registration system
         self.registered_endpoints = []
 
-        self.annual_page = AnnualPage(self)
-        self.chat_page = WebChat(self)
+        self.annual_page = LazyPage(lambda: make_annual_page(self))
+        self.chat_page = LazyPage(lambda: make_chat_page(self))
 
     def web_auth_enabled(self):
         """Return True when a web username or password is configured, so the login gate is active."""
@@ -823,7 +893,9 @@ class WebInterface(ComponentBase):
         # orphaned - burning a CPU core for up to several minutes with nothing left
         # tracking it - while the fresh AnnualPage created on the next start() reports
         # idle and would happily let a second run be started alongside it.
-        await self.annual_page.job.cancel()
+        # A page nobody opened has no job to cancel, and must not be built just to find that out.
+        if self.annual_page.loaded():
+            await self.annual_page.job.cancel()
         await runner.cleanup()
 
         self.api_started = False
@@ -1295,7 +1367,7 @@ class WebInterface(ComponentBase):
             <span id="inverterRefreshStatus" style="font-size: 13px; color: #666;"></span>
         </div>
         """
-        text += get_refresh_inverter_js()
+        text += web_helper.get_refresh_inverter_js()
         text += self.get_power_flow_diagram()
 
         # Text description of the plan
@@ -1639,10 +1711,10 @@ class WebInterface(ComponentBase):
             </form>
         </div>"""
         # CSS
-        text += get_entity_css()
+        text += web_helper.get_entity_css()
 
         # Add JavaScript and CSS for entity list and search (with attribute selection support)
-        text += get_entity_js(selected_entities_json, entity_attributes_json)
+        text += web_helper.get_entity_js(selected_entities_json, entity_attributes_json)
 
         if entity_selections:
             # Group entities by unit of measurement
@@ -1791,7 +1863,7 @@ class WebInterface(ComponentBase):
 </script>"""
 
                 # Add JavaScript for toggling detail rows
-                text += get_entity_detailed_row_js()
+                text += web_helper.get_entity_detailed_row_js()
         else:
             text += "<h2>Select one or more entities</h2>\n"
 
@@ -1873,7 +1945,7 @@ class WebInterface(ComponentBase):
         html = '<div class="entity-edit-container" style="margin-top: 15px; padding: 15px; border: 1px solid var(--border-color, #ddd); border-radius: 5px; background-color: var(--background-secondary, #f9f9f9);">'
 
         # Add CSS for dark mode support
-        html += get_entity_control_css()
+        html += web_helper.get_entity_control_css()
 
         html += f'<form method="post" action="./entity" style="display: flex; align-items: center; gap: 10px;">'
         html += f'<input type="hidden" name="entity_id" value="{entity_id}">'
@@ -1889,7 +1961,7 @@ class WebInterface(ComponentBase):
             html += f"</div>"
 
             # Add JavaScript for toggle functionality
-            html += get_entity_toggle_js()
+            html += web_helper.get_entity_toggle_js()
 
         elif control_type == "number":
             min_val = self.get_state_wrapper(entity_id=entity_id, attribute="min", default=None)
@@ -1940,7 +2012,7 @@ class WebInterface(ComponentBase):
         if self.base.update_pending:
             calculating = True
         self.update_success_timestamp()
-        return get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
+        return web_helper.get_header_html(title, calculating, self.default_page, self.arg_errors, THIS_VERSION_DISPLAY, self.get_battery_status_icon(), refresh, codemirror=codemirror, chat_enabled=self.chat_enabled())
 
     def get_chart_series(self, name, results, chart_type, color, hidden=False):
         """
@@ -2834,7 +2906,7 @@ chart.render();
         text = self.get_header("Predbat Plan", refresh=5 * 60)  # Set a long refresh interval just in case, but JS will handle it
 
         # Add CSS
-        text += get_plan_css()
+        text += web_helper.get_plan_css()
 
         # Add warning/error divs
         text += '<div id="staleWarning" style="display:none; padding:10px; background:#fff3cd; color:#856404; border:1px solid #ffc107; margin-bottom:10px;">&#9888;&#65039; Plan data is stale</div>'
@@ -2911,7 +2983,7 @@ chart.render();
         text += "</script>"
 
         # Include renderer JavaScript (which declares newestDataTimestamp variable)
-        text += get_plan_renderer_js()
+        text += web_helper.get_plan_renderer_js()
 
         # Initialise newestDataTimestamp from the initial data loaded, and start automatic updates
         text += "<script>"
@@ -2958,7 +3030,7 @@ chart.render();
         # Remove refresh from header since we'll update dynamically
         text = self.get_header("Predbat Log", refresh=0)
         text += """<body>"""
-        text += get_log_css()
+        text += web_helper.get_log_css()
 
         if errors:
             active_all = ""
@@ -3011,7 +3083,7 @@ chart.render();
         text += "</table>"
 
         # Add JavaScript for dynamic updates
-        text += get_logfile_js(filter_type)
+        text += web_helper.get_logfile_js(filter_type)
 
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
@@ -3361,8 +3433,8 @@ chart.render();
 
         self.default_page = "./dash"
         text = self.get_header("Predbat Dashboard", refresh=0)
-        text += get_dashboard_css()
-        text += get_dashboard_collapsible_js()
+        text += web_helper.get_dashboard_css()
+        text += web_helper.get_dashboard_collapsible_js()
         text += """
 <script>
 (function() {
@@ -3495,6 +3567,9 @@ chart.render();
         if chart == "Curves":
             # Needs no plan or history, so it is shown before the first plan too
             return self.get_curves_chart()
+        if chart in ("PVCalibration", "PVAccuracy"):
+            # PVAccuracy is the old name of this page, kept so saved links open it
+            return self.get_pv_calibration_chart()
         now_str = self.now_utc.strftime(TIME_FORMAT)
         soc_kw_h0 = {}
         if self.base.soc_kwh_history:
@@ -3672,25 +3747,6 @@ chart.render();
                 {"name": "Forecast CL", "data": pv_today_forecastCL, "opacity": "0.3", "stroke_width": "2", "stroke_curve": "smooth", "chart_type": "area", "color": "#e90a0a"},
             ]
             text += self.render_chart(series_data, "kW", "Solar Forecast", now_str)
-        elif chart == "PVAccuracy":
-            # Get pv_today history once and extract total and remaining attributes per timestamp
-            pv_today_hist = self.get_history_wrapper("sensor." + self.prefix + "_pv_today", 7, required=False)
-            pv_total_raw = history_attribute(pv_today_hist, attributes=True, state_key="totalCL")
-            pv_remaining_raw = history_attribute(pv_today_hist, attributes=True, state_key="remainingCL")
-            # Compute forecast so far = total - remaining per timestamp
-            pv_forecast_sofar_raw = {}
-            for ts, total_val in pv_total_raw.items():
-                remaining_val = pv_remaining_raw.get(ts, 0)
-                pv_forecast_sofar_raw[ts] = dp2(max(total_val - remaining_val, 0))
-            pv_forecast_sofar = prune_today(pv_forecast_sofar_raw, self.now_utc, self.midnight_utc, prune=False)
-            # Get actual PV energy over time
-            pv_actual_hist = history_attribute(self.get_history_wrapper(self.prefix + ".pv_energy_h0", 7, required=False))
-            pv_actual = prune_today(pv_actual_hist, self.now_utc, self.midnight_utc, prune=False)
-            series_data = [
-                {"name": "PV Forecast (so far)", "data": pv_forecast_sofar, "opacity": "1.0", "stroke_width": "2", "stroke_curve": "stepline", "color": "#a8a8a7"},
-                {"name": "PV Actual", "data": pv_actual, "opacity": "1.0", "stroke_width": "3", "stroke_curve": "stepline", "color": "#f5c43d"},
-            ]
-            text += self.render_chart(series_data, "kWh", "PV Forecast vs Actual", now_str)
         elif chart == "LoadML":
             load_today_history = self.get_history_with_now_attrs("sensor." + self.prefix + "_load_ml_stats", 7)
             # Get historical load data for last 24 hours
@@ -3983,218 +4039,6 @@ chart.render();
 
         return text
 
-    def get_curves_chart(self):
-        """
-        The Curves chart page: a status table for each battery curve, the charge and discharge power curves against SoC on
-        one chart, and the temperature curves on a second, each plotted as the plan looks them up.
-        """
-        dashboard_values = getattr(self.base, "dashboard_values", {}) or {}
-        text = "<br><h2>Battery Curves</h2>\n"
-        text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n<tr>"
-        for heading in ("Curve", "In use", "Source", "Learned at", "Evidence days", "Last scan"):
-            text += "<th style='padding:6px 12px;border:1px solid #555;text-align:left;'>{}</th>".format(heading)
-        text += "</tr>\n"
-        for title, name in (
-            ("Charge power", "battery_charge_power_curve"),
-            ("Discharge power", "battery_discharge_power_curve"),
-            ("Temperature charge", "battery_temperature_charge_curve"),
-            ("Temperature discharge", "battery_temperature_discharge_curve"),
-        ):
-            item = dashboard_values.get("binary_sensor.{}_{}".format(self.prefix, name), {})
-            attributes = item.get("attributes", {}) or {}
-            learned = item.get("state") == "on"
-            cells = [
-                title,
-                "Yes" if learned else ("No" if item else "Not yet run"),
-                attributes.get("source", ""),
-                attributes.get("updated") or "",
-                attributes.get("days", ""),
-                attributes.get("last_scan") or "",
-            ]
-            text += "<tr>"
-            for index, cell in enumerate(cells):
-                style = "padding:6px 12px;border:1px solid #555;"
-                if index == 1 and learned:
-                    style += "background:#00B050;color:#fff;"
-                text += "<td style='{}'>{}</td>".format(style, html_module.escape(str(cell)))
-            text += "</tr>\n"
-        text += "</table>\n"
-
-        def int_keys(curve):
-            """A curve with int keys (sensor attributes and apps.yaml can give strings)."""
-            result = {}
-            for key, value in (curve or {}).items():
-                try:
-                    result[int(key)] = float(value)
-                except (TypeError, ValueError):
-                    continue
-            return result
-
-        def evidence_series(label, points, x_key, scale, color, faded, learned_from=True):
-            """
-            The evidence as up to three point series: recent days, older days, and points with too little evidence to be
-            learned. learned_from=False (evidence that is only charted) leaves out the last group, as nothing is learned.
-            """
-            groups = (
-                ("{} evidence, last {} days".format(label, CURVE_EVIDENCE_RECENT_DAYS), lambda point: (point["enough"] or not learned_from) and point["age_days"] <= CURVE_EVIDENCE_RECENT_DAYS, color),
-                ("{} evidence, older".format(label), lambda point: (point["enough"] or not learned_from) and point["age_days"] > CURVE_EVIDENCE_RECENT_DAYS, faded),
-                ("{} evidence, too little to learn".format(label), lambda point: learned_from and not point["enough"], "rgba(150,150,150,0.5)"),
-            )
-            series = []
-            for name, keep, group_color in groups:
-                data = [{"x": point[x_key], "y": round(point["value"] * scale, 3), "minutes": point["minutes"], "age": point["age_days"]} for point in points if keep(point)]
-                if data:
-                    series.append({"name": name, "data": data, "color": group_color, "type": "scatter", "stroke_width": 0, "markers": 4})
-            return series
-
-        # SoC curves: the plan reads the value for the whole SoC percent, 1.0 where the curve does not set one
-        power_series = []
-        evidence = []
-        power_today = datetime.strptime(charge_day(self.now_utc, 0, getattr(self.base, "local_tz", None)), "%Y-%m-%d").date()
-        power_samples = getattr(self.base, "battery_power_curve_samples", {}) or {}
-        for label, kind, curve, color, faded, scaling in (
-            ("Charge", "charge", self.base.battery_charge_power_curve, "#3291a8", "rgba(50,145,168,0.35)", getattr(self.base, "battery_rate_max_scaling", 1.0)),
-            ("Discharge", "discharge", self.base.battery_discharge_power_curve, "#f5a442", "rgba(245,164,66,0.35)", getattr(self.base, "battery_rate_max_scaling_discharge", 1.0)),
-        ):
-            curve = int_keys(curve)
-            power_series.append({"name": "{} curve".format(label), "data": [{"x": soc, "y": curve.get(soc, 1.0)} for soc in range(0, 101)], "color": color, "stroke_width": 3})
-            evidence += evidence_series(label, power_curve_evidence(power_samples.get(kind, {}), power_today, scaling), "soc", 1.0, color, faded)
-        text += self.render_curve_chart(power_series + evidence, "State of charge (%)", "Fraction of the maximum rate", "Battery charge and discharge power curves", "chart_power_curve", 0, 100, y_min=0)
-        if evidence:
-            text += "<p>Each dot is one day's average rate at that SoC, from full-rate charges (or exports), on the curve's scale; hover over one for its minutes and age, as a day with more minutes counts for more. Faded dots are over {} days old and count for less (half every {} days); grey ones have too little evidence (under {} days or {} minutes) to be learned.</p>\n".format(
-                CURVE_EVIDENCE_RECENT_DAYS, BATTERY_POWER_CURVE_HALF_LIFE_DAYS, BATTERY_POWER_CURVE_MIN_DAYS, BATTERY_POWER_CURVE_MIN_MINUTES
-            )
-
-        # Temperature curves: the curve values are a rate cap as a fraction of the battery capacity per hour (C), shown in kW
-        # when the capacity is known; find_battery_temperature_cap with a capacity of 60 and no rate limit returns the curve value itself
-        soc_max = float(getattr(self.base, "soc_max", 0) or 0)
-        scale = soc_max if soc_max > 0 else 1.0
-        unit = "kW" if soc_max > 0 else "C"
-        temperatures = list(range(-20, BATTERY_TEMPERATURE_CURVE_TEMP_MAX + 1))
-        in_use = int_keys(self.base.battery_temperature_charge_curve)
-        configured = int_keys(getattr(self.base, "battery_temperature_charge_curve_configured", {}))
-        learned = int_keys(getattr(self.base, "battery_temperature_curve_learned", {})) if getattr(self.base, "battery_temperature_charge_curve_auto", False) else {}
-        discharge = int_keys(getattr(self.base, "battery_temperature_discharge_curve", {}))
-        rate_max_charge = float(getattr(self.base, "battery_rate_max_charge", 0) or 0) * 60.0
-        rate_max_discharge = float(getattr(self.base, "battery_rate_max_discharge", 0) or 0) * 60.0
-
-        def cap_points(curve, rate_max):
-            """The cap at each degree as the plan applies it: never above the maximum rate, so an uncapped degree shows the rate the battery is planned at, not 1 C."""
-            points = []
-            for t in temperatures:
-                # At 0 the line shows a real reading just above freezing: only an exact 0 (a missing reading) uses the 0 entry
-                value = find_battery_temperature_cap(t if t != 0 else 0.5, curve, 60.0, 1e9) * scale
-                if soc_max > 0 and rate_max > 0:
-                    value = min(value, rate_max)
-                points.append({"x": t, "y": round(value, 3)})
-            return points
-
-        temperature_series = []
-        if in_use:
-            temperature_series.append({"name": "Charge cap in use", "data": cap_points(in_use, rate_max_charge), "color": "#15eb8b", "stroke_width": 3})
-        if configured and configured != in_use:
-            temperature_series.append({"name": "Charge cap configured", "data": cap_points(configured, rate_max_charge), "color": "#9b59b6", "stroke_width": 2, "dash": 6})
-        if learned:
-            temperature_series.append({"name": "Learned", "data": [{"x": t, "y": round(learned[t] * scale, 3)} for t in sorted(learned)], "color": "#eb2323", "stroke_width": 0, "markers": 5})
-        temperature_evidence = evidence_series(
-            "Charge",
-            temperature_curve_evidence(getattr(self.base, "battery_temperature_samples", {}) or {}, self.now_utc.date(), getattr(self.base, "battery_rate_max_scaling", 1.0)),
-            "temperature",
-            scale,
-            "#15eb8b",
-            "rgba(21,235,139,0.35)",
-        )
-        temperature_series += temperature_evidence
-        if discharge:
-            temperature_series.append({"name": "Discharge cap configured", "data": cap_points(discharge, rate_max_discharge), "color": "#f5a442", "stroke_width": 2})
-        # Export evidence is gathered and shown, not learned (see battery_temperature_discharge_evidence_update)
-        discharge_evidence = evidence_series(
-            "Discharge",
-            temperature_curve_evidence(getattr(self.base, "battery_temperature_discharge_samples", {}) or {}, self.now_utc.date(), getattr(self.base, "battery_rate_max_scaling_discharge", 1.0)),
-            "temperature",
-            scale,
-            "#f5a442",
-            "rgba(245,164,66,0.35)",
-            learned_from=False,
-        )
-        temperature_series += discharge_evidence
-        if temperature_series and soc_max > 0 and rate_max_charge > 0:
-            temperature_series.append({"name": "Maximum charge rate", "data": [{"x": temperatures[0], "y": round(rate_max_charge, 3)}, {"x": temperatures[-1], "y": round(rate_max_charge, 3)}], "color": "#777777", "stroke_width": 2, "dash": 4})
-        if (discharge or discharge_evidence) and soc_max > 0 and rate_max_discharge > 0 and abs(rate_max_discharge - rate_max_charge) > 0.001:
-            temperature_series.append({"name": "Maximum discharge rate", "data": [{"x": temperatures[0], "y": round(rate_max_discharge, 3)}, {"x": temperatures[-1], "y": round(rate_max_discharge, 3)}], "color": "#b0712a", "stroke_width": 2, "dash": 4})
-        if temperature_series:
-            text += self.render_curve_chart(temperature_series, "Battery temperature (C)", "Rate cap ({})".format(unit), "Battery temperature curves", "chart_temperature_curve", temperatures[0], temperatures[-1], y_min=0)
-            text += "<p>The plan charges at the lower of the SoC curve rate and the temperature cap. A degree the curve does not set uses the 20 degree value above zero (then no cap), and below zero the 0 degree value, else the coldest value the curve sets. A reading of exactly 0, which often means the temperature is missing, uses the 0 degree value, else no cap.</p>\n"
-            if temperature_evidence:
-                text += "<p>Each dot is one day's average charge rate at that temperature, from full-rate charges below {}% SoC; hover over one for its minutes and age, as a day with more minutes counts for more. Faded dots are over {} days old and count for less (half every {} days); grey ones have too little evidence (under {} minutes, or fewer than {} days) to be learned.</p>\n".format(
-                    BATTERY_TEMPERATURE_CURVE_SOC_MAX, CURVE_EVIDENCE_RECENT_DAYS, BATTERY_TEMPERATURE_CURVE_HALF_LIFE_DAYS, BATTERY_TEMPERATURE_CURVE_MIN_MINUTES, BATTERY_TEMPERATURE_CURVE_MIN_DAYS
-                )
-            if discharge_evidence:
-                text += "<p>Orange dots are the same for forced exports at the full discharge rate from {}% SoC up, not held back by the export limit. They are shown so a <code>battery_temperature_discharge_curve</code> can be checked against them; nothing is learned from them.</p>\n".format(
-                    BATTERY_TEMPERATURE_DISCHARGE_SOC_MIN
-                )
-        else:
-            text += "<p>No battery temperature curve is set or learned - set <code>battery_temperature_charge_curve</code> or turn on <code>battery_temperature_charge_curve_auto</code> in apps.yaml.</p>\n"
-        return text
-
-    def render_curve_chart(self, series_data, xaxis_name, yaxis_name, chart_name, tagname, x_min, x_max, y_min=None, y_max=None):
-        """
-        Render a line chart over a numeric x axis (SoC or temperature rather than time).
-
-        series_data is a list of dicts: {"name", "data": [{"x": number, "y": number}, ...], "color", "type", "stroke_width", "dash", "markers"}.
-        type is "line" (the default) or "scatter"; a series with stroke_width 0 and markers is drawn as points only.
-        """
-        series = [{"name": entry["name"], "type": entry.get("type", "line"), "data": entry["data"], "color": entry.get("color", "#3291a8")} for entry in series_data]
-        widths = [entry.get("stroke_width", 2) for entry in series_data]
-        dashes = [entry.get("dash", 0) for entry in series_data]
-        markers = [entry.get("markers", 0) for entry in series_data]
-        yaxis = {"title": {"text": yaxis_name}, "decimalsInFloat": 2}
-        if y_min is not None:
-            yaxis["min"] = y_min
-        if y_max is not None:
-            yaxis["max"] = y_max
-        options = {
-            "chart": {"type": "line", "animations": {"enabled": False}, "zoom": {"enabled": False}},
-            "series": series,
-            "stroke": {"width": widths, "curve": "stepline", "dashArray": dashes},
-            "markers": {"size": markers},
-            "xaxis": {"type": "numeric", "min": x_min, "max": x_max, "tickAmount": 10, "title": {"text": xaxis_name}},
-            "yaxis": yaxis,
-            "legend": {"position": "top"},
-            "tooltip": {"shared": False, "intersect": False},
-        }
-        # JSON in a script block: escape '<' so a name can never close the script tag
-        options_js = json.dumps(options).replace("<", "\\u003c")
-        title_js = json.dumps(str(chart_name)).replace("<", "\\u003c")
-        text = "<div id='{}'></div>\n".format(tagname)
-        text += "<script>\n"
-        text += "(function() {\n"
-        text += "  window.onresize = function(){ location.reload(); };\n"
-        text += "  var width = Math.max(window.innerWidth / 3 * 2, 600);\n"
-        text += "  var height = width / 1.68;\n"
-        text += "  var options = {};\n".format(options_js)
-        text += "  options.chart.width = width;\n"
-        text += "  options.chart.height = height;\n"
-        text += "  options.xaxis.labels = { formatter: function(value) { return Math.round(value); } };\n"
-        # An evidence dot's tooltip says how much it counts for: its minutes and its age
-        text += "  options.tooltip.y = { formatter: function(value, opts) {\n"
-        text += "    if (value === null || value === undefined) { return value; }\n"
-        text += "    var point = opts.w.config.series[opts.seriesIndex].data[opts.dataPointIndex];\n"
-        text += "    var text = (Math.round(value * 100) / 100).toFixed(2);\n"
-        text += "    if (point && point.minutes !== undefined) { text += ' (' + point.minutes + ' min, ' + (point.age === 0 ? 'today' : point.age + ' days ago') + ')'; }\n"
-        text += "    return text;\n"
-        text += "  } };\n"
-        text += "  var container = document.getElementById('{}');\n".format(tagname)
-        text += "  var heading = document.createElement('h2');\n"
-        text += "  heading.textContent = {};\n".format(title_js)
-        text += "  var wrapper = document.createElement('div');\n"
-        text += "  wrapper.appendChild(heading);\n"
-        text += "  container.parentNode.insertBefore(wrapper, container);\n"
-        text += "  new ApexCharts(container, options).render();\n"
-        text += "})();\n"
-        text += "</script>\n"
-        return text
-
     async def html_charts(self, request):
         """
         Render apps.yaml as an HTML page
@@ -4204,7 +4048,7 @@ chart.render();
         self.default_page = "./charts?chart={}".format(chart)
         text = self.get_header("Predbat Charts", refresh=60 * 5)
         text += "<body>\n"
-        text += get_charts_css()
+        text += web_helper.get_charts_css()
 
         text += '<div class="charts-menu">'
         text += "<h3>Charts</h3> "
@@ -4215,7 +4059,7 @@ chart.render();
         text += f'<a href="./charts?chart=InDay" class="{"active" if chart == "InDay" else ""}">InDay</a>'
         text += f'<a href="./charts?chart=PV" class="{"active" if chart == "PV" else ""}">PV</a>'
         text += f'<a href="./charts?chart=PV7" class="{"active" if chart == "PV7" else ""}">PV7</a>'
-        text += f'<a href="./charts?chart=PVAccuracy" class="{"active" if chart == "PVAccuracy" else ""}">PVAccuracy</a>'
+        text += f'<a href="./charts?chart=PVCalibration" class="{"active" if chart in ("PVCalibration", "PVAccuracy") else ""}">PVCalibration</a>'
         text += f'<a href="./charts?chart=Savings" class="{"active" if chart == "Savings" else ""}">Savings</a>'
         text += f'<a href="./charts?chart=BatteryDegradation" class="{"active" if chart == "BatteryDegradation" else ""}">BatteryDegradation</a>'
         text += f'<a href="./charts?chart=MarginalCosts" class="{"active" if chart == "MarginalCosts" else ""}">MarginalCosts</a>'
@@ -4226,11 +4070,280 @@ chart.render();
             text += f'<a href="./charts?chart=LoadMLPower" class="{"active" if chart == "LoadMLPower" else ""}">LoadMLPower</a>'
         text += "</div>"
 
-        if chart not in ("MarginalCosts", "Curves"):
+        if chart not in ("MarginalCosts", "Curves", "PVCalibration", "PVAccuracy"):
             text += '<div id="chart"></div>'
         text += self.get_chart(chart=chart)
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text)
+
+    def get_curves_chart(self):
+        """
+        The Curves page: a status table for the charge and discharge rate grids, then each grid drawn in 3D (SoC x battery
+        temperature x rate as a fraction of the rated rate) with its recent evidence as dots, and a short table of it.
+        """
+        dashboard_values = getattr(self.base, "dashboard_values", {}) or {}
+        charge_grid, discharge_grid = self.base.rate_grids()
+        cell = "padding:6px 12px;border:1px solid #555;"
+        # The shared header sets p { white-space: nowrap }, a rule on the paragraphs themselves, so the page's container
+        # cannot override it by inheritance: a scoped rule for its paragraphs lets the captions wrap
+        text = "<style>.curves-page p { white-space: normal; }</style>\n"
+        text += "<div class='curves-page' style='max-width:960px;'>\n<br><h2>Battery rate grids</h2>\n"
+        text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n<tr>"
+        for heading in ("Grid", "Learned grid in use", "Source", "Cells", "Evidence days", "Temperatures", "Learned at", "Last scan"):
+            text += "<th style='{}text-align:left;'>{}</th>".format(cell, heading)
+        text += "</tr>\n"
+        for title, kind in (("Charge", "charge"), ("Discharge", "discharge")):
+            item = dashboard_values.get("binary_sensor.{}_battery_{}_rate_grid".format(self.prefix, kind), {})
+            attributes = item.get("attributes", {}) or {}
+            learned = item.get("state") == "on"
+            temperature_range = attributes.get("temperature_range")
+            cells = [
+                title,
+                "Yes" if learned else ("No" if item else "Not yet run"),
+                attributes.get("source", ""),
+                attributes.get("cells", ""),
+                attributes.get("days", ""),
+                "{} to {} C".format(temperature_range[0], temperature_range[1]) if isinstance(temperature_range, list) and len(temperature_range) == 2 else "",
+                attributes.get("updated") or "",
+                attributes.get("last_scan") or "",
+            ]
+            text += "<tr>"
+            for index, value in enumerate(cells):
+                style = cell + ("background:#00B050;color:#fff;" if index == 1 and learned else "")
+                text += "<td style='{}'>{}</td>".format(style, html_module.escape(str(value)))
+            text += "</tr>\n"
+        text += "</table>\n"
+        text += "<p>Each grid is the rate the battery reaches, as a fraction of its rated rate, at each SoC and battery temperature. It is learned from runs of {} minutes or more at the full rate (cut into {}-minute segments), and the plan uses it once it has {} cells from {} days; until then, and wherever the evidence does not reach, the curves set in <code>apps.yaml</code> are used. The rate never rises with SoC (charge) or as SoC falls (discharge), or as the temperature falls. Older evidence counts for less, half every {} days.</p>\n".format(
+            BATTERY_RATE_GRID_RUN_MINUTES, BATTERY_RATE_GRID_SEGMENT_MINUTES, BATTERY_RATE_GRID_MIN_CELLS, BATTERY_RATE_GRID_MIN_DAYS, BATTERY_RATE_GRID_HALF_LIFE_DAYS
+        )
+        text += '<script src="{}"></script>\n'.format(PLOTLY_GL3D_URL)
+        today = datetime.strptime(charge_day(self.now_utc, 0, getattr(self.base, "local_tz", None)), "%Y-%m-%d").date()
+        samples_by_kind = getattr(self.base, "battery_rate_grid_samples", {}) or {}
+        learned_by_kind = getattr(self.base, "battery_rate_grid_learned", {}) or {}
+        for title, kind, grid in (("Charge", "charge", charge_grid), ("Discharge", "discharge", discharge_grid)):
+            evidence = []
+            for day, entries in (samples_by_kind.get(kind) or {}).items():
+                try:
+                    age = (today - datetime.strptime(day, "%Y-%m-%d").date()).days
+                except (TypeError, ValueError):
+                    continue
+                if age <= CURVE_EVIDENCE_DAYS:
+                    evidence.extend(entries)
+            temperatures = [entry[1] for entry in evidence if entry[1] is not None]
+            learned = learned_by_kind.get(kind)
+            if learned and learned.get("temp_range"):
+                temperatures += learned["temp_range"]
+            if temperatures:
+                low = max(int(min(temperatures)) - CURVE_TEMPERATURE_MARGIN, BATTERY_RATE_GRID_TEMP_MIN)
+                high = min(int(max(temperatures)) + CURVE_TEMPERATURE_MARGIN, BATTERY_RATE_GRID_TEMP_MAX)
+            else:
+                low, high = -10, 30
+            degrees = list(range(low, high + 1))
+            # An exact 0 reading means a missing one, so the 0 row is drawn as a real reading just above freezing
+            data = {
+                "soc": list(range(101)),
+                "temperature": degrees,
+                "z": [[round(value, 3) for value in rate_grid_curve(grid, degree if degree != 0 else 0.5)[:101]] for degree in degrees],
+                "ex": [entry[0] for entry in evidence],
+                "ey": [entry[1] if entry[1] is not None else BATTERY_RATE_GRID_UNKNOWN_TEMP for entry in evidence],
+                "ez": [entry[2] for entry in evidence],
+            }
+            text += "<h3>{} rate grid</h3>\n".format(title)
+            text += "<div id='curve_grid_{}' style='width:100%;height:560px;'></div>\n".format(kind)
+            text += "<script>\nvar curve_grid_{}_data = {};\n".format(kind, json.dumps(data))
+            text += """(function() {{
+  var d = curve_grid_{kind}_data;
+  var fg = getComputedStyle(document.body).color || '#888';
+  var axis = function(t) {{ return {{title: {{text: t, font: {{color: fg}}}}, tickfont: {{color: fg}}, gridcolor: 'rgba(128,128,128,0.3)', backgroundcolor: 'rgba(0,0,0,0)'}}; }};
+  var traces = [{{type: 'surface', x: d.soc, y: d.temperature, z: d.z, cmin: 0, cmax: {cmax}, colorscale: 'Viridis', opacity: 0.85, name: '{title} grid', showlegend: true,
+    colorbar: {{title: {{text: 'rate', font: {{color: fg}}}}, tickfont: {{color: fg}}, thickness: 14, len: 0.6, x: 0.98}}, hovertemplate: 'SoC %{{x}}%<br>%{{y}} C<br>rate %{{z:.2f}}<extra></extra>'}}];
+  if (d.ex.length) {{
+    traces.push({{type: 'scatter3d', mode: 'markers', x: d.ex, y: d.ey, z: d.ez, name: 'evidence (last {days} days)', marker: {{size: 3, color: '#e4572e', opacity: 0.85}},
+      hovertemplate: 'SoC %{{x:.0f}}%<br>%{{y:.1f}} C<br>rate %{{z:.2f}}<extra>evidence</extra>'}});
+  }}
+  if (typeof Plotly === 'undefined') {{ document.getElementById('curve_grid_{kind}').innerText = 'The 3D chart library could not be loaded.'; return; }}
+  Plotly.newPlot('curve_grid_{kind}', traces, {{paper_bgcolor: 'rgba(0,0,0,0)', margin: {{l: 0, r: 0, t: 0, b: 0}}, legend: {{font: {{color: fg}}, orientation: 'h', x: 0, y: 0}},
+    scene: {{xaxis: axis('SoC %'), yaxis: axis('Battery temperature C'), zaxis: Object.assign(axis('Rate / rated'), {{range: [0, {cmax}]}}), aspectmode: 'manual', aspectratio: {{x: 1.3, y: 1.3, z: 0.8}}, camera: {{eye: {{x: 1.45, y: -1.45, z: 0.85}}}}}}}}, {{responsive: true}});
+}})();
+</script>
+""".format(kind=kind, title=title, cmax=BATTERY_RATE_GRID_MAX, days=CURVE_EVIDENCE_DAYS)
+            if not evidence:
+                text += "<p>No {} evidence yet: the grid shown is from the curves in <code>apps.yaml</code> (or the full rated rate where none is set).</p>\n".format(kind)
+            table = rate_grid_table(grid)
+            small = "padding:4px 8px;border:1px solid #555;"
+            text += "<table style='border-collapse:collapse;margin:8px 0 20px 0;font-size:0.9em;'>\n<tr><th style='{}'>C \\ SoC %</th>".format(small)
+            for soc in table["soc"]:
+                text += "<th style='{}'>{}</th>".format(small, soc)
+            text += "</tr>\n"
+            if table["temperature"] is None:
+                labels, rows = ["All"], table["rows"]
+            else:
+                labels, rows = [], []
+                for degree, row in zip(table["temperature"], table["rows"]):
+                    if low <= degree <= high:
+                        labels.append(degree)
+                        rows.append(row)
+            for label, row in zip(labels, rows):
+                text += "<tr><td style='{}'>{}</td>".format(small, label) + "".join("<td style='{}'>{:.2f}</td>".format(small, value) for value in row) + "</tr>\n"
+            text += "</table>\n"
+        text += "</div>\n"
+        return text
+
+    def get_pv_calibration_chart(self):
+        """
+        The PV Calibration page: a status table for PV calibration, then each half-hour slot's evidence (actual / forecast for
+        every stored day) against the unshrunk and applied slot factors, the same for whole days, and a short table in
+        two-hour bands.
+        """
+        text = "<style>.pv-calibration-page p { white-space: normal; }</style>\n"
+        text += "<div class='pv-calibration-page' style='max-width:960px;'>\n<br><h2>PV calibration</h2>\n"
+        components = getattr(self.base, "components", None)
+        solar = components.get_component("solar") if components else None
+        if solar is None:
+            text += "<p>Solar forecast component is not running, so there is no PV calibration to show.</p>\n</div>\n"
+            return text
+        # Always a solcast.SolarAPI, whose initialize() sets all of these; evidence and settings are None until it first runs
+        model = solar.pv_calibration_model
+        evidence = solar.pv_calibration_evidence or {}
+        settings = solar.pv_calibration_settings_used or {}
+        overridden = settings.get("overridden") or set()
+        switch_on = self.base.get_arg("metric_pv_calibration_enable", True)
+
+        def when(stamp):
+            """A datetime in local time as YYYY-MM-DD HH:MM, or blank."""
+            if not stamp:
+                return ""
+            return stamp.astimezone(self.local_tz).strftime("%Y-%m-%d %H:%M")
+
+        def setting(key, fmt):
+            """A setting formatted, marked when apps.yaml sets it."""
+            value = settings.get(key)
+            if value is None:
+                return ""
+            return fmt.format(value) + (" (apps.yaml)" if key in overridden else "")
+
+        # The daily scan, or the one just after local midnight that adds yesterday, whichever comes first
+        # (only while that midnight is still ahead: after a failed scan the last success can be days old, and the retry is next)
+        next_scan = solar.pv_calibration_next_scan
+        if next_scan and solar.pv_calibration_last_success:
+            last_local = solar.pv_calibration_last_success.astimezone(self.local_tz)
+            # localize() rather than replace() + normalize(): across a clock change normalize keeps the instant and lands on 23:00 or 01:00
+            next_midnight = self.local_tz.localize(datetime.combine(last_local.date() + timedelta(days=1), datetime.min.time()))
+            if next_midnight > self.now_utc:
+                next_scan = min(next_scan, next_midnight)
+
+        if not switch_on:
+            state, reason = "Off", "switch.{}_metric_pv_calibration_enable is off: the raw forecast is used".format(self.prefix)
+        elif model is None:
+            state, reason = "Waiting", "not enough evidence yet: calibration needs {} valid days".format(PV_CALIBRATION_MIN_DAYS)
+        else:
+            state, reason = "On", ""
+        days_used = (model or {}).get("days_used") or []
+        rows = [
+            ("Calibration", state),
+            ("Reason", reason),
+            ("Days stored", "{} ({} to {})".format(len(evidence), min(evidence), max(evidence)) if evidence else "0"),
+            ("Valid days used", "{} ({} down days skipped)".format(len(days_used), len((model or {}).get("down_days") or [])) if model else ""),
+            ("Day factor applied", "{:.2f}".format(model["total"]) if model else ""),
+            ("Day factor unshrunk", "{:.2f} (days typically within \u00b1{:.0f}% of it)".format(model["raw_total"], 100 * (math.exp(model["spread_day"]) - 1)) if model else ""),
+            ("Half-life", setting("half_life", "{} days")),
+            ("Shrink (day / half-hour)", "{} / {}".format(setting("shrink", "{:.2f}"), setting("shrink_slot", "{:.2f}")) if settings else ""),
+            ("Days kept / daily scan", "{} / {}".format(setting("history_days", "{}"), setting("scan_days", "{}")) if settings else ""),
+            ("Band (worst / best day)", "{:.2f} / {:.2f}".format(solar.pv_calibration_worst_scaling, solar.pv_calibration_best_scaling)),
+            (
+                "Last scan",
+                "{} - {}".format(when(solar.pv_calibration_last_scan), solar.pv_calibration_scan_status) if solar.pv_calibration_last_scan else solar.pv_calibration_scan_status,
+            ),
+            ("Next scan", when(next_scan)),
+        ]
+        ceiling = solar.pv_clipping_ceiling_kw()
+        if ceiling:
+            clipped = sum(record.get("clipped_minutes", 0) for record in evidence.values())
+            rows.append(("Clipping ceiling", "{:.2f} kW ({} minutes at the ceiling taken as the forecast)".format(ceiling, clipped)))
+        cell = "padding:6px 12px;border:1px solid #555;"
+        text += "<table style='border-collapse:collapse;margin-bottom:16px;font-size:0.95em;'>\n"
+        for label, value in rows:
+            style = cell + ("background:#00B050;color:#fff;" if label == "Calibration" and state == "On" else "")
+            text += "<tr><th style='{}text-align:left;'>{}</th><td style='{}'>{}</td></tr>\n".format(cell, label, style, html_module.escape(str(value)))
+        text += "</table>\n"
+        text += (
+            "<p>Predbat compares each half hour of your actual solar generation with the forecast your provider gave for it, over the last {} days, and calibrates the forecast "
+            "with a day factor and a half-hour shape. Recent days count for more (a day's weight halves every {} days). Each factor only moves as far as the evidence supports: "
+            "when the days scatter either side of the forecast with no consistent direction it stays close to 1, and a consistent difference is corrected. "
+            "The charts show every stored day as a dot - larger for more forecast energy, fainter for older days - against the factor worked out from them before (unshrunk) and after that limit (applied).</p>\n"
+        ).format(settings.get("history_days", PV_CALIBRATION_HISTORY_DAYS), settings.get("half_life", PV_CALIBRATION_HALF_LIFE_DAYS))
+        if model is None:
+            text += "<p>Not enough evidence to calibrate yet: the charts appear once there are {} valid days.</p>\n</div>\n".format(PV_CALIBRATION_MIN_DAYS)
+            return text
+
+        slot_data = {
+            "points": [[point["minute"], round(point["ratio"], 4), round(point["forecast_kwh"], 4), round(point["weight"], 4)] for point in model["slot_points"]],
+            "raw_adj": {str(minute): round(value, 4) for minute, value in model["raw_adj"].items()},
+            "adj": {str(minute): round(value, 4) for minute, value in model["adj"].items()},
+            # Slots with their own evidence: elsewhere the factor is just the day factor, so the lines are not drawn there
+            "evidence_minutes": sorted(minute for minute, count in Counter(point["minute"] for point in model["slot_points"]).items() if count >= PV_CALIBRATION_MIN_SLOT_POINTS),
+        }
+        day_data = {
+            "points": [[point["day"], round(point["ratio"], 4) if point["ratio"] is not None else None, round(point["forecast_kwh"], 3), bool(point["down"])] for point in model["day_points"]],
+            "raw_total": round(model["raw_total"], 4),
+            "total": round(model["total"], 4),
+        }
+        text += '<script src="{}"></script>\n'.format(PLOTLY_GL3D_URL)
+        text += "<h3>Half-hour slots</h3>\n<div id='pv_calibration_slots' style='width:100%;height:420px;'></div>\n"
+        text += "<h3>Days</h3>\n<div id='pv_calibration_days' style='width:100%;height:320px;'></div>\n"
+        text += "<script>\nvar pv_calibration_slot_data = {};\nvar pv_calibration_day_data = {};\n".format(json.dumps(slot_data), json.dumps(day_data))
+        text += """(function() {
+  var s = pv_calibration_slot_data, d = pv_calibration_day_data;
+  if (typeof Plotly === 'undefined') { document.getElementById('pv_calibration_slots').innerText = 'The chart library could not be loaded.'; return; }
+  var fg = getComputedStyle(document.body).color || '#888';
+  var axis = function(t, extra) { return Object.assign({title: {text: t, font: {color: fg}}, tickfont: {color: fg}, gridcolor: 'rgba(128,128,128,0.3)', zeroline: false}, extra || {}); };
+  var hhmm = function(m) { return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2); };
+  var maxF = Math.max.apply(null, s.points.map(function(p) { return p[2]; }).concat([0.001]));
+  var minutes = Object.keys(s.adj).map(Number).sort(function(a, b) { return a - b; });
+  var shown = {}; s.evidence_minutes.forEach(function(m) { shown[m] = true; });
+  var layout = function(xt) { return {paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)', margin: {l: 50, r: 10, t: 40, b: 40}, legend: {font: {color: fg}, orientation: 'h', x: 0, y: 1.02, yanchor: 'bottom'},
+    xaxis: axis(xt), yaxis: axis('Actual / forecast', {range: [0, 3]})}; };
+  Plotly.newPlot('pv_calibration_slots', [
+    {type: 'scatter', mode: 'markers', name: 'stored days', x: s.points.map(function(p) { return p[0] / 60; }), text: s.points.map(function(p) { return hhmm(p[0]); }), y: s.points.map(function(p) { return Math.min(p[1], 3); }),
+      marker: {size: s.points.map(function(p) { return 6 + 10 * p[2] / maxF; }), color: '#f5c43d', opacity: s.points.map(function(p) { return Math.max(p[3], 0.15); })}},
+    {type: 'scatter', mode: 'lines', name: 'unshrunk', x: minutes.map(function(m) { return m / 60; }), y: minutes.map(function(m) { return shown[m] ? s.raw_adj[m] : null; }), line: {color: '#a8a8a7', dash: 'dot'}},
+    {type: 'scatter', mode: 'lines', name: 'applied', x: minutes.map(function(m) { return m / 60; }), y: minutes.map(function(m) { return shown[m] ? s.adj[m] : null; }), line: {color: '#e90a0a', width: 3}},
+    {type: 'scatter', mode: 'lines', name: 'no correction', x: [0, 24], y: [1, 1], line: {color: fg, dash: 'dash', width: 1}}
+  ], (function() { var l = layout('Time of day'); var ticks = [0, 2, 4, 6, 8, 10, 12, 14, 16, 18, 20, 22, 24];
+    l.xaxis = Object.assign(l.xaxis, {range: [0, 24], tickvals: ticks, ticktext: ticks.map(function(h) { return hhmm(h * 60); })}); return l; })(), {responsive: true});
+  var good = d.points.filter(function(p) { return !p[3] && p[1] !== null; }), down = d.points.filter(function(p) { return p[3] && p[1] !== null; });
+  var maxD = Math.max.apply(null, d.points.map(function(p) { return p[2]; }).concat([0.001]));
+  var days = d.points.map(function(p) { return p[0]; });
+  Plotly.newPlot('pv_calibration_days', [
+    {type: 'scatter', mode: 'markers', name: 'days', x: good.map(function(p) { return p[0]; }), y: good.map(function(p) { return Math.min(p[1], 3); }), marker: {size: good.map(function(p) { return 6 + 10 * p[2] / maxD; }), color: '#f5c43d'}},
+    {type: 'scatter', mode: 'markers', name: 'down days (skipped)', x: down.map(function(p) { return p[0]; }), y: down.map(function(p) { return Math.min(p[1], 3); }), marker: {size: 8, color: 'rgba(0,0,0,0)', line: {color: '#888', width: 1}}},
+    {type: 'scatter', mode: 'lines', name: 'unshrunk', x: [days[0], days[days.length - 1]], y: [d.raw_total, d.raw_total], line: {color: '#a8a8a7', dash: 'dot'}},
+    {type: 'scatter', mode: 'lines', name: 'applied', x: [days[0], days[days.length - 1]], y: [d.total, d.total], line: {color: '#e90a0a', width: 3}}
+  ], layout('Day'), {responsive: true});
+})();
+</script>
+"""
+        # Two-hour bands: mean forecast and actual kWh per valid day, the factors at the band's middle slot, and the number of points
+        used = set(days_used)
+        valid_days = max(len(used), 1)
+        small = "padding:4px 8px;border:1px solid #555;"
+        text += "<table style='border-collapse:collapse;margin:8px 0 20px 0;font-size:0.9em;'>\n<tr>"
+        for heading in ("Time", "Forecast kWh", "Actual kWh", "Unshrunk", "Applied", "Points"):
+            text += "<th style='{}'>{}</th>".format(small, heading)
+        text += "</tr>\n"
+        slot_minutes = min((b - a for a, b in zip(sorted(model["adj"]), sorted(model["adj"])[1:])), default=30)
+        for band_start in range(0, 24 * 60, 120):
+            band = [point for point in model["slot_points"] if band_start <= point["minute"] < band_start + 120]
+            forecast = sum(point["forecast_kwh"] for point in band) / valid_days
+            actual = sum(point["actual_kwh"] for point in band) / valid_days
+            if forecast < 0.01 and actual < 0.01:
+                continue
+            middle = band_start + 60 - (60 % slot_minutes)
+            text += "<tr><td style='{0}'>{1:02d}:00-{2:02d}:00</td><td style='{0}'>{3:.2f}</td><td style='{0}'>{4:.2f}</td><td style='{0}'>{5:.2f}</td><td style='{0}'>{6:.2f}</td><td style='{0}'>{7}</td></tr>\n".format(
+                small, band_start // 60, (band_start + 120) // 60, forecast, actual, model["raw_adj"].get(middle, model["raw_total"]), model["adj"].get(middle, model["total"]), len(band)
+            )
+        text += "</table>\n</div>\n"
+        return text
 
     def is_editable_value(self, value):
         """
@@ -4322,15 +4435,15 @@ chart.render();
             all_states_json = "{}"
 
         # Add CSS styles for edit functionality and for the filter box
-        text += get_apps_css()
-        text += get_filter_css()
+        text += web_helper.get_apps_css()
+        text += web_helper.get_filter_css()
         text += "<body>\n"
 
         # JavaScript for edit functionality
-        text += get_apps_js(all_states_json)
+        text += web_helper.get_apps_js(all_states_json)
 
         # JavaScript for the filter box
-        text += get_apps_filter_js()
+        text += web_helper.get_apps_filter_js()
 
         # Add message container
         text += '<div id="messageContainer" class="message-container"></div>\n'
@@ -4774,7 +4887,7 @@ chart.render();
         self.default_page = "./config"
         text = self.get_header("Predbat Config", refresh=60)
         text += "<body>\n"
-        text += get_html_config_css()
+        text += web_helper.get_html_config_css()
 
         text += """
         <div class="filter-container">
@@ -5090,7 +5203,7 @@ chart.render();
         # Calculate MD5 checksum of the content for external change detection
         file_checksum = hashlib.md5(apps_yaml_content.encode("utf-8")).hexdigest() if apps_yaml_content else ""
 
-        text += get_editor_css()
+        text += web_helper.get_editor_css()
         text += """
 
 <div class="editor-container">
@@ -5133,7 +5246,7 @@ chart.render();
         text += """
     </div>
 </div>"""
-        text += get_editor_js()
+        text += web_helper.get_editor_js()
         text += """
 </div>"""
 
@@ -5617,7 +5730,7 @@ chart.render();
         self.default_page = "./discovery"
         text = self.get_header("Predbat Discovery", refresh=60)
         text += "<body>\n"
-        text += get_discovery_css()
+        text += web_helper.get_discovery_css()
         text += "<h2>Discovery Catalogue</h2>\n"
 
         coordinator = self._coordinator()
@@ -5845,13 +5958,13 @@ chart.render();
         self.default_page = "./components"
         text = self.get_header("Predbat Components", refresh=60)
         text += "<body>\n"
-        text += get_components_css()
-        text += get_entity_modal_css()
-        text += get_component_edit_modal_css()
-        text += get_entity_modal_js()
-        text += get_component_edit_modal_js()
-        text += get_discovery_css()
-        text += get_discovery_modal_js()
+        text += web_helper.get_components_css()
+        text += web_helper.get_entity_modal_css()
+        text += web_helper.get_component_edit_modal_css()
+        text += web_helper.get_entity_modal_js()
+        text += web_helper.get_component_edit_modal_js()
+        text += web_helper.get_discovery_css()
+        text += web_helper.get_discovery_modal_js()
 
         # Discovery status per component: the ones listed here get an info button (see html_component_discovery)
         discovery_status = self._discovery_status_map()
@@ -6080,7 +6193,7 @@ chart.render();
 </div>
 """
 
-        text += get_restart_button_js()
+        text += web_helper.get_restart_button_js()
 
         # Add JavaScript for toggling disabled components
         text += """
@@ -6337,6 +6450,8 @@ document.addEventListener('DOMContentLoaded', function() {
                                 converted_value = yaml_parser.load(stream)
                     else:
                         # String type - always quote strings for safety
+                        from ruamel.yaml.scalarstring import DoubleQuotedScalarString
+
                         converted_value = DoubleQuotedScalarString(str(new_value))
 
                     data[ROOT_YAML_KEY][config_key] = converted_value
@@ -6396,7 +6511,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
         text = self.get_header("Predbat File Browser", refresh=0)
         text += "<body>\n"
-        text += get_browse_css()
+        text += web_helper.get_browse_css()
 
         # Breadcrumb navigation
         text += '<div class="breadcrumb-container">\n'
@@ -6701,7 +6816,7 @@ document.addEventListener('DOMContentLoaded', function() {
         self.default_page = "./kraken_key"
         text = self.get_header("Predbat Kraken API Key", refresh=0)
         text += "<body>\n"
-        text += get_kraken_key_page_html()
+        text += web_helper.get_kraken_key_page_html()
         text += "</body></html>\n"
         return web.Response(content_type="text/html", text=text, headers={"Cache-Control": "no-store"})
 
@@ -6755,8 +6870,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
         text = self.get_header("Predbat Internals", refresh=0)
         text += "<body>\n"
-        text += get_internals_css()
-        text += get_internals_js()
+        text += web_helper.get_internals_css()
+        text += web_helper.get_internals_js()
 
         text += '<div class="internals-container">\n'
         text += '<div class="breadcrumb-container">\n'
@@ -7002,6 +7117,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         obj = getattr(obj, part)
                     else:
                         return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": f"Path not found: {path}"}))
+                    # A packed rate series is browsed as the dict it stands for
+                    obj = PackedRates.unpack(obj)
 
             # Get members of the object
             members = self._get_object_members(obj, path)
@@ -7094,6 +7211,9 @@ document.addEventListener('DOMContentLoaded', function() {
         # Handle None
         if obj is None:
             return None
+
+        # A packed rate series is written as the dict it stands for
+        obj = PackedRates.unpack(obj)
 
         # Handle primitives (no circular reference check needed)
         if isinstance(obj, (str, int, float, bool)):
@@ -7229,6 +7349,8 @@ document.addEventListener('DOMContentLoaded', function() {
         """
         Analyze a value and return information about it
         """
+        # A packed rate series is shown as the dict it stands for
+        value = PackedRates.unpack(value)
         value_type = type(value).__name__
         expandable = False
         display_value = None

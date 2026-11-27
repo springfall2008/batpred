@@ -19,7 +19,8 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate, MinuteArray, PackedRates
+import array
 import functools
 import io
 import itertools
@@ -39,17 +40,111 @@ from const import (
     REPEAT_FULL_LOG_SECONDS,
 )
 from config import APPS_SCHEMA, CONFIG_API_OVERRIDE, CURRENCY_UNITS
+from control_ledger import ControlLedger
+from control_monitor import ControlMonitor
 from predbat import THIS_VERSION, THIS_VERSION_DISPLAY
 
 
 # A debug dump is several megabytes of deeply nested YAML and PyYAML's pure-Python parser spends
-# most of a replay's wall-clock on it - about 6s for a 5MB dump. CLoader pairs libyaml's C parser
-# with the very same (unsafe) Constructor that yaml.unsafe_load uses, so the Python-object tags
-# these dumps carry still load, roughly 6x faster. PyYAML is not always built with libyaml, so
-# fall back to the pure-Python loader when the C one is absent. The one difference from
-# yaml.unsafe_load is the RepeatLogGate constructor added below.
-class DebugYamlLoader(getattr(yaml, "CLoader", yaml.UnsafeLoader)):
-    """The loader read_debug_yaml() replays a debug dump with; see construct_empty_log_gate()."""
+# most of a replay's wall-clock on it - about 5s for a 5MB dump. CSafeLoader pairs libyaml's C parser
+# with PyYAML's safe Constructor and parses the same dump in under a second, exactly as fast as the
+# unsafe CLoader (0.91s each, measured on a 5MB dump). PyYAML is not always built with libyaml, so
+# fall back to the pure-Python SafeLoader when the C one is absent.
+#
+# The loader must be safe because the dumps it reads are untrusted: users attach them to public bug
+# reports, and maintainers and the triage bot replay them. An unsafe loader runs any Python a
+# !!python/object/apply or !!python/name tag names, so a crafted dump was code execution on whoever
+# replayed it. The safe Constructor builds no Python object from a tag unless one is registered
+# below, and each one registered here builds only the type it names:
+# - the Predbat classes a dump really carries (DEBUG_YAML_OBJECT_CLASSES), with no __init__ or
+#   __setstate__ run, as yaml.unsafe_load built them;
+# - numeric array.array values, which MinuteArray keeps its data in;
+# - an empty RepeatLogGate, numpy dtypes and scalars of numeric kinds only, and tuples, for older dumps;
+# - any other !!python/object: as a plain dict of its attributes, named in a warning when replaying.
+# Every other Python tag (apply, new, name, module) is refused with "could not determine a constructor".
+class DebugYamlLoader(getattr(yaml, "CSafeLoader", yaml.SafeLoader)):
+    """The safe loader read_debug_yaml() replays a debug dump with; see the constructors registered below."""
+
+    def __init__(self, stream):
+        """Start with no unknown object tags seen; construct_unknown_object() records each one it flattens."""
+        super().__init__(stream)
+        self.unknown_object_tags = set()
+
+
+# The Predbat-owned classes a debug dump can carry as !!python/object: tags. A replay restores them as
+# real instances, as the unsafe loader did. MinuteArray is in every dump taken after a plan cycle;
+# ControlLedger and ControlMonitor only in dumps written before they joined DEBUG_EXCLUDE_LIST. Add a
+# class here when a new one starts appearing in dumps; until then it loads as a plain dict and
+# read_debug_yaml() names it in a warning.
+DEBUG_YAML_OBJECT_CLASSES = {
+    "control_ledger.ControlLedger": ControlLedger,
+    "control_monitor.ControlMonitor": ControlMonitor,
+    "utils.MinuteArray": MinuteArray,
+}
+
+# array.array typecodes a dump may carry: the integer and floating-point ones, not the wide-character ones
+DEBUG_YAML_ARRAY_TYPECODES = ("b", "B", "h", "H", "i", "I", "l", "L", "q", "Q", "f", "d")
+
+# numpy kinds a dumped scalar may have: booleans, signed and unsigned integers, floats and complex numbers.
+# An object ("O") or void dtype is refused, as it could stand for something other than a number.
+DEBUG_YAML_NUMPY_KINDS = ("b", "i", "u", "f", "c")
+
+
+def construct_known_object(loader, tag_suffix, node):
+    """
+    Build one of DEBUG_YAML_OBJECT_CLASSES from its dumped attributes, without running __init__ or __setstate__.
+
+    This is how yaml.unsafe_load built them (cls.__new__, then the attribute dict). The instance is yielded
+    before its attributes are filled in so a dump that refers back to it through an alias still loads.
+    """
+    instance = DEBUG_YAML_OBJECT_CLASSES[tag_suffix].__new__(DEBUG_YAML_OBJECT_CLASSES[tag_suffix])
+    yield instance
+    if isinstance(node, yaml.MappingNode):
+        instance.__dict__.update(loader.construct_mapping(node, deep=True))
+
+
+def construct_unknown_object(loader, tag_suffix, node):
+    """
+    Load any other !!python/object: tag as a plain dict of its attributes, recording the tag on the loader.
+
+    Nothing is imported or constructed, so this is safe whatever the dump names. A replay still gets the
+    values, and read_debug_yaml() warns that the object came back as a dict, which is the cue to add its
+    class to DEBUG_YAML_OBJECT_CLASSES.
+    """
+    if tag_suffix in DEBUG_YAML_OBJECT_CLASSES:
+        return (yield from construct_known_object(loader, tag_suffix, node))
+    loader.unknown_object_tags.add(tag_suffix)
+    data = {}
+    yield data
+    if isinstance(node, yaml.MappingNode):
+        data.update(loader.construct_mapping(node, deep=True))
+
+
+DebugYamlLoader.add_multi_constructor("tag:yaml.org,2002:python/object:", construct_unknown_object)
+
+
+def construct_tuple(loader, node):
+    """Load a !!python/tuple, which a plain yaml.Dumper writes for every tuple, as a tuple."""
+    return tuple(loader.construct_sequence(node, deep=True))
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/tuple", construct_tuple)
+
+
+def construct_array(loader, node):
+    """
+    Build an array.array from a debug dump: a numeric typecode and a list of numbers.
+
+    A dump taken after a plan cycle holds MinuteArray series, whose _data yaml.dump() writes as
+    array.array(typecode, values). The array is built here rather than by calling what the tag names.
+    """
+    args = loader.construct_sequence(node, deep=True) if isinstance(node, yaml.SequenceNode) else loader.construct_mapping(node, deep=True).get("args") or []
+    if len(args) != 2 or args[0] not in DEBUG_YAML_ARRAY_TYPECODES or not isinstance(args[1], list) or not all(isinstance(value, (int, float)) for value in args[1]):
+        raise yaml.constructor.ConstructorError(None, None, "an array in a debug dump must be a numeric typecode and a list of numbers", node.start_mark)
+    return array.array(args[0], args[1])
+
+
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:array.array", construct_array)
 
 
 def construct_empty_log_gate(loader, node):
@@ -76,17 +171,43 @@ def construct_numpy_dtype(loader, node):
     dump, and DebugYamlDumper writes a tuple as a list, so each scalar's dtype state was written as one.
     A fresh dtype refuses a list ("SystemError: bad argument to internal function"), which stopped those
     dumps loading anywhere.
+
+    Only a numeric dtype is accepted (DEBUG_YAML_NUMPY_KINDS), named by a string such as "f8".
     """
+    import numpy
+
     value = loader.construct_mapping(node, deep=True)
-    dtype = loader.find_python_name("numpy.dtype", node.start_mark)
-    instance = dtype(*value.get("args", []))
+    args = value.get("args") or []
+    if not args or not isinstance(args[0], str):
+        raise yaml.constructor.ConstructorError(None, None, "a numpy dtype in a debug dump must be named by a string, got {!r}".format(args[:1]), node.start_mark)
+    instance = numpy.dtype(*args)
+    if instance.kind not in DEBUG_YAML_NUMPY_KINDS:
+        raise yaml.constructor.ConstructorError(None, None, "a numpy dtype in a debug dump must be numeric, got {}".format(instance), node.start_mark)
     state = value.get("state")
     if state is not None:
         instance.__setstate__(tuple(state))
     return instance
 
 
+def construct_numpy_scalar(loader, node):
+    """
+    Build a numpy scalar from a debug dump: a numeric dtype (construct_numpy_dtype) and its raw bytes.
+
+    Older dumps wrote each Load ML value as numpy._core.multiarray.scalar(dtype, bytes) - numpy.core before
+    numpy 2. The bytes are read with numpy.frombuffer rather than by calling the function the tag names, and
+    must be exactly one value of that dtype.
+    """
+    import numpy
+
+    args = loader.construct_sequence(node, deep=True) if isinstance(node, yaml.SequenceNode) else loader.construct_mapping(node, deep=True).get("args") or []
+    if len(args) != 2 or not isinstance(args[0], numpy.dtype) or args[0].kind not in DEBUG_YAML_NUMPY_KINDS or not isinstance(args[1], bytes) or len(args[1]) != args[0].itemsize:
+        raise yaml.constructor.ConstructorError(None, None, "a numpy scalar in a debug dump must be a numeric dtype and one value's bytes", node.start_mark)
+    return numpy.frombuffer(args[1], dtype=args[0])[0]
+
+
 DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy.dtype", construct_numpy_dtype)
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy._core.multiarray.scalar", construct_numpy_scalar)
+DebugYamlLoader.add_constructor("tag:yaml.org,2002:python/object/apply:numpy.core.multiarray.scalar", construct_numpy_scalar)
 DEBUG_YAML_LOADER = DebugYamlLoader
 
 # Parsed debug dumps keyed by (path, mtime, size). None, the default, turns the cache off: Predbat replays
@@ -96,18 +217,35 @@ DEBUG_YAML_LOADER = DebugYamlLoader
 DEBUG_YAML_PARSE_CACHE = None
 
 
-def load_debug_yaml_file(filename):
-    """Parse a debug dump with DEBUG_YAML_LOADER, through DEBUG_YAML_PARSE_CACHE when that is switched on."""
+def parse_debug_yaml_file(filename):
+    """Parse a debug dump with DEBUG_YAML_LOADER, returning (data, the !!python/object: tags it loaded as plain dicts)."""
+    with open(filename, "r") as file:
+        loader = DEBUG_YAML_LOADER(file)
+        try:
+            return loader.get_single_data(), frozenset(loader.unknown_object_tags)
+        finally:
+            loader.dispose()
+
+
+def load_debug_yaml_file(filename, unknown_object_tags=None):
+    """
+    Parse a debug dump with DEBUG_YAML_LOADER, through DEBUG_YAML_PARSE_CACHE when that is switched on.
+
+    If unknown_object_tags is a set, the !!python/object: tags the dump carried that are not in
+    DEBUG_YAML_OBJECT_CLASSES, and so loaded as plain dicts, are added to it.
+    """
     cache = DEBUG_YAML_PARSE_CACHE
     if cache is None:
-        with open(filename, "r") as file:
-            return yaml.load(file, Loader=DEBUG_YAML_LOADER)
-    stat = os.stat(filename)
-    key = (os.path.abspath(filename), stat.st_mtime_ns, stat.st_size)
-    if key not in cache:
-        with open(filename, "r") as file:
-            cache[key] = yaml.load(file, Loader=DEBUG_YAML_LOADER)
-    return cache[key]
+        data, unknown = parse_debug_yaml_file(filename)
+    else:
+        stat = os.stat(filename)
+        key = (os.path.abspath(filename), stat.st_mtime_ns, stat.st_size)
+        if key not in cache:
+            cache[key] = parse_debug_yaml_file(filename)
+        data, unknown = cache[key]
+    if unknown_object_tags is not None:
+        unknown_object_tags.update(unknown)
+    return data
 
 
 class DebugYamlDumper(yaml.Dumper):
@@ -140,6 +278,10 @@ class DebugYamlDumper(yaml.Dumper):
 # dump - io_slot_log_gate was one (#5569) and is in DEBUG_EXCLUDE_LIST for that reason.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
 
+# A packed rate series is written as the minute -> rate dict it stands for, so a dump reads exactly as it did
+# when these series were dicts, and loads with plain YAML tooling and on an older Predbat
+DebugYamlDumper.add_representer(PackedRates, lambda dumper, value: dumper.represent_dict(value.to_dict()))
+
 
 def represent_numpy_as_plain(dumper, value):
     """
@@ -161,20 +303,243 @@ def represent_numpy_as_plain(dumper, value):
 DebugYamlDumper.add_multi_representer(object, represent_numpy_as_plain)
 
 
+# A mapping key the debug writer may leave unquoted: an identifier YAML reads back as that same string
+# (not 'on', 'yes', 'null' and the like, which YAML 1.1 reads as booleans or null)
+DEBUG_PLAIN_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+DEBUG_PLAIN_RESOLVER = yaml.resolver.Resolver()
+# A run of numbers longer than this is written compactly as {...} or [...], this many to a line, so a
+# 31,680-minute history is ~2,000 lines rather than 31,680; a shorter one is laid out one per line as yaml.dump does
+DEBUG_SERIES_PER_LINE = 16
+# Characters a double-quoted string escapes: the quote and backslash, and everything outside printable ASCII, as
+# yaml.dump does. That covers what must be escaped (control characters, the characters PyYAML's reader refuses and
+# U+0085/U+2028/U+2029, which YAML would fold into spaces) and keeps the dump ASCII, so, as with yaml.dump, no open()
+# that writes or reads it depends on the platform's default encoding
+DEBUG_STRING_ESCAPE_RE = re.compile("[^\\x20\\x21\\x23-\\x5b\\x5d-\\x7e]")
+DEBUG_SURROGATE_RE = re.compile("[\\ud800-\\udfff]")
+DEBUG_STRING_ESCAPES = {'"': '\\"', "\\": "\\\\", "\n": "\\n", "\t": "\\t", "\r": "\\r"}
+
+
+class DebugValueNotPlain(Exception):
+    """A value the debug writer does not write itself (an object, numpy, a cycle, an unusual key), so yaml.dump writes it."""
+
+
+def debug_yaml_number(number):
+    """
+    The text yaml.dump writes for an int or float, so yaml.safe_load reads back the same value
+
+    The float rules are PyYAML's own (SafeRepresenter.represent_float): .nan and +/-.inf, and a decimal point added
+    to an exponent-only repr such as 1e-05, which PyYAML would otherwise read as a string.
+    """
+    if type(number) is int:
+        return str(number)
+    if number != number:
+        return ".nan"
+    if number == math.inf:
+        return ".inf"
+    if number == -math.inf:
+        return "-.inf"
+    text = repr(number).lower()
+    if "." not in text and "e" in text:
+        text = text.replace("e", ".0e", 1)
+    return text
+
+
+def debug_yaml_escape(match):
+    """The YAML escape for one character matched by DEBUG_STRING_ESCAPE_RE, in the form yaml.dump writes: \\x with 2 hex digits, \\u with 4 or \\U with 8"""
+    char = match.group(0)
+    escape = DEBUG_STRING_ESCAPES.get(char)
+    if escape:
+        return escape
+    code = ord(char)
+    if code < 0x100:
+        return "\\x{:02X}".format(code)
+    if code < 0x10000:
+        return "\\u{:04X}".format(code)
+    return "\\U{:08X}".format(code)
+
+
+def debug_yaml_string(text):
+    """
+    A YAML double-quoted scalar that reads back as exactly text
+
+    A lone surrogate is left to yaml.dump: its escape loads with PyYAML but libyaml (the replay loader) refuses it,
+    as it refuses yaml.dump's own text for one, so the direct writer leaves such a string exactly as it was.
+    """
+    if not DEBUG_STRING_ESCAPE_RE.search(text):
+        return '"' + text + '"'
+    if DEBUG_SURROGATE_RE.search(text):
+        raise DebugValueNotPlain("a lone surrogate")
+    return '"' + DEBUG_STRING_ESCAPE_RE.sub(debug_yaml_escape, text) + '"'
+
+
+def debug_yaml_scalar(value):
+    """The YAML text for None, a bool, an int, a float or a string, or None when value is none of those exactly"""
+    kind = type(value)
+    if kind is str:
+        return debug_yaml_string(value)
+    if kind is int or kind is float:
+        return debug_yaml_number(value)
+    if kind is bool:
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    return None
+
+
+def debug_yaml_key(key):
+    """The YAML text for a mapping key: an int, a string (bare when YAML reads it back as itself), else not plain"""
+    if type(key) is int:
+        return str(key)
+    if type(key) is str:
+        if DEBUG_PLAIN_KEY_RE.match(key) and DEBUG_PLAIN_RESOLVER.resolve(yaml.ScalarNode, key, (True, False)) == "tag:yaml.org,2002:str":
+            return key
+        return debug_yaml_string(key)
+    raise DebugValueNotPlain("key {!r}".format(key))
+
+
+def debug_flow_lines(entries, open_text, close_text):
+    """A run of entries written compactly, DEBUG_SERIES_PER_LINE to a line, as lines to be indented by the caller"""
+    lines = []
+    for start in range(0, len(entries), DEBUG_SERIES_PER_LINE):
+        lines.append("  " + ", ".join(entries[start : start + DEBUG_SERIES_PER_LINE]) + ",")
+    lines[0] = open_text + lines[0][2:]
+    lines[-1] = lines[-1][:-1] + close_text
+    return lines
+
+
+def debug_number_run(value):
+    """value's entries as YAML text if it is a run of numbers worth writing compactly (a long minute dict or list), else None"""
+    if len(value) <= DEBUG_SERIES_PER_LINE:
+        return None
+    if type(value) is dict:
+        entries = []
+        for minute in debug_sorted_keys(value):
+            number = value[minute]
+            if type(minute) is not int or (type(number) is not float and type(number) is not int):
+                return None
+            entries.append("{}: {}".format(minute, debug_yaml_number(number)))
+        return debug_flow_lines(entries, "{", "}")
+    for number in value:
+        if type(number) is not float and type(number) is not int:
+            return None
+    return debug_flow_lines([debug_yaml_number(number) for number in value], "[", "]")
+
+
+def debug_sorted_keys(mapping):
+    """The mapping's keys in the order yaml.dump writes them: sorted, or as they are when they cannot be sorted"""
+    try:
+        return sorted(mapping)
+    except TypeError:
+        return list(mapping)
+
+
+def debug_value_lines(value, path_ids):
+    """
+    value as YAML lines laid out the way yaml.dump lays them out, as (inline text, lines below) for the parent to place
+
+    inline is the text that follows the parent's "key:" or "-" on the same line ("" when the value starts below it);
+    the lines below are indented relative to the parent. Raises DebugValueNotPlain for anything it does not write.
+    """
+    scalar = debug_yaml_scalar(value)
+    if scalar is not None:
+        return scalar, []
+    kind = type(value)
+    if kind is PackedRates:
+        # Written as the plain minute -> rate dict it stands for, as DebugYamlDumper's representer writes it
+        return debug_value_lines(value.to_dict(), path_ids)
+    if kind is MinuteArray and set(value.__dict__) == {"_data"}:
+        # Written as yaml.dump writes it, so the replay loader rebuilds the same MinuteArray
+        inline, below = debug_value_lines(value._data, path_ids)
+        return "!!python/object:utils.MinuteArray", ["_data: " + inline] + below
+    if kind is array.array:
+        # Written as yaml.dump writes it: the apply tag with the typecode and the list of numbers
+        if value.typecode == "u":
+            raise DebugValueNotPlain("a unicode array")
+        numbers = value.tolist()
+        run = debug_number_run(numbers)
+        if run is not None:
+            data = ["- " + run[0]] + ["  " + line for line in run[1:]]
+        elif numbers:
+            data = ["- - " + debug_yaml_number(numbers[0])] + ["  - " + debug_yaml_number(number) for number in numbers[1:]]
+        else:
+            data = ["- []"]
+        return "!!python/object/apply:array.array", ["- " + debug_yaml_string(value.typecode)] + data
+    if kind is not dict and kind is not list and kind is not tuple:
+        raise DebugValueNotPlain(kind.__name__)
+    if not value:
+        return ("{}" if kind is dict else "[]"), []
+    if id(value) in path_ids:
+        raise DebugValueNotPlain("a cycle")
+    path_ids.add(id(value))
+    try:
+        run = debug_number_run(value)
+        if run is not None:
+            return run[0], ["  " + line for line in run[1:]]
+        lines = []
+        if kind is dict:
+            for key in debug_sorted_keys(value):
+                inline, below = debug_value_lines(value[key], path_ids)
+                child_is_list = type(value[key]) in (list, tuple) and not inline
+                lines.append("{}:{}".format(debug_yaml_key(key), " " + inline if inline else ""))
+                # A list under a key is not indented further, as yaml.dump writes it; anything else is indented by two
+                lines.extend(below if child_is_list else ["  " + line for line in below])
+        else:
+            for item in value:
+                inline, below = debug_value_lines(item, path_ids)
+                if inline:
+                    lines.append("- " + inline)
+                    lines.extend("  " + line for line in below)
+                else:
+                    lines.append("- " + below[0])
+                    lines.extend("  " + line for line in below[1:])
+        return "", lines
+    finally:
+        path_ids.discard(id(value))
+
+
+def write_debug_value(key, value, stream):
+    """
+    Write one top-level key of the debug dump directly, or return False (writing nothing) when yaml.dump must write it
+
+    The text is built for the whole key before any of it is written, so a value found part way through not to be plain
+    leaves the stream untouched.
+    """
+    try:
+        inline, below = debug_value_lines(value, set())
+        text = "{}:{}\n".format(debug_yaml_key(key), " " + inline if inline else "")
+    except DebugValueNotPlain:
+        return False
+    child_is_list = type(value) in (list, tuple) and not inline
+    stream.write(text)
+    for line in below:
+        stream.write(line + "\n" if child_is_list else "  " + line + "\n")
+    return True
+
+
 def dump_debug_yaml(debug, stream):
     """
     Write the debug dict to stream as one YAML document, one top-level key at a time.
 
-    yaml.dump() builds a Node object for every scalar in the data before it emits a byte, so dumping
-    the whole dict at once costs around thirty times the size of the output - ~150MB for a typical
-    5MB debug file, which set Predbat's peak memory and left ~30MB of heap fragmentation behind
-    at idle. Dumping per key bounds the node tree by the largest key instead (~20MB here). The
-    output is the same sorted single document; the only difference is that an object shared between
-    two top-level keys is written out twice rather than aliased.
+    yaml.dump() builds a Node object for every scalar in the data before it emits a byte, about thirty times
+    the size of its output (31MB and 1.9s for dashboard_values alone, ~10MB for each 22-day MinuteArray
+    history), and that set the memory peak of every debug-history snapshot. So each key whose value is
+    plain data - dicts, lists, tuples, strings, numbers, bools, None, MinuteArray and array.array - is
+    written directly by write_debug_value(), in the same layout, and reads back exactly as yaml.dump's
+    text would. Strings are always double-quoted, and a run of more than DEBUG_SERIES_PER_LINE numbers is
+    written compactly ({minute: value, ...} or [...]) so a long history stays a few thousand lines.
+
+    Anything else in a key (another object, numpy values, a cycle, an unusual dict key) sends the whole key
+    through yaml.dump as before. Neither shares anchors between top-level keys, so an object that two keys
+    hold is written out twice rather than aliased; within a key the direct writer writes it out each time.
+
+    A packed rate series (PackedRates) is written as the minute -> rate dict it stands for, by either path, so the
+    dump reads exactly as it did when those series were dicts.
     """
     dumper = functools.partial(DebugYamlDumper, anchor_ids=itertools.count(1))
     for key in sorted(debug):
-        yaml.dump({key: debug[key]}, stream, Dumper=dumper)
+        value = debug[key]
+        if not write_debug_value(key, value, stream):
+            yaml.dump({key: value}, stream, Dumper=dumper)
 
 
 class UserInterface:
@@ -946,7 +1311,10 @@ class UserInterface:
         """
         debug = {}
         if os.path.exists(filename):
-            debug = load_debug_yaml_file(filename)
+            unknown_object_tags = set()
+            debug = load_debug_yaml_file(filename, unknown_object_tags)
+            if unknown_object_tags:
+                self.log("Warn: Debug file {} holds objects this replay does not rebuild, so they load as plain dicts: {}".format(filename, ", ".join(sorted(unknown_object_tags))))
         else:
             self.log("Warn: Debug file {} not found".format(filename))
             return

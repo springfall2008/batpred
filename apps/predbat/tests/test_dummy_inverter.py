@@ -156,6 +156,31 @@ def test_inverter_def_matches():
     return 0
 
 
+def test_dummy_totals_default_to_zero():
+    """Without a totals block every lifetime counter starts at zero, as before."""
+    dummy = DummyInverter(MockBase(), config={"battery_size": 8})
+    return check(dummy.totals == {"pv": 0.0, "load": 0.0, "import": 0.0, "export": 0.0, "clipped": 0.0}, "totals should default to zero: {}".format(dummy.totals))
+
+
+def test_dummy_totals_seed_the_lifetime_sensors():
+    """A totals block seeds the lifetime counters, so the published sensors start where the history ended."""
+    base = MockBase()
+    dummy = DummyInverter(base, config={"battery_size": 8, "totals": {"load": 12.5, "pv": 3.25}})
+    failed = 0
+    failed += check(dummy.totals["load"] == 12.5 and dummy.totals["pv"] == 3.25, "load and pv should be seeded: {}".format(dummy.totals))
+    failed += check(dummy.totals["import"] == 0.0 and dummy.totals["export"] == 0.0, "unset totals should stay zero: {}".format(dummy.totals))
+    dummy.publish()
+    failed += check(base.get_state_wrapper("sensor.predbat_dummy_load_lifetime") == 12.5, "the load lifetime sensor should start at the seed")
+    failed += check(base.get_state_wrapper("sensor.predbat_dummy_pv_lifetime") == 3.25, "the pv lifetime sensor should start at the seed")
+    return failed
+
+
+def test_dummy_totals_ignore_bad_values():
+    """A non-numeric or negative total is ignored and zero used instead."""
+    dummy = DummyInverter(MockBase(), config={"battery_size": 8, "totals": {"load": "lots", "pv": -1, "import": None, "export": "2.5"}})
+    return check(dummy.totals["load"] == 0.0 and dummy.totals["pv"] == 0.0 and dummy.totals["import"] == 0.0 and dummy.totals["export"] == 2.5, "bad totals should be ignored: {}".format(dummy.totals))
+
+
 def run_dummy_inverter_tests(my_predbat):
     """Run every dummy inverter test, returning a non-zero count on failure."""
     failed = 0
@@ -166,4 +191,7 @@ def run_dummy_inverter_tests(my_predbat):
     failed += test_component()
     failed += test_inverter_def_matches()
     failed += test_local_time_windows()
+    failed += test_dummy_totals_default_to_zero()
+    failed += test_dummy_totals_seed_the_lifetime_sensors()
+    failed += test_dummy_totals_ignore_bad_values()
     return failed

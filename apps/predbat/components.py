@@ -755,7 +755,8 @@ COMPONENT_LIST = {
         "args": {
             "system_id": {"required": True, "secret": True, "config": "sigenergy_system_id"},
             "app_key": {"required": True, "secret": True, "config": "sigenergy_app_key"},
-            "app_secret": {"required": True, "secret": True, "config": "sigenergy_app_secret"},
+            "app_secret": {"required": False, "secret": True, "config": "sigenergy_app_secret"},  # needed by the default api_key auth method only
+            "auth_method": {"required": False, "default": "api_key", "config": "sigenergy_auth_method"},
             "base_url": {"required": False, "config": "sigenergy_base_url", "default": "https://openapi-eu.sigencloud.com"},
             "mqtt_host": {"required": False, "config": "sigenergy_mqtt_host"},
             "ca_cert": {"required": False, "config": "sigenergy_ca_pem"},

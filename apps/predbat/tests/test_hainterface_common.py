@@ -94,6 +94,7 @@ class MockBase:
         self.args = {}
         self.CONFIG_ITEMS = []
         self.SERVICE_REGISTER_LIST = []
+        self.dashboard_index_app = {}
         self.update_pending = False
         self.callback_calls = []
         self.watch_list_calls = []
@@ -120,6 +121,23 @@ class MockBase:
     def fatal_error_occurred(self):
         """Mock fatal_error_occurred - tracks calls"""
         self.fatal_error_occurred_called = True
+
+
+def make_fake_time(clock, sleeps=None):
+    """
+    Stand-in for the 'time' module as seen by ha.py (use with patch("ha.time", ...)), driven by clock[0].
+    Patching ha.time rather than ha.time.monotonic keeps the fake clock away from asyncio and threading,
+    which share the real time module. sleep() advances the clock instead of waiting.
+    """
+    import time as real_time
+    from types import SimpleNamespace
+
+    def fake_sleep(seconds):
+        clock[0] += seconds
+        if sleeps is not None:
+            sleeps.append(seconds)
+
+    return SimpleNamespace(monotonic=lambda: clock[0], time=real_time.time, sleep=fake_sleep)
 
 
 class MockWebsocket:

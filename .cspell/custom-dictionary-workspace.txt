@@ -40,6 +40,8 @@ armv
 ASHP
 asn
 asname
+aspectmode
+aspectratio
 astimezone
 asyncio
 atfork
@@ -55,6 +57,7 @@ axisbelow
 axvline
 axvspan
 Backfeed
+backgroundcolor
 backprop
 Backpropagate
 backpropagation
@@ -68,6 +71,7 @@ batteri
 batteryb
 batusecap
 beforeunload
+benchid
 bierner
 bisectable
 Bitwarden
@@ -105,6 +109,8 @@ chg
 Chrg
 citem
 cloudfront
+cmax
+cmin
 cmpl
 cobat
 codepoint
@@ -113,6 +119,8 @@ Codespaces
 COEFF
 collaps
 collapsable
+colorbar
+colorscale
 compareform
 configform
 connack
@@ -154,6 +162,7 @@ deadbanding
 deadbeefdeadbeef
 dedup
 dedupe
+deepseek
 dend
 denorm
 derate
@@ -179,12 +188,15 @@ dlimit
 dlopen
 dnoregion
 docstrings
+DONT
 dschg
 dstamp
 dstart
 dtu
 dtype
 dwindow
+Dykstra
+Dykstra's
 eauth
 echargingpile
 ECONNRESET
@@ -195,6 +207,7 @@ edfenergy
 edfgb
 edgecolor
 efgh
+EINVAL
 elif
 elinter
 eload
@@ -240,11 +253,13 @@ EVDC
 evergen
 evilspringfall
 evse
+executemany
 exog
 expmsg
 exportlimit
 exportvalue
 facecolor
+faketime
 fdpwr
 fdsoc
 feedin
@@ -267,8 +282,11 @@ foxess
 foxesscloud
 frameon
 freephase
+frombuffer
 fromisoformat
 fronius
+frozenlist
+fsmonitor
 funcs
 futurerate
 gaierror
@@ -299,6 +317,7 @@ GOELEC
 goldens
 gridcharge
 gridcode
+gridcolor
 gridconsumption
 gridconsumptionpower
 gridspec
@@ -309,6 +328,7 @@ guoxia
 guoxiatech
 GWMQTT
 HACS
+hacsfiles
 hadashboard
 hahistory
 hainterface
@@ -332,6 +352,7 @@ heatsink
 holdout
 homeassistant
 houseb
+hovertemplate
 htmlcov
 hultenvp
 husforbrukning
@@ -345,6 +366,7 @@ idxs
 iess
 iflux
 importlimit
+importtime
 inday
 Indevolt
 indra
@@ -394,8 +416,10 @@ labelnames
 ladybugdb
 Lanmate
 larr
+lastrowid
 libbi
 libc
+libfaketime
 libyaml
 LIFEPO
 linebreak
@@ -430,6 +454,7 @@ mdi
 mdlrc
 measurand
 measurands
+memray
 Meteo
 Meteoalarm
 meterpoint
@@ -455,6 +480,7 @@ misdetection
 mispairing
 Mixergy
 mkdocs
+mktemp
 mlugg
 Modbus
 mogons
@@ -464,6 +490,7 @@ Mosquitto
 mousedown
 mpan
 mpans
+mpip
 mppt
 mprn
 mpxn
@@ -471,10 +498,12 @@ mqtt
 mtok
 mult
 multiarray
+multidict
 myaccount
 myenergi
 mypy
 nanmean
+nanosleep
 nanstd
 nattribute
 nbytes
@@ -534,6 +563,7 @@ pac
 packettypes
 paho
 parseable
+pava
 pbat
 pbgw
 pcharging
@@ -547,6 +577,7 @@ percnt
 peterhaban
 pgrid
 photovoltaics
+pipefail
 pitem
 pkwh
 plenticore
@@ -572,6 +603,8 @@ predheat
 preseed
 preseeded
 prevs
+procps
+propcache
 protobuf
 pseudonymisation
 pseudonymise
@@ -596,6 +629,7 @@ pypi
 pyproject
 pytest
 pythonhashseed
+PYTHONPATH
 pytz
 Quattro
 Qwen
@@ -657,12 +691,15 @@ setstate
 SFMB
 sg05lp1
 sharex
+showlegend
 SIGALRM
 sigcloud
 sigen
 sigencloud
 sigenergy
 sigenstor
+sitecustomize
+sizeof
 skynet
 Slee
 slugified
@@ -702,6 +739,7 @@ stdlib
 stepline
 stevekirtley
 Storion
+strftime
 Stromligning
 strptime
 strtod
@@ -732,6 +770,9 @@ testname
 thirdparty
 threadpool
 threadpoolctl
+tickfont
+ticktext
+tickvals
 timea
 timeb
 timec
@@ -753,6 +794,7 @@ tmrw
 tojson
 topbar
 tottime
+tracemalloc
 trapezoidally
 trapz
 Trefor
@@ -768,8 +810,13 @@ tzdata
 tzfile
 tzpath
 tzset
+udfff
+ufeff
+ufffe
+uffff
 unasserted
 uncalibrated
+uncancellable
 uncompilable
 unconfigured
 underivable
@@ -788,6 +835,7 @@ unpushed
 unreachability
 unredacted
 unregisters
+unrelate
 unrepresentable
 unreproduced
 unsmoothed
@@ -804,6 +852,7 @@ Vallery
 varh
 venv
 Victron
+Viridis
 visibilitychange
 vvwwxxabcdefyyzzuu
 waf
@@ -820,6 +869,7 @@ workmode
 workstream
 workstreams
 worktree
+worktrees
 writeonly
 wrongsha
 WRONLY
@@ -834,6 +884,8 @@ xrtkq
 xtest
 xticks
 xxabcdefyy
+yanchor
+yarl
 yaxis
 yaxistooltip
 yday
@@ -844,6 +896,8 @@ yticks
 yuanzhi
 zappi
 zappis
+zaxis
 zcat
+zeroline
 zigbee
 zoneinfo

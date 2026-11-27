@@ -1,0 +1,27 @@
+# Memory benchmark apps.yaml template (committed). export_fixture.py completes it from the live apps.yaml into
+# coverage/memory_benchmark_data/apps.yaml, which is local and never committed. Settings here win over the live ones.
+pred_bat:
+  module: predbat
+  class: PredBat
+  prefix: predbat
+  # No Home Assistant: the reference database is the only data source
+  db_enable: true
+  db_primary: true
+  db_mirror_ha: false
+  db_days: 30
+  # Mirror the Predbat cloud shape: Load ML off, the kernel on, one fixed planning thread. MCP is off by leaving
+  # mcp_enable out: the component counts the setting's presence, whatever its value, as switching it on
+  load_ml_enable: false
+  prediction_kernel_enable: true
+  threads: 0
+  plan_random_delay: 0
+  # Forecast entries are seeded in the cache and the clock is frozen, so they never age out
+  forecast_solar_max_age: 8760
+  # The simulated inverter in place of the real one; export_fixture.py sets battery_size, soc_initial and totals
+  dummy_inverter:
+    battery_size: 10
+    battery_rate_max: 3600
+    inverter_limit: 3600
+    export_limit: 3600
+    reserve: 4
+    soc_initial: 50
