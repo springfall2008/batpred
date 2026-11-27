@@ -254,6 +254,7 @@ from tests.test_fill_load_from_power import run_all_tests as test_fill_load_from
 from tests.test_fill_load_from_history import run_all_tests as test_fill_load_from_history
 from tests.test_fetch_pv_forecast import run_all_tests as test_fetch_pv_forecast
 from tests.test_octopus_free import test_octopus_free
+from tests.test_octopus_url_cache import test_octopus_url_cache
 from tests.test_prune_today import test_prune_today
 from tests.test_cumulative import test_get_now_from_cumulative
 from tests.test_octopus_url import test_octopus_url
@@ -916,6 +917,7 @@ def main():
         ("optimise_export_copy", run_optimise_export_copy_tests, "Optimise export window copying tests", False),
         ("inverter_multi", run_inverter_multi_tests, "Inverter multi tests", False),
         ("octopus_free", test_octopus_free, "Octopus free electricity tests", False),
+        ("octopus_url_cache", test_octopus_url_cache, "Octopus URL cache stored as compact JSON", False),
         ("battery_curve_keys", run_battery_curve_keys_tests, "Battery curve keys tests", False),
         ("balance_inverters", run_balance_inverters_tests, "Balance inverters tests", False),
         ("heterogeneous_fleet", test_heterogeneous_fleet, "Heterogeneous multi-inverter fleet tests (#4856)", False),
