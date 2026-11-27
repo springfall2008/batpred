@@ -21,6 +21,7 @@ import re
 import array
 import ctypes
 import os
+from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone, time
 from email.utils import parsedate_to_datetime
 from io import StringIO
@@ -285,6 +286,137 @@ class MinuteArray:
         new = MinuteArray.__new__(MinuteArray)
         new._data = array.array("d", self._data)
         return new
+
+
+class PackedRates(Mapping):
+    """
+    A read-only minute -> rate mapping held as a start minute and an array of C doubles.
+
+    A per-minute rate series held as a dict costs an int key, a float value and a hash slot for each
+    of thousands of minutes. This keeps just the 8 byte doubles. Readers get the same keys, values and
+    order through the Mapping interface (get, [], in, iteration, items, ==, dict()), and to_dict()
+    builds a fresh dict, so no reader can alter what is held. Anything that needs a real dict - a
+    caller that mutates it, a yaml or json dump - must convert it first (to_dict() or dict()).
+
+    descending=True holds a series a dict built from its last minute back to its first (the
+    forward-looking min/max rates), so iteration and to_dict() keep that order.
+    """
+
+    __slots__ = ("start", "rates", "descending")
+
+    def __init__(self, start, rates, descending=False):
+        """Hold the rate for minute `start + index` in rates[index] (an array of doubles; not called values, which is the Mapping method)."""
+        self.start = start
+        self.rates = rates
+        self.descending = descending
+
+    def _index(self, minute):
+        """
+        Return the array index holding a minute, or -1 when it is not held.
+
+        A dict finds an int key from any key equal to it (10.0, True, a numpy integer), so those are
+        looked up as the int they equal; anything else (10.5, "10", None, NaN) is not held.
+        """
+        if type(minute) is not int:
+            try:
+                as_int = int(minute)
+            except (TypeError, ValueError, OverflowError):
+                return -1
+            if as_int != minute:
+                return -1
+            minute = as_int
+        index = minute - self.start
+        return index if 0 <= index < len(self.rates) else -1
+
+    def __getitem__(self, minute):
+        """Return the rate for a minute, or raise KeyError as a dict would."""
+        index = self._index(minute)
+        if index < 0:
+            raise KeyError(minute)
+        return self.rates[index]
+
+    def get(self, minute, default=None):
+        """Return the rate for a minute, or default - the hot path, so an int minute skips _index() and Mapping.get's exception."""
+        if type(minute) is int:
+            index = minute - self.start
+            if 0 <= index < len(self.rates):
+                return self.rates[index]
+            return default
+        index = self._index(minute)
+        return self.rates[index] if index >= 0 else default
+
+    def __contains__(self, minute):
+        """True when the minute is held."""
+        if type(minute) is int:
+            return 0 <= minute - self.start < len(self.rates)
+        return self._index(minute) >= 0
+
+    def minutes(self):
+        """The minutes held, in iteration order."""
+        end = self.start + len(self.rates)
+        return range(end - 1, self.start - 1, -1) if self.descending else range(self.start, end)
+
+    def __iter__(self):
+        """Iterate the minutes, ascending unless the series is descending."""
+        return iter(self.minutes())
+
+    def __len__(self):
+        """Return the number of minutes held."""
+        return len(self.rates)
+
+    def __repr__(self):
+        """Show the series as the dict it stands for."""
+        return repr(self.to_dict())
+
+    def to_dict(self):
+        """Return a new plain minute -> rate dict holding the same data, in the same order."""
+        if self.descending:
+            return {minute: self.rates[minute - self.start] for minute in self.minutes()}
+        return dict(zip(range(self.start, self.start + len(self.rates)), self.rates))
+
+    @classmethod
+    def pack(cls, data):
+        """
+        Return PackedRates holding `data` if that is exactly representable: a dict of consecutive, ascending
+        int minutes to float rates. Anything else (gaps, other types, empty, free session lists) is returned unchanged.
+        """
+        if not isinstance(data, dict) or not data:
+            return data
+        expected = next(iter(data))
+        start = expected
+        values = array.array("d")
+        for minute, rate in data.items():
+            if type(minute) is not int or type(rate) is not float or minute != expected:
+                return data
+            values.append(rate)
+            expected += 1
+        return cls(start, values)
+
+    @classmethod
+    def from_descending(cls, last_minute, values):
+        """
+        Hold a series built from its last minute back: values[i] is the rate for minute last_minute - i.
+
+        Returns descending PackedRates, which iterate in that same order, when every value is a float, and
+        otherwise the dict {last_minute - i: values[i]} the series would have been built as.
+        """
+        if values and all(type(value) is float for value in values):
+            return cls(last_minute - len(values) + 1, array.array("d", reversed(values)), descending=True)
+        return {last_minute - index: value for index, value in enumerate(values)}
+
+    @classmethod
+    def pack_copy(cls, data):
+        """
+        Return an independent copy of the dict `data`: packed if pack() can hold it, otherwise data.copy().
+        For a snapshot of a dict that goes on being changed, without building a dict copy only to pack it.
+        """
+        packed = cls.pack(data)
+        return data.copy() if packed is data else packed
+
+    @staticmethod
+    def unpack(data):
+        """Return `data` as a plain dict if it is PackedRates, otherwise return it as it is."""
+        return data.to_dict() if isinstance(data, PackedRates) else data
 
 
 # Predbat member variables never included in a debug dump or served over MCP - live object

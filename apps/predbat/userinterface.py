@@ -19,7 +19,7 @@ service calls) to the appropriate handlers.
 
 import os
 from datetime import timedelta
-from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate, MinuteArray
+from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate, MinuteArray, PackedRates
 import array
 import functools
 import io
@@ -278,6 +278,10 @@ class DebugYamlDumper(yaml.Dumper):
 # dump - io_slot_log_gate was one (#5569) and is in DEBUG_EXCLUDE_LIST for that reason.
 DebugYamlDumper.add_representer(tuple, lambda dumper, value: dumper.represent_list(list(value)))
 
+# A packed rate series is written as the minute -> rate dict it stands for, so a dump reads exactly as it did
+# when these series were dicts, and loads with plain YAML tooling and on an older Predbat
+DebugYamlDumper.add_representer(PackedRates, lambda dumper, value: dumper.represent_dict(value.to_dict()))
+
 
 def represent_numpy_as_plain(dumper, value):
     """
@@ -440,6 +444,9 @@ def debug_value_lines(value, path_ids):
     if scalar is not None:
         return scalar, []
     kind = type(value)
+    if kind is PackedRates:
+        # Written as the plain minute -> rate dict it stands for, as DebugYamlDumper's representer writes it
+        return debug_value_lines(value.to_dict(), path_ids)
     if kind is MinuteArray and set(value.__dict__) == {"_data"}:
         # Written as yaml.dump writes it, so the replay loader rebuilds the same MinuteArray
         inline, below = debug_value_lines(value._data, path_ids)
@@ -524,6 +531,9 @@ def dump_debug_yaml(debug, stream):
     Anything else in a key (another object, numpy values, a cycle, an unusual dict key) sends the whole key
     through yaml.dump as before. Neither shares anchors between top-level keys, so an object that two keys
     hold is written out twice rather than aliased; within a key the direct writer writes it out each time.
+
+    A packed rate series (PackedRates) is written as the minute -> rate dict it stands for, by either path, so the
+    dump reads exactly as it did when those series were dicts.
     """
     dumper = functools.partial(DebugYamlDumper, anchor_ids=itertools.count(1))
     for key in sorted(debug):

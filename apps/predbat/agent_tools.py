@@ -22,6 +22,7 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict
 from utils import (
+    PackedRates,
     SECRET_MASK,
     parse_yaml_path,
     resolve_nested_yaml_value,
@@ -1129,6 +1130,8 @@ class PredbatTools:
                     continue
                 if key in ("args", "args_from_apps_yaml"):
                     value = mask_secret_args(value)
+                # A packed rate series is described and returned as the dict it stands for
+                value = PackedRates.unpack(value)
 
                 fits, safe, size = measure_state_value(value, max_bytes)
                 if not fits:

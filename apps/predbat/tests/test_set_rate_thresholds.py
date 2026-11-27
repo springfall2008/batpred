@@ -1250,7 +1250,7 @@ def test_fetch_snapshots_are_taken_in_the_right_order(my_predbat):
     saving_minutes = find("self.rate_import_saving_minutes = {minute for minute, tag", "the rate_import_saving_minutes snapshot")
     basic = find("import_rates, self.rate_import_pre_saving = self.apply_rate_overrides(", "the import overrides")
 
-    export_pre_saving = find("self.rate_export_pre_saving = self.rate_export_base.copy()", "the rate_export_pre_saving snapshot")
+    export_pre_saving = find("self.rate_export_pre_saving = export_rates.copy()", "the rate_export_pre_saving snapshot")
     export_min_base = find("self.rate_export_min_base = self.rate_minmax(self.rate_export_base)[0]", "the rate_export_min_base build")
     export_saving_slot = find("self.load_saving_slot(self.octopus_saving_slots, export_rates", "load_saving_slot() for export")
     export_axle_slot = find("load_axle_slot(self, self.axle_sessions, export_rates", "load_axle_slot() for export")

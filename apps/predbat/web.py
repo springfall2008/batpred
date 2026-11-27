@@ -84,6 +84,7 @@ from utils import (
     log_line_included,
     predbat_log_file_prev,
     is_secret_key,
+    PackedRates,
 )
 from utils import is_data_numerical, ROOT_YAML_KEY, SECRET_MASK, YAML_DUMP_WIDTH, parse_yaml_path, resolve_nested_yaml_value, update_nested_yaml_value  # noqa: F401 - re-exported: moved to utils.py, agent_tools.py/chat_tools.py must not import from web.py
 from const import (
@@ -7116,6 +7117,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         obj = getattr(obj, part)
                     else:
                         return web.Response(content_type="application/json", text=json.dumps({"success": False, "error": f"Path not found: {path}"}))
+                    # A packed rate series is browsed as the dict it stands for
+                    obj = PackedRates.unpack(obj)
 
             # Get members of the object
             members = self._get_object_members(obj, path)
@@ -7208,6 +7211,9 @@ document.addEventListener('DOMContentLoaded', function() {
         # Handle None
         if obj is None:
             return None
+
+        # A packed rate series is written as the dict it stands for
+        obj = PackedRates.unpack(obj)
 
         # Handle primitives (no circular reference check needed)
         if isinstance(obj, (str, int, float, bool)):
@@ -7343,6 +7349,8 @@ document.addEventListener('DOMContentLoaded', function() {
         """
         Analyze a value and return information about it
         """
+        # A packed rate series is shown as the dict it stands for
+        value = PackedRates.unpack(value)
         value_type = type(value).__name__
         expandable = False
         display_value = None

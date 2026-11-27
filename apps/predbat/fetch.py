@@ -33,6 +33,7 @@ from utils import (
     minute_data,
     get_now_from_cumulative,
     MinuteArray,
+    PackedRates,
     strptime_aware,
     is_entity_id,
     intelligent_device_is_charger,
@@ -1773,11 +1774,14 @@ class Fetch:
                 self.log("Warn: metric_octopus_gas is not set correctly in apps.yaml, or no energy rates can be read")
                 self.record_status(message="Warn: rate_import_gas not set correctly in apps.yaml, or no energy rates can be read", had_errors=True)
             else:
-                self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
+                rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
+                # Only ever read from here on (get, in), so held packed rather than as a dict per minute
+                self.rate_gas = PackedRates.pack(rate_gas)
                 self.rate_scan_gas(self.rate_gas, print=True)
         elif "rates_gas" in self.args:
-            self.rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "rates_gas")
-            self.rate_gas, self.rate_gas_replicated = self.rate_replicate(self.rate_gas, is_import=False, is_gas=False)
+            rate_gas = self.basic_rates(self.get_arg("rates_gas", [], indirect=False), "rates_gas")
+            rate_gas, self.rate_gas_replicated = self.rate_replicate(rate_gas, is_import=False, is_gas=False)
+            self.rate_gas = PackedRates.pack(rate_gas)
             self.rate_scan_gas(self.rate_gas, print=True)
 
         # Carbon intensity data
@@ -1863,12 +1867,19 @@ class Fetch:
 
         # futurerate data
         futurerate = FutureRate(self)
-        self.future_energy_rates_import, self.future_energy_rates_export = futurerate.futurerate_analysis(import_rates, export_rates)
+        future_energy_rates_import, future_energy_rates_export = futurerate.futurerate_analysis(import_rates, export_rates)
+        # The per-minute series below are only read once built (get, [], in, iteration), so each is held packed
+        # (PackedRates) rather than as a dict per minute; one that is not a run of float minutes stays a dict
+        self.future_energy_rates_import = PackedRates.pack(future_energy_rates_import)
+        self.future_energy_rates_export = PackedRates.pack(future_energy_rates_export)
+        del future_energy_rates_import, future_energy_rates_export
 
         # Replicate and scan import rates
         if import_rates:
             self.rate_scan(import_rates, print=False)
-            self.rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
+            rate_import_base, self.rate_min_base, self.rate_max_base = self.rate_base_min_max(import_rates)
+            self.rate_import_base = PackedRates.pack(rate_import_base)
+            del rate_import_base
             previous_surplus = self.octopus_surplus
             self.octopus_surplus = self.octopus_surplus_minutes()
             # The rates can move without the slots moving (the car's SoC changes how many half hours it needs)
@@ -1878,7 +1889,8 @@ class Fetch:
             import_rates = self.dynamic_load_car_strip_feed_rates(import_rates)
             import_rates = self.octopus_strip_withdrawn_feed_rates(import_rates, save=save)
             import_rates, self.rate_import_replicated = self.rate_replicate(import_rates, self.io_adjusted, is_import=True, use_future=True)
-            self.rate_import_no_io = import_rates.copy()
+            # A packed copy: import_rates goes on to have the dispatch slots and sessions added to it
+            self.rate_import_no_io = PackedRates.pack_copy(import_rates)
             for car_n in range(self.num_cars):
                 import_rates = self.rate_add_io_slots(car_n, import_rates, self.octopus_slots[car_n])
             # Snapshot the tariff as it stands AFTER the IOG/SmartFlex dispatch overlay but BEFORE any
@@ -1921,7 +1933,8 @@ class Fetch:
         if export_rates:
             self.rate_scan_export(export_rates, print=False)
             export_rates, self.rate_export_replicated = self.rate_replicate(export_rates, is_import=False, use_future=True)
-            self.rate_export_base = export_rates.copy()
+            # A packed copy: export_rates goes on to have the sessions and overrides added to it
+            self.rate_export_base = PackedRates.pack_copy(export_rates)
             # Built here, from the base rates, so the saving session and overrides applied below stay
             # out of it - battery_value_rate needs the tariff's own export price, not an event price
             self.rate_export_max_forward = self.rate_export_max_forward_calc(self.rate_export_base)
@@ -1929,8 +1942,8 @@ class Fetch:
             self.rate_export_min_base = self.rate_minmax(self.rate_export_base)[0]
             # Export has no IOG overlay, so the pre-saving tariff matches rate_export_base - copied
             # rather than aliased so the two can never be corrupted together by a future in-place
-            # mutation of either.
-            self.rate_export_pre_saving = self.rate_export_base.copy()
+            # mutation of either. export_rates still holds the base rates here: nothing above changes it.
+            self.rate_export_pre_saving = export_rates.copy()
             # For export tariff only load the saving session if enabled
             if self.rate_export_max > 0:
                 self.load_saving_slot(self.octopus_saving_slots, export_rates, export=True, rate_replicate=self.rate_export_replicated)
@@ -3170,6 +3183,17 @@ class Fetch:
                 rate_last_valid = True
             minute += 1
 
+        # The rates can arrive out of minute order (basic_rates() seeds today before stamping yesterday), and a
+        # filled minute is added after the ones already held, so a feed starting later than -24h or with a gap ends
+        # up out of order too. Readers index by minute, so the order only matters to PackedRates.pack(), which holds
+        # a run of ascending minutes; sort in place so it can, keeping the dict the caller passed in
+        minutes = list(rates)
+        ascending = sorted(minutes)
+        if minutes != ascending:
+            ordered = [(minute, rates[minute]) for minute in ascending]
+            rates.clear()
+            rates.update(ordered)
+
         return rates, replicated_rates
 
     def carbon_replicate(self, carbon_data):
@@ -3784,7 +3808,6 @@ class Fetch:
         Work out lowest rate from time forwards
         """
         rate_array = []
-        rate_min_forward = {}
         rate = self.rate_min
 
         for minute in range(self.forecast_minutes + self.minutes_now + 48 * 60):
@@ -3793,11 +3816,15 @@ class Fetch:
             rate_array.append(rate)
 
         # Work out the min rate going forward — O(n) right-to-left scan avoids O(n²) slice allocations
+        end_minute = self.forecast_minutes + 24 * 60 + self.minutes_now
         running_min = rate_array[-1] if rate_array else self.rate_min
+        forward = []
         for minute in range(len(rate_array) - 1, self.minutes_now - 1, -1):
             running_min = min(running_min, rate_array[minute])
-            if minute < self.forecast_minutes + 24 * 60 + self.minutes_now:
-                rate_min_forward[minute] = running_min
+            if minute < end_minute:
+                forward.append(running_min)
+        # Held packed, last minute first as it was built; only read from here on (get, [])
+        rate_min_forward = PackedRates.from_descending(end_minute - 1, forward)
 
         self.log("Rate min forward looking: now {}{} at end of forecast {}{}".format(dp2(rate_min_forward[self.minutes_now]), self.currency_symbols[1], dp2(rate_min_forward[self.forecast_minutes]), self.currency_symbols[1]))
 
@@ -4024,7 +4051,6 @@ class Fetch:
         cannot sell a single kWh.
         """
         rate_array = []
-        rate_export_max_forward = {}
         rate = 0.0
 
         for minute in range(self.forecast_minutes + self.minutes_now + 48 * 60):
@@ -4033,13 +4059,16 @@ class Fetch:
             rate_array.append(rate)
 
         # Work out the max rate going forward — O(n) right-to-left scan avoids O(n²) slice allocations
+        end_minute = self.forecast_minutes + 24 * 60 + self.minutes_now
         running_max = rate_array[-1] if rate_array else 0.0
+        forward = []
         for minute in range(len(rate_array) - 1, self.minutes_now - 1, -1):
             running_max = max(running_max, rate_array[minute])
-            if minute < self.forecast_minutes + 24 * 60 + self.minutes_now:
-                rate_export_max_forward[minute] = running_max
+            if minute < end_minute:
+                forward.append(running_max)
 
-        return rate_export_max_forward
+        # Held packed, last minute first as it was built; only read from here on (get)
+        return PackedRates.from_descending(end_minute - 1, forward)
 
     def rate_scan_gas(self, rates, print=True):
         """
