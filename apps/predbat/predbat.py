@@ -1535,9 +1535,6 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
         # Calculate the new plan (or re-use existing)
         recompute = self.calculate_plan(recompute=recompute)
-        # The search is over, so its memoised results are dead weight for the rest of the cycle
-        if getattr(self, "prediction", None) is not None:
-            self.prediction.release_caches()
 
         # Persist the plan so it can be restored immediately on next startup, if a recompute or an expired head window changed it
         if self.plan_valid:

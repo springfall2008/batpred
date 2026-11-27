@@ -7,7 +7,7 @@
 # pylint: disable=consider-using-f-string
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
-"""Tests for Prediction.release_caches, which update_pred calls once the plan search is over.
+"""Tests for Prediction.release_caches, which calculate_plan calls once the plan search is over.
 
 The caches are a memo of simulations, so dropping them must leave every later answer unchanged: a run after the
 release simulates again and has to agree with the result the memo held.
@@ -19,6 +19,9 @@ from const import EXPORT_MODE_IDLE
 from utils import pack_export_limit
 from tests.test_infra import reset_inverter, reset_rates
 
+# The debug case test_calculate_plan_releases_the_caches replans
+PLAN_CASE = "cases/predbat_debug_agile1.yaml"
+
 
 def run_prediction_release_caches_tests(my_predbat):
     """Run the release_caches tests"""
@@ -27,6 +30,7 @@ def run_prediction_release_caches_tests(my_predbat):
     failed |= test_results_after_release_match_the_cached_ones(my_predbat)
     failed |= test_release_empties_the_export_limit_buffers(my_predbat)
     failed |= test_release_on_a_prediction_without_base(my_predbat)
+    failed |= test_calculate_plan_releases_the_caches()
     return failed
 
 
@@ -125,6 +129,65 @@ def test_release_on_a_prediction_without_base(my_predbat):
         failed = True
     if getattr(prediction, "prediction_cache", None) != {}:
         print("ERROR: release_caches did not leave an empty prediction_cache")
+        failed = True
+    if not failed:
+        print("PASS")
+    return failed
+
+
+def test_calculate_plan_releases_the_caches():
+    """A real calculate_plan releases the search's caches itself, once, after the search has filled them.
+
+    The release sits at the end of calculate_plan so that every caller is covered (the cycle's own plan, the recompute
+    of an aged plan, compare and the annual run); the tests above only drive release_caches directly, so without this
+    one the call could be dropped with everything still passing.
+    """
+    print("**** test_calculate_plan_releases_the_caches ****")
+    failed = False
+
+    # read_debug_yaml reconfigures the instance wholesale, so replan on a throwaway one rather than leaving the
+    # shared fixture holding this debug case for every test that runs after
+    from unit_test import create_predbat
+
+    my_predbat = create_predbat()
+    reset_inverter(my_predbat)
+    my_predbat.read_debug_yaml(PLAN_CASE)
+    my_predbat.config_root = "./"
+    my_predbat.save_restore_dir = "./"
+    my_predbat.load_user_config()
+    my_predbat.args["threads"] = 0
+    my_predbat.debug_enable = False
+    my_predbat.plan_valid = False
+
+    releases = []
+    real_release = Prediction.release_caches
+
+    def recording(self):
+        """Note which Prediction is released and how much its memo held at that moment, then release it"""
+        releases.append((self, len(self.prediction_cache)))
+        return real_release(self)
+
+    Prediction.release_caches = recording
+    try:
+        my_predbat.calculate_plan(recompute=True, publish=False)
+    finally:
+        Prediction.release_caches = real_release
+
+    prediction = my_predbat.prediction
+    if len(releases) != 1:
+        print("ERROR: calculate_plan should release the search caches exactly once, it did so {} times".format(len(releases)))
+        failed = True
+    elif releases[0][0] is not prediction:
+        print("ERROR: calculate_plan released a Prediction other than the one it planned with")
+        failed = True
+    elif not releases[0][1]:
+        print("ERROR: the memo was empty when it was released, so the search did not fill it and this test proves nothing")
+        failed = True
+    if prediction.prediction_cache or prediction.prediction_cache_export_end or prediction.trial_memo:
+        print("ERROR: calculate_plan returned still holding cache {} export_end {} trial_memo {}".format(len(prediction.prediction_cache), len(prediction.prediction_cache_export_end), len(prediction.trial_memo)))
+        failed = True
+    if prediction_kernel._EXPORT_LIMIT_BUFFER_CACHE:
+        print("ERROR: calculate_plan returned still holding {} export-limit buffers".format(len(prediction_kernel._EXPORT_LIMIT_BUFFER_CACHE)))
         failed = True
     if not failed:
         print("PASS")

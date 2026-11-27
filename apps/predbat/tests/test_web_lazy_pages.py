@@ -17,7 +17,9 @@ import os
 import subprocess
 import sys
 
-from web import LazyPage, YAML
+from aiohttp import web as aiohttp_web
+
+from web import LazyPage, WebInterface, YAML
 
 # Modules that importing web (and predbat, debug_history, download) must no longer pull in
 DEFERRED_MODULES = ["web_chat", "web_annual", "annual", "chat", "chat_tools", "agent_tools", "predheat", "ruamel", "tarfile", "web_helper"]
@@ -162,6 +164,54 @@ def test_web_lazy_pages_routes(my_predbat):
     return failed
 
 
+class RecordingPage:
+    """Stands in front of a LazyPage while routes are registered, noting every handler name the registration asks for."""
+
+    def __init__(self, lazy):
+        """Keep the lazy page and start with no names"""
+        self._lazy = lazy
+        self._names = []
+
+    def __getattr__(self, name):
+        """Note the name, then answer as the lazy page would"""
+        if name.startswith("_"):
+            raise AttributeError(name)
+        self._names.append(name)
+        return getattr(self._lazy, name)
+
+
+def test_web_lazy_pages_handlers_exist(my_predbat):
+    """
+    Every handler the annual and chat routes name is a real coroutine method of the page it will be built from.
+
+    LazyPage hands back a wrapper for any html_* name without building the page, so a renamed or misspelled handler
+    no longer fails when the web server starts - it would first show as a 500 on that route. This check stands in
+    for the start-up failure.
+    """
+    failed = False
+    web_interface = WebInterface(my_predbat, web_port=5056)
+    for label, attribute, register in (("annual", "annual_page", web_interface._register_annual_routes), ("chat", "chat_page", web_interface._register_chat_routes)):
+        lazy = getattr(web_interface, attribute)
+        recorder = RecordingPage(lazy)
+        setattr(web_interface, attribute, recorder)
+        try:
+            register(aiohttp_web.Application())
+        finally:
+            setattr(web_interface, attribute, lazy)
+        if lazy.loaded():
+            print("ERROR: registering the {} routes built the page, which should wait for its first request".format(label))
+            failed = True
+        if not recorder._names:
+            print("ERROR: registering the {} routes asked the page for no handlers, so this test checks nothing".format(label))
+            failed = True
+        page = lazy.get()
+        for name in recorder._names:
+            if not inspect.iscoroutinefunction(getattr(page, name, None)):
+                print("ERROR: the {} routes name handler {}, which {} does not have as a coroutine method".format(label, name, type(page).__name__))
+                failed = True
+    return failed
+
+
 def run_web_lazy_pages_tests(my_predbat):
     """
     Run every lazy web page test
@@ -171,4 +221,5 @@ def run_web_lazy_pages_tests(my_predbat):
     failed |= test_web_lazy_pages_yaml(my_predbat)
     failed |= test_web_lazy_pages_web_helper(my_predbat)
     failed |= test_web_lazy_pages_routes(my_predbat)
+    failed |= test_web_lazy_pages_handlers_exist(my_predbat)
     return failed
