@@ -20,6 +20,7 @@ Alertfeed
 allclose
 alphaess
 am2
+andrewmusty
 anker
 annualform
 Anson
@@ -77,6 +78,7 @@ Bitwarden
 BLAS
 boostable
 Bottlecap
+bpinto
 brickatius
 britkat1980
 bwignore
@@ -171,6 +173,7 @@ desync
 desynced
 devcontainer
 devcontainers
+dewet
 dexport
 deye
 deyecloud
@@ -184,6 +187,7 @@ Disf
 diverter
 dlimit
 dlopen
+dmacwalter
 dnoregion
 docstrings
 DONT
@@ -264,10 +268,12 @@ feedin
 fentry
 figsize
 finaliser
+findall
 Fingerbot
 firstparty
 flextras
 fline
+fllash
 FLOMASTA
 fontsize
 fontweight
@@ -313,6 +319,7 @@ gndean
 gnueabihf
 GOELEC
 goldens
+goodwe
 gridcharge
 gridcode
 gridcolor
@@ -356,6 +363,7 @@ hultenvp
 husforbrukning
 hvac
 hypervolt
+IAMMETER
 iboost
 idag
 idef
@@ -441,6 +449,7 @@ luxpowertek
 luxpython
 malloc
 mallopt
+markbw
 markdownlint
 matplotlib
 maximise
@@ -477,8 +486,10 @@ misdetecting
 misdetection
 mispairing
 Mixergy
+mkaiser
 mkdocs
 mktemp
+mletenay
 mlugg
 Modbus
 mogons
@@ -512,6 +523,7 @@ nearr
 nemotron
 NESO
 newtok
+njhcarroll
 njpwerner
 nobat
 nocharge
@@ -586,6 +598,7 @@ poinv
 popv
 postdata
 powercontrolmode
+Powerflex
 powerline
 Powerwall
 ppdetails
@@ -622,6 +635,7 @@ pwindow
 pwr
 pyjwt
 pylint
+Pylontech
 pymyenergi
 pypi
 pyproject
@@ -655,6 +669,7 @@ repr
 resetmidnight
 resultid
 resultmid
+retested
 retryable
 reweight
 reweighted
@@ -688,7 +703,9 @@ setpoints
 setstate
 SFMB
 sg05lp1
+SGSH
 sharex
+shelldor
 showlegend
 SIGALRM
 sigcloud
@@ -729,6 +746,7 @@ Southwell
 sparkline
 spki
 springfall
+ssson
 starthour
 startminute
 startswith
@@ -746,6 +764,7 @@ suback
 subclassing
 submessage
 substep
+Sungrow
 sunspec
 sunsynk
 supabase
@@ -868,6 +887,7 @@ workstream
 workstreams
 worktree
 worktrees
+woutervg
 writeonly
 wrongsha
 WRONLY
@@ -879,6 +899,7 @@ xlabel
 xlim
 xload
 xrtkq
+Xset
 xtest
 xticks
 xxabcdefyy
