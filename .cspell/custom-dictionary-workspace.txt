@@ -36,6 +36,7 @@ appsyaml
 argname
 armhf
 armv
+ascontiguousarray
 ASHP
 asn
 asname
@@ -789,6 +790,7 @@ timestr
 timezone
 tmpfs
 tmrw
+tobytes
 tojson
 topbar
 tottime
