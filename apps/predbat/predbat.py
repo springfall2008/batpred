@@ -100,7 +100,6 @@ from utils import (
     export_limits_from_stored,
     next_aligned_run,
 )
-from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
 from stromligning import Stromligning
@@ -2669,6 +2668,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Predheat
         predheat = self.args.get("predheat", {})
         if predheat:
+            # Imported here so an install without PredHeat configured never loads the module
+            from predheat import PredHeat
+
             self.predheat = PredHeat(self)
             self.predheat.initialize()
 
