@@ -21,7 +21,6 @@ filesystem-dependent than the feature it is capturing snapshots of.
 
 import datetime
 import io
-import tarfile
 
 STORAGE_MODULE = "debug_history"
 INDEX_NAME = "snapshots_index"
@@ -285,6 +284,8 @@ def build_archive(named_snapshots):
     (load_all_snapshots) first and hands the already-loaded text here, so this half is
     trivially testable without an event loop or a fake storage backend.
     """
+    import tarfile  # only the one-click archive download needs it
+
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
         for filename, yaml_text in named_snapshots:
