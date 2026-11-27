@@ -91,7 +91,8 @@
 // Parity 22 (car cancel branch): the car cancel branch's parity 21 merged with main's parity 20.
 // Parity 21 to 23 (main): the battery rate grids - each step's charge and discharge rate from a rate grid curve row.
 // Parity 24: the car cancel branch's parity 22 merged with main's parity 23.
-#define PK_PARITY_REVISION 24
+// Parity 25: iBoost limits per mode - import limits gate the charging-linked boost, export limits excess-solar diversion, both plain solar diversion (#4473).
+#define PK_PARITY_REVISION 25
 #define PK_MAX_CARS 8
 #define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
@@ -1261,26 +1262,28 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         }
 
         // iBoost - prediction.py:704-760
-        bool iboost_rate_okay = true;
+        // Import limits gate what the diverter takes instead of importing, export limits what it takes instead of exporting (#4473)
+        bool iboost_import_okay = true;
+        bool iboost_export_okay = true;
         double iboost_amount = 0;
         if (c->iboost_enable) {
             // Boost on energy rates
             if (import_rate > c->iboost_rate_threshold) {
-                iboost_rate_okay = false;
+                iboost_import_okay = false;
             }
             if (export_rate > c->iboost_rate_threshold_export) {
-                iboost_rate_okay = false;
+                iboost_export_okay = false;
             }
 
             // Boost on gas vs import/export rate
             if (c->iboost_gas && c->has_rate_gas) {
                 if (import_rate > c->gas_rate[k]) {
-                    iboost_rate_okay = false;
+                    iboost_import_okay = false;
                 }
             }
             if (c->iboost_gas_export && c->has_rate_gas) {
                 if (export_rate > c->gas_rate[k]) {
-                    iboost_rate_okay = false;
+                    iboost_export_okay = false;
                 }
             }
 
@@ -1291,7 +1294,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             }
 
             // iBoost based on Predbat charging - prediction.py:735-738
-            if (c->iboost_charging && iboost_rate_okay && iboost_today_kwh < c->iboost_max_energy) {
+            if (c->iboost_charging && iboost_import_okay && iboost_today_kwh < c->iboost_max_energy) {
                 if (charge_window_active) {
                     iboost_amount = std::min(c->iboost_max_power * step, std::max(c->iboost_max_energy - iboost_today_kwh, 0.0));
                 }
@@ -1312,7 +1315,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
             // iBoost solar diversion model - prediction.py:752-759
             if (c->iboost_solar && !c->iboost_solar_excess) {
-                if (iboost_rate_okay && iboost_today_kwh < c->iboost_max_energy && (pv_now > (c->iboost_min_power * step) && ((soc * 100.0 / soc_max) >= c->iboost_min_soc)) && (c->iboost_on_export || (export_window_n < 0))) {
+                if (iboost_import_okay && iboost_export_okay && iboost_today_kwh < c->iboost_max_energy && (pv_now > (c->iboost_min_power * step) && ((soc * 100.0 / soc_max) >= c->iboost_min_soc)) && (c->iboost_on_export || (export_window_n < 0))) {
                     const double iboost_pv_amount = std::min({pv_now, std::max(c->iboost_max_power * step - iboost_amount, 0.0), std::max(c->iboost_max_energy - iboost_today_kwh - iboost_amount, 0.0)});
                     pv_now -= iboost_pv_amount;
                     iboost_amount += iboost_pv_amount;
@@ -1667,7 +1670,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 if (diff < 0) {
                     excess = -diff;
                 }
-                if (iboost_rate_okay && iboost_today_kwh < c->iboost_max_energy && (excess > (c->iboost_min_power * step) && ((soc * 100.0 / soc_max) >= c->iboost_min_soc)) && (c->iboost_on_export || (export_window_n < 0))) {
+                if (iboost_export_okay && iboost_today_kwh < c->iboost_max_energy && (excess > (c->iboost_min_power * step) && ((soc * 100.0 / soc_max) >= c->iboost_min_soc)) && (c->iboost_on_export || (export_window_n < 0))) {
                     const double iboost_pv_amount = std::min({excess, std::max(c->iboost_max_power * step - iboost_amount, 0.0), std::max(c->iboost_max_energy - iboost_today_kwh - iboost_amount, 0.0)});
                     load_yesterday += iboost_pv_amount;
                     iboost_amount += iboost_pv_amount;
