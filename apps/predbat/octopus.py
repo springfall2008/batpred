@@ -80,12 +80,15 @@ DATE_TIME_STR_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 # since both would otherwise look the same (falsy) to callers.
 _ATTRIBUTE_UNSET = object()
 
-# Where the URL cache (rate series and free sessions per URL) is kept between restarts. It used to be a YAML
-# mapping with one line per minute under "url_cache"; that file is no longer read and expires and is removed
-# by the storage cleanup. JSON with each run of minutes held as a start and a list loads without building a
-# YAML node per value, which took tens of MB at startup and left that memory with the process.
+# Where the URL cache (rate series and free sessions per URL) is kept between restarts. JSON with each run of
+# minutes held as a start and a list loads without building a YAML node per value, which took tens of MB at
+# startup and left that memory with the process. Earlier versions wrote a YAML mapping with one line per minute
+# under OCTOPUS_URL_CACHE_LEGACY_NAME. That file is read only when there is no JSON cache, which is the first
+# start after upgrading, and is saved straight away as JSON. It stops loading 8 hours after the old version last
+# saved it, and the storage cleanup then removes it.
 OCTOPUS_URL_CACHE_MODULE = "octopus_free"
 OCTOPUS_URL_CACHE_NAME = "url_cache_json"
+OCTOPUS_URL_CACHE_LEGACY_NAME = "url_cache"
 
 
 class PackedUrlCacheRates:
@@ -231,6 +234,26 @@ def decode_octopus_url_cache(encoded, log=None, packed=False):
         except (AttributeError, KeyError, TypeError, ValueError) as e:
             if log:
                 log("Warn: Octopus: Skipping unreadable URL cache entry for {}: {}".format(url, e))
+    return cache
+
+
+def adopt_legacy_octopus_url_cache(legacy, log=None):
+    """
+    Return the in-memory URL cache for one loaded from the YAML file earlier versions wrote
+    YAML already gives stamp and midnight_utc back as datetimes, so each entry keeps them and only its data is
+    packed, as the JSON cache holds it. An entry without a datetime stamp, or whose midnight_utc is set but is not a
+    datetime, is skipped (and logged).
+    """
+    cache = {}
+    if not isinstance(legacy, dict):
+        return cache
+    for url, entry in legacy.items():
+        midnight_utc = entry.get("midnight_utc") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict) or not isinstance(entry.get("stamp"), datetime) or (midnight_utc is not None and not isinstance(midnight_utc, datetime)):
+            if log:
+                log("Warn: Octopus: Skipping unreadable entry for {} in the old URL cache".format(url))
+            continue
+        cache[url] = {"stamp": entry["stamp"], "midnight_utc": midnight_utc, "data": PackedUrlCacheRates.pack_copy(entry.get("data"))}
     return cache
 
 
@@ -3679,6 +3702,15 @@ class Octopus:
             if data:
                 self.octopus_url_cache = decode_octopus_url_cache(data, log=self.log, packed=True)
                 self.log("Octopus: Loaded URL cache from storage ({} entries)".format(len(self.octopus_url_cache)))
+                return
+            # No JSON cache: on the first start after upgrading, fall back once on the YAML file the old version wrote,
+            # so a failed first download still has rates. Saving it as JSON straight away means it is never read again.
+            legacy = run_async(storage.load(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_LEGACY_NAME))
+            if legacy:
+                self.octopus_url_cache = adopt_legacy_octopus_url_cache(legacy, log=self.log)
+                self.log("Octopus: Loaded URL cache from the previous version's YAML file ({} entries), saving it as JSON".format(len(self.octopus_url_cache)))
+                if self.octopus_url_cache:
+                    self._save_octopus_url_cache_to_storage()
         except Exception as e:
             self.log("Warn: Octopus: Failed to load URL cache from storage: {}".format(e))
 
