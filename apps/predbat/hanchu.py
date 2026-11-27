@@ -647,6 +647,11 @@ class HanchuAPI(ComponentBase):
         generator = payload.get(HANCHU_GENERATOR_FIELD)
         if generator is not None:
             detail["has_generator"] = str(generator).strip().lower() in ("true", "1")
+        # Kept for the discovery record's hybrid value (build_discovery()), read by the same test as the PV
+        # fold above. Only a payload that carries the field moves it, so a poll without it keeps what was seen.
+        ac_coupled = payload.get(HANCHU_AC_COUPLED_FIELD)
+        if ac_coupled is not None:
+            detail["ac_coupled"] = self._as_float(ac_coupled, 0) == 1
         self._apply_model(sn, payload.get(HANCHU_MODEL_FIELD))
         self._apply_device_status(sn, payload.get(HANCHU_DEVICE_STATUS_FIELD))
         return True
@@ -1258,9 +1263,13 @@ class HanchuAPI(ComponentBase):
           info.model, only where getDeviceStatus's devModel is one HANCHU_MODELS names.
         - the work mode: it changes, and refresh_discovery() compares whole reports, so a changing
           value would re-file the report every time it moved.
-        - an AC-coupled verdict. bypMeterSwitch does distinguish the two (HANCHU_AC_COUPLED_FIELD),
-          but it is only used to fold AC-coupled solar into pv_power and is not kept, and the
-          record's composition vocabulary has been confirmed against no Hanchu system.
+        - a composition other than "direct": the record's composition vocabulary has been confirmed
+          against no Hanchu system.
+
+        hybrid comes from bypMeterSwitch (HANCHU_AC_COUPLED_FIELD), kept by _apply_status_payload() as
+        device_detail's ac_coupled: False when it says AC coupled (1), True when the field is sent with
+        any other value, left out when the device has never sent it. The discovery coordinator sets
+        inverter_hybrid from it.
 
         "solar" is claimed only once PV has actually been observed, which is why it keys off a
         reported pv_power rather than off a nameplate the API never gives.
@@ -1291,6 +1300,7 @@ class HanchuAPI(ComponentBase):
 
             account_ids = {"station": detail["station_id"]} if detail.get("station_id") else {}
             info = {"model": detail["model"]} if detail.get("model") else {}
+            ac_coupled = detail.get("ac_coupled")
 
             inverters.append(
                 inverter_record(
@@ -1304,6 +1314,7 @@ class HanchuAPI(ComponentBase):
                     info=info,
                     ratings=ratings,
                     entities=self._discovery_entities(sn),
+                    hybrid=(not ac_coupled) if isinstance(ac_coupled, bool) else None,
                 )
             )
         return {"automatic": self.automatic, "inverters": inverters}

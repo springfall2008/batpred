@@ -139,6 +139,8 @@ _TIP:_ Make sure you set the losses correctly, they are decimal percentages, so 
 
 **switch.predbat_inverter_hybrid** Set to On (the default) if you have a hybrid inverter so no inverter losses will be applied for DC charging from Solar generation.
 You should set it to Off if you have an AC-coupled battery and inverter losses will be applied when the battery is charging from solar.
+With an inverter component's automatic configuration on (for example `ge_cloud_automatic`, `givtcp_automatic`, `solis_automatic` or `alphaess_automatic`), Predbat's discovery may set this switch for you from what the inverter reports - see [The hybrid setting](discovery-catalogue.md#the-hybrid-setting).
+With an automatic inverter component - which includes GivTCP REST, on by default - discovery sets the switch and a value set by hand is put back on the next changed report and after every restart; set [`inverter_hybrid_override`](apps-yaml.md#inverter_hybrid_override) to manage the switch yourself.
 NB: This switch only applies when Predbat is modelling solar charging.
 All grid charging (regardless of inverter type) has to undergo an AC to DC conversion so the inverter_loss % will be included in Predbat's model when charging from the grid.
 

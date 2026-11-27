@@ -1648,6 +1648,12 @@ class EnphaseAPI(ComponentBase):
 
         Never reported: the site name, the login email or user id, timezone and country.
 
+        hybrid is False when the site's BatteryConfig siteSettings flags report AC batteries - hasEncharge (IQ
+        Battery / Encharge) or hasAcb (the older AC Battery) set True: Enphase batteries carry their own
+        microinverters on the AC side, so such a site is AC coupled. Otherwise it is left out. The flags are site
+        configuration, refreshed on the settings tier and kept through a failed read, so the value does not move
+        between polls. The discovery coordinator sets inverter_hybrid from it.
+
         Returns None until the site's battery capacity and the Envoy serial are known.
         """
         if not self.sites:
@@ -1659,11 +1665,15 @@ class EnphaseAPI(ComponentBase):
         if not envoy:
             return None
         batteries = [str(battery.get("serial_num")) for battery in self.battery_status[site_id].get("batteries") or [] if battery.get("serial_num")]
+        site_flags = self.site_settings.get(site_id)
+        site_flags = site_flags if isinstance(site_flags, dict) else {}
+        ac_batteries = site_flags.get("hasEncharge") is True or site_flags.get("hasAcb") is True
         record = inverter_record(
             "enphase:{}".format(envoy),
             inverter_type="EnphaseCloud",
             composition="gateway",
             serials=batteries,
+            hybrid=False if ac_batteries else None,
             functions=["solar", "battery"],
             capabilities=dict(ENPHASE_CAPABILITIES),
             hardware_ids={"serial": str(envoy)},

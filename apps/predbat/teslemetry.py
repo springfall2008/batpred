@@ -192,8 +192,9 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             tbc_control: teslemetry_tbc_control, on by default (GH#5186). When set, evaluate_schedule and
                 sync_tariff take the signal-tariff / Time-Based Control path - see GH#4892; False opts
                 back into the real-rate tariff and reserve-driven charging.
-            hybrid: teslemetry_hybrid - True/False forces Predbat's inverter_hybrid setting; unset (None) lets
-                automatic_config decide from the Powerwall model (on for a Powerwall 3, off otherwise).
+            hybrid: teslemetry_hybrid - True/False forces the discovery record's hybrid value, from which discovery
+                sets Predbat's inverter_hybrid; unset (None) decides from the Powerwall model (on for a Powerwall 3,
+                off otherwise) - see _discovery_hybrid().
             battery_export: teslemetry_battery_export - True/False forces whether the Powerwall is treated as
                 permitted to export battery energy; unset (None) decides from site_info's net_meter_mode.
             auth_method: "api_key" (default, static Teslemetry token) or "oauth" (direct Fleet API; token
@@ -239,6 +240,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.battery_export_permitted = True  # Until site_info says otherwise, set by update_battery_export_permitted
         self._battery_export_warned = False
         self._battery_export_reported = None  # The value last logged, so the Info line appears on each change only
+        self._hybrid_reported = None  # The hybrid value last logged by _log_hybrid_reason(), for the same reason
         self._last_export_permission_check = 0
         self.battery_type = None  # components.battery_type from site_info: solar_powerwall (PW3) or ac_powerwall (PW2)
         self.powerwall_3 = False  # battery_type solar_powerwall AND a "Powerwall 3" gateway, set by fetch_site_info
@@ -524,6 +526,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.battery_type = components.get("battery_type")
         # battery_type alone is not trusted to mean a Powerwall 3 - a Powerwall+ might report solar_powerwall too
         self.powerwall_3 = self.battery_type == "solar_powerwall" and any(gateway.get("part_name") == "Powerwall 3" for gateway in components.get("gateways") or [])
+        self._log_hybrid_reason()
         self.update_battery_export_permitted(components)
         nameplate_wh = response.get("nameplate_energy", 0)
         gateway_kwh = self.gateway_energy_kwh(response)
@@ -1139,6 +1142,37 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                 entities[limit_arg] = sensor(limit_arg, "W")
         return entities
 
+    def _discovery_hybrid(self):
+        """Whether the site is a hybrid inverter, as the record's hybrid value - always True or False, never unknown.
+
+        A Powerwall 3 (battery_type solar_powerwall with a "Powerwall 3" gateway) is a hybrid inverter: solar on its
+        own DC inputs shares the one AC nameplate with the battery, so inverter_limit must cap them combined. Every
+        other Powerwall is AC coupled - with hybrid on, get_total_inverted() would fold a separately inverted array
+        into the Powerwall's AC rating, inventing clipping and the export windows that "recover" it - so it is False
+        there, for solar_powerwall without a Powerwall 3 gateway (a Powerwall+ may report that too, GH#5276), and when
+        the model is unknown, as the AC-coupled Powerwall is the common case (GH#5275). teslemetry_hybrid overrides
+        either way, e.g. for a Powerwall 3 beside an existing string inverter, which site_info cannot tell apart.
+        """
+        return self._hybrid_reason()[0]
+
+    def _hybrid_reason(self):
+        """Return (hybrid, reason): _discovery_hybrid()'s value and the words that explain it in the log."""
+        if self.hybrid_override is not None:
+            return self.hybrid_override, "teslemetry_hybrid in apps.yaml"
+        if self.powerwall_3:
+            return True, "auto: Powerwall 3"
+        if self.battery_type == "solar_powerwall":
+            return False, "auto: solar_powerwall without a Powerwall 3 gateway"
+        return False, "auto: AC-coupled Powerwall" if self.battery_type else "auto: Powerwall model unknown"
+
+    def _log_hybrid_reason(self):
+        """Log the record's hybrid value and its reason once, and again only if site_info changes it."""
+        hybrid, reason = self._hybrid_reason()
+        if hybrid == self._hybrid_reported:
+            return
+        self._hybrid_reported = hybrid
+        self.log("Info: Teslemetry reports inverter_hybrid {} to discovery ({})".format("on" if hybrid else "off", reason))
+
     def build_discovery(self):
         """
         Describe the Tesla energy site for the discovery catalogue.
@@ -1149,6 +1183,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         gateway only meters - so its functions are battery only; a Powerwall 3 is a hybrid inverter with
         its own solar inputs. The energy site id is an account identifier and goes in account_ids,
         published readable like every identifier.
+
+        hybrid is _discovery_hybrid(): teslemetry_hybrid when set, else True for a Powerwall 3 and False otherwise,
+        the model unknown included. The discovery coordinator sets inverter_hybrid from it; Teslemetry no longer
+        writes that switch itself.
 
         Ratings are the figures site_info reports (nameplate energy and power, the configured export
         limit). inverter_limit_charge is derived per battery unit and the battery_count capacity
@@ -1185,6 +1223,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             info=info,
             ratings=dict(self.site_ratings or {}),
             entities=self._discovery_entities(),
+            hybrid=self._discovery_hybrid(),
         )
         return {"automatic": self.automatic, "inverters": [record]}
 
@@ -1202,8 +1241,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         and soc_max use set_arg_auto(overwrite=False), so a value the user set in apps.yaml wins over the
         device-derived one (GH#5275).
 
-        Unlike the args above, inverter_hybrid is one of Predbat's OWN config switches rather than a
-        component entity, so it is written through set_state_external (see below).
+        inverter_hybrid, one of Predbat's OWN config switches, is not written here: the discovery record
+        reports hybrid (_discovery_hybrid()) and the discovery coordinator sets the switch from it.
         """
         self.log("Info: Teslemetry automatic configuration - wiring Predbat to the TESLA inverter type")
         self.set_arg("inverter_type", ["TESLA"])
@@ -1240,25 +1279,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         # Published by fetch_site_info before automatic_config runs. Read every cycle by the inverter, so a
         # later re-check that lifts the restriction needs no re-wiring (GH#5710).
         self.set_arg("battery_export_permitted", [self.entity("battery_export_permitted", domain="binary_sensor")])
-        # A Powerwall 3 (battery_type solar_powerwall with a "Powerwall 3" gateway) is a hybrid inverter: solar on its own DC inputs shares
-        # the one AC nameplate with the battery, so inverter_limit must cap them combined. Every other
-        # Powerwall is AC coupled - with hybrid on, get_total_inverted() would fold a separately inverted
-        # array into the Powerwall's AC rating, inventing clipping and the export windows that "recover" it,
-        # so it stays off there and when the model is unknown. teslemetry_hybrid overrides either way, e.g.
-        # for a Powerwall 3 beside an existing string inverter, which site_info cannot tell apart (GH#5275).
-        # set_state_external is the write path that updates the matching CONFIG_ITEMS value; a plain
-        # state write would move the entity without changing the setting Predbat plans with.
-        hybrid_entity = "switch.{}_inverter_hybrid".format(self.prefix)
-        if self.hybrid_override is not None:
-            hybrid, reason = self.hybrid_override, "teslemetry_hybrid in apps.yaml"
-        elif self.powerwall_3:
-            hybrid, reason = True, "auto: Powerwall 3"
-        elif self.battery_type == "solar_powerwall":
-            hybrid, reason = False, "auto: solar_powerwall without a Powerwall 3 gateway"
-        else:
-            hybrid, reason = False, "auto: AC-coupled Powerwall" if self.battery_type else "auto: Powerwall model unknown"
-        self.log("Info: Teslemetry setting {} {} ({})".format(hybrid_entity, "on" if hybrid else "off", reason))
-        await self.set_state_external(hybrid_entity, hybrid)
+        # inverter_hybrid is not set here: the record reports hybrid (_discovery_hybrid()) and the discovery
+        # coordinator sets the switch from it
 
     @writes
     async def schedule_event(self, entity_id, value):

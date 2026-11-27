@@ -2845,6 +2845,7 @@ APPS_SCHEMA = {
     "inverter_mode": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters", "blank_entries": True},
     "inverter_time": {"type": "sensor_list", "sensor_type": "string", "entries": "num_inverters"},
     "inverter_type": {"type": "string_list", "entries": "num_inverters"},
+    "inverter_hybrid_override": {"type": "boolean|boolean_list"},
     "charge_start_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
     "charge_end_time": {"type": "sensor_list", "sensor_type": "string", "modify": True, "entries": "num_inverters"},
     "charge_limit": {"type": "sensor_list", "sensor_type": "float", "modify": True, "entries": "num_inverters"},

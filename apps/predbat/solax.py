@@ -284,6 +284,14 @@ SOLAX_DEVICE_MODEL_RESIDENTIAL = {
 # https://www.solaxpower.com/uploads/file/solax-x1-mini-g4-plus-series-datasheet-en.pdf
 SOLAX_PV_ONLY_MODELS_RESIDENTIAL = {4, 16, 18, 22, 26, 27, 28, 29, 44}
 
+# Residential inverter model codes whose name in SOLAX_DEVICE_MODEL_RESIDENTIAL states how the battery is coupled,
+# for the discovery record's hybrid value. AC-coupled battery inverters: X1-AC (9) and A1-AC-G2 (20). Hybrids: every
+# name carrying Hybrid or HYB - X-Hybrid (2), X1-Hybrid-G3 (3), X3-Hybrid-G1/G2 (5), A1-Hybrid (10), X3-Hybrid-G4 (14),
+# X1-Hybrid-G4 (15), A1-HYB-G2 (19), X3-HYB-G4 PRO (32), A1-HYB-G3 (47) and X1-Hybrid-LV (102). Any other code names
+# no coupling (X1-IES, X3-ULT, ...), so it says nothing.
+SOLAX_AC_COUPLED_MODELS_RESIDENTIAL = {9, 20}
+SOLAX_HYBRID_MODELS_RESIDENTIAL = {2, 3, 5, 10, 14, 15, 19, 32, 47, 102}
+
 # Device model mapping for Commercial & Industrial (businessType=4)
 SOLAX_DEVICE_MODEL_COMMERCIAL = {
     1: {  # Inverter
@@ -464,6 +472,32 @@ class SolaxAPI(ComponentBase):
                 plants.append(plant_id)
         return plants
 
+    def _discovery_hybrid(self, plant):
+        """The plant record's hybrid value from its inverters' residential model codes, or None when none states it.
+
+        Each inverter states only what its own model code names (SOLAX_AC_COUPLED_MODELS_RESIDENTIAL False,
+        SOLAX_HYBRID_MODELS_RESIDENTIAL True, any other code nothing). SolaX gives one record per plant, so the
+        plant's verdicts combine as the coordinator combines records: any AC-coupled unit -> False, else any
+        hybrid -> True, else None. A device on the commercial table (businessType 4) says nothing, as its codes
+        mean other models. The model code is static device info, so the value does not move between polls.
+        """
+        verdicts = set()
+        for device_sn in self.plant_inverters.get(plant, []):
+            device = self.device_info.get(device_sn, {})
+            # Older cached records omit businessType; the normal discovery path is residential.
+            if as_int(device.get("businessType", BUSINESS_TYPE_RESIDENTIAL)) != BUSINESS_TYPE_RESIDENTIAL:
+                continue
+            code = as_int(device.get("deviceModel"), None)
+            if code in SOLAX_AC_COUPLED_MODELS_RESIDENTIAL:
+                verdicts.add(False)
+            elif code in SOLAX_HYBRID_MODELS_RESIDENTIAL:
+                verdicts.add(True)
+        if False in verdicts:
+            return False
+        if True in verdicts:
+            return True
+        return None
+
     def _discovery_entities(self, plant, first):
         """Every setting automatic_config() binds for one plant, as discovery entity descriptors.
 
@@ -551,6 +585,9 @@ class SolaxAPI(ComponentBase):
 
         Never reported: the plant name, the dongle (registerNo) serial and the API credentials.
 
+        hybrid comes from the plant's inverter model codes (_discovery_hybrid()): False for an AC-coupled model,
+        True for a Hybrid model, left out otherwise. The discovery coordinator sets inverter_hybrid from it.
+
         Returns None when no plant has both an inverter and a battery.
         """
         plants = self._discovery_plants()
@@ -572,6 +609,7 @@ class SolaxAPI(ComponentBase):
                     inverter_type="SolaxCloud",
                     composition="direct",
                     serials=serials if len(serials) > 1 else None,
+                    hybrid=self._discovery_hybrid(plant),
                     functions=["solar", "battery"],
                     capabilities=dict(SOLAX_CAPABILITIES),
                     hardware_ids={"serial": serials[0]},

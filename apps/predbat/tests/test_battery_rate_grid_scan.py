@@ -89,6 +89,8 @@ def _make(args=None):
     my_predbat.args["battery_power"] = ["sensor.battery_power"]
     my_predbat.args["battery_power_invert"] = [False]
     my_predbat.args["grid_power"] = ["sensor.grid_power"]
+    # A slot without an inverter_type is an error, not an implied GE
+    my_predbat.args["inverter_type"] = ["GE"]
     my_predbat.args["battery_temperature_history"] = TEMP_SENSOR
     my_predbat.battery_loss = 1.0
     my_predbat.battery_rate_max_scaling = 1.0
@@ -117,6 +119,7 @@ def _make_two(battery_power):
     my_predbat.args["discharge_rate"] = ["number.discharge_rate", "number.discharge_rate_1"]
     my_predbat.args["battery_power"] = battery_power
     my_predbat.args["battery_power_invert"] = [False, False]
+    my_predbat.args["inverter_type"] = ["GE", "GE"]
     inv1 = Inverter(my_predbat, 1)
     inv1.battery_rate_max_charge = RATED_W / 60000
     inv1.battery_rate_max_discharge = RATED_W / 60000

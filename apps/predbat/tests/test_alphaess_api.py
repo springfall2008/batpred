@@ -563,7 +563,7 @@ def test_alphaess_ppv_detail_all_null_signal():
         ("all zero - a hybrid at night, must NOT read as AC-coupled", {"ppv1": 0.0, "ppv2": 0.0, "ppv3": 0.0, "ppv4": 0.0}, False),
         ("some non-zero - daytime generation", {"ppv1": 340.0, "ppv2": 0.0, "ppv3": 0.0, "ppv4": 0.0}, False),
         ("mixed null and zero - not EVERY string is null", {"ppv1": None, "ppv2": 0.0, "ppv3": None, "ppv4": None}, False),
-        ("ppvDetail is an empty dict", {}, False),
+        ("ppvDetail is an empty dict - says nothing about the strings", {}, None),
     )
     for name, detail, expect in cases:
         payload = dict(base, ppvDetail=detail)
@@ -573,12 +573,16 @@ def test_alphaess_ppv_detail_all_null_signal():
             print(f"ERROR: {name}: ppv_detail_all_null {actual} != {expect}")
             failed = True
 
-    # ppvDetail absent from the payload entirely - the bool(pv_detail) guard.
+    # ppvDetail absent from the payload entirely: undecided (None), never False, which
+    # detect_ac_coupled() would read as "DC strings reported" and call a hybrid.
     payload = dict(base)
     client._apply_live_payload("AL70", payload)
     actual = client.device_values.get("AL70", {}).get("ppv_detail_all_null")
-    if actual is not False:
-        print(f"ERROR: ppvDetail absent: ppv_detail_all_null {actual} != False")
+    if actual is not None:
+        print(f"ERROR: ppvDetail absent: ppv_detail_all_null {actual} != None")
+        failed = True
+    if client.detect_ac_coupled("AL70") is not None:
+        print(f"ERROR: ppvDetail absent must leave the verdict undecided, got {client.detect_ac_coupled('AL70')}")
         failed = True
 
     assert not failed, "test_alphaess_ppv_detail_all_null_signal"

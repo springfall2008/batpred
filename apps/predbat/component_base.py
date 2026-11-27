@@ -336,6 +336,20 @@ class ComponentBase(ABC):
 
         Either way the decision is per key, and neither message repeats for the same key.
         """
+        user_configured = self.note_apps_yaml_override(arg, value, overwrite)
+        if user_configured and not overwrite:
+            # Deliberately not calling set_arg() at all - the user's own value is already in self.args
+            return None
+        return self.set_arg(arg, value)
+
+    def note_apps_yaml_override(self, arg, value, overwrite):
+        """
+        Whether the user's apps.yaml sets arg to something other than the auto-discovered value, logging that once per key.
+
+        The note set_arg_auto() gives: with overwrite, that auto-discovery wins; without, that the user's value is kept.
+        For a caller that decides which value wins some other way (GE Cloud, whose kept settings the discovery coordinator
+        keeps), so the user sees the same line and it shares set_arg_auto()'s once-per-key record. Writes nothing.
+        """
         raw_args = getattr(self.base, "args_from_apps_yaml", None) or {}
         raw_value = raw_args.get(arg)
         user_configured = raw_value is not None and raw_value != value
@@ -346,10 +360,14 @@ class ComponentBase(ABC):
                 self.log(f"Note: apps.yaml sets '{arg}: {raw_value}' but auto-discovery is using '{value}' instead - auto-discovery wins for this setting; remove the apps.yaml entry to avoid this message")
             else:
                 self.log(f"Info: apps.yaml sets '{arg}: {raw_value}' - keeping your apps.yaml setting rather than auto-discovering '{value}'")
-        if user_configured and not overwrite:
-            # Deliberately not calling set_arg() at all - the user's own value is already in self.args
-            return None
-        return self.set_arg(arg, value)
+        return user_configured
+
+    def apps_yaml_value(self, arg):
+        """The raw value the user's apps.yaml gives arg - the snapshot set_arg_auto() decides by - or None.
+
+        None when apps.yaml does not set it. Read only.
+        """
+        return self.base.args_from_apps_yaml.get(arg)
 
     def get_arg(self, arg, default=None, indirect=True, combine=False, attribute=None, index=None, domain=None, can_override=True, required_unit=None):
         """
@@ -377,6 +395,42 @@ class ComponentBase(ABC):
         coordinator = getattr(components, "coordinator", None) if components else None
         if coordinator:
             coordinator.report(self.component_name or type(self).__name__, report)
+
+    def _coordinator(self):
+        """The discovery coordinator, or None when there is none: a standalone CLI harness runs a component against a MockBase with no registry."""
+        components = self.base.components
+        return components.coordinator if components else None
+
+    def discovery_inverter_records(self, source):
+        """A copy of the validated inverter records source last reported to discovery, in report order (see Coordinator.inverter_records()).
+
+        [] when there is no coordinator (a standalone CLI harness with no CoordinatorHarness).
+        """
+        coordinator = self._coordinator()
+        if not coordinator:
+            return []
+        return coordinator.inverter_records(source)
+
+    def discovery_slot_map(self):
+        """A copy of the coordinator's {device_id: slot} from its last automatic configuration pass (see Coordinator.slot_map).
+
+        {} when there is no coordinator, as for discovery_inverter_records(), or before any pass has given a slot.
+        """
+        coordinator = self._coordinator()
+        if not coordinator:
+            return {}
+        return dict(coordinator.slot_map)
+
+    def allow_automatic_config(self, skip_settings=(), keep_user_settings=(), include_pv_only=False):
+        """Ask the coordinator to configure this component's inverters; returns whether it will (see Coordinator.allow_automatic()).
+
+        False when there is no coordinator - a standalone CLI harness with no CoordinatorHarness. On False nothing
+        configures this component's inverters.
+        """
+        coordinator = self._coordinator()
+        if not coordinator:
+            return False
+        return coordinator.allow_automatic(self.component_name, skip_settings=skip_settings, keep_user_settings=keep_user_settings, include_pv_only=include_pv_only)
 
     def refresh_discovery(self):
         """Rebuild this component's discovery report and file it if it has moved on.

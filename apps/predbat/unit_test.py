@@ -371,6 +371,7 @@ from tests.test_rate_replicate_missing_slots import test_rate_replicate
 from tests.test_find_charge_window import test_find_charge_window
 from tests.test_fetch_pv_mid_cycle import test_fetch_pv_mid_cycle
 from tests.test_fetch_no_load_source import test_fetch_no_load_source
+from tests.test_fetch_ge_cloud_load_source import test_fetch_ge_cloud_load_source
 from tests.test_set_rate_thresholds import run_set_rate_thresholds_tests
 from tests.test_random_scenarios import (
     generate_scenarios,
@@ -412,8 +413,10 @@ from tests.test_car_cancel import run_car_cancel_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
 from tests.test_coordinator import test_coordinator_all
+from tests.test_bindings import test_bindings_all
 from tests.test_discovery_contract import run_discovery_contract_tests
 from tests.test_discovery_catalogue import test_discovery_catalogue_all
+from tests.test_discovery_automatic import test_discovery_automatic_all
 from tests.test_mock_base import test_mock_base_all
 from tests.test_solis import run_solis_tests
 from tests.test_load_ml import test_load_ml
@@ -602,6 +605,8 @@ def create_predbat():
     my_predbat.ha_interface.base = my_predbat
     my_predbat.ha_interface.history_enable = False
     my_predbat.auto_config()
+    # inverter_type no longer defaults to GE, so name it once for every test that never set one
+    my_predbat.args["inverter_type"] = ["GE"]
     my_predbat.load_user_config()
     my_predbat.fetch_config_options()
     my_predbat.forecast_minutes = 24 * 60
@@ -827,6 +832,7 @@ def main():
         ("find_charge_window", test_find_charge_window, "Find charge window gap handling tests", False),
         ("fetch_pv_mid_cycle", test_fetch_pv_mid_cycle, "PV forecasts not empty part way through fetch_sensor_data (#4317)", False),
         ("fetch_no_load_source", test_fetch_no_load_source, "No load source raises LoadSourceMissing with the right status (#5092)", False),
+        ("fetch_ge_cloud_load_source", test_fetch_ge_cloud_load_source, "Behind a GivEnergy EMS ge_cloud_data falls back to load_today", False),
         ("set_rate_thresholds", run_set_rate_thresholds_tests, "Rate threshold saving-session exclusion tests (GH#5050)", False),
         ("find_charge_rate", test_find_charge_rate, "Find charge rate tests", False),
         ("find_charge_rate_pv", test_find_charge_rate_pv_overlap, "Find charge rate with PV overlap", False),
@@ -1008,8 +1014,10 @@ def main():
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),
         ("coordinator", test_coordinator_all, "Discovery catalogue coordinator tests", False),
+        ("bindings", test_bindings_all, "Discovery bindings: manual slots, allocation and replay", False),
         ("discovery_contract", run_discovery_contract_tests, "Discovery reporter contract checks", False),
         ("discovery_catalogue", test_discovery_catalogue_all, "End-to-end discovery catalogue assembly and the observe-only invariant", False),
+        ("discovery_automatic", test_discovery_automatic_all, "Discovery automatic inverter configuration: triggers and GE Cloud acceptance", False),
         # Shared MockBase tests
         ("mock_base", test_mock_base_all, "Shared CLI-harness MockBase tests", False),
         # Solis Cloud API unit tests

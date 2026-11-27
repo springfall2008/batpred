@@ -36,6 +36,29 @@ from utils import dp2, load_apps_yaml
 # A decimal kW rating in a Fox deviceType, e.g. the 3.7 in H1-3.7-E-G2-WL or the 10.5 in KH10.5 (see FoxAPI.capacity_watts)
 FOX_DEVICE_TYPE_KW_RATING = re.compile(r"(\d+\.\d+)")
 
+# The model ranges a Fox deviceType or productType names, for the discovery record's hybrid value: the AC-coupled
+# AC1/AC3 range, and the H1/H3/KH hybrids. A range prefix must not run on into another digit (H10 is not H1) or, for
+# KH, a letter; any other model (S1 string inverters, AIO all-in-ones, ...) says nothing
+FOX_AC_COUPLED_TYPE_PATTERN = re.compile(r"^AC[13](?!\d)", re.IGNORECASE)
+FOX_HYBRID_TYPE_PATTERN = re.compile(r"^(?:H[13](?!\d)|KH(?![A-Z]))", re.IGNORECASE)
+
+
+def fox_model_hybrid(detail):
+    """The discovery hybrid value a Fox device detail's deviceType and productType state, or None.
+
+    Each field states False for an AC-coupled range, True for a hybrid range, nothing otherwise. The value is the
+    one they agree on; a disagreement, or neither naming a known range, gives None - unknown is always safe.
+    """
+    verdicts = set()
+    for field in ("deviceType", "productType"):
+        value = str(detail.get(field) or "").strip()
+        if FOX_AC_COUPLED_TYPE_PATTERN.match(value):
+            verdicts.add(False)
+        elif FOX_HYBRID_TYPE_PATTERN.match(value):
+            verdicts.add(True)
+    return verdicts.pop() if len(verdicts) == 1 else None
+
+
 # Define TIME_FORMAT_HA locally to avoid dependency issues
 TIME_FORMAT_HA = "%Y-%m-%dT%H:%M:%S%z"
 
@@ -2623,6 +2646,11 @@ class FoxAPI(ComponentBase, OAuthMixin):
         A third-party generator this inverter meters is topology, not something the inverter can
         do, so it is a flag.
 
+        hybrid comes from the device detail's deviceType and productType (fox_model_hybrid()): False
+        for the AC-coupled AC1/AC3 range, True for the H1/H3/KH hybrids, left out otherwise or when
+        the two disagree. Both are static device detail, kept through a failed detail read, so the
+        value does not move between polls. The discovery coordinator sets inverter_hybrid from it.
+
         ratings are figures the device reports, keyed by Predbat setting name. inverter_limit goes
         through capacity_watts(), never capacity * 1000: Fox reports a fractional-kW model's capacity
         truncated (a KH10.5 says 10, an H1-3.7 says 3), and capacity_watts() is what restores the fraction. For a
@@ -2733,6 +2761,7 @@ class FoxAPI(ComponentBase, OAuthMixin):
                     "fox:{}".format(serial),
                     inverter_type="FoxCloud" if drives_it else None,
                     composition="direct",
+                    hybrid=fox_model_hybrid(detail),
                     functions=functions,
                     capabilities=FOX_CAPABILITIES if drives_it else None,
                     flags=flags,
