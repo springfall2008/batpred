@@ -18,6 +18,7 @@ import math
 from datetime import datetime
 from const import MINUTE_WATT
 from utils import dp0, dp2
+from axle import load_axle_slot
 import yaml
 import copy
 
@@ -320,6 +321,9 @@ class Compare:
             # which must be put back as an earlier tariff in the run may have replaced it.
             if import_replaced:
                 pb.rate_min_forward = pb.rate_min_forward_calc(pb.rate_import)
+                # Axle events come from the VPP, not the energy supplier, so they apply to whatever tariff is
+                # compared (#4042). A side left on the live rates already carries them.
+                self.apply_axle_sessions(pb.rate_import, export=False)
             else:
                 pb.rate_min_forward = dict(live_saving.get("import_min_forward", pb.rate_min_forward))
             if "rates_import_override" in tariff:
@@ -338,6 +342,8 @@ class Compare:
             if export_replaced:
                 pb.rate_export_max_forward = pb.rate_export_max_forward_calc(pb.rate_export)
                 pb.rate_export_min_base = pb.rate_minmax(pb.rate_export)[0]
+                # See the import side (#4042)
+                self.apply_axle_sessions(pb.rate_export, export=True)
             else:
                 pb.rate_export_max_forward = dict(live_saving.get("export_max_forward", pb.rate_export_max_forward))
                 pb.rate_export_min_base = live_saving.get("export_min_base", pb.rate_export_min_base)
@@ -364,16 +370,54 @@ class Compare:
         # cycle's events, so it is checked against the live tariff without them - otherwise an active saving
         # session or dispatch makes the user's own tariff look different (#5180). A side left on the live
         # rates is checked against them as they are, so only this tariff's override can make it differ.
+        # The Axle sessions applied above to a side this tariff supplied are events too, so those minutes are
+        # checked at the tariff's price before them (#4042)
         import_match = rate_import_match if (import_replaced and rate_import_match) else rate_import_base
         export_match = rate_export_match if (export_replaced and rate_export_match) else rate_export_base
+        import_check = pb.rate_import
+        export_check = pb.rate_export
+        if import_replaced and pb.rate_import_saving_minutes:
+            import_check = dict(pb.rate_import)
+            import_check.update({minute: pb.rate_import_pre_saving[minute] for minute in pb.rate_import_saving_minutes if minute in pb.rate_import_pre_saving})
+        if export_replaced and pb.rate_export_saving_minutes:
+            export_check = dict(pb.rate_export)
+            export_check.update({minute: pb.rate_export_pre_saving[minute] for minute in pb.rate_export_saving_minutes if minute in pb.rate_export_pre_saving})
         for minute in range(pb.minutes_now, pb.forecast_minutes + pb.minutes_now):
-            if dp2(pb.rate_import.get(minute, 0)) != dp2(import_match.get(minute, 0)):
-                self.log("Compare rate import is different, minute {} changed from {} to {}".format(minute, import_match.get(minute, 0), pb.rate_import.get(minute, 0)))
+            if dp2(import_check.get(minute, 0)) != dp2(import_match.get(minute, 0)):
+                self.log("Compare rate import is different, minute {} changed from {} to {}".format(minute, import_match.get(minute, 0), import_check.get(minute, 0)))
                 return False
-            if dp2(pb.rate_export.get(minute, 0)) != dp2(export_match.get(minute, 0)):
-                self.log("Compare rate export is different, minute {} changed from {} to {}".format(minute, export_match.get(minute, 0), pb.rate_export.get(minute, 0)))
+            if dp2(export_check.get(minute, 0)) != dp2(export_match.get(minute, 0)):
+                self.log("Compare rate export is different, minute {} changed from {} to {}".format(minute, export_match.get(minute, 0), export_check.get(minute, 0)))
                 return False
         return True
+
+    def apply_axle_sessions(self, rates, export):
+        """
+        Stamp the live cycle's Axle VPP sessions onto a side of the compared tariff that supplied its own rates,
+        as fetch_sensor_data() does for the live tariff: the pre-session snapshot and saving-minute set are
+        rebuilt from this tariff's rates so set_rate_thresholds() and any override treat those minutes as events.
+
+        Mirrors the session blocks in fetch_sensor_data() (fetch.py, import and export sides): snapshot
+        pre_saving before load_axle_slot() mutates the rates in place, then freeze the "saving"-tagged minutes
+        before the caller's rates_*_override can tag them again (GH#5050). Keep the two in step. fetch_sensor_data()
+        takes its snapshot before the Octopus saving/free sessions as well, which the compared tariff never
+        carries, so only the Axle step is repeated here. As apply_rate_overrides() does on the live path, the
+        snapshot is then reduced to the session minutes (pre_saving_for_session_minutes()), the only ones read.
+        """
+        pb = self.pb
+        if not pb.axle_sessions:
+            return
+        replicated = pb.rate_export_replicated if export else pb.rate_import_replicated
+        pre_saving = dict(rates)
+        load_axle_slot(pb, pb.axle_sessions, rates, export=export, rate_replicate=replicated)
+        saving_minutes = {minute for minute, tag in replicated.items() if tag == "saving"}
+        pre_saving = pb.pre_saving_for_session_minutes(pre_saving, saving_minutes)
+        if export:
+            pb.rate_export_saving_minutes = saving_minutes
+            pb.rate_export_pre_saving = pre_saving
+        else:
+            pb.rate_import_saving_minutes = saving_minutes
+            pb.rate_import_pre_saving = pre_saving
 
     def is_live_published(self, rates, live_rates):
         """
