@@ -1996,7 +1996,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             # The coordinator configures args when it has this component's report. File it now rather than at the
             # end of the cycle: run() reads the control registers next, and finds them by the entities args name
             self.refresh_discovery()
-        elif not getattr(self, "automatic_unavailable_warned", False):
+        elif not self.automatic_unavailable_warned:
             self.automatic_unavailable_warned = True
             self.log("Warn: GECloud: automatic configuration needs the discovery coordinator, which is not available - no inverter is configured")
 
@@ -2034,15 +2034,9 @@ class GECloudDirect(ComponentBase, CarChargerControl):
         same way now that the coordinator keeps that value (keep_user_settings): only where apps.yaml sets the
         setting to something other than what GE Cloud would bind, and sharing set_arg_auto's once-per-key record.
         """
-        warned = getattr(self.base, "apps_yaml_override_warned", None)
         for setting in GE_CLOUD_KEEP_USER_SETTINGS:
-            if setting not in bound:
-                continue
-            raw_value = self.apps_yaml_value(setting)
-            if raw_value is None or raw_value == bound[setting] or warned is None or setting in warned:
-                continue
-            warned.add(setting)
-            self.log(f"Info: apps.yaml sets '{setting}: {raw_value}' - keeping your apps.yaml setting rather than auto-discovering '{bound[setting]}'")
+            if setting in bound:
+                self.note_apps_yaml_override(setting, bound[setting], overwrite=False)
 
     def _legacy_bindings(self, devices):
         """
@@ -2315,11 +2309,8 @@ class GECloudDirect(ComponentBase, CarChargerControl):
 
     def _log_check_once(self, line):
         """Log one check_automatic_config() line the first time it is seen in this process."""
-        logged = getattr(self, "automatic_check_logged", None)
-        if logged is None:
-            logged = self.automatic_check_logged = set()
-        if line not in logged:
-            logged.add(line)
+        if line not in self.automatic_check_logged:
+            self.automatic_check_logged.add(line)
             self.log(line)
 
     def _check_automatic_config(self, slots):
@@ -2329,7 +2320,7 @@ class GECloudDirect(ComponentBase, CarChargerControl):
             return []
         legacy, facts = self._legacy_plan(devices)
         slots = list(slots)
-        args = getattr(self, "args", None) or {}
+        args = self.args
         legacy_types = legacy.get("inverter_type") or []
         warnings = []
         known = []

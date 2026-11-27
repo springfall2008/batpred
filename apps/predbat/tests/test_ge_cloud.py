@@ -115,6 +115,9 @@ class MockGECloudDirect(GECloudDirect):
         self.site_inverters = []
         self.site_stamp = None
         self.site_fetch_stamp = None
+        # As GECloudDirect.initialize() sets them
+        self.automatic_check_logged = set()
+        self.automatic_unavailable_warned = False
 
         class MockHAInterface:
             def __init__(self):
@@ -135,6 +138,8 @@ class MockGECloudDirect(GECloudDirect):
                 # whether auto-discovery may replace a setting
                 self.args_from_apps_yaml = {}
                 self.apps_yaml_override_warned = set()
+                # As PredBat before its registry is built: no discovery coordinator
+                self.components = None
 
         self.base = MockBase()
 
@@ -6908,10 +6913,16 @@ def _records_hybrid(ge):
     """
 
     class _ThinBase:
-        """A base with a log only: the coordinator stores reports but cannot configure or write."""
+        """A base with a log, no apps.yaml settings and no HA interface yet: the coordinator stores reports and writes nothing."""
+
+        ha_interface = None
 
         def log(self, message):
             """Discard the coordinator's log."""
+
+        def get_arg(self, name, default=None, **kwargs):
+            """No apps.yaml settings: every read gives its default."""
+            return default
 
     coordinator = Coordinator(_ThinBase())
     coordinator.report("GECloud", dict(ge.build_discovery(), automatic=True))
@@ -10171,7 +10182,8 @@ class _CloudDataBase:
             self.coordinator = coordinator
 
     def __init__(self):
-        """A coordinator on this base, logging nowhere: it stores reports but cannot configure or write."""
+        """A coordinator on this base, logging nowhere, with no HA interface yet: it stores reports and writes nothing."""
+        self.ha_interface = None
         self.components = self._Components(Coordinator(self))
 
     def log(self, message):

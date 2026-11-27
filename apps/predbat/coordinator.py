@@ -478,21 +478,13 @@ class Coordinator:
         if changed:
             self.apply_hybrid()
 
-    def _can_configure(self):
-        """Whether the base has what a configure pass needs: the apps.yaml snapshot, args and set_arg. False on a thin base (the bare test doubles)."""
-        base = self.base
-        return isinstance(getattr(base, "args_from_apps_yaml", None), dict) and isinstance(getattr(base, "args", None), dict) and callable(getattr(base, "set_arg", None))
-
     def allow_automatic(self, component_name, skip_settings=(), keep_user_settings=(), include_pv_only=False):
-        """Opt a component in to automatic configuration by the coordinator; returns whether the coordinator will configure it.
+        """Opt a component in to automatic configuration by the coordinator; returns True, as the coordinator will configure it.
 
-        The options are stored under the component's name and a pass runs at once. False, recording nothing, only
-        on a base a pass cannot configure (no apps.yaml snapshot, args or set_arg). skip_settings are left exactly
+        The options are stored under the component's name and a pass runs at once. skip_settings are left exactly
         as args hold them; keep_user_settings yield to an apps.yaml value at the slot; include_pv_only lets records
         with no inverter_type contribute pv_power and pv_today.
         """
-        if not self._can_configure():
-            return False
         options = {"skip_settings": frozenset(skip_settings or ()), "keep_user_settings": frozenset(keep_user_settings or ()), "include_pv_only": bool(include_pv_only)}
         with self.lock:
             self.automatic[component_name] = options
@@ -502,8 +494,7 @@ class Coordinator:
     def configure(self):
         """One automatic configuration pass: build the bindings, replay what differs into args, then check. Never raises.
 
-        A no-op until a component has opted in (allow_automatic()), and on a base without the apps.yaml snapshot,
-        args or set_arg. Runs on whichever thread triggered it, under configure_lock for the whole pass. A pass
+        A no-op until a component has opted in (allow_automatic()). Runs on whichever thread triggered it, under configure_lock for the whole pass. A pass
         with nothing new writes nothing and logs nothing.
 
         The first pass keeps a baseline: a copy of the live binding settings and inverter_type, before anything is
@@ -545,10 +536,7 @@ class Coordinator:
         a boolean nor a list is ignored, and so is a list entry that is not a boolean or None (it becomes None), each
         with one Warn line naming the key.
         """
-        get_arg = getattr(self.base, "get_arg", None)
-        if not callable(get_arg):
-            return None
-        raw = get_arg(HYBRID_OVERRIDE_KEY, None)
+        raw = self.base.get_arg(HYBRID_OVERRIDE_KEY, None)
         if hybrid_override_unset(raw):
             return None
         if isinstance(raw, (list, tuple)):
@@ -627,16 +615,14 @@ class Coordinator:
     def apply_hybrid(self):
         """Set Predbat's inverter_hybrid switch from hybrid_decision() when it differs from the setting and from a write still pending. Never raises.
 
-        Does nothing on a thin base (no ha_interface, get_arg or prefix). The write goes through
-        ha_interface.set_state_external() - the path a component uses, which changes the setting the planner reads -
-        and is scheduled, never awaited here (see _schedule_hybrid_write()). The value is held as pending while the
-        write is in flight - until it completes, or the setting is seen to equal it - so a second changed report
+        Does nothing until the base has an HA interface (ha_interface is None until the HA component starts). The
+        write goes through ha_interface.set_state_external() - the path a component uses, which changes the setting the
+        planner reads - and is scheduled, never awaited here (see _schedule_hybrid_write()). The value is held as pending
+        while the write is in flight - until it completes, or the setting is seen to equal it - so a second changed report
         before the write lands does not send it again, while a user's later change is corrected on the next one.
         """
         base = self.base
-        ha_interface = getattr(base, "ha_interface", None)
-        prefix = getattr(base, "prefix", None)
-        if ha_interface is None or not callable(getattr(ha_interface, "set_state_external", None)) or not callable(getattr(base, "get_arg", None)) or not prefix:
+        if base.ha_interface is None:
             return
         scheduled = None
         try:
@@ -656,7 +642,7 @@ class Coordinator:
             else:
                 reason = "{} reports it is not a hybrid inverter" if len(device_ids) == 1 else "{} report they are not hybrid inverters"
             self.log("Coordinator: inverter_hybrid set {} - {}".format("on" if value else "off", reason.format(", ".join(device_ids))))
-            self._schedule_hybrid_write("switch.{}_inverter_hybrid".format(prefix), value)
+            self._schedule_hybrid_write("switch.{}_inverter_hybrid".format(base.prefix), value)
         except Exception as e:
             self._hybrid_write_failed(e, scheduled)
 
@@ -714,11 +700,8 @@ class Coordinator:
 
     def _configure_pass(self, before):
         """The body of configure(): build, replay, then log and check what changed. `before` collects each written setting's prior value."""
-        base = self.base
-        snapshot = getattr(base, "args_from_apps_yaml", None)
-        args = getattr(base, "args", None)
-        if not isinstance(snapshot, dict) or not isinstance(args, dict) or not callable(getattr(base, "set_arg", None)):
-            return
+        snapshot = self.base.args_from_apps_yaml
+        args = self.base.args
         if self.args_baseline is None:
             self.args_baseline = capture_baseline(args, self._read_arg)
             # ge_cloud_serial names slot 0's inverter, and the templates write it as {geserial} too. Expanded once, with the
@@ -760,11 +743,8 @@ class Coordinator:
 
     def _read_arg(self, setting):
         """setting as the base's get_arg reads it with {name} templates expanded: no HA lookup (indirect off), no API override; None when that read fails."""
-        get_arg = getattr(self.base, "get_arg", None)
-        if not callable(get_arg):
-            return None
         try:
-            return get_arg(setting, indirect=False, can_override=False)
+            return self.base.get_arg(setting, indirect=False, can_override=False)
         except Exception:
             return None
 
@@ -855,13 +835,13 @@ class Coordinator:
                 names.update(source["name"] for source in sources)
             elif index < len(entries) and entries[index].get("source"):
                 names.add(entries[index]["source"])
-        get_component = getattr(getattr(self.base, "components", None), "get_component", None)
-        if not callable(get_component):
+        components = self.base.components
+        if not components:
             return
         for source in sources:
             if source["name"] not in names:
                 continue
-            component = get_component(source["name"])
+            component = components.get_component(source["name"])
             checker = getattr(component, "check_automatic_config", None) if component is not None else None
             if not callable(checker):
                 continue

@@ -33,6 +33,9 @@ class _Base:
         self.args_from_apps_yaml = copy.deepcopy(apps_yaml if apps_yaml is not None else self.args)
         self.apps_yaml_override_warned = set()
         self.prefix = "predbat"
+        # As PredBat: no registry until one is built, no HA interface until the HA component starts
+        self.components = None
+        self.ha_interface = None
         self.log_messages = []
         self.set_calls = []
         self.fail_set_arg = None
@@ -679,47 +682,8 @@ def test_assemble_slots_follow_bindings():
     return 0
 
 
-class _Bare:
-    """A base with only log and args, as the standalone harnesses build."""
-
-    def __init__(self):
-        """Nothing but a log list and args."""
-        self.args = {"num_inverters": 1}
-        self.messages = []
-
-    def log(self, message):
-        """Record a log line."""
-        self.messages.append(message)
-
-
-def test_bare_base_is_inert():
-    """On a base with no get_arg, args_from_apps_yaml or components, nothing is configured and nothing raises (amendment 4)."""
-    base = _Bare()
-    coordinator = Coordinator(base)
-    assert coordinator.allow_automatic("gecloud") is False  # a pass could not configure this base, so it is not accepted
-    assert coordinator.automatic == {}
-    coordinator.report("gecloud", _report(["ce1111g111"]))
-    coordinator.configure()
-    assert base.args == {"num_inverters": 1}
-    assert not [line for line in base.messages if "failed" in line], base.messages
-    # get_arg present, but no snapshot, no set_arg and no registry: still nothing
-    base.get_arg = lambda name, default=None, **kwargs: base.args.get(name, default)
-    assert coordinator.allow_automatic("gecloud") is False
-    coordinator.report("gecloud", _report(["ce1111g111", "ce2222g222"]))
-    coordinator.configure()
-    assert base.args == {"num_inverters": 1}
-    assert coordinator.bindings is None
-    # Opted in by hand on that base, a pass still finds nothing to configure with and neither writes nor raises
-    coordinator.automatic["gecloud"] = {"skip_settings": frozenset(), "keep_user_settings": frozenset(), "include_pv_only": False}
-    coordinator.configure()
-    assert base.args == {"num_inverters": 1} and coordinator.bindings is None
-    assert not [line for line in base.messages if "failed" in line], base.messages
-    print("PASS: bare base is inert")
-    return 0
-
-
 def test_allow_automatic_config_wrapper():
-    """ComponentBase.allow_automatic_config() reaches the coordinator, and is False with no base, registry or coordinator."""
+    """ComponentBase.allow_automatic_config() reaches the coordinator, and is False with no registry (a standalone harness)."""
     from component_base import ComponentBase
 
     class _Component(ComponentBase):
@@ -730,12 +694,11 @@ def test_allow_automatic_config_wrapper():
 
     base, registry, coordinator = _setup()
     component = _Component.__new__(_Component)
-    assert component.allow_automatic_config() is False  # no base at all
     component.base = base
     component.component_name = "gecloud"
     assert component.allow_automatic_config(skip_settings=("load_today",), keep_user_settings=("inverter_mode",), include_pv_only=True) is True
     assert coordinator.automatic["gecloud"] == {"skip_settings": frozenset({"load_today"}), "keep_user_settings": frozenset({"inverter_mode"}), "include_pv_only": True}
-    component.base = _Bare()
+    component.base = _Base(args={"num_inverters": 1})  # no registry
     assert component.allow_automatic_config() is False
     print("PASS: allow_automatic_config wrapper")
     return 0
@@ -975,10 +938,6 @@ def test_hybrid_never_raises():
     assert not [line for line in base.log_messages if line.startswith("Error:")], base.log_messages
     # Scheduling itself failing is caught the same way
     base, coordinator, ha = _hybrid_setup(current=True)
-    base.prefix = None
-    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
-    assert ha.calls == [], ha.calls  # no prefix: a thin base, nothing to do
-    base.prefix = "predbat"
 
     def broken_get_arg(name, default=None, **kwargs):
         """A get_arg that fails."""
@@ -1010,17 +969,13 @@ def test_hybrid_log_line():
     return 0
 
 
-def test_hybrid_thin_base_inert():
-    """No ha_interface, get_arg or prefix: the rule does nothing and logs nothing."""
-    base = _Bare()
-    coordinator = Coordinator(base)
+def test_hybrid_waits_for_ha_interface():
+    """Before the HA component starts (ha_interface None) the rule does nothing and logs nothing."""
+    base, registry, coordinator = _setup(args={"inverter_hybrid": True})
     coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
     coordinator.apply_hybrid()
-    assert not [line for line in base.messages if "inverter_hybrid" in line], base.messages
-    base, registry, coordinator = _setup(args={"inverter_hybrid": True})  # get_arg and prefix but no ha_interface
-    coordinator.report("gecloud", _hybrid_report([("gecloud:a", False, "GEC")]))
     assert _hybrid_lines(base) == [] and coordinator.hybrid_pending is None, base.log_messages
-    print("PASS: hybrid thin base inert")
+    print("PASS: hybrid waits for ha_interface")
     return 0
 
 
@@ -1314,8 +1269,7 @@ def test_inverter_records_copy():
     records[0]["entities"]["reserve"]["entity_id"] = "changed"
     assert coordinator.reports["gecloud"]["inverters"][0]["entities"]["reserve"]["entity_id"] != "changed"
     component = _Component.__new__(_Component)
-    assert component.discovery_inverter_records("gecloud") == []  # no base at all
-    component.base = _Bare()
+    component.base = _Base(args={"num_inverters": 1})
     assert component.discovery_inverter_records("gecloud") == []  # no registry
     component.base = base
     assert [record["device_id"] for record in component.discovery_inverter_records("gecloud")] == ["gecloud:a", "gecloud:b"]
@@ -1980,7 +1934,6 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_ge_cloud_serial_expanded_once()
     failures += test_release_compacts()
     failures += test_assemble_slots_follow_bindings()
-    failures += test_bare_base_is_inert()
     failures += test_allow_automatic_config_wrapper()
     # The hybrid site rule
     failures += test_hybrid_one_false_turns_off()
@@ -1995,7 +1948,7 @@ def test_discovery_automatic_all(my_predbat=None):
     failures += test_hybrid_runs_without_opt_in()
     failures += test_hybrid_never_raises()
     failures += test_hybrid_log_line()
-    failures += test_hybrid_thin_base_inert()
+    failures += test_hybrid_waits_for_ha_interface()
     failures += test_hybrid_scheduled_from_a_running_loop()
     failures += test_hybrid_lost_value_keeps_last_known()
     failures += test_hybrid_removed_device_forgotten()
