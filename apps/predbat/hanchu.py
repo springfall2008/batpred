@@ -1493,16 +1493,34 @@ class HanchuAPI(ComponentBase):
             # Predbat writes the charge and discharge rates after its per-inverter loop with no
             # press of their own, and the zero discharge rate is what turns a charge slot into a
             # hold. A change while a write is waiting therefore restarts the wait, so it goes out
-            # with the rates rather than ahead of them (batpred#6074).
+            # with the rates rather than ahead of them (batpred#6074). With nothing waiting, a
+            # change to a device Predbat already controls starts the wait itself, rather than
+            # sitting until the next tick (batpred#6190).
             await self._hand_over_write(self._restart_pending_write(sn))
         await self.publish_schedule_settings_ha(sn)
 
     async def _restart_pending_write(self, sn):
-        """Restart sn's debounced write if one is waiting; with none waiting, leave the change for the next press or tick."""
+        """Restart sn's debounced write after a schedule change, or start one if Predbat already controls sn.
+
+        A change with no write waiting used to be left for the next press or tick. Predbat's rates
+        are such a change: it works out a low-power charge rate only once a window is running, and
+        writes it with no press, so a window armed at full power kept charging at full power until
+        the next tick - about a minute on a live HESS-HY-S-10K (batpred#6190). Starting the debounce
+        sends it about write_debounce seconds later instead.
+
+        Gated as the reconcile tick is (_reconcile_control): not before Predbat's first press, not in
+        read-only mode and not with control disabled, as this is a write the component starts
+        itself. Read-only is checked again when the timer fires (_debounced_write()), as it can be
+        turned on while the write waits. An unchanged payload is still not sent, and min_write_interval still paces
+        writes. Returns whether a debounced write is now waiting.
+        """
         if self._write_pending(sn):
             await self._schedule_write(sn)
             return True
-        return False
+        if sn not in self.control_active or self._is_read_only() or not self.control_enable:
+            return False
+        await self._schedule_write(sn)
+        return True
 
     def _write_debounce_available(self):
         """Return whether a press can be debounced: a delay is configured and the component's loop is running.
@@ -1559,6 +1577,13 @@ class HanchuAPI(ComponentBase):
         # must start its own timer rather than cancel a write that is already on its way.
         if self.write_debounce_tasks.get(sn) is asyncio.current_task():
             self.write_debounce_tasks.pop(sn, None)
+        if self._is_read_only():
+            # Read-only was turned on while this write waited out the debounce: the switch promises no
+            # writes, and the gate that armed the timer is stale by now. The change stays in the local
+            # schedule, so the reconcile tick sends it once read-only is off. apply_schedule() re-checks
+            # control_enable itself.
+            self.log("Hanchu write for {} not sent: read-only was turned on while it waited".format(sn))
+            return
         try:
             await self.apply_schedule(sn)
         except Exception as error:
