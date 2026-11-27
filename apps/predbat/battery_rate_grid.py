@@ -392,3 +392,69 @@ def clean_rate_grid_samples(data):
         if rows:
             cleaned[day] = rows
     return cleaned
+
+
+def value_runs(values):
+    """A list as runs of [value, count] for a compact log line; expand_runs() turns it back into the list."""
+    runs = []
+    for value in values:
+        if runs and runs[-1][0] == value:
+            runs[-1][1] += 1
+        else:
+            runs.append([value, 1])
+    return runs
+
+
+def expand_runs(runs):
+    """The list value_runs() was made from."""
+    return [value for value, count in runs for _ in range(count)]
+
+
+def forecast_grid_temperatures(prediction, step):
+    """
+    The battery temperature forecast as the rate grids read it: the whole degree (grid_temperature_index) at each step
+    from now, for as many steps from minute 0 as the forecast has.
+
+    rate_grid_curve() gives a reading and its degree the same curve (an exact 0 stays 0, anything else becomes a non-zero
+    whole degree that maps to itself), and the plan reads the forecast only through those curves, so a plan run on the
+    degrees is the plan run on the readings. The degrees hold one value for hours, which keeps their log line short.
+    """
+    degrees = []
+    minute = 0
+    while minute in prediction:
+        degrees.append(grid_temperature_index(prediction[minute]))
+        minute += step
+    return degrees
+
+
+def shift_grid_temperatures(degrees, offset, forecast_minutes, step):
+    """
+    A degree forecast made offset minutes ago, as the forecast {minute from now: degree} it stands for now: each step reads
+    the step made for the same moment, and steps past its end hold its last degree. Empty when there are no degrees.
+
+    The live log writes a new line whenever this would not give its current forecast, and a replay rebuilds each run's
+    forecast with it, so the two always agree.
+    """
+    if not degrees:
+        return {}
+    last = len(degrees) - 1
+    return {minute: degrees[min(max((offset + minute) // step, 0), last)] for minute in range(0, forecast_minutes, step)}
+
+
+def learned_grid_to_log(learned):
+    """A learned grid (fit_rate_grid) for a replay log line: each row as runs (value_runs), zero_row left out as it is derived."""
+    if learned is None:
+        return None
+    logged = {key: value for key, value in learned.items() if key not in ("rows", "zero_row")}
+    logged["rows"] = [value_runs(row) for row in learned["rows"]]
+    return logged
+
+
+def learned_grid_from_log(logged):
+    """The learned grid a replay log line holds (learned_grid_to_log), with zero_row derived as fit_rate_grid derives it."""
+    if logged is None:
+        return None
+    learned = dict(logged)
+    learned["rows"] = [expand_runs(row) for row in logged["rows"]]
+    learned["zero_row"] = grid_row(learned, BATTERY_RATE_GRID_UNKNOWN_TEMP)
+    return learned

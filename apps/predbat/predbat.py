@@ -1515,6 +1515,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.check_export_more_solar_effective()
         self.log_replay_state()
         self.log_replay_inverter()
+        self.log_replay_battery_temperature()
+        self.log_replay_rate_grids()
 
         # Check if we have valid import rates
         if self.rate_min == self.rate_max == 0:
