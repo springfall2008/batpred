@@ -784,7 +784,7 @@ The EV charger settings above are not affected.
 reading the inverter's settings is done one register at a time, so Predbat reads them sparingly: the registers it controls at
 startup and every 12 hours, and all the others only when it has no stored copy from the last 7 days. They are also re-read
 straight away when Predbat leaves read only mode, and when a control failure shows the inverter is not doing what Predbat asked
-(at most once every 4 hours). A setting you change in the GivEnergy app can therefore take up to 12 hours to be noticed. Set this
+(at most once every 4 hours, plus once more 30 minutes later if it is still failing). A setting you change in the GivEnergy app can therefore take up to 12 hours to be noticed. Set this
 to `true` to read every register every 10 minutes instead, as older versions did, at the cost of many more API calls.
 
 - **ge_cloud_evc_direct** - Optional, defaults to false. Set it to `true`, in place of **ge_cloud_direct**, when your inverter is
