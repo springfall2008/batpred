@@ -117,6 +117,11 @@ NETWORK_PREFIXES = (
 # (geserial is not here: it may just say "auto"; the serials themselves are read off entity names, see export())
 IDENTIFYING_KEYS = ("ha_url", "carbon_postcode", "axle_api_key", "wallbox_password", "mcp_secret", "device_id")
 
+# The LoadML training benchmark's fixture (--load-ml): the live LoadML history is copied, never a trained model, so every
+# run trains from scratch, and LoadML is switched on with its forecast as the load source
+ML_HISTORY = "predbat_ml_history.npz"
+LOAD_ML_SETTINGS = {"load_ml_enable": True, "load_ml_source": True}
+
 
 class Secret:
     """A !secret reference in the live apps.yaml. Its value is never read; any setting holding one is dropped."""
@@ -170,11 +175,12 @@ def is_dropped_setting(key):
     return key in INVERTER_KEYS or key in NETWORK_KEYS or key.startswith(INVERTER_PREFIXES) or key.startswith(NETWORK_PREFIXES) or key.endswith("_invert")
 
 
-def build_apps_yaml(template, live_args, forecast_config, totals, sizing):
+def build_apps_yaml(template, live_args, forecast_config, totals, sizing, load_ml=False):
     """Return the benchmark's apps.yaml: the live settings that are kept, under the template's.
 
     forecast_config is the neutral forecast_solar list, totals the dummy inverter's starting lifetime totals and sizing
-    its battery_size and soc_initial. Octopus is pointed at the fake account when the live config uses it.
+    its battery_size and soc_initial. Octopus is pointed at the fake account when the live config uses it. load_ml switches
+    LoadML on for the LoadML training benchmark's fixture (LOAD_ML_SETTINGS, over the template's off).
     """
     args = {key: copy.deepcopy(value) for key, value in live_args.items() if not is_dropped_setting(key) and not _holds_secret(value)}
     args.pop("forecast_solar", None)
@@ -182,6 +188,8 @@ def build_apps_yaml(template, live_args, forecast_config, totals, sizing):
     template_args = copy.deepcopy(template["pred_bat"])
     dummy = template_args.pop("dummy_inverter")
     args.update(template_args)
+    if load_ml:
+        args.update(LOAD_ML_SETTINGS)
     if "octopus_api_key" in live_args or "octopus_api_account" in live_args:
         args["octopus_api_key"] = scrub.FAKE_OCTOPUS_KEY
         args["octopus_api_account"] = scrub.FAKE_ACCOUNT
@@ -214,27 +222,61 @@ def battery_sizing(db_path, prefix):
     return {"battery_size": size, "soc_initial": soc_initial}
 
 
+def copy_ml_history(live, out, t0):
+    """Copy the live LoadML history npz into out; return {npz_sha256, npz_saved_utc} for the manifest.
+
+    LoadML shifts the saved history forward by the time since it was saved, so a history saved after T0 would be shifted
+    backwards: that raises ValueError. A missing history raises FileNotFoundError.
+    """
+    import numpy as np
+
+    source = Path(live) / ML_HISTORY
+    if not source.exists():
+        raise FileNotFoundError("no LoadML history at {}".format(source))
+    target = Path(out) / ML_HISTORY
+    shutil.copyfile(source, target)
+    with np.load(target, allow_pickle=False) as data:
+        saved_utc = datetime.fromisoformat(json.loads(str(data["metadata_json"]))["saved_utc"])
+    if saved_utc > t0:
+        raise ValueError("the LoadML history was saved at {}, after T0 {}".format(saved_utc.isoformat(), t0.isoformat()))
+    return {"npz_sha256": _sha256(target), "npz_saved_utc": saved_utc.isoformat()}
+
+
+def ml_history_metadata(out):
+    """Return the LoadML history's metadata text from a fixture directory, or None when it holds no history."""
+    path = Path(out) / ML_HISTORY
+    if not path.exists():
+        return None
+    import numpy as np
+
+    with np.load(path, allow_pickle=False) as data:
+        return str(data["metadata_json"])
+
+
 def _sha256(path):
     """Return the hex sha256 of a file."""
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def export(live, out, days, t0, strip_outputs=False):
+def export(live, out, days, t0, strip_outputs=False, load_ml=False):
     """Write the fixture for live into out (which must not exist) and return (stats, secrets, tokens).
 
     secrets are the real values known to the export and tokens the device ids read off entity names, for the leak check.
+    With load_ml the live LoadML history is copied first, just before the database snapshot, so the two are from the
+    same moment, and LoadML is switched on.
     """
     live_args = load_live_apps_text((live / "apps.yaml").read_text())
     prefix = live_args.get("prefix", "predbat")
     (out / "cache").mkdir(parents=True)
+    ml_history = copy_ml_history(live, out, t0) if load_ml else None
     with tempfile.TemporaryDirectory() as snapshot_dir:
         # A consistent local copy of the live database, which the add-on keeps writing; kept outside the fixture
         snapshot = Path(snapshot_dir) / "predbat.db"
         fixture_db.snapshot_db(live / "predbat.db", snapshot)
-        return _export_from(live, out, days, t0, live_args, prefix, snapshot, strip_outputs)
+        return _export_from(live, out, days, t0, live_args, prefix, snapshot, strip_outputs, ml_history)
 
 
-def _export_from(live, out, days, t0, live_args, prefix, snapshot, strip_outputs):
+def _export_from(live, out, days, t0, live_args, prefix, snapshot, strip_outputs, ml_history=None):
     """Finish export() from a snapshot of the live database; returns (stats, secrets, tokens)."""
     live_names = fixture_db.entity_names(snapshot)
     # Device ids inside entity names (Solax sites and serials, chargers, Octopus devices), replaced wherever they stand as
@@ -263,10 +305,12 @@ def _export_from(live, out, days, t0, live_args, prefix, snapshot, strip_outputs
     remap = fixture_db.build_remap(live_args, prefix, live_names)
     stats = fixture_db.export_db(snapshot, out / "predbat.db", t0.replace(tzinfo=None), days, remap, prefix, dropped=lambda name: name in forecast_entities, replacements=replacements, strip_outputs=strip_outputs, tokens=tokens)
 
-    apps = build_apps_yaml(load_template(), live_args, forecast_config, stats["totals"], battery_sizing(out / "predbat.db", prefix))
+    apps = build_apps_yaml(load_template(), live_args, forecast_config, stats["totals"], battery_sizing(out / "predbat.db", prefix), load_ml=ml_history is not None)
     apps_text = scrub.replace_tokens(scrub.replace_everywhere(yaml.safe_dump(apps, sort_keys=False), replacements), tokens)
     (out / "apps.yaml").write_text(apps_text)
     manifest = {"t0": t0.isoformat(), "days": days, "db_sha256": _sha256(out / "predbat.db"), "tool_version": TOOL_VERSION, "entities": stats["entities"], "rows": stats["rows"]}
+    if ml_history:
+        manifest.update(ml_history)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
     secrets = [real for real in replacements if real] + forecast_secrets
@@ -282,6 +326,7 @@ def main(argv=None):
     parser.add_argument("--days", type=int, default=7, help="days of history to keep (default 7)")
     parser.add_argument("--strip-outputs", action="store_true", help="leave Predbat's own output entities out (its settings stay)")
     parser.add_argument("--t0", help="the extraction time as an ISO datetime, for tests and re-exports (default now)")
+    parser.add_argument("--load-ml", action="store_true", help="also copy the live LoadML history and switch LoadML on, for the LoadML training benchmark (use --days 28)")
     args = parser.parse_args(argv)
 
     live, out = Path(args.live), Path(args.out)
@@ -297,9 +342,15 @@ def main(argv=None):
     if work.exists():
         shutil.rmtree(work)
     try:
-        stats, secrets, tokens = export(live, work, args.days, t0, args.strip_outputs)
+        stats, secrets, tokens = export(live, work, args.days, t0, args.strip_outputs, args.load_ml)
         leaks = scrub.find_leaks(work, secrets, tokens)
         personal = scrub.find_personal_data(work)
+        # The byte scans skip the compressed LoadML history; its metadata, its only text, is scanned here
+        metadata = ml_history_metadata(work)
+        found = scrub.scan_text(metadata, secrets, tokens) if metadata is not None else []
+        if "real identifier" in found:
+            leaks.append(ML_HISTORY)
+        personal += [(ML_HISTORY, kind) for kind in found if kind != "real identifier"]
     except Exception:
         shutil.rmtree(work, ignore_errors=True)
         raise

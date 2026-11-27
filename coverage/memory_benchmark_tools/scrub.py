@@ -111,13 +111,30 @@ def with_case_variants(replacements, min_length=6):
     return result
 
 
+# Compressed NumPy archives (the LoadML history) are deflated float arrays, whose bytes can match a pattern by chance;
+# their only text, the metadata, is checked with scan_text instead
+SKIPPED_SUFFIXES = (".npz",)
+
+
 def _files(root):
-    """Yield (relative posix path, bytes) for every file under root."""
+    """Yield (relative posix path, bytes) for every file under root, except compressed archives (SKIPPED_SUFFIXES)."""
     root = Path(root)
     for directory, _, files in os.walk(root):
         for name in files:
+            if name.endswith(SKIPPED_SUFFIXES):
+                continue
             path = Path(directory) / name
             yield path.relative_to(root).as_posix(), path.read_bytes()
+
+
+def scan_text(text, secrets: Iterable[str], tokens: Iterable[str] = ()):
+    """Return what text holds that a fixture must not, by kind only: "real identifier" for a secret or token, then the personal-data kinds."""
+    data = text.encode()
+    lowered = data.lower()
+    found = []
+    if any(secret.lower().encode() in lowered for secret in secrets if secret) or any(re.search(_token_pattern(token).encode(), data, re.IGNORECASE) for token in tokens if token):
+        found.append("real identifier")
+    return found + sorted(personal_data_kinds(data))
 
 
 def find_leaks(root, secrets: Iterable[str], tokens: Iterable[str] = ()):
