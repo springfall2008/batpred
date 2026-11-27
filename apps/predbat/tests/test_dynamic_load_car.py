@@ -24,7 +24,7 @@ Intelligent charging built are affected - Predbat-led charging is never cancelle
 import copy
 import shutil
 import tempfile
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from tests.test_infra import run_async, MockStorageComponents, make_test_storage
 
@@ -47,6 +47,7 @@ STATE_FIELDS = (
     "metric_dynamic_load_adjust",
     "octopus_intelligent_dynamic",
     "dynamic_load_car_run",
+    "dynamic_load_car_charge_from",
     "dynamic_load_car_confirmed",
     "dynamic_load_car_confirmed_periods",
     "octopus_slots_planned",
@@ -90,13 +91,14 @@ def _at(my_predbat, minute, seconds=0):
     return my_predbat.now_utc_real
 
 
-def _cycle(my_predbat, minute, seconds=0, slots=None, save=True):
+def _cycle(my_predbat, minute, seconds=0, slots=None, save=True, read_at=None):
     """
-    One fetch cycle for car 0: rebuild its slots, then run the early (pre-rates) check.
+    One fetch cycle for car 0: rebuild its slots, then run the early (pre-rates) check. The sensors are read
+    at read_at, by default at the cycle's own clock rather than the wall clock.
     """
     _at(my_predbat, minute, seconds)
     my_predbat.car_charging_slots = [copy.deepcopy(slots if slots is not None else _slots())] + [[] for _ in range(my_predbat.num_cars - 1)]
-    return my_predbat.dynamic_load_car_check(save=save)
+    return my_predbat.dynamic_load_car_check(save=save, read_at=read_at if read_at is not None else my_predbat.now_utc_real)
 
 
 def _sensor(my_predbat, state):
@@ -120,6 +122,7 @@ def _reset(my_predbat):
     my_predbat.metric_dynamic_load_adjust = False
     my_predbat.octopus_intelligent_dynamic = True
     my_predbat.dynamic_load_car_run = {}
+    my_predbat.dynamic_load_car_charge_from = {}
     my_predbat.dynamic_load_car_confirmed = {}
     my_predbat.dynamic_load_car_confirmed_periods = {}
     my_predbat.octopus_slots_planned = {}
@@ -1210,14 +1213,212 @@ def _run_short_dispatch(my_predbat):
         _cycle(my_predbat, 910, slots=[{"start": 900, "end": 930, "kwh": 3.0, "octopus": True}])
         failed |= _check("t56 old half hour pruned", old not in my_predbat.dynamic_load_car_confirmed_periods[0], "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
 
-        print("Test 57: a one-minute dispatch in the first 2 minutes of a half hour is never confirmed")
-        # Deliberate: the sensor can still show charging for a car that stopped just before the boundary, and a
-        # dispatch that short is not trusted (dispatch_too_short()), so the guard is kept for it too
+        # A sensor reading in the first DYNAMIC_LOAD_CAR_CONFIRM_MINUTES of a half hour can still show a car that
+        # stopped just before the boundary, so it does not confirm - unless the sensor was seen to go from idle to
+        # charging since the boundary, which a stopped car's sensor never does (GH#6354)
+        def confirmed_after(slots, readings):
+            """
+            Reset, then poll car 0 at each (minute, seconds, sensor state) in turn with slots, and return whether
+            14:00-14:30 was confirmed.
+            """
+            _reset(my_predbat)
+            my_predbat.car_charging_slots = [slots]
+            for minute, seconds, state in readings:
+                _sensor(my_predbat, state)
+                my_predbat.dynamic_load_car_poll(_at(my_predbat, minute, seconds))
+            return my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set())
+
+        one_minute = [{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]
+        two_minute = [{"start": 840, "end": 842, "kwh": 0.2, "octopus": True}]
+        print("Test 57: a charge seen starting since the boundary confirms in the first 2 minutes")
+        failed |= _check("t57 14:00-14:01 idle 14:00:10, charging 14:00:30", confirmed_after(one_minute, [(840, 10, "off"), (840, 30, "on")]))
+        failed |= _check("t57 14:00-14:02 idle to 14:01:30, charging 14:01:45 (the #6354 log)", confirmed_after(two_minute, [(840, 15, "off"), (841, 30, "off"), (841, 45, "on")]))
+        failed |= _check("t57 14:00-14:01 idle 13:59:45, charging 14:00:00", confirmed_after(one_minute, [(839, 45, "off"), (840, 0, "on")]))
+        failed |= _check("t57 14:00-14:03 idle 14:00:10, charging 14:01:30", confirmed_after([{"start": 840, "end": 843, "kwh": 0.3, "octopus": True}], [(840, 10, "off"), (841, 15, "off"), (841, 30, "on")]))
+
+        print("Test 57b: the car must be seen inside the dispatch - a reading after it ends does not confirm")
+        failed |= _check("t57b 14:00-14:02 not confirmed at 14:02:30", not confirmed_after(two_minute, [(840, 15, "off"), (842, 30, "on")]))
+
+        print("Test 57c: a sensor still showing a car that stopped before the boundary does not confirm")
+        # A separate 13:30-13:59 dispatch: the car stops at 13:59 but the sensor still reads charging at 14:00:30
+        lagging = [{"start": 810, "end": 839, "kwh": 3.0, "octopus": True}] + one_minute
+        failed |= _check("t57c charging since 13:58:30 not confirmed at 14:00:30", not confirmed_after(lagging, [(838, 0, "off"), (838, 30, "on"), (840, 30, "on")]))
+        # ...the same for a dispatch running across the boundary, whatever its slots now say
+        failed |= _check("t57c 13:50-14:01 charging since 13:50 not confirmed at 14:00:30", not confirmed_after(one_minute, [(830, 0, "off"), (830, 30, "on"), (840, 30, "on")]))
+
+        print("Test 57d: with no idle reading since Predbat started, the guard stays")
+        failed |= _check("t57d charging at the first reading not confirmed at 14:00:30", not confirmed_after(one_minute, [(840, 30, "on")]))
+        failed |= _check("t57d ...but still confirmed from 14:02", confirmed_after([{"start": 840, "end": 843, "kwh": 0.3, "octopus": True}], [(842, 15, "on")]))
+
+        print("Test 57e: an unavailable reading is no evidence of the car going idle")
+        failed |= _check("t57e unavailable then charging not confirmed at 14:00:30", not confirmed_after(one_minute, [(840, 10, "unavailable"), (840, 30, "on")]))
+
+        print("Test 57f: once confirmed, a 14:00-14:02 dispatch is no longer too short to be cheap (GH#6354)")
         _reset(my_predbat)
+        my_predbat.car_charging_slots = [list(two_minute)]
+        failed |= _check("t57f too short before the car is seen", my_predbat.dispatch_too_short(0, 840, 842))
+        confirmed_after(two_minute, [(840, 15, "off"), (841, 30, "off"), (841, 45, "on")])
+        failed |= _check("t57f cheap once seen inside it", not my_predbat.dispatch_too_short(0, 840, 842))
+
+        def two_cars_confirmed_after(readings):
+            """
+            Reset to two cars, car 0 with a 14:00-14:01 dispatch, poll at each (minute, seconds, car 0 state, car 1
+            state) in turn, and return whether car 0's 14:00-14:30 was confirmed.
+            """
+            _reset(my_predbat)
+            for minute, seconds, state_0, state_1 in readings:
+                _sensors(my_predbat, state_0, state_1)
+                my_predbat.car_charging_slots = [list(one_minute), []]
+                my_predbat.dynamic_load_car_poll(_at(my_predbat, minute, seconds))
+            return my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set())
+
+        print("Test 57g: car 1 seen starting confirms car 0's dispatch in the same poll")
+        # The dispatch's car can be on the charger Predbat calls 1 (dynamic_load_any_car_charging_now())
+        failed |= _check("t57g confirmed at car 1's first charging reading", two_cars_confirmed_after([(840, 10, "off", "off"), (840, 25, "off", "on")]))
+
+        print("Test 57h: any car seen starting will do, even with another charging since before the boundary")
+        failed |= _check("t57h car 1 charging throughout, car 0 starts at 14:00:30", two_cars_confirmed_after([(840, 10, "off", "on"), (840, 30, "on", "on")]))
+        failed |= _check("t57h car 1 charging throughout, car 0 idle: not confirmed", not two_cars_confirmed_after([(840, 10, "off", "on"), (840, 30, "off", "on")]))
+
+        print("Test 57i: after a gap in the readings, the first charging reading is not a fresh start")
+        failed |= _check("t57i idle 13:58, next reading charging 14:00:30", not confirmed_after(one_minute, [(838, 0, "off"), (840, 30, "on")]))
+
+        print("Test 57j: starts are judged on the clock-skewed clock the half hour is judged on")
+        saved_skew = my_predbat.args.get("clock_skew", None)
+        try:
+            my_predbat.args["clock_skew"] = -1
+            # Real 14:00:10 / 14:00:30 is 13:59:10 / 13:59:30 skewed: a start before the boundary
+            failed |= _check("t57j start before the skewed boundary not confirmed", not confirmed_after(one_minute, [(840, 10, "off"), (840, 30, "on"), (841, 10, "on")]))
+            failed |= _check("t57j start after the skewed boundary confirmed", confirmed_after(one_minute, [(841, 10, "off"), (841, 30, "on")]))
+        finally:
+            if saved_skew is None:
+                my_predbat.args.pop("clock_skew", None)
+            else:
+                my_predbat.args["clock_skew"] = saved_skew
+
+        print("Test 57k: the cycle on the boundary confirms a start it reads, dated when it read it")
+        # Poll idle at 13:59:45; the 14:00 cycle reads the sensor at 14:00:20, after its fetch, and the car has started
+        confirmed_after(one_minute, [(839, 45, "off")])
         _sensor(my_predbat, "on")
-        my_predbat.car_charging_slots = [[{"start": 840, "end": 841, "kwh": 0.1, "octopus": True}]]
+        _cycle(my_predbat, 840, 0, slots=one_minute, read_at=my_predbat.midnight_utc + timedelta(minutes=840, seconds=20))
+        failed |= _check("t57k start dated at the reading", my_predbat.dynamic_load_car_charge_from[0]["from"] == my_predbat.midnight_utc + timedelta(minutes=840, seconds=20), "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        failed |= _check("t57k confirmed by the cycle", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        # ...and a later poll still counts it, though the poll waited while the cycle planned
+        _sensor(my_predbat, "on")
+        my_predbat.dynamic_load_car_confirmed_periods = {}
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 50))
+        failed |= _check("t57k ...and the first poll after the plan", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+
+        print("Test 57k2: a cycle whose clock is not the wall clock (plan_once, a replay) records no starts")
+        confirmed_after(one_minute, [(839, 45, "off")])
+        _sensor(my_predbat, "on")
+        _cycle(my_predbat, 840, 0, slots=one_minute, read_at=my_predbat.midnight_utc + timedelta(days=1, minutes=840, seconds=20))
+        failed |= _check("t57k2 start unrecorded", not my_predbat.dynamic_load_car_charge_from[0]["charging"], "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        failed |= _check("t57k2 not confirmed", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        # ...but keeps an idle reading, dated by the earlier of the two clocks: a plan time ahead of the wall clock must
+        # not make an idle reading taken at 13:59:00 look as though it was taken after the boundary
+        confirmed_after(one_minute, [])
+        _sensor(my_predbat, "off")
+        _cycle(my_predbat, 840, 5, slots=one_minute, read_at=my_predbat.midnight_utc + timedelta(minutes=839))
+        failed |= _check("t57k2 idle dated by the earlier clock", my_predbat.dynamic_load_car_charge_from[0]["idle_at"] == my_predbat.midnight_utc + timedelta(minutes=839), "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        _sensor(my_predbat, "on")
         my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
-        failed |= _check("t57 14:00-14:30 not confirmed at 14:00:30", not my_predbat.dynamic_load_car_confirmed_periods.get(0), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+        failed |= _check(
+            "t57k2 ...so a charge 90s after it is not fresh", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods)
+        )
+
+        print("Test 57k3: a start the cycle reads after the dispatch has ended does not confirm it")
+        # Poll idle at 14:00:10; a cycle begins at 14:00:15, inside the 14:00-14:01 dispatch, but its fetch is slow and
+        # reads the car charging only at 14:02:30
+        confirmed_after(one_minute, [(840, 10, "off")])
+        _sensor(my_predbat, "on")
+        _cycle(my_predbat, 840, 15, slots=one_minute, read_at=my_predbat.midnight_utc + timedelta(minutes=842, seconds=30))
+        failed |= _check("t57k3 not confirmed", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods))
+
+        print("Test 57k4: by default the cycle dates its readings by the wall clock")
+        confirmed_after(one_minute, [])
+        _sensor(my_predbat, "off")
+        my_predbat.now_utc_real = datetime.now(my_predbat.local_tz) - timedelta(seconds=1)
+        my_predbat.dynamic_load_car_check()
+        failed |= _check(
+            "t57k4 live cycle dated after its own clock",
+            my_predbat.dynamic_load_car_charge_from[0]["idle_at"] > my_predbat.midnight_utc + timedelta(minutes=my_predbat.dynamic_load_car_minute(my_predbat.now_utc_real)),
+            "state {}".format(my_predbat.dynamic_load_car_charge_from),
+        )
+        my_predbat.now_utc_real = datetime.now(my_predbat.local_tz) - timedelta(days=1)
+        my_predbat.dynamic_load_car_check()
+        failed |= _check(
+            "t57k4 replayed cycle dated by its own clock",
+            my_predbat.dynamic_load_car_charge_from[0]["idle_at"] == my_predbat.midnight_utc + timedelta(minutes=my_predbat.dynamic_load_car_minute(my_predbat.now_utc_real)),
+            "state {}".format(my_predbat.dynamic_load_car_charge_from),
+        )
+
+        print("Test 57l: the cycle that plans on the boundary bridges the poll's pause with its idle reading")
+        # Poll idle at 13:59:45; the 14:00 cycle reads idle and plans until 14:01:10 with the poll paused; the car
+        # started at 14:00:20 and the first poll after the plan sees it charging at 14:01:15, inside 14:00-14:02
+        two_minute_cycle = [{"start": 840, "end": 842, "kwh": 0.2, "octopus": True}]
+        confirmed_after(two_minute_cycle, [(839, 45, "off")])
+        _cycle(my_predbat, 840, 0, slots=two_minute_cycle)
+        _sensor(my_predbat, "on")
+        my_predbat.car_charging_slots = [list(two_minute_cycle)]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 841, 15))
+        failed |= _check("t57l confirmed after the plan", my_predbat.midnight_utc + timedelta(minutes=870) in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        failed |= _check("t57l ...but not without the cycle's idle reading", not confirmed_after(two_minute_cycle, [(839, 45, "off"), (841, 15, "on")]))
+
+        print("Test 57m: a car seen starting that has since stopped no longer counts")
+        # Car 1 starts at 14:00:15 and stops by 14:00:30; car 0's sensor still shows a charge that ended before 14:00.
+        # The confirmation car 1's start gave at 14:00:15 is cleared to see what the 14:00:30 poll alone decides
+        two_cars_confirmed_after([(840, 0, "on", "off"), (840, 15, "on", "on")])
+        for state_1 in ("off", "unavailable"):
+            my_predbat.dynamic_load_car_confirmed_periods = {}
+            my_predbat.dynamic_load_car_charge_from[1] = {"entity": my_predbat.dynamic_load_car_sensors[1], "charging": True, "idle_at": None, "from": my_predbat.midnight_utc + timedelta(minutes=840, seconds=15)}
+            _sensors(my_predbat, "on", state_1)
+            my_predbat.car_charging_slots = [list(one_minute), []]
+            my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
+            failed |= _check(
+                "t57m car 1 now {} does not confirm car 0".format(state_1),
+                my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()),
+                "periods {}".format(my_predbat.dynamic_load_car_confirmed_periods),
+            )
+
+        print("Test 57n: readings of a sensor the car no longer uses do not count")
+        # Car 0 is seen starting at 14:00:15 on its old sensor (no dispatch yet), then car_charging_now is changed to an
+        # entity still showing a charge that ended before 14:00, and a 14:00-14:01 dispatch is listed
+        _reset(my_predbat)
+        my_predbat.car_charging_slots = [[]]
+        _sensor(my_predbat, "off")
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 5))
+        _sensor(my_predbat, "on")
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 15))
+        my_predbat.args["car_charging_now"] = SENSOR_1
+        my_predbat.ha_interface.dummy_items[SENSOR_1] = "on"
+        my_predbat.dynamic_load_car_refresh_sensors()
+        my_predbat.car_charging_slots = [list(one_minute)]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 30))
+        failed |= _check("t57n changed sensor not confirmed at 14:00:30", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        # ...nor does the old sensor's idle reading make the new one's first charging reading a start
+        _reset(my_predbat)
+        my_predbat.car_charging_slots = [list(one_minute)]
+        _sensor(my_predbat, "off")
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 5))
+        my_predbat.args["car_charging_now"] = SENSOR_1
+        my_predbat.ha_interface.dummy_items[SENSOR_1] = "on"
+        my_predbat.dynamic_load_car_refresh_sensors()
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 15))
+        failed |= _check("t57n old sensor's idle reading does not count", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "state {}".format(my_predbat.dynamic_load_car_charge_from))
+
+        print("Test 57o: readings from before dynamic load was switched off do not count once it is back on")
+        confirmed_after(one_minute, [(840, 5, "off")])
+        my_predbat.octopus_intelligent_dynamic = False
+        _cycle(my_predbat, 840, 20, slots=one_minute)
+        failed |= _check("t57o switched off clears the readings", my_predbat.dynamic_load_car_charge_from == {}, "state {}".format(my_predbat.dynamic_load_car_charge_from))
+        my_predbat.octopus_intelligent_dynamic = True
+        _sensor(my_predbat, "on")
+        my_predbat.car_charging_slots = [list(one_minute)]
+        my_predbat.dynamic_load_car_poll(_at(my_predbat, 840, 40))
+        failed |= _check(
+            "t57o charging after switching back on not a fresh start", my_predbat.midnight_utc + timedelta(minutes=870) not in my_predbat.dynamic_load_car_confirmed_periods.get(0, set()), "state {}".format(my_predbat.dynamic_load_car_charge_from)
+        )
     finally:
         for key, value in (("octopus_slot_low_rate", saved_low_rate), ("octopus_slot_max", saved_slot_max)):
             if value is None:
@@ -1236,6 +1437,7 @@ def _restart(my_predbat):
     my_predbat.dynamic_load_car_since = {}
     my_predbat.dynamic_load_car_cancelled = {}
     my_predbat.dynamic_load_car_run = {}
+    my_predbat.dynamic_load_car_charge_from = {}
     my_predbat.dynamic_load_car_saved = {}
     my_predbat.dynamic_load_car_load()
 
