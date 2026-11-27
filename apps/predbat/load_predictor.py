@@ -1509,9 +1509,10 @@ class LoadPredictor:
                 best_val_loss = val_mae
                 best_val_bias = val_bias_mean
                 patience_counter = 0
-                # Checkpoint best weights
-                best_weights = [w.copy() for w in self.weights]
-                best_biases = [b.copy() for b in self.biases]
+                # Checkpoint best weights, into the checkpoint's own arrays: a fresh copy each time would
+                # hold two full checkpoints at once while the old one is released
+                for best, current in zip(best_weights + best_biases, self.weights + self.biases):
+                    np.copyto(best, current)
             else:
                 patience_counter += 1
 
