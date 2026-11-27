@@ -354,6 +354,18 @@ class TestBoardFile(unittest.TestCase):
         self.assertEqual(measure.ROUNDS, 30)
         self.assertGreaterEqual(self.board["measure"]["timeout_minutes"], 2 * measure.ROUNDS * 3)
 
+    def test_the_rules_keep_small_savings_instead_of_giving_up_on_them(self):
+        """Intents gave up on real savings of 0.6-1.7 MB because the lead wrote 'saves under 2 MB' as the give-up line;
+        ten such savings are 5% of main. The rules say size is never a reason to give up, and measure a small one longer."""
+        rules = self.board["rules"]
+        self.assertIn("Small savings count", rules)
+        self.assertIn("never a reason to give up", rules)
+        self.assertIn("ten rounds each", rules)
+
+    def test_the_worker_timeout_covers_a_ten_round_comparison(self):
+        """Ten rounds of main and the branch is 20 runs of up to 3 minutes, plus the build, the quick suite and pre-commit."""
+        self.assertGreaterEqual(self.board["permissions"]["worker_timeout_minutes"], 2 * 10 * 3 + 60)
+
 
 class TestDocstrings(unittest.TestCase):
     """Every function and class in this directory has a docstring (CLAUDE.md's 100% interrogate rule)."""
