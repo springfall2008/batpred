@@ -238,6 +238,7 @@ eonnext
 epod
 epvtoday
 errno
+esac
 ESSAPI
 etime
 ETIMEDOUT
@@ -549,6 +550,7 @@ oninput
 onmouseout
 onmouseover
 openapi
+OPENBLAS
 openrouter
 openweathermap
 Opticaster
