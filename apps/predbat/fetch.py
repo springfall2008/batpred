@@ -18,7 +18,7 @@ battery temperature, and other sensor inputs. Converts all data to per-minute
 dictionaries for use by the prediction engine.
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from utils import (
     average_temperature_minutes,
     battery_temperature_entities,
@@ -52,6 +52,7 @@ from const import (
     LOAD_FORECAST_RECORDED_MIN_MINUTES,
     PREDBAT_MAX_CARS,
     CAR_CHARGING_LIMIT_UNCAPPED,
+    DISPATCH_SOURCE_CHARGER_SCHEDULE,
     CAR_CHARGING_NOW_POWER_W,
     CAR_MANUAL_SOC_LATE_MINUTES,
     CAR_MANUAL_SOC_UNPLUG_MINUTES,
@@ -1963,11 +1964,8 @@ class Fetch:
 
         # Find discharging windows
         if self.rate_export:
-            self.high_export_rates, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=self.rate_import)
-            # Update threshold automatically
-            self.log("High export rate found rates in range {}{} to {}{}".format(lowest, curr, highest, curr))
-            if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
-                self.rate_export_cost_threshold = lowest
+            lowest, highest = self.scan_export_windows(alt_rates=self.rate_import)
+            self.log("High export rate found rates in range {}{} to {}{}, {} export candidate window(s) for the optimiser".format(lowest, curr, highest, curr, len(self.high_export_rates)))
 
         # Find charging windows
         if self.rate_import:
@@ -1986,6 +1984,7 @@ class Fetch:
             self.log_replay_cars()
         # Publish the car plan
         self.publish_car_plan()
+        self.publish_octopus_cap()
 
         # Work out iBoost plan
         if self.iboost_enable and (((not self.iboost_solar) and (not self.iboost_charging)) or self.iboost_smart):
@@ -2111,6 +2110,56 @@ class Fetch:
             if (self.car_charging_planned[car_n] or self.car_charging_now[car_n]) and self.car_charging_exclusive[car_n] and self.car_charging_slots[car_n]:
                 self.log("Car {} charging is exclusive, will not plan other cars".format(car_n))
                 break
+
+    def octopus_smart_control_off(self, car_n, save=True):
+        """
+        Whether Octopus Smart Control is explicitly switched off for car_n, so its planned dispatches will not happen.
+
+        The switch is octopus_intelligent_smart_control (one per car), which the apps.yaml template points at the Octopus
+        Energy integration's intelligent smart charge switch. Only an explicit "off" counts - an unset, missing or
+        unavailable switch leaves the planned slots trusted as before.
+
+        The change is logged once, and only when save is True (not in compare.py's re-runs for other tariffs).
+        """
+        switch_config = self.get_arg("octopus_intelligent_smart_control", None, indirect=False)
+        if switch_config and not isinstance(switch_config, list):
+            switch_config = [switch_config]
+        switch_id = switch_config[car_n] if switch_config and car_n < len(switch_config) else None
+        # An unresolved 're:' template default or a fixed value names no switch
+        if not switch_id or not isinstance(switch_id, str) or switch_id.startswith("re:"):
+            return False
+        state = self.get_state_wrapper(entity_id=switch_id)
+        off = isinstance(state, str) and state.lower() == "off"
+        if save and off != self.octopus_smart_control_off_logged.get(car_n, False):
+            self.octopus_smart_control_off_logged[car_n] = off
+            if off:
+                self.log("Car {} Octopus Smart Control is now Off ({}), planned Octopus dispatches are ignored".format(car_n, switch_id))
+            else:
+                # Not necessarily On: unknown or unavailable is no evidence either way, so say what the switch reports
+                self.log("Car {} Octopus Smart Control is no longer Off ({} is {}), planned Octopus dispatches are used".format(car_n, switch_id, state))
+        return off
+
+    def smart_control_off_slots(self, slots, charger_plan):
+        """
+        The dispatches still used for a car while Octopus Smart Control is off (#5339).
+
+        A charger's own schedule is kept. Other dispatches, manual bump/boost ones included, are
+        Octopus's plan, which will not happen, as Octopus dispatches nothing to a suspended device
+        (matching planned_dispatches_for_state() in the built-in component), unless charger_plan says they came from the charger's
+        own sensor (octopus_intelligent_planned_slot): those are kept as car load but re-tagged as a
+        charger schedule, as Octopus is not dispatching them and so they are not off-peak. Kept slots
+        carry their source at the top level, which is where load_octopus_slots() reads it from.
+        """
+        used = []
+        for slot in slots or []:
+            if not isinstance(slot, dict):
+                continue
+            source = slot.get("source") or (slot.get("meta") or {}).get("source")
+            if source == DISPATCH_SOURCE_CHARGER_SCHEDULE:
+                used.append(slot if slot.get("source") == source else dict(slot, source=source))
+            elif charger_plan:
+                used.append(dict(slot, source=DISPATCH_SOURCE_CHARGER_SCHEDULE))
+        return used
 
     def car_planned_slot_entity(self, planned_entity_id_list, car_n, slot_entity_id):
         """
@@ -2528,6 +2577,10 @@ class Fetch:
         iog_slot_cars = []
         # The planned dispatches each car's plan used this cycle, for octopus_held_update()
         self.octopus_slots_planned = {}
+        if save:
+            # Read below once the dispatches are in; none without Octopus Intelligent slots. A compare.py run (save False)
+            # keeps this cycle's, as the record is the same whatever the tariff
+            self.octopus_cap_idle = None
 
         if entity_id_list:
             # Process each car's intelligent slot configuration
@@ -2539,6 +2592,8 @@ class Fetch:
                 completed = []
                 planned = []
                 started = []
+                planned_entity_id = None
+                planned_completed = []
 
                 if entity_id and "octopus_intelligent_slot_action_config" in self.args:
                     config_entry = self.get_arg("octopus_intelligent_slot_action_config", None, indirect=False)
@@ -2569,21 +2624,41 @@ class Fetch:
                         # completed list: it covers a slot from when it ends until the slot sensor lists
                         # it, and load_octopus_slots() drops whatever of it the slot sensor has by then
                         try:
-                            planned = self.get_state_wrapper(entity_id=planned_entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="plannedDispatches")
+                            charger_planned = self.get_state_wrapper(entity_id=planned_entity_id, attribute="planned_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="plannedDispatches")
                             planned_completed = self.get_state_wrapper(entity_id=planned_entity_id, attribute="completed_dispatches") or self.get_state_wrapper(entity_id=planned_entity_id, attribute="completedDispatches")
-                            completed = (completed or []) + (planned_completed or [])
+                            # Only once both reads have worked, so a failure leaves the slot sensor's plan whole
+                            planned = charger_planned
+                            planned_completed = planned_completed or []
                         except (ValueError, TypeError):
-                            self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_planned_slot may not be set correctly in apps.yaml".format(planned_entity_id, car_n))
+                            # planned still holds the slot sensor's own plan, so treat it as that below
+                            planned_entity_id = None
+                            planned_completed = []
+                            self.log("Warn: Unable to get data from {} for car {} - octopus_intelligent_planned_slot may not be set correctly in apps.yaml".format(planned_entity_id_list[car_n], car_n))
                             self.record_status(message="Error: octopus_intelligent_planned_slot not set correctly in apps.yaml for car {}".format(car_n), had_errors=True)
 
+                # Octopus keeps returning the plan it made before Smart Control was switched off, but nothing will act
+                # on it (#5339), bump/boost charges included: Octopus dispatches nothing to a suspended device, as the
+                # built-in component's planned_dispatches_for_state() assumes. Slots already delivered (completed) are
+                # real, so those are still counted. So is a charger's own schedule: the Ohme
+                # component wires that in when Octopus no longer drives the charger, and Smart Control has no say in it.
+                # Slots taken from octopus_intelligent_planned_slot are the charger's own plan, so they are kept as car
+                # load - but with Octopus no longer dispatching they are not off-peak, so they are re-tagged as a charger
+                # schedule (the Ohme component leaves them untagged while it follows Octopus's dispatches). The same goes
+                # for what that sensor has seen finish: one Octopus did dispatch is on the slot sensor's completed list,
+                # which is merged first and so wins in load_octopus_slots()
+                smart_control_off = self.octopus_smart_control_off(car_n, save=save)
+
+                if planned_completed:
+                    completed = (completed or []) + (self.smart_control_off_slots(planned_completed, True) if smart_control_off else planned_completed)
                 # Completed and planned slots - merge from all cars
                 if completed:
                     self.octopus_slots[car_n] += completed
+                planned_kept = self.smart_control_off_slots(planned, bool(planned_entity_id)) if smart_control_off else planned
                 planned_used = []
-                if planned and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
+                if planned_kept and (not self.octopus_intelligent_ignore_unplugged or self.car_charging_planned[car_n] or self.car_charging_now[car_n]):
                     # We only count planned slots if the car is plugged in or we are ignoring unplugged cars. A car
                     # charging now is plugged in, even before car_charging_planned catches up with an ad-hoc dispatch
-                    planned_used = planned
+                    planned_used = planned_kept
                 # The half hours a planned dispatch has already run in, until the completed list has them (#5520).
                 # After the completed list, which is the record once it arrives, and ahead of the planned one
                 self.octopus_slots[car_n] += self.octopus_held_dispatches(car_n, completed or [], planned_used)
@@ -2686,6 +2761,14 @@ class Fetch:
             # Get rate for import to compute charging costs
             if self.rate_import:
                 self.rate_scan(self.rate_import, print=False)
+
+            # The past minutes no car charged in, which use none of the Octopus Intelligent daily cap (#6252): read once
+            # every car's dispatches are in, before the car plans below and the rates count the cap with them
+            if save:
+                # Stamped when read, not with the cycle's clock, which was taken before the fetch and the poll's last reading
+                self.octopus_cap_record(datetime.now(timezone.utc), save="cycle")
+                self.octopus_cap_idle = self.octopus_cap_idle_load()
+                self.octopus_cap_idle_midnight = self.midnight_utc
 
             # Use octopus slots for charging - process for each car
             if self.octopus_intelligent_charging:
@@ -3723,6 +3806,27 @@ class Fetch:
 
         return rate_min_forward
 
+    def scan_export_windows(self, alt_rates=None):
+        """
+        Find the export windows, after set_rate_thresholds().
+
+        The export counterpart of find_low_rate_windows()'s low_rates / low_rates_tariff (GH#5050).
+        high_export_rates is what the optimiser is offered (calculate_plan() seeds export_window_best from it):
+        every window at or above rate_export_candidate_threshold, which in automatic mode is every export slot.
+        high_export_rates_tariff is the tariff's own high-rate windows, at or above rate_export_cost_threshold,
+        and drives the high_rate_export sensors - publishing the tariff's cheapest band as the next high rate
+        would be wrong. In automatic mode the threshold is then ratcheted to the cheapest high-rate window.
+        Returns the lowest and highest average of the high-rate windows.
+        """
+        self.high_export_rates_tariff, lowest, highest = self.rate_scan_window(self.rate_export, 5, self.rate_export_cost_threshold, True, alt_rates=alt_rates)
+        if self.rate_export_candidate_threshold < self.rate_export_cost_threshold:
+            self.high_export_rates, _, _ = self.rate_scan_window(self.rate_export, 5, self.rate_export_candidate_threshold, True, alt_rates=alt_rates)
+        else:
+            self.high_export_rates = self.high_export_rates_tariff
+        if self.rate_high_threshold == 0 and lowest <= self.rate_export_max:
+            self.rate_export_cost_threshold = lowest
+        return lowest, highest
+
     def rate_scan_window(self, rates, rate_low_min_window, threshold_rate, find_high, return_raw=False, alt_rates=None, pv_light_dark=None, start_minute=0):
         """
         Scan for the next high/low rate window, from start_minute (midnight by default)
@@ -3878,12 +3982,19 @@ class Fetch:
         # Compute the export rate threshold
         if self.rate_high_threshold > 0:
             self.rate_export_cost_threshold = dp2(rate_export_average * self.rate_high_threshold)
+            self.rate_export_candidate_threshold = self.rate_export_cost_threshold
         else:
             # In automatic mode select the only rate or everything but the most cheapest
             if (rate_export_max == rate_export_min) or (rate_export_min > rate_min) or have_alerts:
                 self.rate_export_cost_threshold = rate_export_min - 0.1
             else:
                 self.rate_export_cost_threshold = rate_export_min + 0.5
+            # The optimiser is offered every export rate, the cheapest included (scan_export_windows). Leaving the
+            # cheapest out hid the one export a dual-rate tariff needs when the solar will clip: a battery still
+            # holding energy at dawn before an export-limited solar day earns the night rate by exporting it, or
+            # nothing once the solar that displaces it is clipped (#6214). Whether an export is worth making is the
+            # optimiser's decision. rate_export_cost_threshold above stays the high-rate one the entities publish.
+            self.rate_export_candidate_threshold = rate_export_min - 0.1
 
         self.log(
             "Rate thresholds (for charge/export) are import {}{} ({}{}), export {}{} ({}{})".format(

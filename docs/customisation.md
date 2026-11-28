@@ -480,8 +480,11 @@ e.g. setting to 0.8 = 80% of the average rate.<BR>
 If you set this too low you might not get enough charge slots. If it's too high you might get too many in the
 24-hour period which makes optimisation harder.
 
-**input_number.predbat_rate_high_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future export rates in the plan
-and determine the threshold above which a slot can be considered a potential exporting slot.<BR>
+**input_number.predbat_rate_high_threshold** (_expert mode_) When set to 0 (the default) every future export slot, the cheapest included, is a potential
+exporting slot, and the optimiser decides which are worth using. The cheapest rate matters on a dual-rate export tariff with an export limit: a battery
+still holding energy at dawn before a sunny day can export it at the night rate rather than have the solar that displaces it clipped later.
+Predbat still works out a high-rate threshold automatically, and only the slots above it are published as high-rate export slots
+(**predbat.high_rate_export_start** and the related entities).<BR>
 If rate_high_threshold is set to a non-zero value this will set the threshold above future average export rates as the minimum export rate to consider exporting for,
 e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
@@ -714,7 +717,7 @@ Predbat has an 'iBoost model' that, instead of exporting excess solar to the gri
 
 - **switch.predbat_iboost_on_export** Whether iBoost will run when the battery is forced to export to the grid - default False.
 
-- **switch.predbat_iboost_prevent_discharge** Stops the battery from discharging to the diverter when iBoost is active. Not recommended when iBoost solar mode is enabled as battery discharge will be prevented during excess solar periods. This could cause additional imports due to passing clouds - default False.
+- **switch.predbat_iboost_prevent_discharge** Stops the battery from discharging to the diverter when iBoost is active. Not recommended when iBoost solar mode is enabled as battery discharge will be prevented during excess solar periods. This could cause additional imports due to passing clouds. The hold does not apply while the battery is charging or exporting, so it does not stop a planned export window draining the battery, and it should not be combined with **switch.predbat_iboost_on_export** - default False.
 
 - **switch.predbat_iboost_smart** Whether Predbat will pick the lowest import rate slots within the forecast horizon (48 hours by default) to achieve the desired energy for each day, as specified by **input_number.predbat_iboost_max_energy**. Can be combined with the Solar and Battery modes - default False.
 

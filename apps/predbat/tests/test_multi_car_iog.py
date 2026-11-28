@@ -263,6 +263,17 @@ def run_multi_car_iog_load_slots_test(testname, my_predbat):
         },
     )
 
+    # Both cars have read not charging since yesterday, so the past minutes use none of the daily cap (#6252): recorded
+    # and read once the dispatches are in, so this must come after them in fetch_sensor_data_cars()
+    saved_slot_max = my_predbat.args.get("octopus_slot_max")
+    saved_sensors = my_predbat.dynamic_load_car_sensors
+    my_predbat.args["octopus_slot_max"] = 12
+    my_predbat.dynamic_load_car_sensors = {0: "binary_sensor.car1_charging", 1: "binary_sensor.car2_charging"}
+    my_predbat.car_charging_now_reading = lambda car_n: False
+    now_ts = my_predbat.now_utc_real.timestamp()
+    my_predbat.octopus_cap_runs = [[now_ts - 24 * 60 * 60, now_ts]]
+    my_predbat.octopus_cap_last = (now_ts, True)
+
     # This is the real function that contained the bug - call it directly.
     # Before the fix, car_charging_soc was initialized AFTER the IOG loop, so
     # load_octopus_slots(car_n=1, ...) would raise IndexError: list index out of range.
@@ -271,6 +282,18 @@ def run_multi_car_iog_load_slots_test(testname, my_predbat):
     except IndexError as exc:
         print("ERROR: fetch_sensor_data_cars raised IndexError (regression of bug #3515): {}".format(exc))
         failed = True
+    finally:
+        idle_read = my_predbat.octopus_cap_idle
+        my_predbat.octopus_cap_idle = None
+        my_predbat.octopus_cap_idle_midnight = None
+        my_predbat.octopus_cap_runs = []
+        my_predbat.octopus_cap_last = None
+        my_predbat.__dict__.pop("car_charging_now_reading", None)
+        my_predbat.dynamic_load_car_sensors = saved_sensors
+        if saved_slot_max is None:
+            my_predbat.args.pop("octopus_slot_max", None)
+        else:
+            my_predbat.args["octopus_slot_max"] = saved_slot_max
 
     if not failed:
         # Both cars should have charging slots populated from their IOG dispatches
@@ -283,6 +306,9 @@ def run_multi_car_iog_load_slots_test(testname, my_predbat):
         # car_charging_soc must be a 2-element list (not the old empty/wrong-length list)
         if len(my_predbat.car_charging_soc) != 2:
             print("ERROR: Expected car_charging_soc to have 2 entries, got {}".format(len(my_predbat.car_charging_soc)))
+            failed = True
+        if not idle_read or 0 not in idle_read:
+            print("ERROR: Expected the minutes no car charged in to be read once the dispatches are in, got {}".format(idle_read))
             failed = True
 
     restore_test_clock(my_predbat, saved_clock)
