@@ -153,6 +153,8 @@ class LoadMLComponent(ComponentBase):
             load_success = self.predictor.load(self.model_filepath)
             if load_success:
                 self.log("ML Component: Loaded existing model")
+                # Until it next trains the model only predicts: keep the float16 copy and free the rest, which train() reloads from the file
+                self.predictor.release_training_state()
                 # Check if model is still valid
                 is_valid, reason = self.predictor.is_valid(validation_threshold=self.ml_validation_threshold, max_age_hours=self.ml_max_model_age_hours)
                 if is_valid:
@@ -1087,9 +1089,9 @@ class LoadMLComponent(ComponentBase):
                     self.model_status = "fallback_validation"
                     self.log("Warn: ML Component: Validation MAE ({:.4f}) exceeds threshold ({:.4f})".format(val_mae, self.ml_validation_threshold))
 
-                # Save model (fast - no lock needed)
-                if self.model_filepath:
-                    self.predictor.save(self.model_filepath)
+                # Save model (fast - no lock needed), then free the training state until the next training reloads it from the file
+                if self.model_filepath and self.predictor.save(self.model_filepath):
+                    self.predictor.release_training_state()
             else:
                 self.log("Warn: ML Component: Training failed")
 

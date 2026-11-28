@@ -38,6 +38,7 @@ OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30 min)
 HIDDEN_SIZES = [512, 256, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Batch size
+INFERENCE_DTYPE = np.float16  # Weights kept for prediction between trainings: a 48 h forecast moves about 0.01% from float64, for a quarter of the memory
 ADAM_CHUNK = 131072  # Elements per chunk of the optimiser step (1 MB of float64): few enough calls to cost little, small enough to keep its buffers small
 MAX_BATCHES_PER_EPOCH = 200  # Cap on SGD batches per epoch - with importance sampling this keeps training
 # cost constant regardless of how many days of history are loaded
@@ -255,6 +256,12 @@ class LoadPredictor:
         self.pattern_mae = None
         self.epochs_trained = 0
         self.model_initialized = False
+        # Between trainings only float16 prediction copies of the weights are kept (release_training_state);
+        # the full state is reloaded from the model file it was last saved to or loaded from
+        self.training_state_released = False
+        self.released_dtypes = None
+        self.state_filepath = None
+        self.state_file_stamp = None
 
     def _initialize_weights(self):
         """Initialise network weights using He initialisation (optimal for ReLU)"""
@@ -289,6 +296,89 @@ class LoadPredictor:
 
         self.adam_t = 0
         self.model_initialized = True
+        self.training_state_released = False
+
+    def _file_stamp(self, filepath):
+        """Size and modification time of a file, or None if it cannot be read: enough to tell it has been rewritten."""
+        try:
+            stat = os.stat(filepath)
+            return (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            return None
+
+    def _remember_state_file(self, filepath):
+        """Record that filepath now holds this model's full training state, as saved or loaded."""
+        self.state_filepath = filepath
+        self.state_file_stamp = self._file_stamp(filepath)
+
+    def _state_file_matches(self):
+        """Whether the model file last saved or loaded is still there and unchanged since."""
+        return self.state_filepath is not None and self.state_file_stamp is not None and self._file_stamp(self.state_filepath) == self.state_file_stamp
+
+    def release_training_state(self):
+        """
+        Free the training state between trainings, keeping only what prediction needs.
+
+        Prediction needs neither the float64 weights nor the Adam moments: every fine-tune resets
+        the moments before its first step, and a float16 copy of the weights moves a 48 h forecast
+        by about 0.01%. So once the model file holds the full state (after a successful save() or
+        load()), keep float16 copies of the weights and biases and drop the rest. The next train()
+        or save() reloads the full state from that file, so training is bit-identical to never
+        having released it.
+
+        Returns:
+            True if the state was released; False if there is no model, it is already released,
+            or no unchanged model file holds the full state
+        """
+        if not self.model_initialized or self.training_state_released or not self._state_file_matches():
+            return False
+        moments = (self.m_weights or []) + (self.v_weights or []) + (self.m_biases or []) + (self.v_biases or [])
+        before = sum(array.nbytes for array in self.weights + self.biases + moments) + sum(array.nbytes for array in self.adam_buffers.values())
+        self.released_dtypes = [array.dtype for array in self.weights + self.biases]
+        self.weights = [w.astype(INFERENCE_DTYPE) for w in self.weights]
+        self.biases = [b.astype(INFERENCE_DTYPE) for b in self.biases]
+        self.m_weights = self.v_weights = self.m_biases = self.v_biases = None
+        self.adam_buffers = {}
+        self.training_state_released = True
+        after = sum(array.nbytes for array in self.weights + self.biases)
+        self.log("ML Predictor: Released training state until the next training, predicting from {} weights ({:.1f} MB freed)".format(np.dtype(INFERENCE_DTYPE), (before - after) / 1048576.0))
+        return True
+
+    def _restore_training_state(self):
+        """
+        Bring back the full training state freed by release_training_state(), before training or saving.
+
+        Reloads the weights, biases, Adam moments and step count from the model file they were
+        saved to or loaded from, exactly as they were. If that file has gone, changed or cannot be
+        read, training carries on from the float16 weights cast back to their training dtypes,
+        with the moments starting from zero, and a warning is logged.
+        """
+        if not self.training_state_released:
+            return
+        layer_count = len(self.weights)
+        try:
+            if self._state_file_matches():
+                with np.load(self.state_filepath, allow_pickle=True) as data:
+                    state = {name: [np.array(data["{}_{}".format(name, i)]) for i in range(layer_count)] for name in ("weight", "bias", "m_weight", "v_weight", "m_bias", "v_bias")}
+                    adam_t = int(data["adam_t"][0])
+                if [w.shape for w in state["weight"]] == [w.shape for w in self.weights] and [b.shape for b in state["bias"]] == [b.shape for b in self.biases]:
+                    self.weights, self.biases = state["weight"], state["bias"]
+                    self.m_weights, self.v_weights, self.m_biases, self.v_biases = state["m_weight"], state["v_weight"], state["m_bias"], state["v_bias"]
+                    self.adam_t = adam_t
+                    self.training_state_released = False
+                    return
+        except Exception as e:
+            self.log("Warn: ML Predictor: Could not reload the training state from {}: {}".format(self.state_filepath, e))
+        self.log("Warn: ML Predictor: Model file {} has changed or gone since it was saved, continuing training from the float16 prediction weights".format(self.state_filepath))
+        dtypes = self.released_dtypes
+        self.weights = [w.astype(dtype) for w, dtype in zip(self.weights, dtypes[:layer_count])]
+        self.biases = [b.astype(dtype) for b, dtype in zip(self.biases, dtypes[layer_count:])]
+        self.m_weights = [np.zeros_like(w) for w in self.weights]
+        self.v_weights = [np.zeros_like(w) for w in self.weights]
+        self.m_biases = [np.zeros_like(b) for b in self.biases]
+        self.v_biases = [np.zeros_like(b) for b in self.biases]
+        self.adam_t = 0
+        self.training_state_released = False
 
     def _reset_adam_optimizer(self):
         """
@@ -1326,6 +1416,7 @@ class LoadPredictor:
             Validation MAE or None if training failed
         """
         self.log("ML Predictor: Starting {} training with {} epochs".format("initial" if is_initial else "fine-tune", epochs))
+        self._restore_training_state()
 
         # Create dataset with train/validation split
         result = self._create_dataset(
@@ -1993,6 +2084,7 @@ class LoadPredictor:
             return False
 
         try:
+            self._restore_training_state()
             # Prepare metadata
             metadata = {
                 "model_version": MODEL_VERSION,
@@ -2037,6 +2129,7 @@ class LoadPredictor:
             save_dict["adam_t"] = np.array([self.adam_t])
 
             np.savez(filepath, **save_dict)
+            self._remember_state_file(filepath)
             self.log("ML Predictor: Model saved to {}".format(filepath))
             return True
 
@@ -2100,6 +2193,8 @@ class LoadPredictor:
                 self.v_biases.append(data[f"v_bias_{i}"])
 
             self.adam_t = int(data["adam_t"][0])
+            self.training_state_released = False
+            self.adam_buffers = {}
 
             # Load normalization parameters
             if metadata.get("feature_mean"):
@@ -2137,6 +2232,7 @@ class LoadPredictor:
             self.dropout_rate = metadata.get("dropout_rate", 0.1)
 
             self.model_initialized = True
+            self._remember_state_file(filepath)
 
             self.log(
                 "ML Predictor: Model loaded from {} (trained {}, val_mae={:.4f}, val_bias={:+.4f})".format(
