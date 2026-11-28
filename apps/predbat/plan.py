@@ -2144,6 +2144,26 @@ class Plan:
         )
         return metric, battery_value, cost, metric_keep, battery_cycle, final_carbon_g, import_kwh_battery + import_kwh_house, export_kwh
 
+    def get_run_prediction_gates(self, handles):
+        """
+        Return the metric of a trial queued with launch_run_prediction_metric in the central forecast and in the PV90
+        scenario, as (gate, gate90); gate90 is None when PV90 is not simulated
+
+        Each is export_gate_metric plus that scenario's metric_keep. The gate leaves keep out so that holding the
+        battery up cannot pass for a saving when choosing whether to export at all (#2984); comparing two plans that
+        export the same amount at the same price, a move that takes the battery below best_soc_keep must still count.
+
+        Reads the scenarios the trial already simulated, so it costs no extra simulation. The PV10 handle is not read.
+        """
+        gates = []
+        for handle in (handles[0], handles[2]):
+            if handle is None:
+                gates.append(None)
+                continue
+            cost, import_kwh_battery, import_kwh_house, export_kwh, _, soc, _, battery_cycle, metric_keep, final_iboost, final_carbon_g = handle.get()
+            gates.append(dp4(self.export_gate_metric(self.end_record, cost, soc, final_iboost, battery_cycle, final_carbon_g, import_kwh_battery, import_kwh_house, export_kwh) + metric_keep))
+        return gates[0], gates[1]
+
     def in_charge_window(self, charge_window, minute_abs):
         """
         Work out if this minute is within the a charge window
@@ -4784,6 +4804,8 @@ class Plan:
                 selected_metric, selected_battery_value, selected_cost, selected_keep, selected_cycle, selected_carbon, selected_import, select_export = self.run_prediction_metric(
                     self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, end_record=self.end_record
                 )
+                # Central and PV90 gate metrics of the selected plan, simulated only when an equal-price move needs them
+                selected_gates = None
                 if first:
                     self.log(
                         "Swap export optimisation started metric {}{}, cost {}{}, battery_value {}kWh, min_improvement_swap {}{}".format(
@@ -4845,6 +4867,7 @@ class Plan:
                             selected_cycle = best_cycle_drop
                             selected_carbon = best_carbon_drop
                             selected_import = best_import_drop
+                            selected_gates = None
                             swapped = True
                             export_limit_target = pack_export_limit(EXPORT_MODE_IDLE)
                         else:
@@ -4865,7 +4888,8 @@ class Plan:
                     # partner is tried against the same plan: build each on its own copy of the limits
                     # and of the two windows it moves, queue them all as one batch, then read the results
                     # in partner order and keep the first that passes - the swap a one-at-a-time search
-                    # would have stopped at.
+                    # would have stopped at. Only if none passes on the blended metric are they read again
+                    # for a same-price later move judged on the central forecast and PV90 (#4292).
                     trials = []
                     for window_n in range(max(window_n_target - 32, 0), max(window_n_target, 0), 1):
                         previous_end = 0
@@ -4937,10 +4961,10 @@ class Plan:
                             handles = self.launch_run_prediction_metric(self.charge_limit_best, self.charge_window_best, try_export_window, try_export_limits, self.end_record)
                             trials.append((window_n, previous_end, window_length, export_limit, is_combined, limit_new, start_new, limit_target_new, start_target_new, handles))
 
-                    for window_n, previous_end, window_length, export_limit, is_combined, limit_new, start_new, limit_target_new, start_target_new, handles in trials:
+                    for gate_pass, (window_n, previous_end, window_length, export_limit, is_combined, limit_new, start_new, limit_target_new, start_target_new, handles) in [(False, trial) for trial in trials] + [(True, trial) for trial in trials]:
                         best_metric, best_battery_value, best_cost, best_keep, best_cycle, best_carbon, best_import, best_export = self.get_run_prediction_metric(handles)
 
-                        if self.debug_enable:
+                        if self.debug_enable and not gate_pass:
                             self.log(
                                 "Try to swap export combine {} window {} {}-{} previous end {} window_length {} limit {} with {} => {}-{} previous_end_target {} length_target {} limit_target {} metric {} (current best {}) cost {} keep {} cycle {} carbon {} import {}".format(
                                     is_combined,
@@ -4966,7 +4990,36 @@ class Plan:
                                 )
                             )
 
-                        if ((selected_metric - best_metric) >= self.metric_min_improvement_swap) and (best_metric <= selected_metric or ((export_mode_of(export_limit_target) == EXPORT_MODE_IDLE or is_combined))):
+                        moves_later = export_mode_of(export_limit_target) == EXPORT_MODE_IDLE or is_combined
+                        accept = not gate_pass and ((selected_metric - best_metric) >= self.metric_min_improvement_swap) and (best_metric <= selected_metric or moves_later)
+
+                        # Moving export to a later window at the same price keeps the option to stop it, which the earlier
+                        # export gives up once sold (#4292). The PV10 scenario simulates the plan with no replanning, so it
+                        # charges the later export for running the battery dry under high load, although the next replan
+                        # would see the load and trim or stop the export. Such a move is judged on the central forecast and
+                        # PV90 instead, leaving PV10 out: PV90 stays, as high solar on a battery held full is clipping that
+                        # replanning cannot recover. Partners are read a second time (gate_pass) for this, so it never
+                        # pre-empts a partner the blended metric keeps.
+                        trial_gates = None
+                        if gate_pass and moves_later and self.export_window_best[window_n]["average"] == self.export_window_best[window_n_target]["average"]:
+                            if selected_gates is None:
+                                selected_gates = self.get_run_prediction_gates(
+                                    (
+                                        self.launch_run_prediction_single(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, PV_SCENARIO_NOMINAL, end_record=self.end_record),
+                                        None,
+                                        self.launch_run_prediction_single(self.charge_limit_best, self.charge_window_best, self.export_window_best, self.export_limits_best, PV_SCENARIO_PV90, end_record=self.end_record) if handles[2] is not None else None,
+                                    )
+                                )
+                            trial_gates = self.get_run_prediction_gates(handles)
+                            accept = trial_gates[0] <= selected_gates[0] and (trial_gates[1] is None or trial_gates[1] <= selected_gates[1])
+
+                        if accept:
+                            if self.debug_enable and trial_gates is not None:
+                                self.log(
+                                    "Swap export window {} to {} at the same price judged on the central forecast {} (was {}) and PV90 {} (was {}), not the blended metric (#4292)".format(
+                                        window_n, window_n_target, trial_gates[0], selected_gates[0], trial_gates[1], selected_gates[1]
+                                    )
+                                )
                             if self.debug_enable:
                                 self.log(
                                     "Swap export window {} {}-{} limit {} with {} => {}-{} metric {}{}, selected_metric {}{}, min_improvement_swap {}, cost {}{}, keep {}kWh, cycle {}kWh, carbon {}kg, import {}kWh".format(
@@ -5005,6 +5058,7 @@ class Plan:
                             selected_cycle = best_cycle
                             selected_carbon = best_carbon
                             selected_import = best_import
+                            selected_gates = trial_gates
                             swapped = True
                             swapped_target[window_n_target] = True
                             break
