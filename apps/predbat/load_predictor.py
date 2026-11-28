@@ -23,6 +23,7 @@ and cyclical time features (minute-of-day, day-of-week, day-of-year).
 import numpy as np
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone, timedelta
 
 # Architecture constants (not user-configurable)
@@ -39,6 +40,12 @@ PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30
 HIDDEN_SIZES = [512, 256, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Batch size
 ADAM_CHUNK = 131072  # Elements per chunk of the optimiser step (1 MB of float64): few enough calls to cost little, small enough to keep its buffers small
+# The optimiser step is element-wise, and NumPy runs element-wise operations on one core (only BLAS calls such as np.dot
+# are threaded), so a large parameter's step is split into ADAM_THREADS slices run in parallel: NumPy releases the GIL in
+# its inner loops. Natively 3 threads ran the step 2.0x faster, 2 gave 1.6x and 4 gave 1.8x, being bound by memory bandwidth
+ADAM_THREADS = max(1, min(3, os.cpu_count() or 1))
+ADAM_SPLIT_MIN = 32768  # Parameters with fewer elements stay on one thread, where the hand-off would cost more than it saves
+_ADAM_POOL = None  # Worker threads for the optimiser step, made on a training's first step and shut down when it ends
 MAX_BATCHES_PER_EPOCH = 200  # Cap on SGD batches per epoch - with importance sampling this keeps training
 # cost constant regardless of how many days of history are loaded
 
@@ -60,6 +67,34 @@ TOTAL_FEATURES = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_I
 # of this and made one case's forecast far too flat. The limit is part of the input transform a model is trained under, so
 # save() records it and load() discards a model saved under a different one
 FEATURE_Z_LIMIT = 5.0
+
+
+def _adam_pool():
+    """Return the optimiser step's worker pool (ADAM_THREADS - 1 workers; the caller runs the first slice), made on first use."""
+    global _ADAM_POOL
+    if _ADAM_POOL is None:
+        _ADAM_POOL = ThreadPoolExecutor(max_workers=max(1, ADAM_THREADS - 1), thread_name_prefix="load_ml_adam")
+    return _ADAM_POOL
+
+
+def release_adam_pool():
+    """Shut down the optimiser step's worker pool, if there is one, so no idle threads outlive a training run."""
+    global _ADAM_POOL
+    if _ADAM_POOL is not None:
+        _ADAM_POOL.shutdown(wait=True)
+        _ADAM_POOL = None
+
+
+def zero_non_finite(array):
+    """Set NaN and +/-inf in a float array to 0 in place, returning it: np.nan_to_num(copy=False, nan=0, posinf=0, neginf=0).
+
+    nan_to_num makes several masked passes even when there is nothing to replace. A finite sum means every element is
+    finite (any NaN or inf, or inf - inf, makes the sum non-finite), so one sum() pass decides whether those are needed;
+    an all-finite array whose sum overflows just runs a nan_to_num that changes nothing.
+    """
+    if not np.isfinite(array.sum()):
+        np.nan_to_num(array, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    return array
 
 
 def bound_normalised(features):
@@ -167,10 +202,10 @@ class WindowedFeatures:
         if self.mean is not None and self.std is not None:
             batch -= self.mean
             batch /= self.std
-            np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            zero_non_finite(batch)
             bound_normalised(batch)
         else:
-            np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            zero_non_finite(batch)
         return batch[0] if scalar else batch
 
 
@@ -484,13 +519,45 @@ class LoadPredictor:
             return m, v
 
         step_dtype = np.result_type(m, lr)
-        scratch_full = self._adam_buffer("scratch", m.dtype)
-        step_full = self._adam_buffer("step", step_dtype)
-        m_hat_full = step_full if step_dtype == m.dtype else self._adam_buffer("m_hat", m.dtype)
-        flat_param, flat_m, flat_v, flat_grad = param.reshape(-1), m.reshape(-1), v.reshape(-1), grad.reshape(-1)
-        size = flat_m.size
-        for start in range(0, size, ADAM_CHUNK):
-            stop = min(start + ADAM_CHUNK, size)
+        flat = (param.reshape(-1), m.reshape(-1), v.reshape(-1), grad.reshape(-1))
+        size = flat[1].size
+        parts = ADAM_THREADS if size >= ADAM_SPLIT_MIN else 1
+        bounds = [size * part // parts for part in range(parts + 1)]
+        # Each slice gets its own buffers, made here on the calling thread so the workers only read the dict
+        buffers = []
+        for part in range(parts):
+            scratch_full = self._adam_buffer("scratch", m.dtype, part)
+            step_full = self._adam_buffer("step", step_dtype, part)
+            buffers.append((scratch_full, step_full, step_full if step_dtype == m.dtype else self._adam_buffer("m_hat", m.dtype, part)))
+        constants = (beta1, beta2, epsilon, correction1, correction2, lr, decay)
+        if parts == 1:
+            self._adam_step_slice(*flat, 0, size, buffers[0], *constants)
+            return m, v
+        futures = [_adam_pool().submit(self._adam_step_slice, *flat, bounds[part], bounds[part + 1], buffers[part], *constants) for part in range(1, parts)]
+        try:
+            self._adam_step_slice(*flat, bounds[0], bounds[1], buffers[0], *constants)
+        finally:
+            wait(futures)  # never leave a worker writing into the arrays after this returns or raises
+        for future in futures:
+            future.result()
+        return m, v
+
+    def _adam_step_slice(self, flat_param, flat_m, flat_v, flat_grad, begin, end, buffers, beta1, beta2, epsilon, correction1, correction2, lr, decay):
+        """
+        Run _adam_step's in-place step over elements begin:end of the flattened arrays, ADAM_CHUNK at a time.
+
+        Every operation is element-wise, so slices and chunks can fall anywhere and run in any
+        order, or at once on several threads, without changing a bit of the result.
+
+        Args:
+            flat_param, flat_m, flat_v, flat_grad: The flattened parameter, moments and gradient
+            begin, end: The element range to update
+            buffers: (scratch, step, m_hat) ADAM_CHUNK-element buffers for this slice alone
+            beta1, beta2, epsilon, correction1, correction2, lr, decay: As for _adam_step
+        """
+        scratch_full, step_full, m_hat_full = buffers
+        for start in range(begin, end, ADAM_CHUNK):
+            stop = min(start + ADAM_CHUNK, end)
             p, mc, vc, g = flat_param[start:stop], flat_m[start:stop], flat_v[start:stop], flat_grad[start:stop]
             scratch, step, m_hat = scratch_full[: stop - start], step_full[: stop - start], m_hat_full[: stop - start]
             np.multiply(mc, beta1, out=mc)
@@ -515,11 +582,10 @@ class LoadPredictor:
                 p *= decay
             if not np.isfinite(p.sum()):
                 np.nan_to_num(p, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-        return m, v
 
-    def _adam_buffer(self, name, dtype):
-        """Return a reusable ADAM_CHUNK-element scratch array of dtype for the optimiser step, made on first use."""
-        key = (name, np.dtype(dtype))
+    def _adam_buffer(self, name, dtype, part=0):
+        """Return a reusable ADAM_CHUNK-element scratch array of dtype for slice part of the optimiser step, made on first use."""
+        key = (name, np.dtype(dtype), part)
         buffer = self.adam_buffers.get(key)
         if buffer is None:
             buffer = np.empty(ADAM_CHUNK, dtype=dtype)
@@ -1528,6 +1594,7 @@ class LoadPredictor:
 
         # The optimiser's scratch arrays are only needed while training; do not keep them for the model's lifetime
         self.adam_buffers = {}
+        release_adam_pool()
         self.training_timestamp = datetime.now(timezone.utc)
         self.validation_mae = best_val_loss
         self.validation_bias = float(best_val_bias)

@@ -20,7 +20,8 @@ import tracemalloc
 
 import numpy as np
 
-from load_predictor import LoadPredictor, TOTAL_FEATURES
+import load_predictor
+from load_predictor import LOOKBACK_STEPS, NUM_TIME_FEATURES, LoadPredictor, TOTAL_FEATURES, WindowedFeatures
 
 
 def reference_relu(x):
@@ -368,6 +369,9 @@ def test_early_stopping_restores_the_best_epoch(my_predbat=None):
     record = lambda: snapshots.append([array.copy() for array in predictor.weights + predictor.biases])
     predictor.train(load_data, now_utc, is_initial=True, epochs=40, time_decay_days=7, patience=2, progress_callback=record)
     ema = [float(match) for message in logs for match in re.findall(r"ema_combined=([0-9.]+)", message)]
+    if load_predictor._ADAM_POOL is not None:
+        print("ERROR: train() left the optimiser's thread pool running")
+        failed += 1
     if not any("Early stopping" in message for message in logs):
         print("ERROR: training did not stop early, so this case is not exercised")
         return 1
@@ -387,6 +391,93 @@ def test_early_stopping_restores_the_best_epoch(my_predbat=None):
     return failed
 
 
+def test_threaded_adam_update_matches_the_reference(my_predbat=None):
+    """Split over 1, 2 or 3 threads, several steps (one with NaN and +/-inf gradients in different slices) give the reference's bits"""
+    print("\n=== Testing the threaded optimiser step against the reference ===")
+    failed = 0
+    saved = load_predictor.ADAM_THREADS
+    try:
+        for threads in (1, 2, 3):
+            load_predictor.ADAM_THREADS = threads
+            load_predictor.release_adam_pool()
+            live = LoadPredictor(log_func=lambda message: None, learning_rate=0.001, weight_decay=0.01, dropout_rate=0.1)
+            live._initialize_weights()
+            reference = copy.deepcopy(live)
+            for step in range(4):
+                weight_grads, bias_grads = _training_dtype_grads(live, seed=500 + step)
+                if step == 2:
+                    size = weight_grads[0].size
+                    weight_grads[0].flat[[5, size // 2, size - 3]] = [np.nan, np.inf, -np.inf]
+                    weight_grads[1].flat[[7, weight_grads[1].size - 1]] = [np.inf, np.nan]
+                lr = np.float64(0.001) * np.float64(1.0 - step / 50.0)
+                reference_adam_update(reference, [g.copy() for g in weight_grads], [g.copy() for g in bias_grads], lr=lr)
+                live._adam_update([g.copy() for g in weight_grads], [g.copy() for g in bias_grads], lr=lr)
+                if not _all_same(_state(live), _state(reference)):
+                    print("ERROR: {} threads: optimiser state differs from the reference after step {}".format(threads, step + 1))
+                    failed += 1
+                    break
+            if (load_predictor._ADAM_POOL is not None) != (threads > 1):
+                print("ERROR: {} threads: thread pool {}".format(threads, "made" if load_predictor._ADAM_POOL is not None else "never made"))
+                failed += 1
+            load_predictor.release_adam_pool()
+            if load_predictor._ADAM_POOL is not None:
+                print("ERROR: release_adam_pool() left the pool in place")
+                failed += 1
+    finally:
+        load_predictor.ADAM_THREADS = saved
+        load_predictor.release_adam_pool()
+    if not failed:
+        print("✓ 1, 2 and 3 threads match the reference bit for bit, non-finite values included, and the pool is released")
+    return failed
+
+
+def _reference_batch(windows, indices):
+    """Batch rows as __getitem__ built them before the finiteness gate: nan_to_num on every batch."""
+    batch = windows._assemble(np.atleast_1d(windows.targets[indices]), np.empty((len(np.atleast_1d(windows.targets[indices])), TOTAL_FEATURES), dtype=np.float32))
+    if windows.mean is not None and windows.std is not None:
+        batch -= windows.mean
+        batch /= windows.std
+        np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        load_predictor.bound_normalised(batch)
+    else:
+        np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    return batch
+
+
+def test_batch_rows_match_the_reference(my_predbat=None):
+    """Training batches are bit-identical to always running nan_to_num, with and without non-finite inputs, and a finite batch skips it"""
+    print("\n=== Testing training batch rows against the reference ===")
+    failed = 0
+    steps = LOOKBACK_STEPS + 40
+    rng = np.random.default_rng(8)
+    indices = np.arange(30)
+    for label, poison in (("finite", False), ("non-finite", True)):
+        channels = [rng.standard_normal(steps).astype(np.float32) for _ in range(5)]
+        if poison:
+            channels[0][10], channels[2][20], channels[4][LOOKBACK_STEPS + 5] = np.nan, np.inf, -np.inf
+        windows = WindowedFeatures(channels, rng.standard_normal((steps, NUM_TIME_FEATURES)).astype(np.float32), np.arange(steps - LOOKBACK_STEPS, dtype=np.int64))
+        for normalised in (False, True):
+            windows.mean = (rng.standard_normal(TOTAL_FEATURES) * 0.1).astype(np.float32) if normalised else None
+            windows.std = (np.abs(rng.standard_normal(TOTAL_FEATURES)) + 0.5).astype(np.float32) if normalised else None
+            calls = []
+            real = np.nan_to_num
+            np.nan_to_num = lambda *args, **kwargs: (calls.append(1), real(*args, **kwargs))[1]
+            try:
+                live = windows[indices].copy()
+            finally:
+                np.nan_to_num = real
+            expected = _reference_batch(windows, indices)
+            if not _same_bytes(live, expected):
+                print("ERROR: {} {} batch differs from the reference".format(label, "normalised" if normalised else "raw"))
+                failed += 1
+            if not poison and calls:
+                print("ERROR: a finite {} batch still ran nan_to_num".format("normalised" if normalised else "raw"))
+                failed += 1
+    if not failed:
+        print("✓ batch rows match the reference with and without non-finite inputs, and finite batches skip nan_to_num")
+    return failed
+
+
 def run_ml_training_bitwise_tests(my_predbat=None):
     """Run the ML training bit-identity tests; return the number of failures."""
     failed = 0
@@ -399,4 +490,6 @@ def run_ml_training_bitwise_tests(my_predbat=None):
     failed += test_forward_matches_the_reference_when_the_bias_would_promote(my_predbat)
     failed += test_optimiser_buffers_follow_reset_and_load(my_predbat)
     failed += test_early_stopping_restores_the_best_epoch(my_predbat)
+    failed += test_threaded_adam_update_matches_the_reference(my_predbat)
+    failed += test_batch_rows_match_the_reference(my_predbat)
     return failed
