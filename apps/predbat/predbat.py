@@ -32,6 +32,18 @@ import threading
 
 IS_COMPILED = getattr(sys, "frozen", False)
 
+# OpenBLAS (NumPy's BLAS on Linux) keeps its worker threads busy-waiting after every matrix product. In a LoadML training
+# that spin was 43% of all CPU used (1173 s of CPU against 674 s with this, for the same 299 s of training), taken from
+# whatever else shares the machine, and it held the cores the optimiser step's own threads wanted. Measured between
+# matrix products, every value from 1 to 10 left the same CPU in use (only the products' own), so 4 is at the floor;
+# 0 is not lower, it spins as long as leaving it unset. It is read once when OpenBLAS loads, so it must be set before
+# anything imports NumPy (only components that need it do, lazily); a value already in the environment is kept
+_OPENBLAS_TIMEOUT_PRESET = "OPENBLAS_THREAD_TIMEOUT" in os.environ
+os.environ.setdefault("OPENBLAS_THREAD_TIMEOUT", "4")
+if not _OPENBLAS_TIMEOUT_PRESET and "numpy" in sys.modules:
+    # Something imported NumPy first (a new import above "import predbat" in an entry point, say), so this cannot apply
+    print("Warn: NumPy was loaded before predbat.py set OPENBLAS_THREAD_TIMEOUT, so OpenBLAS's idle threads will keep spinning")
+
 import hass as hass
 import pytz
 import asyncio

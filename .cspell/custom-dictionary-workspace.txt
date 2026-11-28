@@ -245,6 +245,7 @@ eonnext
 epod
 epvtoday
 errno
+esac
 ESSAPI
 etime
 ETIMEDOUT
@@ -266,6 +267,7 @@ exportlimit
 exportvalue
 facecolor
 faketime
+fcntl
 fdpwr
 fdsoc
 feedin
@@ -390,8 +392,10 @@ invopop
 iot
 IPPROTO
 isinstance
+isneginf
 isoformat
 isort
+isposinf
 itemsize
 itemtype
 ivtime
@@ -564,6 +568,7 @@ oninput
 onmouseout
 onmouseover
 openapi
+OPENBLAS
 openrouter
 openweathermap
 Opticaster

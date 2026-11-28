@@ -414,6 +414,7 @@ from tests.test_car_charger_control import run_car_charger_control_tests
 from tests.test_car_cancel import run_car_cancel_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
+from tests.test_openblas_env import test_openblas_env
 from tests.test_coordinator import test_coordinator_all
 from tests.test_discovery_contract import run_discovery_contract_tests
 from tests.test_discovery_catalogue import test_discovery_catalogue_all
@@ -423,6 +424,7 @@ from tests.test_load_ml import test_load_ml
 from tests.test_load_ml_rollout import run_load_ml_rollout_tests
 from tests.test_ml_memory import run_ml_memory_tests
 from tests.test_ml_training_bitwise import run_ml_training_bitwise_tests
+from tests.test_ml_lean_inference import run_ml_lean_inference_tests
 from tests.test_ml_training_perf import run_ml_training_perf_tests
 from tests.test_temperature import test_temperature
 from tests.test_http_sync import run_http_sync_tests
@@ -1014,6 +1016,7 @@ def main():
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),
+        ("openblas_env", test_openblas_env, "OPENBLAS_THREAD_TIMEOUT set before NumPy loads", False),
         ("coordinator", test_coordinator_all, "Discovery catalogue coordinator tests", False),
         ("discovery_contract", run_discovery_contract_tests, "Discovery reporter contract checks", False),
         ("discovery_catalogue", test_discovery_catalogue_all, "End-to-end discovery catalogue assembly and the observe-only invariant", False),
@@ -1120,6 +1123,7 @@ def main():
         # ML training memory: dataset construction, normalisation dtype and statistics accuracy
         ("ml_memory", run_ml_memory_tests, "ML training memory tests", False),
         ("ml_training_bitwise", run_ml_training_bitwise_tests, "ML training bit-identity tests", False),
+        ("ml_lean_inference", run_ml_lean_inference_tests, "ML lean inference between trainings tests", False),
         # Production-scale ML training harness against a captured history fixture
         ("ml_training_perf", run_ml_training_perf_tests, "ML training performance tests", True),
         ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),

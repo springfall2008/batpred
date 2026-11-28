@@ -23,6 +23,9 @@ and cyclical time features (minute-of-day, day-of-week, day-of-year).
 import numpy as np
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor, wait
+
+from utils import available_cpu_count
 from datetime import datetime, timezone, timedelta
 
 # Architecture constants (not user-configurable)
@@ -38,7 +41,10 @@ OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30 min)
 HIDDEN_SIZES = [512, 256, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Batch size
+INFERENCE_DTYPE = np.float16  # Weights kept for prediction between trainings: a 48 h forecast moves about 0.01% from float64, for a quarter of the memory
 ADAM_CHUNK = 131072  # Elements per chunk of the optimiser step (1 MB of float64): few enough calls to cost little, small enough to keep its buffers small
+ADAM_SPLIT_MIN = 32768  # Parameters with fewer elements stay on one thread, where the hand-off would cost more than it saves
+_ADAM_POOL = None  # Worker threads for the optimiser step, made on a training's first step and shut down when it ends
 MAX_BATCHES_PER_EPOCH = 200  # Cap on SGD batches per epoch - with importance sampling this keeps training
 # cost constant regardless of how many days of history are loaded
 
@@ -60,6 +66,50 @@ TOTAL_FEATURES = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_I
 # of this and made one case's forecast far too flat. The limit is part of the input transform a model is trained under, so
 # save() records it and load() discards a model saved under a different one
 FEATURE_Z_LIMIT = 5.0
+
+
+def adam_thread_count():
+    """
+    Return how many threads the optimiser step should split a large parameter across.
+
+    The step is element-wise, and NumPy runs element-wise operations on one core (only BLAS calls
+    such as np.dot are threaded), so a large parameter's step is split into slices run in parallel:
+    NumPy releases the GIL in its inner loops. Natively 3 threads ran the step 2.0x faster, 2 gave
+    1.6x and 4 gave 1.8x, being bound by memory bandwidth, so at most 3 - and never more than the
+    CPUs this process may use, which in a container is its quota rather than the host's cores.
+    """
+    return max(1, min(3, available_cpu_count()))
+
+
+ADAM_THREADS = adam_thread_count()
+
+
+def _adam_pool():
+    """Return the optimiser step's worker pool (ADAM_THREADS - 1 workers; the caller runs the first slice), made on first use."""
+    global _ADAM_POOL
+    if _ADAM_POOL is None:
+        _ADAM_POOL = ThreadPoolExecutor(max_workers=max(1, ADAM_THREADS - 1), thread_name_prefix="load_ml_adam")
+    return _ADAM_POOL
+
+
+def release_adam_pool():
+    """Shut down the optimiser step's worker pool, if there is one, so no idle threads outlive a training run."""
+    global _ADAM_POOL
+    if _ADAM_POOL is not None:
+        _ADAM_POOL.shutdown(wait=True)
+        _ADAM_POOL = None
+
+
+def zero_non_finite(array):
+    """Set NaN and +/-inf in a float array to 0 in place, returning it: np.nan_to_num(copy=False, nan=0, posinf=0, neginf=0).
+
+    nan_to_num makes several masked passes even when there is nothing to replace. A finite sum means every element is
+    finite (any NaN or inf, or inf - inf, makes the sum non-finite), so one sum() pass decides whether those are needed;
+    an all-finite array whose sum overflows just runs a nan_to_num that changes nothing.
+    """
+    if not np.isfinite(array.sum()):
+        np.nan_to_num(array, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    return array
 
 
 def bound_normalised(features):
@@ -124,15 +174,22 @@ class WindowedFeatures:
         array is genuinely wanted.
         """
         out = np.empty((len(self.targets), TOTAL_FEATURES), dtype=np.float32)
-        self._assemble(self.targets, out)
-        if self.mean is not None and self.std is not None:
-            out -= self.mean
-            out /= self.std
-            np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-            bound_normalised(out)
-        else:
-            np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        self._normalise_and_clean(self._assemble(self.targets, out))
         return out.astype(dtype) if dtype is not None and dtype != np.float32 else out
+
+    def _normalise_and_clean(self, rows):
+        """Normalise assembled rows in place by mean and std when set, zero any non-finite value and bound them; return rows.
+
+        The one transform both training batches and the materialised matrix go through, so the two cannot drift apart.
+        """
+        if self.mean is not None and self.std is not None:
+            rows -= self.mean
+            rows /= self.std
+            zero_non_finite(rows)
+            bound_normalised(rows)
+        else:
+            zero_non_finite(rows)
+        return rows
 
     def _assemble(self, target_chunks, out):
         """Write the feature rows for the given target chunks into out."""
@@ -163,14 +220,7 @@ class WindowedFeatures:
         rows = len(target_chunks)
         if self._scratch is None or len(self._scratch) < rows:
             self._scratch = np.empty((rows, TOTAL_FEATURES), dtype=np.float32)
-        batch = self._assemble(target_chunks, self._scratch)
-        if self.mean is not None and self.std is not None:
-            batch -= self.mean
-            batch /= self.std
-            np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-            bound_normalised(batch)
-        else:
-            np.nan_to_num(batch, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        batch = self._normalise_and_clean(self._assemble(target_chunks, self._scratch))
         return batch[0] if scalar else batch
 
 
@@ -255,6 +305,12 @@ class LoadPredictor:
         self.pattern_mae = None
         self.epochs_trained = 0
         self.model_initialized = False
+        # Between trainings only float16 prediction copies of the weights are kept (release_training_state);
+        # the full state is reloaded from the model file it was last saved to or loaded from
+        self.training_state_released = False
+        self.released_dtypes = None
+        self.state_filepath = None
+        self.state_file_stamp = None
 
     def _initialize_weights(self):
         """Initialise network weights using He initialisation (optimal for ReLU)"""
@@ -289,6 +345,95 @@ class LoadPredictor:
 
         self.adam_t = 0
         self.model_initialized = True
+        self.training_state_released = False
+        self._forget_state_file()  # fresh weights: a file saved or loaded earlier holds another model
+
+    def _file_stamp(self, filepath):
+        """Size and modification time of a file, or None if it cannot be read: enough to tell it has been rewritten."""
+        try:
+            stat = os.stat(filepath)
+            return (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            return None
+
+    def _remember_state_file(self, filepath):
+        """Record that filepath now holds this model's full training state, as saved or loaded."""
+        self.state_filepath = filepath
+        self.state_file_stamp = self._file_stamp(filepath)
+
+    def _forget_state_file(self):
+        """Record that no model file holds the current state any more: it has changed (or is about to) since the last save or load."""
+        self.state_filepath = None
+        self.state_file_stamp = None
+
+    def _state_file_matches(self):
+        """Whether the model file last saved or loaded is still there and unchanged since."""
+        return self.state_filepath is not None and self.state_file_stamp is not None and self._file_stamp(self.state_filepath) == self.state_file_stamp
+
+    def release_training_state(self):
+        """
+        Free the training state between trainings, keeping only what prediction needs.
+
+        Prediction needs neither the float64 weights nor the Adam moments: every fine-tune resets
+        the moments before its first step, and a float16 copy of the weights moves a 48 h forecast
+        by about 0.01%. So once the model file holds the full state (after a successful save() or
+        load()), keep float16 copies of the weights and biases and drop the rest. The next train()
+        or save() reloads the full state from that file, so training is bit-identical to never
+        having released it.
+
+        Returns:
+            True if the state was released; False if there is no model, it is already released,
+            or no unchanged model file holds the full state
+        """
+        if not self.model_initialized or self.training_state_released or not self._state_file_matches():
+            return False
+        moments = (self.m_weights or []) + (self.v_weights or []) + (self.m_biases or []) + (self.v_biases or [])
+        before = sum(array.nbytes for array in self.weights + self.biases + moments) + sum(array.nbytes for array in self.adam_buffers.values())
+        self.released_dtypes = [array.dtype for array in self.weights + self.biases]
+        self.weights = [w.astype(INFERENCE_DTYPE) for w in self.weights]
+        self.biases = [b.astype(INFERENCE_DTYPE) for b in self.biases]
+        self.m_weights = self.v_weights = self.m_biases = self.v_biases = None
+        self.adam_buffers = {}
+        self.training_state_released = True
+        after = sum(array.nbytes for array in self.weights + self.biases)
+        self.log("ML Predictor: Released training state until the next training, predicting from {} weights ({:.1f} MB freed)".format(np.dtype(INFERENCE_DTYPE), (before - after) / 1048576.0))
+        return True
+
+    def _restore_training_state(self):
+        """
+        Bring back the full training state freed by release_training_state(), before training or saving.
+
+        Reloads the weights, biases, Adam moments and step count from the model file they were
+        saved to or loaded from, exactly as they were. If that file has gone, changed or cannot be
+        read, training carries on from the float16 weights cast back to their training dtypes,
+        with the moments starting from zero, and a warning is logged.
+        """
+        if not self.training_state_released:
+            return
+        layer_count = len(self.weights)
+        try:
+            if self._state_file_matches():
+                with np.load(self.state_filepath, allow_pickle=True) as data:
+                    state = {name: [np.array(data["{}_{}".format(name, i)]) for i in range(layer_count)] for name in ("weight", "bias", "m_weight", "v_weight", "m_bias", "v_bias")}
+                    adam_t = int(data["adam_t"][0])
+                if [w.shape for w in state["weight"]] == [w.shape for w in self.weights] and [b.shape for b in state["bias"]] == [b.shape for b in self.biases]:
+                    self.weights, self.biases = state["weight"], state["bias"]
+                    self.m_weights, self.v_weights, self.m_biases, self.v_biases = state["m_weight"], state["v_weight"], state["m_bias"], state["v_bias"]
+                    self.adam_t = adam_t
+                    self.training_state_released = False
+                    return
+        except Exception as e:
+            self.log("Warn: ML Predictor: Could not reload the training state from {}: {}".format(self.state_filepath, e))
+        self.log("Warn: ML Predictor: Model file {} has changed or gone since it was saved, continuing training from the float16 prediction weights".format(self.state_filepath))
+        dtypes = self.released_dtypes
+        self.weights = [w.astype(dtype) for w, dtype in zip(self.weights, dtypes[:layer_count])]
+        self.biases = [b.astype(dtype) for b, dtype in zip(self.biases, dtypes[layer_count:])]
+        self.m_weights = [np.zeros_like(w) for w in self.weights]
+        self.v_weights = [np.zeros_like(w) for w in self.weights]
+        self.m_biases = [np.zeros_like(b) for b in self.biases]
+        self.v_biases = [np.zeros_like(b) for b in self.biases]
+        self.adam_t = 0
+        self.training_state_released = False
 
     def _reset_adam_optimizer(self):
         """
@@ -479,18 +624,49 @@ class LoadPredictor:
             param -= lr * (m / correction1) / (np.sqrt(v / correction2) + epsilon)
             if decay is not None:
                 param *= decay
-            if not np.isfinite(param.sum()):
-                np.nan_to_num(param, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            zero_non_finite(param)
             return m, v
 
         step_dtype = np.result_type(m, lr)
-        scratch_full = self._adam_buffer("scratch", m.dtype)
-        step_full = self._adam_buffer("step", step_dtype)
-        m_hat_full = step_full if step_dtype == m.dtype else self._adam_buffer("m_hat", m.dtype)
-        flat_param, flat_m, flat_v, flat_grad = param.reshape(-1), m.reshape(-1), v.reshape(-1), grad.reshape(-1)
-        size = flat_m.size
-        for start in range(0, size, ADAM_CHUNK):
-            stop = min(start + ADAM_CHUNK, size)
+        flat = (param.reshape(-1), m.reshape(-1), v.reshape(-1), grad.reshape(-1))
+        size = flat[1].size
+        parts = ADAM_THREADS if size >= ADAM_SPLIT_MIN else 1
+        bounds = [size * part // parts for part in range(parts + 1)]
+        # Each slice gets its own buffers, made here on the calling thread so the workers only read the dict
+        buffers = []
+        for part in range(parts):
+            scratch_full = self._adam_buffer("scratch", m.dtype, part)
+            step_full = self._adam_buffer("step", step_dtype, part)
+            buffers.append((scratch_full, step_full, step_full if step_dtype == m.dtype else self._adam_buffer("m_hat", m.dtype, part)))
+        constants = (beta1, beta2, epsilon, correction1, correction2, lr, decay)
+        if parts == 1:
+            self._adam_step_slice(*flat, 0, size, buffers[0], *constants)
+            return m, v
+        futures = [_adam_pool().submit(self._adam_step_slice, *flat, bounds[part], bounds[part + 1], buffers[part], *constants) for part in range(1, parts)]
+        try:
+            self._adam_step_slice(*flat, bounds[0], bounds[1], buffers[0], *constants)
+        finally:
+            wait(futures)  # never leave a worker writing into the arrays after this returns or raises
+        for future in futures:
+            future.result()
+        return m, v
+
+    def _adam_step_slice(self, flat_param, flat_m, flat_v, flat_grad, begin, end, buffers, beta1, beta2, epsilon, correction1, correction2, lr, decay):
+        """
+        Run _adam_step's in-place step over elements begin:end of the flattened arrays, ADAM_CHUNK at a time.
+
+        Every operation is element-wise, so slices and chunks can fall anywhere and run in any
+        order, or at once on several threads, without changing a bit of the result.
+
+        Args:
+            flat_param, flat_m, flat_v, flat_grad: The flattened parameter, moments and gradient
+            begin, end: The element range to update
+            buffers: (scratch, step, m_hat) ADAM_CHUNK-element buffers for this slice alone
+            beta1, beta2, epsilon, correction1, correction2, lr, decay: As for _adam_step
+        """
+        scratch_full, step_full, m_hat_full = buffers
+        for start in range(begin, end, ADAM_CHUNK):
+            stop = min(start + ADAM_CHUNK, end)
             p, mc, vc, g = flat_param[start:stop], flat_m[start:stop], flat_v[start:stop], flat_grad[start:stop]
             scratch, step, m_hat = scratch_full[: stop - start], step_full[: stop - start], m_hat_full[: stop - start]
             np.multiply(mc, beta1, out=mc)
@@ -513,13 +689,11 @@ class LoadPredictor:
             np.subtract(p, step, out=p)
             if decay is not None:
                 p *= decay
-            if not np.isfinite(p.sum()):
-                np.nan_to_num(p, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-        return m, v
+            zero_non_finite(p)
 
-    def _adam_buffer(self, name, dtype):
-        """Return a reusable ADAM_CHUNK-element scratch array of dtype for the optimiser step, made on first use."""
-        key = (name, np.dtype(dtype))
+    def _adam_buffer(self, name, dtype, part=0):
+        """Return a reusable ADAM_CHUNK-element scratch array of dtype for slice part of the optimiser step, made on first use."""
+        key = (name, np.dtype(dtype), part)
         buffer = self.adam_buffers.get(key)
         if buffer is None:
             buffer = np.empty(ADAM_CHUNK, dtype=dtype)
@@ -1276,7 +1450,20 @@ class LoadPredictor:
 
         return predictions
 
-    def train(
+    def train(self, *args, **kwargs):
+        """
+        Train or fine-tune the model: the arguments and the return value are _train()'s.
+
+        The optimiser's buffers and worker threads are released however training ends, including
+        when it raises after its first step, so neither outlives the run.
+        """
+        try:
+            return self._train(*args, **kwargs)
+        finally:
+            self.adam_buffers = {}
+            release_adam_pool()
+
+    def _train(
         self,
         load_minutes,
         now_utc,
@@ -1326,6 +1513,10 @@ class LoadPredictor:
             Validation MAE or None if training failed
         """
         self.log("ML Predictor: Starting {} training with {} epochs".format("initial" if is_initial else "fine-tune", epochs))
+        self._restore_training_state()
+        # From here the weights move on from the model file, even if training then fails or raises, so it no longer
+        # holds the state: only the next successful save() makes releasing safe again
+        self._forget_state_file()
 
         # Create dataset with train/validation split
         result = self._create_dataset(
@@ -1526,8 +1717,6 @@ class LoadPredictor:
                 )
             )
 
-        # The optimiser's scratch arrays are only needed while training; do not keep them for the model's lifetime
-        self.adam_buffers = {}
         self.training_timestamp = datetime.now(timezone.utc)
         self.validation_mae = best_val_loss
         self.validation_bias = float(best_val_bias)
@@ -1993,6 +2182,7 @@ class LoadPredictor:
             return False
 
         try:
+            self._restore_training_state()
             # Prepare metadata
             metadata = {
                 "model_version": MODEL_VERSION,
@@ -2037,6 +2227,7 @@ class LoadPredictor:
             save_dict["adam_t"] = np.array([self.adam_t])
 
             np.savez(filepath, **save_dict)
+            self._remember_state_file(filepath)
             self.log("ML Predictor: Model saved to {}".format(filepath))
             return True
 
@@ -2100,6 +2291,8 @@ class LoadPredictor:
                 self.v_biases.append(data[f"v_bias_{i}"])
 
             self.adam_t = int(data["adam_t"][0])
+            self.training_state_released = False
+            self.adam_buffers = {}
 
             # Load normalization parameters
             if metadata.get("feature_mean"):
@@ -2137,6 +2330,7 @@ class LoadPredictor:
             self.dropout_rate = metadata.get("dropout_rate", 0.1)
 
             self.model_initialized = True
+            self._remember_state_file(filepath)
 
             self.log(
                 "ML Predictor: Model loaded from {} (trained {}, val_mae={:.4f}, val_bias={:+.4f})".format(

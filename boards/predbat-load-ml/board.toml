@@ -1,0 +1,327 @@
+# Board predbat-load-ml: cut the time and peak memory of LoadML's initial training, with the trained model unchanged.
+# Run it with the board runner from agent-memory-supabase (runner/README.md there):
+#     board-runner run boards/predbat-load-ml/board.toml
+# It needs coverage/load_ml_benchmark and its local fixture first (see README.md beside this file).
+
+board = "predbat-load-ml"
+scope = "predbat-devs"
+workspace = "~/predbat/batpred"
+# The GitHub repository: written into the goal as Repo:, so a fact's commit links to GitHub once pushed.
+repo = "springfall2008/batpred"
+
+goal = """Cut the time and memory LoadML's initial training takes. On the LoadML training benchmark \
+(coverage/load_ml_benchmark: Predbat standalone in a Linux container with LoadML on, no saved model and a real 90-day \
+training history, timing the component's work up to and including its first initial training), lower the training \
+wall time by at least 25% and the process's peak RSS over that cycle by at least 25% against main, with the trained \
+model's 48 h forecast identical to main's at 2 dp. Peak memory and runtime are what decide whether a small device copes \
+with LoadML."""
+
+done_when = """Facts show a single branch that, measured back to back with main on the same machine and benchmark, has \
+training_seconds and the absolute peak_rss_mb each at least 25% below main's; forecast_digest equal to main's in every \
+run, epochs_trained equal to main's and val_mae equal to main's at 4 dp; rss_after_mb no more than 10% above main's; and \
+./run_all --quick and ./run_pre_commit passing on the branch. The board's measurement (boards/predbat-load-ml/measure.py) \
+then confirms it over 3 interleaved rounds, using medians."""
+
+rules = """Rules for board predbat-load-ml.
+Baseline first: until the board has a confirmed baseline fact, the only intent is the baseline intent, and no saving \
+work starts. That intent records the main commit hash, runs `coverage/load_ml_benchmark <main checkout> <out dir>` on \
+main twice (every run's figures: training_seconds, training_cpu_seconds, training_tick_seconds, rss_before_mb, \
+peak_rss_mb, rss_after_mb, and whether forecast_digest, epochs_trained and val_mae agree between the two runs), then \
+maps where the time goes with `coverage/load_ml_benchmark --profile <tree> <out dir>` (it writes <out dir>/profile.txt, \
+cProfile's top functions over the LoadML ticks by cumulative and by own time) and where the memory goes with \
+`coverage/load_ml_benchmark --tracemalloc <tree> <out dir>` (tracemalloc.txt, the largest live allocations after \
+training). A profiled run's figures include the profiler's overhead, so they are never evidence; measure.py refuses \
+them. The baseline fact states the share of training_seconds spent inside NumPy and BLAS kernels (matrix products and \
+element-wise operations), since under this board's rule that maths cannot be reordered. Every later figure is compared with main, and \
+the profile is what the lead plans from.
+Stop rule: if the baseline's profile, or later facts, show the 25% time cut cannot be reached without changing the \
+floating-point maths (for example most of training_seconds is inside BLAS matrix products whose inputs and order must \
+stay bit-identical), the lead stores a hint saying so with the figures and stops the board instead of spending the \
+intent budget finding out. The person then decides whether to lower the target or to move to an accuracy-based rule.
+Same work, faster: the trained model must be the one main trains. Never change the epochs, the patience, the \
+curriculum (window, step, passes), the learning rate or its schedule, the network's size or layers, the history length \
+or load_ml_database_days, the validation holdout, the time decay, the dropout, the random seeds, or the diagnostics \
+the stats sensor publishes. Never skip work whose output is kept or published. The forecast digest, epochs_trained \
+and val_mae must match main's: any change to the floating-point maths that changes them is refuted, whatever the \
+saving. In practice this means the arithmetic must stay bit-identical.
+In bounds: copies and temporaries; memory layout and array types where the result is bit-identical; dataset construction \
+and the windowed features; the pure-Python loops around the maths (the npz history turned into dicts and back, the \
+fetch and merge of history, the minute-data conversions); work done twice or kept longer than it is needed; running \
+independent work concurrently, provided the results stay bit-identical. Because the target is the absolute peak, \
+cutting the RSS Predbat already holds when LoadML starts counts too; such a change must also leave every plan \
+unchanged. Both LoadML ticks are measured (the npz load and the training tick), so moving work from one to the other \
+saves nothing.
+Not in bounds: the BLAS thread count and other environment variables (the benchmark fixes them), and anything that \
+changes when or how often LoadML trains.
+How to work: Each intent gets its own git worktree of ~/predbat/batpred at \
+~/predbat/batpred/.worktrees/board-loadml-<first 8 chars of the intent id>, on a new local branch \
+board/predbat-load-ml/<same 8 chars>. It starts from the commit the intent names. If the intent names none, start from \
+main, or from any earlier board commit whose fact is confirmed, and say which in the fact. To combine savings, \
+cherry-pick, merge or rebase board commits onto the branch. Use merge and rebase only on your own intent's branch, in \
+your own worktree: never on main or another intent's branch, which other facts cite by commit. Find where the time or \
+memory goes before changing code, naming the functions and their seconds or the objects and their MB.
+Shell commands: workers run with a fixed allow list (the [permissions] below), and a command outside it is refused, \
+not asked about. Run `cd <dir>` as a Bash call of its own; it carries over to later calls. Never put `cd` and `git` in \
+the same call: that chain is refused even when each part is allowed. Create a worktree from the main checkout with \
+absolute paths (`git worktree add -b <branch> <absolute worktree path> <commit>`), then `cd <worktree>` in its own \
+call, then test there one command per call (`cd <worktree>/coverage`, then the test suites under the benchmark lock as \
+How to verify says). Every \
+git command that changes a branch, the index or the files (add, commit, cherry-pick, merge, rebase, restore, checkout, \
+switch, stash) must name your worktree by its canonical absolute path, with no `..` and no symlink: \
+`git -C <absolute worktree path> commit ...`. The plain form is refused wherever you are, because in the main checkout, \
+where the benchmark runs, it would move main. Write the commit message to a file under \
+/tmp/predbat-board/load-ml/<intent short id>/ and commit with `git -C <worktree> commit -F <file>`: the permission \
+check reads the whole command line, so a message given with -m that happens to contain a denied phrase (such as \
+`worktree remove` or `branch -d`) is refused. Reading git (status, log, diff, show, rev-parse, branch, worktree list or \
+add) works plain or with -C; deleting, moving or force-resetting a branch or a worktree does not. There is no rm: \
+leave files in place, or overwrite them. Python is allowed for profiling and analysis (python3, or \
+~/predbat/batpred/coverage/venv/bin/python3 when a script needs Predbat's dependencies, such as a quick check that a \
+change keeps LoadPredictor's outputs bit-identical on synthetic data), but never use it to do what the deny list \
+refuses, and never install packages (no pip, no `python3 -m pip`). Avoid subshells `( ... )`. The GitNexus tools that \
+read the index (impact, context, query, detect_changes) are available for the impact analysis CLAUDE.md asks for; the \
+index may predate recent files, so confirm callers with grep too. A refused command means that spelling is not \
+allowed, not that the intent is blocked: retry it in an allowed form (one allowed command per call is always accepted) \
+before giving up. Whatever happens, end with a BOARD-WORK line; a run that ends without one is counted as lost.
+Commits: each change is one commit whose message starts `board(predbat-load-ml <intent short id>): <what it saves>`, \
+so `git log --oneline main..<commit>` lists every saving in a tree. Run that before building on a commit, to see what \
+it already contains.
+Small savings count: a change that keeps the trained model identical and passes the tests is kept when it saves \
+anything the measurement can resolve, and is stacked onto the best tree with the others; whether the stack meets the \
+goal is settled by measuring the stack. An intent's "Give up when" names the point at which the idea cannot work (the \
+time or memory is not where it was thought to be, or saving it would change the trained model), never a minimum saving.
+How to verify:
+- Benchmark = `coverage/load_ml_benchmark <tree> <out dir>`, run from the main checkout. It writes \
+<out dir>/result.json with ok, training_seconds, training_cpu_seconds, training_tick_seconds, rss_before_mb, \
+peak_rss_mb, rss_after_mb, forecast_digest, val_mae, epochs_trained and queued_seconds, plus forecast.json and \
+predbat.log. One run takes several minutes, and only one runs at a time on the machine: the benchmark holds a lock and \
+says when it is waiting for another run to finish, so never start two at once yourself.
+- Evidence is one run of main and one of the branch, back to back. Run a second pair only if the change is under about \
+5% or the figures look odd (a run whose queued_seconds is large was still measured alone, since the lock is held for \
+the whole run).
+- Linux figures from the benchmark only. macOS timings and RSS are not evidence.
+- The trained model must be identical: the branch's forecast_digest, epochs_trained and val_mae (at 4 dp) equal main's \
+in every run. Any difference makes the result refuted, whatever the saving. forecast.json in each out dir shows where \
+two forecasts differ; never quote its values on the board.
+- Before a confirmed saving: `./run_all --quick` and `./run_pre_commit` (both from coverage/, which set up their own \
+Python environment) pass on the branch. They load the CPU for minutes, so run them under the benchmark lock, from \
+<worktree>/coverage, so they never overlap another worker's measured run: \
+`python3 ~/predbat/batpred/coverage/memory_benchmark_tools/bench_lock.py /tmp/predbat-load-ml-benchmark.lock -- ./run_all --quick` \
+and `python3 ~/predbat/batpred/coverage/memory_benchmark_tools/bench_lock.py /tmp/predbat-load-ml-benchmark.lock -- ./run_pre_commit`. \
+Run nothing else CPU-heavy outside the lock while the board is running.
+Evidence: every fact about a commit starts with these lines, so other workers and the lead can see what a tree holds \
+and what it achieved:
+  Commit: <hash> on board/predbat-load-ml/<short id>
+  Built on: <hash it started from> (main, or the fact id of that commit)
+  Tree contains: one line per board commit in `git log --oneline main..<hash>`, each with the fact id that measured it
+  Time: <branch> s against main <main> s (<percent>); Peak: <branch> MB against main <main> MB (<percent>)
+  After (limit +10%): <branch> MB against main <main> MB (<percent>); Training: digest, epochs and val_mae equal|differ
+Then: every run's figures and the machine; what the saving removed (which functions and seconds, which objects and \
+MB); the commands run.
+Long output: logs, profiles and snapshots go under /tmp/predbat-board/load-ml/<intent short id>/. Facts cite the path \
+and quote only the key lines.
+Allowed beyond the base safety rules: creating local branches and worktrees in ~/predbat/batpred, running the \
+benchmark (it starts Linux containers), and local commits on board/predbat-load-ml/* branches. Everything stays local: \
+no push.
+Never: commit to main, move or delete another intent's branch, or push anything. Never edit coverage/load_ml_benchmark, \
+coverage/memory_benchmark_tools, the fixture or boards/. Never win time or memory by changing behaviour: no dropped or \
+disabled features or components, no less training, no changed outputs. Never weaken or skip tests. Never put customer \
+data, household data (forecast values, load figures from the fixture), instance ids or names on the board \
+(predbat-devs is public-safe)."""
+
+max_open_intents = 2
+claim_minutes = 120
+max_intents = 20
+
+[measure]
+command = "python3 boards/predbat-load-ml/measure.py"
+# 3 rounds of base and candidate is 6 runs of several minutes each, plus any queueing behind a worker's run
+timeout_minutes = 180
+
+[lead]
+model = "opus"
+round_every_minutes = 20
+# When the lead is stuck for ideas it asks a sub-agent on this model (agent-memory-supabase runner PR #17 or later).
+ideas_model = "fable"
+
+[[worker]]
+model = "opus"
+
+[[worker]]
+model = "sonnet"
+
+[permissions]
+# A local run on the maintainer's machine, so the workers are trusted with the tools the intents need: Python (to
+# profile with importtime, gc referrers or deeper tracemalloc), merge and rebase (to combine earlier board commits on
+# their own branch) and the everyday read-only tools. The list is advisory: it stops mistakes, not a determined worker.
+# A Python one-liner can do anything it denies, and ./run_all already runs the worktree's own code on the host.
+# What it is there to catch: pushing, moving main, deleting or moving another intent's branch or worktree, an allowed
+# command that writes a file or runs a command it was not meant to, and changing the shared venv.
+# How an entry matches: from the start of the command, with `*` spanning anything, so `git -C * diff*` matches any
+# command that starts `git -C ` and has ` diff` somewhere after it, not only the diff subcommand. That shapes the list:
+# - Git that writes is allowed only as `git -C */.worktrees/board-loadml-* ...`, as a plain `git merge` or `git commit`
+#   in the main checkout, where workers run the benchmark, would move main. A pattern cannot check that the path is
+#   canonical, so `<worktree>/..` is denied and the rules ask for the canonical path.
+# - Subcommands no entry allows (push, reset, clean, update-ref, fetch, pull) are refused by their absence, so they have
+#   no `git -C * ...` deny: such a deny would also match a commit message that mentions the word.
+# - The destroying forms of the subcommands that are allowed (branch, worktree, checkout, switch) are denied plain and
+#   with -C, and so are the options that let any git command write a file or run one (--output, -c, --exec).
+# - python3 is allowed, so the common pip spellings are denied; there is no rm or env entry, since no spelling-based
+#   deny catches every recursive rm (-R, --recursive, reordered flags) and env runs whatever follows it.
+# The GitNexus tools that only read the index are allowed for CLAUDE.md's impact analysis; rename, which edits code, is
+# not. test_measure.py checks real commands against both lists, and the shapes were checked under claude -p
+# --permission-mode dontAsk.
+allow = [
+  "Read(~/predbat/**)",
+  "Edit(~/predbat/batpred/.worktrees/board-loadml-*/**)",
+  "Write(~/predbat/batpred/.worktrees/board-loadml-*/**)",
+  "Read(//tmp/predbat-board/**)",
+  "Edit(//tmp/predbat-board/**)",
+  "Write(//tmp/predbat-board/**)",
+  "Glob",
+  "Grep",
+  "Bash(git worktree *)",
+  "Bash(git status*)",
+  "Bash(git diff*)",
+  "Bash(git log*)",
+  "Bash(git show*)",
+  "Bash(git rev-parse*)",
+  "Bash(git rev-list*)",
+  "Bash(git merge-base*)",
+  "Bash(git branch*)",
+  "Bash(git -C * worktree *)",
+  "Bash(git -C * status*)",
+  "Bash(git -C * diff*)",
+  "Bash(git -C * log*)",
+  "Bash(git -C * show*)",
+  "Bash(git -C * rev-parse*)",
+  "Bash(git -C * rev-list*)",
+  "Bash(git -C * merge-base*)",
+  "Bash(git -C * branch*)",
+  "Bash(git -C */.worktrees/board-loadml-* add *)",
+  "Bash(git -C */.worktrees/board-loadml-* commit *)",
+  "Bash(git -C */.worktrees/board-loadml-* cherry-pick *)",
+  "Bash(git -C */.worktrees/board-loadml-* merge *)",
+  "Bash(git -C */.worktrees/board-loadml-* rebase *)",
+  "Bash(git -C */.worktrees/board-loadml-* restore *)",
+  "Bash(git -C */.worktrees/board-loadml-* checkout *)",
+  "Bash(git -C */.worktrees/board-loadml-* switch *)",
+  "Bash(git -C */.worktrees/board-loadml-* stash*)",
+  "Bash(cd *)",
+  "Bash(coverage/load_ml_benchmark *)",
+  "Bash(*/coverage/load_ml_benchmark *)",
+  "Bash(./load_ml_benchmark *)",
+  "Bash(./run_all*)",
+  "Bash(./run_pre_commit*)",
+  "Bash(python3 *)",
+  "Bash(python *)",
+  "Bash(*/coverage/venv/bin/python3 *)",
+  "Bash(*/coverage/venv/bin/python *)",
+  "Bash(mkdir *)",
+  "Bash(cp *)",
+  "Bash(mv *)",
+  "Bash(touch *)",
+  "Bash(ls*)",
+  "Bash(cat *)",
+  "Bash(head *)",
+  "Bash(tail *)",
+  "Bash(wc *)",
+  "Bash(grep *)",
+  "Bash(find *)",
+  "Bash(sort *)",
+  "Bash(uniq *)",
+  "Bash(cut *)",
+  "Bash(tr *)",
+  "Bash(awk *)",
+  "Bash(sed *)",
+  "Bash(diff *)",
+  "Bash(du *)",
+  "Bash(file *)",
+  "Bash(stat *)",
+  "Bash(which *)",
+  "Bash(uname*)",
+  "Bash(sysctl *)",
+  "Bash(docker ps*)",
+  "Bash(docker info*)",
+  "Bash(docker images*)",
+  "Bash(date*)",
+  "mcp__gitnexus__impact",
+  "mcp__gitnexus__context",
+  "mcp__gitnexus__query",
+  "mcp__gitnexus__detect_changes",
+]
+deny = [
+  "Bash(git push*)",
+  "Bash(git reset*)",
+  "Bash(git update-ref*)",
+  "Bash(git clean*)",
+  "Bash(git fetch*)",
+  "Bash(git pull*)",
+  "Bash(git branch -f*)",
+  "Bash(git branch --force*)",
+  "Bash(git branch -D*)",
+  "Bash(git branch -d*)",
+  "Bash(git branch --delete*)",
+  "Bash(git branch -m*)",
+  "Bash(git branch -M*)",
+  "Bash(git branch --move*)",
+  "Bash(git branch -c*)",
+  "Bash(git branch -C*)",
+  "Bash(git branch --copy*)",
+  "Bash(git worktree remove*)",
+  "Bash(git worktree prune*)",
+  "Bash(git worktree move*)",
+  "Bash(git checkout -B*)",
+  "Bash(git switch -C*)",
+  "Bash(git switch --force-create*)",
+  "Bash(git -C * branch -f*)",
+  "Bash(git -C * branch --force*)",
+  "Bash(git -C * branch -D*)",
+  "Bash(git -C * branch -d*)",
+  "Bash(git -C * branch --delete*)",
+  "Bash(git -C * branch -m*)",
+  "Bash(git -C * branch -M*)",
+  "Bash(git -C * branch --move*)",
+  "Bash(git -C * branch -c*)",
+  "Bash(git -C * branch -C*)",
+  "Bash(git -C * branch --copy*)",
+  "Bash(git -C * worktree remove*)",
+  "Bash(git -C * worktree prune*)",
+  "Bash(git -C * worktree move*)",
+  "Bash(git -C * checkout -B*)",
+  "Bash(git -C * switch -C*)",
+  "Bash(git -C * switch --force-create*)",
+  "Bash(git *--output*)",
+  "Bash(git -c *)",
+  "Bash(git -C * -c *)",
+  "Bash(git *--exec*)",
+  "Bash(git -C */..*)",
+  "Bash(rm -rf*)",
+  "Bash(rm -fr*)",
+  "Bash(rm -r*)",
+  "Bash(gh *)",
+  "Bash(pip *)",
+  "Bash(pip3 *)",
+  "Bash(python3 -m pip*)",
+  "Bash(python -m pip*)",
+  "Bash(*/coverage/venv/bin/python3 -m pip*)",
+  "Bash(*/coverage/venv/bin/python -m pip*)",
+  "Bash(*/coverage/venv/bin/pip*)",
+  "Bash(rm -R*)",
+  "Bash(rm --recursive*)",
+  "Bash(docker rm*)",
+  "Bash(docker rmi*)",
+  "Bash(docker system*)",
+  "Edit(~/predbat/batpred/apps/**)",
+  "Write(~/predbat/batpred/apps/**)",
+  "Edit(~/predbat/batpred/coverage/**)",
+  "Write(~/predbat/batpred/coverage/**)",
+  "Edit(~/predbat/batpred/boards/**)",
+  "Write(~/predbat/batpred/boards/**)",
+  "mcp__gitnexus__rename",
+  "Bash(python3 -mpip*)",
+  "Bash(python -mpip*)",
+  "Bash(*/coverage/venv/bin/python3 -mpip*)",
+  "Bash(*/coverage/venv/bin/python -mpip*)",
+]
+max_turns = 300
+worker_timeout_minutes = 150

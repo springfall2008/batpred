@@ -12,6 +12,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
 import yaml
 
 HERE = Path(__file__).parent
@@ -105,6 +106,14 @@ def make_live(root, plant_leak=False):
     return live
 
 
+def write_ml_history(live, saved_utc, note=""):
+    """Write a synthetic predbat_ml_history.npz into live, shaped like the LoadML component's database file."""
+    metadata = json.dumps({"version": 1, "saved_utc": saved_utc.isoformat(), "step_minutes": 5, "n_steps": 288, "age_days": 1.0, "nan_sentinel": True, "iboost_subtracted": False, "note": note})
+    channel = np.linspace(0.0, 1.0, 288, dtype=np.float32)
+    np.savez_compressed(live / export_fixture.ML_HISTORY, metadata_json=np.array(metadata), load=channel, pv=channel, temp=channel, import_rate=channel, export_rate=channel)
+    return live / export_fixture.ML_HISTORY
+
+
 class TestBuildAppsYaml(unittest.TestCase):
     """build_apps_yaml turns the live apps.yaml into the benchmark's, with nothing real or networked left in it."""
 
@@ -143,6 +152,13 @@ class TestBuildAppsYaml(unittest.TestCase):
         self.assertIs(apps["db_primary"], True)
         self.assertIs(apps["db_enable"], True)
         self.assertNotIn("givtcp_rest", apps)
+
+    def test_build_apps_yaml_switches_load_ml_on_only_when_asked(self):
+        """The memory fixture keeps Load ML off; the LoadML fixture switches it and its forecast source on."""
+        self.assertIs(self.build()["load_ml_enable"], False)
+        apps = export_fixture.build_apps_yaml(self.template, self.live_args, self.neutral, self.totals, self.sizing, load_ml=True)["pred_bat"]
+        self.assertIs(apps["load_ml_enable"], True)
+        self.assertIs(apps["load_ml_source"], True)
 
     def test_build_apps_yaml_dummy_block_uses_live_sizing_and_totals(self):
         """The dummy inverter is sized from the live battery and its lifetime counters start at the history's totals."""
@@ -205,6 +221,76 @@ class TestExportPersonalDataCheck(unittest.TestCase):
             engine._close()
             out = Path(tmp) / "fixture"
             self.assertNotEqual(export_fixture.main(["--live", str(live), "--out", str(out), "--t0", T0.isoformat()]), 0)
+            self.assertFalse(out.exists())
+
+
+class TestLoadMlFixture(unittest.TestCase):
+    """--load-ml adds the live LoadML history, never a trained model, and switches LoadML on."""
+
+    def test_copy_ml_history_records_sha_and_saved_time(self):
+        """The npz is copied byte for byte, and its sha256 and saved time are returned for the manifest."""
+        with tempfile.TemporaryDirectory() as tmp:
+            live, out = Path(tmp) / "live", Path(tmp) / "out"
+            live.mkdir()
+            out.mkdir()
+            source = write_ml_history(live, T0 - timedelta(minutes=3))
+            info = export_fixture.copy_ml_history(live, out, T0)
+            self.assertEqual((out / export_fixture.ML_HISTORY).read_bytes(), source.read_bytes())
+            self.assertEqual(info["npz_sha256"], export_fixture._sha256(source))
+            self.assertEqual(datetime.fromisoformat(info["npz_saved_utc"]), T0 - timedelta(minutes=3))
+
+    def test_copy_ml_history_refuses_a_history_saved_after_t0(self):
+        """A history saved after T0 would be shifted backwards in time by LoadML, so the export refuses it."""
+        with tempfile.TemporaryDirectory() as tmp:
+            live, out = Path(tmp) / "live", Path(tmp) / "out"
+            live.mkdir()
+            out.mkdir()
+            write_ml_history(live, T0 + timedelta(minutes=5))
+            with self.assertRaises(ValueError) as caught:
+                export_fixture.copy_ml_history(live, out, T0)
+            self.assertIn("after T0", str(caught.exception))
+
+    def test_copy_ml_history_needs_the_file(self):
+        """No LoadML history on the live side is an error, not a fixture that silently trains on 28 days."""
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(FileNotFoundError):
+                export_fixture.copy_ml_history(Path(tmp), Path(tmp), T0)
+
+    def test_export_fixture_cli_with_load_ml_end_to_end(self):
+        """The LoadML fixture holds the npz and no model, records the npz in the manifest and has LoadML on."""
+        with tempfile.TemporaryDirectory() as tmp:
+            live = make_live(tmp)
+            write_ml_history(live, T0 - timedelta(minutes=2))
+            (live / "predbat_ml_model.npz").write_bytes(b"a trained model that must not be copied")
+            out = Path(tmp) / "fixture"
+            self.assertEqual(export_fixture.main(["--live", str(live), "--out", str(out), "--days", "28", "--load-ml", "--t0", T0.isoformat()]), 0)
+            self.assertTrue((out / export_fixture.ML_HISTORY).exists())
+            self.assertFalse((out / "predbat_ml_model.npz").exists())
+            manifest = json.loads((out / "manifest.json").read_text())
+            self.assertEqual(manifest["days"], 28)
+            self.assertEqual(manifest["npz_sha256"], export_fixture._sha256(live / export_fixture.ML_HISTORY))
+            self.assertIn("npz_saved_utc", manifest)
+            apps = yaml.safe_load((out / "apps.yaml").read_text())["pred_bat"]
+            self.assertIs(apps["load_ml_enable"], True)
+            self.assertIs(apps["load_ml_source"], True)
+
+    def test_export_fixture_cli_without_load_ml_has_no_npz(self):
+        """The memory fixture is unchanged: no LoadML history, LoadML off, no npz fields in the manifest."""
+        with tempfile.TemporaryDirectory() as tmp:
+            live = make_live(tmp)
+            write_ml_history(live, T0 - timedelta(minutes=2))
+            out = Path(tmp) / "fixture"
+            self.assertEqual(export_fixture.main(["--live", str(live), "--out", str(out), "--t0", T0.isoformat()]), 0)
+            self.assertFalse((out / export_fixture.ML_HISTORY).exists())
+            self.assertNotIn("npz_sha256", json.loads((out / "manifest.json").read_text()))
+
+    def test_export_refuses_a_secret_in_the_npz_metadata(self):
+        """The npz's metadata text is scanned in place of its compressed bytes, so a real value there is still caught."""
+        with tempfile.TemporaryDirectory() as tmp:
+            live = make_live(tmp)
+            write_ml_history(live, T0 - timedelta(minutes=2), note="contact jo@example.org")
+            out = Path(tmp) / "fixture"
+            self.assertNotEqual(export_fixture.main(["--live", str(live), "--out", str(out), "--load-ml", "--t0", T0.isoformat()]), 0)
             self.assertFalse(out.exists())
 
 

@@ -50,7 +50,7 @@ repos:
   - id: memory-benchmark-tools-tests
     name: memory benchmark tools unit tests
     language: python
-    additional_dependencies: [pyyaml, aiofiles, aiohttp, pytz]
+    additional_dependencies: [pyyaml, aiofiles, aiohttp, pytz, numpy]
     entry: python -m unittest discover -s coverage/memory_benchmark_tools
     files: ^coverage/memory_benchmark_tools/
     pass_filenames: false
@@ -59,6 +59,12 @@ repos:
     language: python
     entry: python -m unittest discover -s boards/predbat-memory
     files: ^boards/predbat-memory/
+    pass_filenames: false
+  - id: board-predbat-load-ml-tests
+    name: board predbat-load-ml measurement tests
+    language: python
+    entry: python -m unittest discover -s boards/predbat-load-ml
+    files: ^boards/predbat-load-ml/
     pass_filenames: false
   - id: owner-gate-tests
     name: owner gate workflow tests

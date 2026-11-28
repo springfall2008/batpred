@@ -77,6 +77,21 @@ class TestFindLeaks(unittest.TestCase):
             (root / "clean.txt").write_text("nothing here")
             self.assertEqual(scrub.find_leaks(root, ["SECRET-999", "unused"]), ["sub/db.bin"])
 
+    def test_byte_scans_skip_npz_files(self):
+        """Compressed arrays can match a pattern by chance, so .npz files are left out of both byte scans."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "history.npz").write_bytes(b"\x00SECRET-999 jo@example.org\x01")
+            (root / "same.json").write_text("SECRET-999")
+            self.assertEqual(scrub.find_leaks(root, ["SECRET-999"]), ["same.json"])
+            self.assertEqual(scrub.find_personal_data(root), [])
+
+    def test_scan_text_reports_leaks_and_personal_data_by_kind(self):
+        """scan_text checks a string the way the byte scans check a file, naming what it found by kind only."""
+        self.assertEqual(scrub.scan_text('{"version": 1}', ["SECRET-999"], []), [])
+        self.assertEqual(scrub.scan_text('{"note": "SECRET-999"}', ["SECRET-999"], []), ["real identifier"])
+        self.assertEqual(scrub.scan_text('{"note": "jo@example.org"}', [], []), ["email"])
+
     def test_find_leaks_ignores_empty_secrets(self):
         """An empty secret would match every file, so it is ignored."""
         with tempfile.TemporaryDirectory() as tmp:

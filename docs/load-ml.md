@@ -121,6 +121,10 @@ If you see `Forward temperature/rate forecast ran out for N of 576 rollout steps
 - Validates on the last 24 hours of data
 - Saves model to disk: `predbat_ml_model.npz`
 
+**CPU use while training:**
+
+Training uses several CPU cores, whatever the `threads` setting in `apps.yaml` (that setting only controls the plan's threads). NumPy's matrix library uses its own threads for the network's matrix products. The optimiser step runs on up to 3 threads, never more than the CPUs Predbat may use, which in a container with a CPU limit is that limit rather than the host's core count. The threads exist only while a training runs.
+
 **Regularisation:**
 
 - **Weight Decay**: L2 penalty (0.01) applied to network weights to prevent overfitting
