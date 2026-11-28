@@ -24,7 +24,7 @@ import random
 import builtins
 import io
 
-import plan
+import utils
 import prediction_batch
 from const import PREDICT_STEP, PV_SCENARIO_NOMINAL, PV_SCENARIO_PV10, PV_SCENARIO_PV90
 from const import EXPORT_MODE_IDLE, EXPORT_MODE_TARGET
@@ -545,7 +545,7 @@ def test_available_cpu_count_respects_a_cgroup_quota():
     ]
 
     real_open = builtins.open
-    real_cpu_count = plan.cpu_count
+    real_cpu_count = utils.cpu_count
 
     for files, cores, expected, why in cases:
 
@@ -559,12 +559,12 @@ def test_available_cpu_count_respects_a_cgroup_quota():
             return real_open(path, *args, **kwargs)
 
         builtins.open = fake_open
-        plan.cpu_count = lambda count=cores: count
+        utils.cpu_count = lambda count=cores: count
         try:
-            got = plan.available_cpu_count()
+            got = utils.available_cpu_count()
         finally:
             builtins.open = real_open
-            plan.cpu_count = real_cpu_count
+            utils.cpu_count = real_cpu_count
 
         if got != expected:
             print("ERROR: files={} cores={} gave {} CPUs, expected {} ({})".format(files, cores, got, expected, why))
