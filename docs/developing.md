@@ -883,6 +883,21 @@ To see where the memory goes, add `--tracemalloc` (`coverage/memory_benchmark --
 
 See `boards/predbat-memory/README.md` for what the fixture holds, how identifiers are scrubbed, and the measured baseline. The tools' tests run with `python3 -m unittest discover -s coverage/memory_benchmark_tools`, and in pre-commit.
 
+### LoadML training benchmark
+
+`coverage/load_ml_benchmark <tree> <out dir>` times one LoadML initial training of Predbat from `<tree>` and measures its memory. It runs in the same offline Linux container as the memory benchmark, with BLAS pinned to 4 threads and the clock frozen. The run stops once the training tick completes. It writes `result.json`, holding the training's wall and CPU time, its peak RSS and the RSS after it, `val_mae`, and a digest of the 48-hour forecast. It also writes `forecast.json`, that forecast to 2 dp. The `predbat-load-ml` board (`boards/predbat-load-ml/`) uses it to make training faster and lighter. A change counts there only if its forecast matches main's to 2 dp.
+
+Its fixture also includes LoadML's saved history, so build it with `--load-ml`:
+
+```bash
+python3 coverage/memory_benchmark_tools/export_fixture.py --load-ml --days 28 --live <add-on config dir> --out coverage/load_ml_benchmark_data
+coverage/load_ml_benchmark . /tmp/load-ml-run
+```
+
+Add `--profile` to also write `profile.txt`, the top functions by cumulative and by own time over the LoadML ticks. Profiling slows the run, so its `result.json` says `"profiled": true` and its times are not comparable.
+
+Only one run of this benchmark goes at a time on a machine: a run holds `/tmp/predbat-load-ml-benchmark.lock` from building the image to the end of the run. A second run waits for the first, says that it is waiting, and records the wait as `queued_seconds` in its result, so two runs never share the CPU. The board's rules run the test suite under the same lock. The memory benchmark does not take it. See `boards/predbat-load-ml/README.md` for the fixture's contents and the measured baseline.
+
 ### Random scenario benchmarking
 
 Predbat can generate reproducible random scenarios, run them through the optimiser, and compare two runs. This is useful to check that a change to the optimiser
