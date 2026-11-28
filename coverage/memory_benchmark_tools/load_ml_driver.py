@@ -229,6 +229,9 @@ def run(out, timeout, profile, ready_timeout=180):
     """Run the benchmark and return the result dict."""
     from multiprocessing import set_start_method
 
+    # predbat before load_ml_component, as hass.py imports it in production: its module-level setup (such as
+    # OPENBLAS_THREAD_TIMEOUT, read once when NumPy loads OpenBLAS) must come before load_ml_component imports NumPy
+    import predbat
     import load_ml_component
 
     profiler = None
@@ -238,8 +241,6 @@ def run(out, timeout, profile, ready_timeout=180):
         profiler = cProfile.Profile()
     meter = TickMeter(profiler=profiler)
     instrument(load_ml_component.LoadMLComponent, meter)
-
-    import predbat
 
     set_start_method("fork")
     problems = []
