@@ -179,11 +179,6 @@ def relu(x):
     return np.maximum(0, x)
 
 
-def relu_derivative(x):
-    """Derivative of ReLU"""
-    return (x > 0).astype(np.float32)
-
-
 def huber_loss(y_true, y_pred, delta=1.0):
     """Huber loss - robust to outliers"""
     error = y_true - y_pred
@@ -396,8 +391,8 @@ class LoadPredictor:
             bias_grads.insert(0, np.sum(delta, axis=0))
 
             if i > 0:
-                # Propagate gradient to previous layer, masked by the ReLU's derivative: multiplying by
-                # the boolean mask is multiplying by 1.0 or 0.0 exactly as by relu_derivative's array
+                # Propagate gradient to previous layer, masked by the ReLU's derivative (1 where the
+                # pre-activation is positive, else 0): multiplying by the boolean mask is exact
                 delta = np.dot(delta, self.weights[i].T)
                 delta *= pre_activations[i - 1] > 0
                 # Apply dropout mask: zero out gradients for dropped neurons
@@ -1510,9 +1505,10 @@ class LoadPredictor:
                 best_val_bias = val_bias_mean
                 patience_counter = 0
                 # Checkpoint best weights, into the checkpoint's own arrays: a fresh copy each time would
-                # hold two full checkpoints at once while the old one is released
+                # hold two full checkpoints at once while the old one is released. casting="no" makes a
+                # dtype mismatch raise rather than silently narrow the checkpoint, as copy() never would
                 for best, current in zip(best_weights + best_biases, self.weights + self.biases):
-                    np.copyto(best, current)
+                    np.copyto(best, current, casting="no")
             else:
                 patience_counter += 1
 

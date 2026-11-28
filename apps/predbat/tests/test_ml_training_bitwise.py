@@ -350,6 +350,43 @@ def test_optimiser_buffers_follow_reset_and_load(my_predbat=None):
     return failed
 
 
+def test_early_stopping_restores_the_best_epoch(my_predbat=None):
+    """When training stops early, the weights and biases it ends with are exactly the best epoch's, not the last epoch's"""
+    print("\n=== Testing early stopping restores the best epoch's weights ===")
+    import re
+    from datetime import datetime, timezone
+
+    from tests.test_load_ml import _create_synthetic_load_data
+
+    failed = 0
+    now_utc = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=5, now_utc=now_utc)
+    logs, snapshots = [], []
+    predictor = LoadPredictor(log_func=logs.append, learning_rate=0.01, weight_decay=0.01, dropout_rate=0.1)
+    # The heartbeat runs after each epoch's validation and before its checkpoint, so each snapshot is that epoch's weights
+    record = lambda: snapshots.append([array.copy() for array in predictor.weights + predictor.biases])
+    predictor.train(load_data, now_utc, is_initial=True, epochs=40, time_decay_days=7, patience=2, progress_callback=record)
+    ema = [float(match) for message in logs for match in re.findall(r"ema_combined=([0-9.]+)", message)]
+    if not any("Early stopping" in message for message in logs):
+        print("ERROR: training did not stop early, so this case is not exercised")
+        return 1
+    final = predictor.weights + predictor.biases
+    matches = [epoch for epoch, snapshot in enumerate(snapshots) if _all_same(snapshot, final)]
+    if len(matches) != 1:
+        print("ERROR: the final weights match {} epochs' snapshots, expected exactly one".format(len(matches)))
+        failed += 1
+    elif matches[0] == len(snapshots) - 1:
+        print("ERROR: the final weights are the last epoch's, not the best epoch's")
+        failed += 1
+    elif ema[matches[0]] != min(ema):
+        print("ERROR: restored epoch {} has ema_combined {}, the best was {}".format(matches[0] + 1, ema[matches[0]], min(ema)))
+        failed += 1
+    if not failed:
+        print("✓ stopped after epoch {} and restored epoch {}, the best, bit for bit".format(len(snapshots), matches[0] + 1))
+    return failed
+
+
 def run_ml_training_bitwise_tests(my_predbat=None):
     """Run the ML training bit-identity tests; return the number of failures."""
     failed = 0
@@ -361,4 +398,5 @@ def run_ml_training_bitwise_tests(my_predbat=None):
     failed += test_forward_and_backward_match_the_reference_bitwise(my_predbat)
     failed += test_forward_matches_the_reference_when_the_bias_would_promote(my_predbat)
     failed += test_optimiser_buffers_follow_reset_and_load(my_predbat)
+    failed += test_early_stopping_restores_the_best_epoch(my_predbat)
     return failed
