@@ -839,6 +839,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.inverter_clock_skew_discharge_end = 0
         self.octopus_url_cache_loaded = False
         self.github_url_cache_loaded = False
+        self.predbat_skipped_version = None
+        self.predbat_skipped_version_loaded = False
         self.load_forecast_history = False
         self.prediction_kernel_enable = False
 

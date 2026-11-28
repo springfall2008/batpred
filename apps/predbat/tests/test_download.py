@@ -126,6 +126,7 @@ def test_download(my_predbat):
         ("predbat_branch_invalid", _test_predbat_download_branch_invalid_rejected, "Predbat branch update refuses an invalid branch name"),
         ("predbat_startup_pins_upstream", _test_predbat_startup_self_check_uses_default_repository, "Predbat startup self-check pins repository to upstream"),
         ("update_event_install", _test_update_event_install_entity_forms, "update.install installs the latest version for a string or list entity_id"),
+        ("update_entity_skip", _test_update_entity_skip, "update.predbat_version follows auto_update and supports skip / clear_skipped (GH#5489)"),
     ]
 
     print("\n" + "=" * 70)
@@ -1949,4 +1950,126 @@ def _test_update_event_install_entity_forms(my_predbat):
         data = {"domain": "update", "service": "install", "service_data": {"entity_id": entity_id}}
         asyncio.run(UserInterface.update_event(dummy, "install", data, None))
         assert dummy.installed == expected, "entity_id {} installed {} expected {}".format(entity_id, dummy.installed, expected)
+    return 0
+
+
+def _test_update_entity_skip(my_predbat):
+    """Test update.predbat_version follows the auto_update switch and can be skipped and un-skipped, the skip surviving a restart (GH#5489)."""
+    from predbat import THIS_VERSION
+    from storage import StorageComponent, StorageLocalFiles
+
+    class _MockComponents:
+        """Components stand-in that only provides the storage component."""
+
+        def __init__(self, storage):
+            """Hold the storage component."""
+            self.storage = storage
+
+        def get_component(self, name):
+            """Return storage for 'storage', None for anything else."""
+            return self.storage if name == "storage" else None
+
+    entity_id = "update.predbat_version"
+    newer = "v99.0.0"
+    newest = "v99.0.1"
+    published = []
+    auto_update = {"value": False}
+    real_get_arg = my_predbat.get_arg
+
+    def fake_get_arg(name, *args, **kwargs):
+        """Answer auto_update from the test and everything else as normal."""
+        if name == "auto_update":
+            return auto_update["value"]
+        return real_get_arg(name, *args, **kwargs)
+
+    def capture(entity_id, state, attributes=None, **_kwargs):
+        """Record each state Predbat publishes."""
+        published.append((entity_id, state, attributes or {}))
+
+    def last():
+        """Return the last (state, attributes) published for the update entity."""
+        entries = [(state, attributes) for entity, state, attributes in published if entity == entity_id]
+        return entries[-1] if entries else (None, {})
+
+    def publish():
+        """Republish the update entity and return its last (state, attributes)."""
+        my_predbat.expose_config("version", False, force=True)
+        return last()
+
+    def call(service, target=entity_id):
+        """Send an HA update.<service> call for an update entity."""
+        data = {"domain": "update", "service": service, "service_data": {"entity_id": [target]}}
+        asyncio.run(my_predbat.update_event(service, data, None))
+
+    saved = (my_predbat.releases, getattr(my_predbat, "components", None), getattr(my_predbat, "predbat_skipped_version", None), getattr(my_predbat, "predbat_skipped_version_loaded", False))
+    tmpdir = tempfile.mkdtemp()
+    try:
+        storage = StorageComponent(my_predbat)
+        storage.backend = StorageLocalFiles(tmpdir, my_predbat.log)
+        my_predbat.components = _MockComponents(storage)
+        my_predbat.predbat_skipped_version = None
+        my_predbat.predbat_skipped_version_loaded = False
+        my_predbat.releases = {"latest": newer, "latest_body": "Notes"}
+
+        with patch.object(my_predbat, "get_arg", side_effect=fake_get_arg), patch.object(my_predbat, "set_state_wrapper", side_effect=capture):
+            # The attribute HA checks before allowing Skip follows the switch, not a constant
+            state, attributes = publish()
+            assert state == "on", "update pending should publish on, got {}".format(state)
+            assert attributes.get("auto_update") is False, "auto_update off should publish auto_update False, got {}".format(attributes.get("auto_update"))
+            assert attributes.get("skipped_version") is None
+
+            auto_update["value"] = True
+            state, attributes = publish()
+            assert attributes.get("auto_update") is True, "auto_update on should publish auto_update True, got {}".format(attributes.get("auto_update"))
+
+            # No skipping while auto update is on, the same rule HA applies
+            call("skip")
+            assert my_predbat.predbat_skipped_version is None, "skip with auto update on should be ignored"
+
+            # Skip with auto update off clears the entry and publishes the skipped release
+            auto_update["value"] = False
+            call("skip")
+            assert my_predbat.predbat_skipped_version == newer, "skip should remember {}, got {}".format(newer, my_predbat.predbat_skipped_version)
+            state, attributes = last()
+            assert state == "off", "a skipped release should publish off, got {}".format(state)
+            assert attributes.get("skipped_version") == newer, "skipped_version should be {}, got {}".format(newer, attributes.get("skipped_version"))
+
+            # The skip survives a restart: a fresh load reads it back from storage
+            my_predbat.predbat_skipped_version = None
+            my_predbat.predbat_skipped_version_loaded = False
+            state, attributes = publish()
+            assert state == "off" and attributes.get("skipped_version") == newer, "skip should be reloaded from storage, got {} {}".format(state, attributes)
+
+            # With auto update on the update will be installed anyway, so the skip is not published
+            auto_update["value"] = True
+            state, attributes = publish()
+            assert state == "on" and attributes.get("skipped_version") is None, "auto update on should ignore the skip, got {} {}".format(state, attributes)
+            auto_update["value"] = False
+
+            # A release newer than the skipped one is offered again
+            my_predbat.releases = {"latest": newest, "latest_body": "Notes"}
+            state, attributes = publish()
+            assert state == "on", "a release newer than the skipped one should publish on, got {}".format(state)
+            assert attributes.get("skipped_version") == newer
+
+            # Clear skipped forgets it, in storage too
+            my_predbat.releases = {"latest": newer, "latest_body": "Notes"}
+            call("clear_skipped")
+            state, attributes = last()
+            assert state == "on" and attributes.get("skipped_version") is None, "clear_skipped should offer the update again, got {} {}".format(state, attributes)
+            my_predbat.predbat_skipped_version_loaded = False
+            assert my_predbat.get_skipped_predbat_version() is None, "clear_skipped should also clear storage"
+
+            # Nothing to skip when already on the latest release
+            my_predbat.releases = {"latest": THIS_VERSION, "latest_body": "Notes"}
+            call("skip")
+            assert my_predbat.predbat_skipped_version is None, "skip with no newer release should be ignored"
+
+            # Another integration's update entity is left alone
+            my_predbat.releases = {"latest": newer, "latest_body": "Notes"}
+            call("skip", target="update.other")
+            assert my_predbat.predbat_skipped_version is None, "skip for another entity should be ignored"
+    finally:
+        my_predbat.releases, my_predbat.components, my_predbat.predbat_skipped_version, my_predbat.predbat_skipped_version_loaded = saved
+        shutil.rmtree(tmpdir, ignore_errors=True)
     return 0

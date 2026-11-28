@@ -94,6 +94,41 @@ class GitHub:
         except Exception as e:
             self.log("Warn: Failed to save GitHub URL cache to storage: {}".format(e))
 
+    def get_skipped_predbat_version(self):
+        """
+        Return the Predbat release the user skipped from the HA update entity, or None (GH#5489).
+
+        Loaded from storage on first use so a skip survives a restart. Until the storage component exists
+        only the in-memory value is known, so the load is tried again on the next call.
+        """
+        if not self.predbat_skipped_version_loaded:
+            components = getattr(self, "components", None)
+            storage = components.get_component("storage") if components else None
+            if storage:
+                self.predbat_skipped_version_loaded = True
+                try:
+                    data = run_async(storage.load("predbat", "skipped_version"))
+                    if isinstance(data, dict) and (data.get("version") is None or isinstance(data.get("version"), str)):
+                        self.predbat_skipped_version = data.get("version")
+                    elif data is not None:
+                        self.log("Warn: Skipped Predbat version in storage has unexpected content {}, ignoring".format(data))
+                except Exception as e:
+                    self.log("Warn: Failed to load skipped Predbat version from storage: {}".format(e))
+        return self.predbat_skipped_version
+
+    async def async_set_skipped_predbat_version(self, version):
+        """Remember the Predbat release skipped from the HA update entity, or forget it with None, and persist it to storage (GH#5489)."""
+        self.predbat_skipped_version = version
+        self.predbat_skipped_version_loaded = True
+        components = getattr(self, "components", None)
+        storage = components.get_component("storage") if components else None
+        if not storage:
+            return
+        try:
+            await storage.save("predbat", "skipped_version", {"version": version}, format="json")
+        except Exception as e:
+            self.log("Warn: Failed to save skipped Predbat version to storage: {}".format(e))
+
     def download_predbat_releases_url(self, url):
         """
         Download release data from GitHub, but use the cache for 2 hours

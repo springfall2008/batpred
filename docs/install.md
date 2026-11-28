@@ -410,9 +410,10 @@ Click on the update and select Install:
 
 ![image](https://github.com/springfall2008/batpred/assets/48591903/e708899d-a4aa-4bd4-b7d1-1c6687dd7e23)
 
-Note that clicking the 'Skip' button gives an error about auto-update being enabled for Predbat and that the update cannot be skipped.  This warning appears because of Predbat's built-in auto-update feature and can be safely ignored.
-If you wish to skip or ignore a Predbat update then you don't need to do anything; Predbat will not auto-update (despite what HA says) unless you turn on Predbat's auto-update (see below) or choose a version to install.
-Predbat will remain running on the current version until you choose to update.
+If you don't want this release, click 'Skip' and the update is removed from the list until a newer Predbat release is published. Predbat remembers the skipped release across restarts.
+To undo a skip, run the `update.clear_skipped` action on `update.predbat_version` (for example from Developer tools → Actions).
+Skip is only offered while **switch.predbat_auto_update** is off: with auto-update on, Home Assistant says the update cannot be skipped, because Predbat would install it anyway.
+Predbat will remain running on the current version until you choose to update, or until auto-update installs a new release.
 
 ## Predbat built-in update
 
