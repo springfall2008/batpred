@@ -462,8 +462,8 @@ mdi
 mdlrc
 measurand
 measurands
-metacharacters
 memray
+metacharacters
 Meteo
 Meteoalarm
 meterpoint
