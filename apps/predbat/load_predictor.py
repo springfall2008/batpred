@@ -38,7 +38,7 @@ OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30 min)
 HIDDEN_SIZES = [512, 256, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Batch size
-ADAM_CHUNK = 131072  # Elements per chunk of the optimiser step (1 MB of float64): few enough calls to cost little, small enough to keep its buffers small
+ADAM_CHUNK = 131072  # Elements per chunk of the optimiser step (1 MB of float64 step buffers): few enough calls to cost little, small enough to keep its buffers small
 MAX_BATCHES_PER_EPOCH = 200  # Cap on SGD batches per epoch - with importance sampling this keeps training
 # cost constant regardless of how many days of history are loaded
 
@@ -278,9 +278,11 @@ class LoadPredictor:
             fan_in = layer_sizes[i]
             fan_out = layer_sizes[i + 1]
 
-            # He initialisation (optimal for ReLU activations)
+            # He initialisation (optimal for ReLU activations). Scale before casting: std is a NumPy
+            # float64, so scaling a float32 array by it would promote the weights, and with them all
+            # of training, to float64
             std = np.sqrt(2.0 / fan_in)
-            w = np.random.randn(fan_in, fan_out).astype(np.float32) * std
+            w = (np.random.randn(fan_in, fan_out) * std).astype(np.float32)
             b = np.zeros(fan_out, dtype=np.float32)
 
             self.weights.append(w)
@@ -457,10 +459,10 @@ class LoadPredictor:
         Python float.
 
         The in-place form needs m, v and grad to share one dtype and shape, and every array to be
-        contiguous, which is how training runs once under way (float64 throughout, from the He
-        initialisation). Otherwise, as on a float32 bias's first step, when the expression form
-        promotes its moments to float64, the expression form itself runs, so the promotion and
-        its rounding are kept.
+        contiguous, which is how training runs (float32 weights, biases, moments and gradients,
+        with the step itself computed in float64 at the schedule's float64 rate and rounded into
+        the float32 parameter). Otherwise, as when float64 gradients meet float32 moments, the
+        expression form itself runs, so any promotion and its rounding are kept.
 
         Args:
             param: Weight or bias array, updated in place
@@ -1387,7 +1389,7 @@ class LoadPredictor:
         if not is_initial:
             baseline_pred, _, _, _ = self._forward(X_val_norm)
             baseline_pred_denorm = self._denormalize_predictions(baseline_pred)
-            baseline_mae = np.mean(np.abs(y_val - baseline_pred_denorm))
+            baseline_mae = float(np.mean(np.abs(y_val - baseline_pred_denorm), dtype=np.float64))
             baseline_bias = float(np.mean(baseline_pred_denorm - y_val))
             self.log("ML Predictor: Baseline (pre-finetune) val_mae={:.4f} kWh val_bias={:+.4f} kWh".format(baseline_mae, baseline_bias))
 
@@ -1467,7 +1469,8 @@ class LoadPredictor:
             # Validation (training=False: no dropout for deterministic evaluation)
             val_pred, _, _, _ = self._forward(X_val_norm)
             val_pred_denorm = self._denormalize_predictions(val_pred)
-            val_mae = np.mean(np.abs(y_val - val_pred_denorm))
+            # Accumulated in float64 and returned as a Python float: the float32 network's predictions would otherwise make it an np.float32, which is not a float and does not serialise to JSON
+            val_mae = float(np.mean(np.abs(y_val - val_pred_denorm), dtype=np.float64))
             # Median bias for early stopping: more robust than mean when validation set
             # contains a few outlier samples (e.g. a single EV charging spike).
             val_bias_median = float(np.median(val_pred_denorm - y_val))
@@ -2094,14 +2097,17 @@ class LoadPredictor:
             self.m_biases = []
             self.v_biases = []
 
+            # Training runs in float32. Earlier versions trained, and saved, in float64 by accident,
+            # so cast on load: the next fine-tune of an existing model then runs in float32 too,
+            # with no retrain from scratch
             layer_count = len(HIDDEN_SIZES) + 1
             for i in range(layer_count):
-                self.weights.append(data[f"weight_{i}"])
-                self.biases.append(data[f"bias_{i}"])
-                self.m_weights.append(data[f"m_weight_{i}"])
-                self.v_weights.append(data[f"v_weight_{i}"])
-                self.m_biases.append(data[f"m_bias_{i}"])
-                self.v_biases.append(data[f"v_bias_{i}"])
+                self.weights.append(data[f"weight_{i}"].astype(np.float32))
+                self.biases.append(data[f"bias_{i}"].astype(np.float32))
+                self.m_weights.append(data[f"m_weight_{i}"].astype(np.float32))
+                self.v_weights.append(data[f"v_weight_{i}"].astype(np.float32))
+                self.m_biases.append(data[f"m_bias_{i}"].astype(np.float32))
+                self.v_biases.append(data[f"v_bias_{i}"].astype(np.float32))
 
             self.adam_t = int(data["adam_t"][0])
 

@@ -194,14 +194,13 @@ def test_adam_update_matches_the_reference_on_non_finite_values(my_predbat=None)
 
 
 def _training_dtype_grads(predictor, seed):
-    """Gradients in the dtypes train() really passes: float64, since the He-initialised weights are float64."""
-    weight_grads, bias_grads = _grads(predictor, seed, scale=2.0)
-    return [g.astype(np.float64) for g in weight_grads], [g.astype(np.float64) for g in bias_grads]
+    """Gradients in the dtypes train() really passes: float32, like the He-initialised weights they are taken against."""
+    return _grads(predictor, seed, scale=2.0)
 
 
 def test_adam_update_matches_the_reference_with_training_dtypes(my_predbat=None):
-    """From a fresh initialisation, with float64 gradients and the schedule's np.float64 rate (float32 biases whose moments
-    the first step promotes to float64), several steps give the reference's bits and dtypes exactly"""
+    """From a fresh initialisation, with float32 gradients and the schedule's np.float64 rate (so the step runs in float64
+    and rounds into the float32 parameters), several steps give the reference's bits and dtypes exactly"""
     print("\n=== Testing _adam_update() against the reference with training's dtypes ===")
     failed = 0
     live = LoadPredictor(log_func=lambda message: None, learning_rate=0.001, weight_decay=0.01, dropout_rate=0.1)
@@ -222,13 +221,13 @@ def test_adam_update_matches_the_reference_with_training_dtypes(my_predbat=None)
 
 
 def test_adam_update_with_training_dtypes_allocates_no_weight_sized_temporaries(my_predbat=None):
-    """With training's float64 state, a warm step still allocates nothing the size of a weight matrix"""
+    """With training's float32 state and float64 rate, a warm step still allocates nothing the size of a weight matrix"""
     print("\n=== Testing _adam_update() allocations with training's dtypes ===")
     failed = 0
     predictor = LoadPredictor(log_func=lambda message: None, learning_rate=0.001, weight_decay=0.01, dropout_rate=0.1)
     predictor._initialize_weights()
     weight_grads, bias_grads = _training_dtype_grads(predictor, seed=12)
-    for _ in range(2):  # the first step promotes the bias moments and makes the buffers
+    for _ in range(2):  # the first step makes the buffers
         predictor._adam_update([g.copy() for g in weight_grads], [g.copy() for g in bias_grads], lr=np.float64(0.001))
     largest = max(w.nbytes for w in predictor.weights)
     fresh_w, fresh_b = [g.copy() for g in weight_grads], [g.copy() for g in bias_grads]
