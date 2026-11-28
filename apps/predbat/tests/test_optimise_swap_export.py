@@ -278,21 +278,21 @@ def _test_full_combine(my_predbat):
     return failed
 
 
-def _run_swap_with_penalties(my_predbat, later_price, blended_penalty, central_penalty, pv90_penalty=0.0):
+def _run_swap_with_penalties(my_predbat, later_price, blended_penalty, central_penalty, pv90_penalty=0.0, pv90_weight=0.1):
     """Run the swap pass on an export in window 0 with an idle later window at later_price, adding
     blended_penalty to every trial's blended metric, central_penalty to its central gate metric and
     pv90_penalty to its PV90 gate metric. Returns the final export limits.
 
     The penalties stand in for a scenario mix where the move is worse under the PV10 forecast than
     under the central one (#4292), without having to build a load profile that produces it. PV90 is
-    simulated (pv_metric90_weight > 0) so that its gate is read."""
+    simulated (pv_metric90_weight > 0) so that its gate is read, unless pv90_weight is 0."""
     now = my_predbat.minutes_now
     export_window_best = [
         {"start": now, "end": now + 30, "average": 15.0},
         {"start": now + 30, "end": now + 60, "average": later_price},
     ]
     saved_pv90_weight = my_predbat.pv_metric90_weight
-    my_predbat.pv_metric90_weight = 0.1
+    my_predbat.pv_metric90_weight = pv90_weight
     setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_FULL, EXPORT_OFF])
     real_get = my_predbat.get_run_prediction_metric
     real_gates = my_predbat.get_run_prediction_gates
@@ -308,7 +308,8 @@ def _run_swap_with_penalties(my_predbat, later_price, blended_penalty, central_p
         gate, gate90 = real_gates(handles)
         if handles[1] is not None:
             gate += central_penalty
-            gate90 += pv90_penalty
+            if gate90 is not None:
+                gate90 += pv90_penalty
         return gate, gate90
 
     my_predbat.get_run_prediction_metric = get
@@ -344,6 +345,11 @@ def _test_equal_price_judged_on_central(my_predbat):
     limits = _run_swap_with_penalties(my_predbat, later_price=15.0, blended_penalty=1.0, central_penalty=0.0, pv90_penalty=1.0)
     if [export_mode_of(limit) for limit in limits] != [EXPORT_MODE_TARGET, EXPORT_MODE_IDLE]:
         print("ERROR: an equal-price move worse in the PV90 scenario (clipping replanning cannot recover) should be refused, got limits {}".format(limits))
+        failed = True
+
+    limits = _run_swap_with_penalties(my_predbat, later_price=15.0, blended_penalty=1.0, central_penalty=0.0, pv90_weight=0.0)
+    if [export_mode_of(limit) for limit in limits] != [EXPORT_MODE_IDLE, EXPORT_MODE_TARGET]:
+        print("ERROR: with PV90 not simulated an equal-price move no worse on the central forecast should be kept, got limits {}".format(limits))
         failed = True
 
     limits = _run_swap_with_penalties(my_predbat, later_price=14.0, blended_penalty=1.0, central_penalty=0.0)

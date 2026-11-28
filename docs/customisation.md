@@ -472,6 +472,8 @@ The value is in pence per slot of export time.
 The default for this setting is -0.25p, meaning that export will be moved later even if it costs up to an extra 0.25p on the plan.
 The advantage of having late exports means that you are less likely to run out of battery earlier in the day.
 Values of between -1p and 0p would be recommended.
+A move to a later slot at the same export rate that this setting refuses is still made if it is no worse on the central forecast and in the PV90 scenario, and does not take the battery below `best_soc_keep`.
+That move is judged without the PV10 scenario: PV10 assumes no replanning, so it charges a later export for running the battery dry under high load, when in practice Predbat would see the load and stop the export.
 
 **input_number.predbat_rate_low_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future import rates in the plan
 and determine the import rate threshold below which a slot will be considered to be a potential charging slot.<BR>
