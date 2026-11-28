@@ -4496,6 +4496,8 @@ chart.render();
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
             arg_errors = self.base.arg_errors.get(arg, "")
+            if not arg_errors and arg in self.base.unmatched_args:
+                arg_errors = "Missing items pending entity discovery"
             # The filter box and the editor both read the row back through data-arg-name, so an
             # apps.yaml key holding a quote must not be able to truncate the attribute
             arg_attr = html_module.escape(str(arg), quote=True)
@@ -4526,6 +4528,8 @@ chart.render();
 
         args = self.base.unmatched_args
         for arg in args:
+            if arg in self.args:
+                continue
             value = args[arg]
             raw_value = self.resolve_value_raw(arg, value)
             text += '<tr id="row_{}" data-arg-name="{}" data-original-value="{}"><td>{}</td><td><span style="background-color:#FFAAAA">{}</span></td><td></td></tr>\n'.format(
