@@ -1124,6 +1124,70 @@ def test_control_charge_is_edge_triggered_but_corrects_drift():
     print("  ✓ Control is edge triggered but corrects drift")
 
 
+def test_control_preserves_boost_and_resumes_the_plan():
+    """A boost overrides both plan edges, and the current plan resumes once it finishes."""
+    for final_now, expected in ((OUT_OF_WINDOW, "Stopped"), (IN_WINDOW, "Fast")):
+        component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+        run_async(component.charger_control_tick(OUT_OF_WINDOW))
+        assert component.transport.set_mode.await_args.args[1] == "Stopped"
+        component.transport.set_mode.reset_mock()
+
+        # An actual direct-API boost report, after Predbat stopped the Zappi.
+        boosting = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sta=4, zmo=3), DEVICE_KIND_ZAPPI)
+        assert boosting.boost_active is True
+        component.devices = {boosting.device_id: boosting}
+        run_async(component.charger_control_tick(OUT_OF_WINDOW))
+        run_async(component.charger_control_tick(IN_WINDOW))
+        component.transport.set_mode.assert_not_awaited()
+        assert component.charger_control_state == {boosting.device_id: False}
+
+        boosting.boost_active = False
+        run_async(component.charger_control_tick(final_now))
+        component.transport.set_mode.assert_awaited_once_with(boosting, expected)
+    print("  ✓ A boost survives plan edges and scheduling resumes when it ends")
+
+
+def test_control_boost_is_per_zappi_and_survives_startup():
+    """A boost present at startup is left alone without disabling the other car's plan."""
+    component = _controlling_component(plans={0: [], 1: []})
+    boosting = normalise_cloud_device(dict(MOCK_CLOUD_ZAPPI_STATUS, boostCharge=True), MOCK_CLOUD_ZAPPI_META)
+    assert boosting.boost_active is True
+    other = _zappi(22223333)
+    component.devices = {boosting.device_id: boosting, other.device_id: other}
+    run_async(component.charger_control_tick(OUT_OF_WINDOW))
+    component.transport.set_mode.assert_awaited_once_with(other, "Stopped")
+    assert boosting.device_id not in component.charger_control_state
+    print("  ✓ A boost present at startup only overrides its own Zappi")
+
+
+def test_control_release_preserves_an_active_boost():
+    """Releasing control during a boost never restores a saved Stopped over the owner's mode."""
+    for release in ("switch", "read_only", "config"):
+        storage = _MemoryStorage()
+        component = _controlling_component(plans={0: [NIGHT_WINDOW]})
+        component.base.components = storage
+        component.devices["Z12345678"].mode = "Stopped"
+        run_async(component.charger_control_tick(IN_WINDOW))
+        assert component.control_saved_modes == {"Z12345678": "Stopped"}
+        component.transport.set_mode.reset_mock()
+        boosting = normalise_direct_device(dict(MOCK_DIRECT_ZAPPI, sta=4, zmo=3), DEVICE_KIND_ZAPPI)
+        component.devices = {boosting.device_id: boosting}
+        if release == "switch":
+            component.charger_control_enabled = False
+        elif release == "read_only":
+            component.base.args["set_read_only"] = True
+        else:
+            component.charger_control_active = False
+        run_async(component.charger_control_tick(OUT_OF_WINDOW))
+        run_async(component.charger_control_tick(OUT_OF_WINDOW))
+        component.transport.set_mode.assert_not_awaited()
+        assert component.charger_control_state == {}
+        assert component.control_saved_modes == {}
+        assert storage.saved[("myenergi", "control_saved_modes")] == {"modes": {}}
+        assert storage.saved[("myenergi", "control_state")]["held"] == {}
+    print("  ✓ Turning control off or read only preserves a boost and forgets the old hold")
+
+
 def test_control_charge_ignores_eddis():
     """Only Zappis are driven - an Eddi has no car plan and a different mode vocabulary."""
     component = _control_component(plans={0: [NIGHT_WINDOW]})
@@ -3240,6 +3304,9 @@ def test_myenergi(my_predbat=None):
     test_control_charge_sets_fast_inside_and_stopped_outside()
     test_control_charge_maps_each_zappi_to_its_own_car()
     test_control_charge_is_edge_triggered_but_corrects_drift()
+    test_control_preserves_boost_and_resumes_the_plan()
+    test_control_boost_is_per_zappi_and_survives_startup()
+    test_control_release_preserves_an_active_boost()
     test_control_charge_ignores_eddis()
     test_control_charge_does_nothing_before_a_plan_exists()
     test_control_gating_refuses_with_a_reason()
