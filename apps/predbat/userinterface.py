@@ -1106,8 +1106,12 @@ class UserInterface:
                         """UPDATE"""
                         summary = self.releases.get("latest_body", "")
                         latest = self.releases.get("latest", "check HACS")
+                        # HA refuses Skip while auto_update is true, so publish the real switch rather than a constant (GH#5489).
+                        # A skip only applies with auto update off, and clears itself once a newer release than the skipped one appears.
+                        auto_update = bool(self.get_arg("auto_update", False))
+                        skipped_version = None if auto_update else self.get_skipped_predbat_version()
                         state = "off"
-                        if item["installed_version"] != latest:
+                        if item["installed_version"] != latest and latest != skipped_version:
                             state = "on"
                         self.set_state_wrapper(
                             entity_id=entity,
@@ -1116,13 +1120,13 @@ class UserInterface:
                                 "friendly_name": item["friendly_name"],
                                 "title": item["title"],
                                 "in_progress": in_progress,
-                                "auto_update": True,
+                                "auto_update": auto_update,
                                 "installed_version": item["installed_version"],
                                 "latest_version": latest,
                                 "entity_picture": item["entity_picture"],
                                 "release_url": item["release_url"],
                                 "release_summary": summary,
-                                "skipped_version": None,
+                                "skipped_version": skipped_version,
                                 "supported_features": 1,
                             },
                         )
@@ -1596,6 +1600,7 @@ class UserInterface:
             {"domain": "select", "service": "select_previous", "callback": self.select_event},
             {"domain": "update", "service": "install", "callback": self.update_event},
             {"domain": "update", "service": "skip", "callback": self.update_event},
+            {"domain": "update", "service": "clear_skipped", "callback": self.update_event},
         ]
 
     def is_new_install(self):
@@ -2364,18 +2369,38 @@ class UserInterface:
         None
         """
         self.log("Update event {} {} {}".format(event, data, kwargs))
-        if data and data.get("service", "") == "install":
-            service_data = data.get("service_data", {})
-            entities = service_data.get("entity_id", [])
+        if not data:
+            return
+        service = data.get("service", "")
+        service_data = data.get("service_data", {})
+        entities = service_data.get("entity_id", [])
 
-            # Can be a string or an array, the HA update card sends an array
-            if isinstance(entities, str):
-                entities = [entities]
+        # Can be a string or an array, the HA update card sends an array
+        if isinstance(entities, str):
+            entities = [entities]
 
-            if "update.predbat_version" in entities:
-                latest = self.releases.get("latest", None)
-                if latest:
-                    self.log("Requested install of latest Predbat version {}".format(latest))
-                    await self.async_download_predbat_version(latest)
-        elif data and data.get("service", "") == "skip":
-            self.log("Requested to skip the update, this is not yet supported...")
+        # The entity id carries the configured prefix (update.<prefix>_version), so match the config item's own entity
+        version_entity = self.config_index.get("version", {}).get("entity")
+        if not version_entity or version_entity not in entities:
+            return
+
+        if service == "install":
+            latest = self.releases.get("latest", None)
+            if latest:
+                self.log("Requested install of latest Predbat version {}".format(latest))
+                await self.async_download_predbat_version(latest)
+        elif service == "skip":
+            # Same rule as HA: no skipping while auto update is on, as the update would be installed anyway (GH#5489)
+            latest = self.releases.get("latest", None)
+            if self.get_arg("auto_update", False):
+                self.log("Requested to skip Predbat version {}, but auto update is on, so it can't be skipped".format(latest))
+            elif not latest or latest == "Unknown" or latest == THIS_VERSION:
+                self.log("Requested to skip the Predbat update, but there is no newer version to skip")
+            else:
+                self.log("Skipping Predbat version {}, it will be offered again once a newer version is released".format(latest))
+                await self.async_set_skipped_predbat_version(latest)
+                self.expose_config("version", False, force=True)
+        elif service == "clear_skipped":
+            self.log("Cleared the skipped Predbat version")
+            await self.async_set_skipped_predbat_version(None)
+            self.expose_config("version", False, force=True)
