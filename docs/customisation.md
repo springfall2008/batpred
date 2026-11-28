@@ -586,6 +586,7 @@ level rather than discharging it. This is useful if you don't want to import to 
 Note that if both this and **switch.predbat_set_charge_freeze** are turned Off, Predbat has no way to use a charge window at all and will leave the battery in demand mode throughout.
 
 **switch.predbat_set_export_freeze** When turned On (the default) will allow Predbat to export Solar to the grid rather than charging the battery.
+On most inverters Freeze Export works by disabling charging, so any solar above your export limit is clipped rather than stored, and the plan already allows for that loss. Only inverters with a genuine "Feed-in First" mode put that surplus into the battery - see [inverter_can_charge_during_export](apps-yaml.md#inverter_can_charge_during_export) for which ones.
 
 **switch.predbat_set_export_freeze_only** (_expert mode_) When turned On forced export is prevented, but export freeze can be used (if enabled) to export excess solar rather than charging the battery.
 This is useful with tariffs that pay you for solar exports but don't allow forced export (brown energy).  Off by default.
