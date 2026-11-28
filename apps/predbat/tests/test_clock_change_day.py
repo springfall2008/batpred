@@ -19,6 +19,8 @@ far" read of that history at minutes_now dropped today's first hour (autumn) or 
 The scenarios run at 02:00 GMT on 25 Oct 2026 (autumn: 180 real minutes since midnight, minutes_now 120) and
 03:00 BST on 28 Mar 2027 (spring: 120 real minutes, minutes_now 180), with a constant 0.01 kWh a minute in every
 history, so the right "today" total is 1.8 kWh in autumn and 1.2 kWh in spring - and the old reads gave the reverse.
+
+The plan's row labels on an autumn change night are checked too (GH#1566).
 """
 
 import copy
@@ -312,6 +314,75 @@ def _test_load_ml_baseline():
     return failed
 
 
+def _render_plan(my_predbat, wall, export_window=None):
+    """Render the plan from the London wall time wall with flat rates and load, and an optional export window; returns (html_plan, raw_plan)."""
+    from prediction import Prediction
+    from tests.test_infra import reset_inverter, reset_rates
+
+    reset_inverter(my_predbat)
+    # Set after reset_inverter(), which moves the clock to noon
+    _set_clock(my_predbat, wall)
+    my_predbat.forecast_minutes = 24 * 60
+    my_predbat.end_record = 6 * 60
+    my_predbat.plan_interval_minutes = 30
+    my_predbat.num_cars = 0
+    my_predbat.carbon_enable = False
+    pv_step = {minute: 0 for minute in range(0, my_predbat.forecast_minutes, 5)}
+    load_step = {minute: 0.5 / 12 for minute in range(0, my_predbat.forecast_minutes, 5)}
+    my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, load_step, load_step)
+    reset_rates(my_predbat, 10.0, 5.0)
+    my_predbat.run_prediction([], [], [], [], False, end_record=my_predbat.end_record, save="best")
+    my_predbat.charge_limit_best = []
+    my_predbat.charge_window_best = []
+    my_predbat.export_limits_best = [50.0] if export_window else []
+    my_predbat.export_window_best = [export_window] if export_window else []
+    return my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+
+
+def _test_plan_row_labels(my_predbat):
+    """The plan labels each row with the wall clock it really has on an autumn change night, so the repeated hour shows
+    01:00 and 01:30 twice instead of running an hour ahead from the change (GH#1566)."""
+    print("clock change day: plan row labels")
+    failed = False
+    # 00:30 BST on 25 Oct 2026, half an hour before the clocks go back: midnight_utc is still on BST
+    html_plan, raw_plan = _render_plan(my_predbat, datetime(2026, 10, 25, 0, 30))
+    times = [row.get("time") for row in raw_plan.get("rows", [])][:6]
+    expected = [
+        "2026-10-25T00:30:00+0100",
+        "2026-10-25T01:00:00+0100",
+        "2026-10-25T01:30:00+0100",
+        "2026-10-25T01:00:00+0000",
+        "2026-10-25T01:30:00+0000",
+        "2026-10-25T02:00:00+0000",
+    ]
+    failed |= _check("plan rows across the change are labelled in real local time", times == expected, "got {}".format(times))
+    html_times = re.findall(r"<td id=time bgcolor=#FFFFFF>(\w+ \d\d:\d\d)</td>", html_plan)[:6]
+    expected_html = ["Sun 00:30", "Sun 01:00", "Sun 01:30", "Sun 01:00", "Sun 01:30", "Sun 02:00"]
+    failed |= _check("HTML plan shows the repeated hour twice", html_times == expected_html, "got {}".format(html_times))
+    return failed
+
+
+def _test_plan_split_time(my_predbat):
+    """A row split by an export window that starts partway through it gives the start as "Until HH:MM" in real local time
+    on both change nights, not in the offset midnight_utc carries (GH#1566)."""
+    print("clock change day: plan split time")
+    failed = False
+    # (label, wall-clock now in London, export start in minutes from midnight_utc, the split row's time, the expected "until" time)
+    cases = [
+        # 00:30 BST on 25 Oct 2026: minute 135 is 01:15 GMT, in the repeated hour (the old label said 02:15)
+        ("autumn", datetime(2026, 10, 25, 0, 30), 135, "2026-10-25T01:00:00+0000", "01:15"),
+        # 00:30 GMT on 28 Mar 2027: minute 75 is 02:15 BST, after the clocks go forward (the old label said 01:15)
+        ("spring", datetime(2027, 3, 28, 0, 30), 75, "2027-03-28T02:00:00+0100", "02:15"),
+    ]
+    for label, wall, export_start, row_time, expected in cases:
+        _, raw_plan = _render_plan(my_predbat, wall, {"start": export_start, "end": export_start + 45, "average": 15.0})
+        row = next((row for row in raw_plan.get("rows", []) if row.get("time") == row_time), None)
+        reasons = row.get("reasons", []) if row else []
+        split_time = reasons[0].get("params", {}).get("split_time") if reasons else None
+        failed |= _check("{} split row reads until {}".format(label, expected), split_time == expected, "got {} in {}".format(split_time, reasons))
+    return failed
+
+
 def test_clock_change_day(my_predbat):
     """Run the clock-change-day tests, restoring the shared PredBat's clock and state."""
     print("**** Running clock change day tests ****")
@@ -332,6 +403,13 @@ def test_clock_change_day(my_predbat):
         "load_minutes_source",
         "load_minutes_now",
         "load_last_period",
+        "forecast_minutes",
+        "end_record",
+        "plan_interval_minutes",
+        "charge_limit_best",
+        "charge_window_best",
+        "export_limits_best",
+        "export_window_best",
     ]
     saved = {field: copy.deepcopy(getattr(my_predbat, field, None)) for field in fields}
     failed = False
@@ -342,6 +420,8 @@ def test_clock_change_day(my_predbat):
         failed |= _test_fetch_load_today(my_predbat)
         failed |= _test_predheat(my_predbat)
         failed |= _test_load_ml_baseline()
+        failed |= _test_plan_row_labels(my_predbat)
+        failed |= _test_plan_split_time(my_predbat)
     finally:
         for field, value in saved.items():
             setattr(my_predbat, field, value)
