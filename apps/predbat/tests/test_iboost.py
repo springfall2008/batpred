@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 from tests.test_infra import reset_rates2, reset_inverter
+from utils import in_iboost_slot
 
 
 def run_iboost_smart_test(test_name, my_predbat, today=0, max_energy=1, max_power=1, min_length=0, expect_cost=0, expect_kwh=0, expect_time=0):
@@ -115,6 +116,80 @@ def run_iboost_smart_average_test(my_predbat):
     return failed
 
 
+def run_iboost_smart_duplicate_slots_test(my_predbat):
+    """
+    Regression test for plan_iboost_smart() booking the same slot more than once when iboost_smart_min_length is
+    longer than the plan interval (#6309). The windows then overlap, and the duplicate check tested a variable left
+    over from an earlier loop, so it never fired. Each copy counted against iboost_max_energy, but the prediction
+    (in_iboost_slot()) applies only the first, so the plan boosted less than the maximum. The slots must stay on the
+    plan interval grid when minutes_now is not, or the first window's slots overlap the next window's.
+    """
+    failed = False
+    print("**** Running Test: iboost_duplicate_slots ****")
+    reset_inverter(my_predbat)
+
+    orig_minutes_now = my_predbat.minutes_now
+    orig_forecast_minutes = my_predbat.forecast_minutes
+    orig_rate_import = my_predbat.rate_import
+    orig_rate_export = my_predbat.rate_export
+    my_predbat.forecast_minutes = 6 * 60
+
+    # A flat rate, so every window costs the same and they are taken in time order, overlapping
+    import_rate = 10.0
+    my_predbat.rate_import = {minute: import_rate for minute in range(0, 48 * 60)}
+    my_predbat.rate_export = {minute: 0 for minute in range(0, 48 * 60)}
+
+    # The rate and gas gates are pinned open, so no earlier test's settings can stop a slot being booked
+    orig_gates = {key: getattr(my_predbat, key) for key in ["iboost_rate_threshold", "iboost_rate_threshold_export", "iboost_gas", "iboost_gas_export", "iboost_smart"]}
+    my_predbat.iboost_rate_threshold = 9999
+    my_predbat.iboost_rate_threshold_export = 9999
+    my_predbat.iboost_gas = False
+    my_predbat.iboost_gas_export = False
+    my_predbat.iboost_slots = []
+    my_predbat.iboost_today = 0
+    my_predbat.iboost_max_energy = 3
+    my_predbat.iboost_max_power = 1 / 60
+
+    try:
+        # minutes_now is wall-clock time, so usually not on the plan interval grid: 605 is 5 minutes past one.
+        # From 1430 the plan crosses midnight, so day 0 has only 10 minutes (1/6 kWh) and day 1 its full 3 kWh
+        for smart in [True, False]:
+            for minutes_now, expect_kwh in [(0, 3), (605, 3), (1430, 3.167)]:
+                for min_length in [0, 60, 120]:
+                    my_predbat.iboost_smart = smart
+                    my_predbat.minutes_now = minutes_now
+                    my_predbat.iboost_smart_min_length = min_length
+                    slots = my_predbat.plan_iboost_smart()
+                    label = "smart {} minutes_now {} min_length {}".format(smart, minutes_now, min_length)
+                    planned_kwh = round(sum(slot["kwh"] for slot in slots), 3)
+                    # The energy the prediction applies, minute by minute
+                    applied_kwh = round(sum(in_iboost_slot(minute, slots) for minute in range(minutes_now, minutes_now + my_predbat.forecast_minutes)) / 60, 3)
+                    booked = [minute for slot in slots for minute in range(slot["start"], slot["end"])]
+                    if len(booked) != len(set(booked)):
+                        print("ERROR: iboost_duplicate_slots {}: a minute was booked more than once: {}".format(label, slots))
+                        failed = True
+                    if any(slot["start"] < minutes_now for slot in slots):
+                        print("ERROR: iboost_duplicate_slots {}: a slot starts before now: {}".format(label, slots))
+                        failed = True
+                    if planned_kwh != expect_kwh or applied_kwh != expect_kwh:
+                        print("ERROR: iboost_duplicate_slots {}: expected {} kWh planned and applied, got {} planned and {} applied: {}".format(label, expect_kwh, planned_kwh, applied_kwh, slots))
+                        failed = True
+    finally:
+        for key, value in orig_gates.items():
+            setattr(my_predbat, key, value)
+        my_predbat.iboost_slots = []
+        my_predbat.iboost_today = 0
+        my_predbat.iboost_max_energy = my_predbat.get_arg("iboost_max_energy")
+        my_predbat.iboost_max_power = my_predbat.get_arg("iboost_max_power") / (60 * 1000)
+        my_predbat.iboost_smart_min_length = my_predbat.get_arg("iboost_smart_min_length")
+        my_predbat.minutes_now = orig_minutes_now
+        my_predbat.forecast_minutes = orig_forecast_minutes
+        my_predbat.rate_import = orig_rate_import
+        my_predbat.rate_export = orig_rate_export
+
+    return failed
+
+
 def run_iboost_smart_tests(my_predbat):
     """
     Test for Iboost smart
@@ -131,5 +206,6 @@ def run_iboost_smart_tests(my_predbat):
     failed |= run_iboost_smart_test("iboost2", my_predbat, today=4.9, max_energy=5, max_power=1, min_length=0, expect_cost=import_rate * (0.1 + 5), expect_kwh=(0.1 + 5), expect_time=10 + 5 * 60)
     failed |= run_iboost_smart_test("iboost3", my_predbat, today=4.95, max_energy=5, max_power=1, min_length=0, expect_cost=import_rate * (0.05 + 5), expect_kwh=(0.05 + 5), expect_time=5 + 5 * 60)
     failed |= run_iboost_smart_average_test(my_predbat)
+    failed |= run_iboost_smart_duplicate_slots_test(my_predbat)
 
     return failed
