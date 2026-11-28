@@ -60,6 +60,15 @@ FORCED_ASSERT_SECONDS = 2 * 60 * 60
 # restriction lifts once the installer fixes the permission (GH#5710). Only blocked sites re-read it:
 # the response is large, and fetch_site_info itself stays once per process.
 EXPORT_PERMISSION_RECHECK_SECONDS = 60 * 60
+# A battery export Predbat did not ask for (GH#6381). While the export rule Predbat last sent is pv_only,
+# live_status showing the battery sending this many watts to the grid beyond the solar surplus means the
+# Powerwall is not following its settings. It must be seen on this many consecutive live polls, so the
+# minutes in which a device winds an export down after its window ends are not flagged. The device's own
+# settings are then read back from site_info at once, and again at this interval while it lasts. Evidence
+# only: nothing is re-sent, because which write a Powerwall acts on in this state is not established.
+UNPLANNED_EXPORT_THRESHOLD_W = 1000
+UNPLANNED_EXPORT_POLLS = 3
+UNPLANNED_EXPORT_RECHECK_SECONDS = 30 * 60
 # components.net_meter_mode value of a site whose installer-level export permission (Tesla One >
 # Import & Export Limits) allows battery export. Any other value, or the key missing, means solar only.
 NET_METER_MODE_BATTERY_OK = "battery_ok"
@@ -227,6 +236,15 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self._last_forced_assert = 0
         self.site_info_done = False
         self.last_soc = None
+        self.last_live_status = {}  # The last live_status response, for check_unplanned_export()
+        # An unplanned battery export (GH#6381): consecutive live polls that showed one, the run() seconds of the
+        # first and latest of them (None outside one), when the device settings were last read back (None until
+        # the episode is declared), and its peak
+        self._unplanned_export_polls = 0
+        self._unplanned_export_since = None
+        self._unplanned_export_last_poll = None
+        self._unplanned_export_checked = None
+        self._unplanned_export_peak_w = 0
         self.soc_max_real = False  # True once soc_max is published from a real device value (not the estimate).
         self._last_sent = {}
         self.automatic = automatic
@@ -307,14 +325,15 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
                             continue
                         if resp.status >= 400:
                             body = await resp.text()
-                            self.log("Warn: Teslemetry HTTP {} on {}: {}".format(resp.status, path, body[:200]))
+                            self.log("Warn: Teslemetry HTTP {} on {}{}: {}".format(resp.status, path, self._body_for_log(json_body), body[:200]))
                             return None
                         self.api_auth_failed = False
                         result = await resp.json()
                         # Log the raw response so live output can be cross-checked against the parsing
                         # here (beta debugging aid), with the bulky history time_series and tariff/rate
-                        # blocks summarised so the endpoints stay readable without a wall of data.
-                        self.log("Info: Teslemetry API {} {} status {} response: {}".format(method, path, resp.status, json.dumps(self._summarize_for_log(result), default=str)))
+                        # blocks summarised so the endpoints stay readable without a wall of data. A
+                        # command's body is logged with it, so a log shows what the device was told (GH#6381).
+                        self.log("Info: Teslemetry API {} {}{} status {} response: {}".format(method, path, self._body_for_log(json_body), resp.status, json.dumps(self._summarize_for_log(result), default=str)))
                         return result
             except (aiohttp.ClientError, asyncio.TimeoutError) as err:
                 self.log("Warn: Teslemetry network error on {} attempt {}: {}".format(path, attempt + 1, err))
@@ -376,6 +395,79 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
             if isinstance(response.get(key), dict):
                 response[key] = "[hidden, code={}]".format(response[key].get("code"))
         return {"response": response}
+
+    @staticmethod
+    def _body_for_log(json_body):
+        """Return ' body: <json>' for a request that carries one, else an empty string.
+
+        Command bodies hold only device settings (mode, reserve, export rule, grid charging, the tariff), never a
+        credential - those travel in the Authorization header - so nothing in them needs redacting. A pushed
+        tariff is reduced to tariff_summary(), its prices and periods, which is what the device acts on.
+        """
+        if json_body is None:
+            return ""
+        body = json_body
+        tou = json_body.get("tou_settings") if isinstance(json_body, dict) else None
+        if isinstance(tou, dict) and "tariff_content_v2" in tou:
+            body = {**json_body, "tou_settings": {**tou, "tariff_content_v2": TeslemetryAPI.tariff_summary(tou["tariff_content_v2"])}}
+        return " body: {}".format(json.dumps(body, default=str))
+
+    @staticmethod
+    def tariff_summary(tariff):
+        """Reduce a tariff_content_v2 to its prices and periods: {"buy": [...], "sell": [...]}, or None if it is not one.
+
+        Each entry reads "<tier> <price> days <from>-<to> <HH:MM>-<HH:MM>", sorted, so two tariffs that price the same
+        periods the same way summarise identically whatever order or extra fields either carries. That makes it the
+        comparison for a tariff read back from the device against the one pushed (check_unplanned_export), as well as
+        a readable log form.
+        """
+        if not isinstance(tariff, dict):
+            return None
+
+        def price(value):
+            """Normalise a tier price, so 0, 0.0 and "0.0" (however the device serialises it) summarise alike."""
+            try:
+                return round(float(value), 4)
+            except (TypeError, ValueError):
+                return value
+
+        def clock(hour, minute):
+            """Format an hour and minute from a tariff period as HH:MM, tolerating odd types."""
+            try:
+                return "{:02d}:{:02d}".format(int(hour or 0), int(minute or 0))
+            except (TypeError, ValueError):
+                return "{}:{}".format(hour, minute)
+
+        def side(block):
+            """Summarise one side (the buy tariff, or sell_tariff) of a tariff."""
+            if not isinstance(block, dict):
+                return []
+            charges = block.get("energy_charges") if isinstance(block.get("energy_charges"), dict) else {}
+            seasons = block.get("seasons") if isinstance(block.get("seasons"), dict) else {}
+            entries = []
+            for season_name, season in seasons.items():
+                season_charges = charges.get(season_name) if isinstance(charges.get(season_name), dict) else {}
+                rates = season_charges.get("rates") if isinstance(season_charges.get("rates"), dict) else {}
+                periods = season.get("tou_periods") if isinstance(season, dict) and isinstance(season.get("tou_periods"), dict) else {}
+                for tier, tier_periods in periods.items():
+                    period_list = tier_periods.get("periods") if isinstance(tier_periods, dict) else tier_periods
+                    for period in period_list if isinstance(period_list, list) else []:
+                        if not isinstance(period, dict):
+                            continue
+                        entries.append(
+                            "{} {} days {}-{} {}-{}".format(
+                                tier,
+                                price(rates.get(tier)),
+                                # A missing field reads as 0 throughout, as a serialiser that omits zero values would leave it
+                                period.get("fromDayOfWeek") or 0,
+                                period.get("toDayOfWeek") or 0,
+                                clock(period.get("fromHour"), period.get("fromMinute")),
+                                clock(period.get("toHour"), period.get("toMinute")),
+                            )
+                        )
+            return sorted(entries)
+
+        return {"buy": side(tariff), "sell": side(tariff.get("sell_tariff"))}
 
     def publish_sensor(self, suffix, state, unit=None, state_class="measurement", friendly=None):
         """Publish one virtual sensor via the dashboard."""
@@ -485,6 +577,7 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if not data:
             return False
         response = data.get("response") or {}
+        self.last_live_status = response
         soc = response.get("percentage_charged", self.last_soc)
         self.last_soc = soc
         self.publish_sensor("soc", round(float(soc or 0), 2), unit="%", friendly="Powerwall SOC")
@@ -637,6 +730,140 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         self.update_battery_export_permitted(response.get("components") or {})
         return True
 
+    @staticmethod
+    def battery_export_w(response):
+        """Watts the battery is sending to the grid beyond what surplus solar explains, from a live_status response.
+
+        Tesla's signs: battery_power is positive while discharging, grid_power negative while exporting. Solar
+        beyond the house load may be exported under pv_only, so only the export above that surplus, and no
+        more than the battery is discharging, counts as the battery's.
+        """
+
+        def watts(key):
+            """Read one live_status power figure as a float, treating a missing or odd value as 0."""
+            try:
+                return float(response.get(key) or 0)
+            except (TypeError, ValueError):
+                return 0.0
+
+        if not isinstance(response, dict):
+            return 0.0
+        solar_surplus = max(0.0, watts("solar_power") - watts("load_power"))
+        return max(0.0, min(watts("battery_power"), -watts("grid_power") - solar_surplus))
+
+    async def check_unplanned_export(self, seconds):
+        """Log a battery export Predbat did not ask for, and read the device's own settings back while it lasts (GH#6381).
+
+        Called after each live poll. Predbat sends pv_only in every state except a running export, so a battery
+        export above UNPLANNED_EXPORT_THRESHOLD_W while pv_only is the last export rule sent is the device not
+        following its settings. The predbat_teslemetry_* control entities mirror what Predbat sent, not what the
+        device holds, so the only way to see what the device had loaded is to read site_info back
+        (log_device_settings). Nothing is re-sent: a re-send of the same settings is not known to stop it.
+        Read-only mode is skipped, as Predbat is not then the one setting the device. The episode is timed from
+        its first flagged poll. Polls more than two intervals apart (a failed poll, an auth outage) do not count
+        as consecutive until the episode has been declared. A failure in the read-back is logged and never
+        stops run() going on to assert the device state.
+        """
+        export_w = self.battery_export_w(self.last_live_status)
+        watching = not self._is_read_only() and self._last_sent.get("export_rule") == "pv_only"
+        declared = self._unplanned_export_checked is not None
+        if not watching or export_w < UNPLANNED_EXPORT_THRESHOLD_W:
+            if declared:
+                self.log(
+                    "Info: Teslemetry unplanned battery export episode ended after {} minutes (peak {} W); battery now sending {} W to the grid, export rule last sent {}{}".format(
+                        round((seconds - self._unplanned_export_since) / 60),
+                        int(self._unplanned_export_peak_w),
+                        int(export_w),
+                        self._last_sent.get("export_rule"),
+                        ", read-only" if self._is_read_only() else "",
+                    )
+                )
+            self._reset_unplanned_export()
+            return
+        if not declared and self._unplanned_export_since is not None and seconds - self._unplanned_export_last_poll > 2 * LIVE_POLL_SECONDS:
+            self._reset_unplanned_export()
+        if self._unplanned_export_since is None:
+            self._unplanned_export_since = seconds
+        self._unplanned_export_last_poll = seconds
+        self._unplanned_export_polls += 1
+        self._unplanned_export_peak_w = max(self._unplanned_export_peak_w, export_w)
+        if self._unplanned_export_polls < UNPLANNED_EXPORT_POLLS:
+            return
+        if not declared:
+            self.log(
+                "Warn: Teslemetry battery is sending {} W to the grid, but the export rule Predbat last sent is pv_only (mode {}, reserve {}%) - the Powerwall is not following its settings, or a Tesla grid-services event is running; reading them back".format(
+                    int(export_w), self._last_sent.get("operation_mode"), self._last_sent.get("backup_reserve")
+                )
+            )
+        elif seconds - self._unplanned_export_checked < UNPLANNED_EXPORT_RECHECK_SECONDS:
+            return
+        else:
+            self.log("Warn: Teslemetry unplanned battery export still running after {} minutes ({} W now); reading the device settings back again".format(round((seconds - self._unplanned_export_since) / 60), int(export_w)))
+        self._unplanned_export_checked = seconds
+        try:
+            await self.log_device_settings()
+        except Exception as error:  # Evidence only: a failure here must not stop run() asserting the device state
+            self.log("Warn: Teslemetry could not log the device settings read back: {}".format(error))
+
+    def _reset_unplanned_export(self):
+        """Clear the unplanned-export episode state (see check_unplanned_export)."""
+        self._unplanned_export_polls = 0
+        self._unplanned_export_since = None
+        self._unplanned_export_last_poll = None
+        self._unplanned_export_checked = None
+        self._unplanned_export_peak_w = 0
+
+    async def log_device_settings(self):
+        """Read site_info back and log the settings the device holds against those Predbat last sent.
+
+        Deliberately not fetch_site_info, which also re-seeds the control entities and the dedupe cache. The
+        tariff is compared through tariff_summary(), so a tariff the device stores in another order or with
+        extra fields still matches the one pushed when it prices the same periods the same way. Returns True
+        when a response was read.
+        """
+        data = await self._request("GET", "/api/1/energy_sites/{}/site_info".format(self.site_id))
+        if not data:
+            self.log("Warn: Teslemetry could not read site_info back to check the device settings")
+            return False
+        response = data.get("response") if isinstance(data, dict) else None
+        if not isinstance(response, dict):
+            self.log("Warn: Teslemetry site_info read back had no settings to check: {}".format(str(data)[:200]))
+            return False
+        self.publish_site_info(response)
+        components = response.get("components") if isinstance(response.get("components"), dict) else {}
+        self.update_battery_export_permitted(components)
+        disallow = components.get("disallow_charge_from_grid_with_solar_installed", response.get("disallow_charge_from_grid_with_solar_installed"))
+        device = {
+            "mode": response.get("default_real_mode"),
+            "reserve": response.get("backup_reserve_percent"),
+            "export_rule": components.get("customer_preferred_export_rule", response.get("customer_preferred_export_rule")),
+            "grid_charging": (not disallow) if isinstance(disallow, bool) else None,
+        }
+        sent = {
+            "mode": self._last_sent.get("operation_mode"),
+            "reserve": self._last_sent.get("backup_reserve"),
+            "export_rule": self._last_sent.get("export_rule"),
+            "grid_charging": self._last_sent.get("grid_charging"),
+        }
+        differs = [key for key, value in device.items() if value is not None and sent[key] is not None and value != sent[key]]
+        pushed = None
+        if self._last_sent.get("tariff"):
+            try:
+                pushed = self.tariff_summary(json.loads(self._last_sent["tariff"]).get("tariff_content_v2"))
+            except (TypeError, ValueError, AttributeError):
+                pushed = None
+        held = self.tariff_summary(response.get("tariff_content_v2"))
+        if held is None:
+            tariff_note = "the device reported no tariff"
+        elif pushed is None:
+            tariff_note = "no tariff pushed yet; device holds {}".format(json.dumps(held))
+        elif held == pushed:
+            tariff_note = "the device tariff matches the one last pushed"
+        else:
+            tariff_note = "the device tariff DIFFERS from the one last pushed; device holds {}, last pushed {}".format(json.dumps(held), json.dumps(pushed))
+        self.log("Warn: Teslemetry device reports {}; Predbat last sent {}; {}; {}".format(json.dumps(device), json.dumps(sent), "differs in {}".format(", ".join(differs)) if differs else "no setting differs", tariff_note))
+        return True
+
     async def fetch_energy_today(self):
         """Fetch today's cumulative energy, publishing daily kWh sensors.
 
@@ -703,6 +930,8 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
         if first or (seconds - self.last_live_poll >= LIVE_POLL_SECONDS):
             self.last_live_poll = seconds
             success = await self.fetch_live_status()
+            if success:
+                await self.check_unplanned_export(seconds)
         if first or (seconds - self.last_energy_poll >= ENERGY_POLL_SECONDS):
             self.last_energy_poll = seconds
             await self.fetch_energy_today()
@@ -1358,9 +1587,10 @@ class TeslemetryAPI(ComponentBase, OAuthMixin):
 
         Drift-refresh limitation (accepted, not an oversight): unlike "operation_mode" and
         "backup_reserve" (refreshed once per process from the device's actual state - see the NOTE in
-        `fetch_site_info`), "grid_charging" and "export_rule" are NEVER device-drift-refreshed at all,
-        because the site_info response this component reads does not expose either field's actual
-        device state. If the device drifts on these two externally, the cache is never proactively
+        `fetch_site_info`), "grid_charging" and "export_rule" are NEVER device-drift-refreshed at all.
+        site_info's components carry customer_preferred_export_rule and
+        disallow_charge_from_grid_with_solar_installed, but only log_device_settings reads them, to log
+        them during an unplanned export (GH#6381); nothing feeds them back into this cache. If the device drifts on these two externally, the cache is never proactively
         corrected; between forced asserts they self-heal only when Predbat's own desired value changes (a
         transition), since a changed target never matches the stale cache irrespective of the device's true
         state. Drift that outlives a transition is caught by run()'s FORCED_ASSERT_SECONDS re-assert, which
