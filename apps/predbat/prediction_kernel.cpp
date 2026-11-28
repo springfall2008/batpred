@@ -66,7 +66,8 @@
 // ABI 13 (car cancel branch): both of the above, plus cancel_floor_kw, each cancellable slot's car charge rate, after cancel_penalty_rate in PkContext.
 // ABI 12 (main): the charge and discharge curves are rate grid curve rows of PK_CURVE_WIDTH (the battery rate grids).
 // ABI 14: the car cancel branch's ABI 13 merged with main's ABI 12 - the cancel table and the PK_CURVE_WIDTH curve rows.
-#define PK_ABI_VERSION 14
+// ABI 15: PkContext::battery_grid_charge_cost follows iboost_rate_threshold_export, shifting every field after it.
+#define PK_ABI_VERSION 15
 #define PK_CURVE_WIDTH 103 // a rate grid curve row: 101 SoC percents, the rated rate, then the absolute temperature cap
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
@@ -91,7 +92,9 @@
 // Parity 22 (car cancel branch): the car cancel branch's parity 21 merged with main's parity 20.
 // Parity 21 to 23 (main): the battery rate grids - each step's charge and discharge rate from a rate grid curve row.
 // Parity 24: the car cancel branch's parity 22 merged with main's parity 23.
-#define PK_PARITY_REVISION 24
+// Parity 25: metric_battery_grid_charge_cost adds a cost per kWh of grid import that covers the battery's AC
+// charge demand (lost generation subsidy and the like), after a gone car's share of the import.
+#define PK_PARITY_REVISION 25
 #define PK_MAX_CARS 8
 #define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
@@ -367,6 +370,7 @@ struct PkContext {
     double iboost_min_soc;
     double iboost_rate_threshold;
     double iboost_rate_threshold_export;
+    double battery_grid_charge_cost; // prediction.py metric_battery_grid_charge_cost (ABI 15)
 
     int32_t n_steps;
     int32_t minutes_now;
@@ -1044,6 +1048,7 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     const double inverter_loss = c->inverter_loss;
     const double inverter_loss_ac = inverter_hybrid ? inverter_loss : 1.0;
     const double inverter_loss_recp = 1.0 / inverter_loss;
+    const double battery_grid_charge_cost = c->battery_grid_charge_cost;
     const double inverter_limit = c->inverter_limit * step;
     const double export_limit = c->export_limit * step;
     const double pv_ac_limit = c->pv_ac_limit * step;
@@ -1740,6 +1745,13 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             if (car_gone_kwh != 0) {
                 // The car's share of the import is paid at its own rate, not the worst-case rate
                 metric -= std::min(diff, car_gone_kwh) * (import_rate - car_gone_cost / car_gone_kwh);
+            }
+            if (battery_grid_charge_cost != 0.0) {
+                // Extra cost on grid energy that ends up in the battery - prediction.py battery_grid_charge_cost
+                const double grid_to_battery = std::min(diff - car_gone_kwh, -(battery_draw + pv_dc) * inverter_loss_recp);
+                if (grid_to_battery > 0) {
+                    metric += battery_grid_charge_cost * grid_to_battery;
+                }
             }
         } else {
             // Export

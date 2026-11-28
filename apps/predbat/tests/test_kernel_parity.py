@@ -162,6 +162,7 @@ SCENARIO_STATE_ATTRS = [
     "rate_import_saving_minutes",
     "rate_max_base",
     "car_charging_now_slots",
+    "metric_battery_grid_charge_cost",
 ]
 
 # The switch that lets an export cancel a car slot - a config item rather than an attribute, so it is
@@ -367,6 +368,9 @@ def apply_random_scenario(my_predbat, rng, cancel_rng=None):
             my_predbat.iboost_plan = plan
         else:
             my_predbat.iboost_plan = []
+
+    # Grid charge cost - drawn before the car cancel draws so the random sequence of every draw above is unchanged
+    my_predbat.metric_battery_grid_charge_cost = rng.choice([0.0, 0.0, round(rng.uniform(0.5, 10), 2)])
 
     # Last, and from a generator of its own, so every configuration rng drew before is unchanged
     if cancel_rng is None:

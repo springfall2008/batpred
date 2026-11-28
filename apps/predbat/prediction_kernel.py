@@ -34,11 +34,13 @@ from utils import in_car_slot, in_iboost_slot
 
 # Expected ABI/parity revisions of the shared library (see prediction_kernel.cpp)
 # ABI 11: scalar results come back already rounded to 4dp. ABI 13 (car cancel branch) adds the car slot cancel table and cancel_floor_kw to
-# PkContext; ABI 12 (main) the rate grid curve rows; ABI 14 is both.
-KERNEL_ABI_VERSION = 14
+# PkContext; ABI 12 (main) the rate grid curve rows; ABI 14 is both. ABI 15 adds
+# battery_grid_charge_cost after iboost_rate_threshold_export.
+KERNEL_ABI_VERSION = 15
 # Parity 22 (car cancel branch): an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted -
 # merged with main's parity 20. Parity 23 (main): the battery rate grids. Parity 24: both.
-KERNEL_PARITY_REVISION = 24
+# Parity 25: metric_battery_grid_charge_cost, a cost per kWh of grid energy into the battery.
+KERNEL_PARITY_REVISION = 25
 
 # Maximum number of cars supported by the kernel (PK_MAX_CARS in prediction_kernel.cpp)
 KERNEL_MAX_CARS = PREDBAT_MAX_CARS
@@ -125,6 +127,7 @@ class PkContext(ctypes.Structure):
         ("iboost_min_soc", ctypes.c_double),
         ("iboost_rate_threshold", ctypes.c_double),
         ("iboost_rate_threshold_export", ctypes.c_double),
+        ("battery_grid_charge_cost", ctypes.c_double),
         ("n_steps", ctypes.c_int32),
         ("minutes_now", ctypes.c_int32),
         ("forecast_minutes", ctypes.c_int32),
@@ -895,6 +898,7 @@ def create_kernel_context(pred, static_cache=None):
         ctx.iboost_min_soc = pred.iboost_min_soc
         ctx.iboost_rate_threshold = pred.iboost_rate_threshold
         ctx.iboost_rate_threshold_export = pred.iboost_rate_threshold_export
+        ctx.battery_grid_charge_cost = pred.metric_battery_grid_charge_cost
 
         ctx.n_steps = n_steps
         ctx.minutes_now = minutes_now

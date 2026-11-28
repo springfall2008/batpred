@@ -2898,10 +2898,11 @@ class Plan:
         Forward value of one kWh left in the battery at the given absolute minute, in p/kWh
 
         The value is what it would cost to replace that energy: the cheapest import rate available
-        from `minute` to the end of the forecast, grossed up by the charging losses. It is capped at
-        the highest import rate (reduced by losses) so a flat tariff cannot value stored energy above
-        what the grid would ever charge for it, and floored at the export arbitrage margin and at
-        1p/kWh.
+        from `minute` to the end of the forecast plus metric_battery_grid_charge_cost, grossed up by the
+        charging losses. It is capped at what a stored kWh can save by avoiding an import at the highest
+        rate, after losses and the cycle cost, so stored energy is never valued above what discharging it
+        can realise. metric_battery_grid_charge_cost does not lift the cap: it is paid on the way into the
+        battery, not on the way out. The value is floored at the export arbitrage margin and at 1p/kWh.
 
         The cap, the export recovery ratio and the export floor all read the base tariff (rate_max_base,
         rate_export_max_forward, rate_export_min_base), captured before saving sessions and overrides are
@@ -2922,7 +2923,8 @@ class Plan:
         """
         rate_min_raw = self.rate_min_forward.get(minute, self.rate_min)
         rate_max = self.rate_max_base or self.rate_max
-        rate_min = rate_min_raw / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+        # Refilling the battery from the grid also pays metric_battery_grid_charge_cost on every kWh it imports
+        rate_min = (rate_min_raw + self.metric_battery_grid_charge_cost) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
         rate_min = max(min(rate_min, rate_max * self.inverter_loss * self.battery_loss - self.metric_battery_cycle), 0)
 
         # Replacement cost assumes the energy can always be redeployed. That holds while surplus can
@@ -3813,8 +3815,8 @@ class Plan:
         if self.calculate_best_charge:
             id = 0
             for window in charge_windows:
-                # Account for losses in average rate as it makes import higher
-                average = window["average"] / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
+                # Account for losses in average rate as it makes import higher, and for any grid charge cost on top of it
+                average = (window["average"] + self.metric_battery_grid_charge_cost) / self.inverter_loss / self.battery_loss + self.metric_battery_cycle
                 if self.carbon_enable:
                     carbon_intensity = self.carbon_intensity.get(max(window["start"] - self.minutes_now, 0), 0)
                     average += dp1(carbon_intensity * self.carbon_metric / 1000.0)

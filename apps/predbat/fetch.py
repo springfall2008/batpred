@@ -5153,6 +5153,7 @@ class Fetch:
         self.metric_min_improvement_plan = self.get_arg("metric_min_improvement_plan")
         self.metric_min_improvement_export_freeze = self.get_arg("metric_min_improvement_export_freeze")
         self.metric_battery_cycle = self.get_arg("metric_battery_cycle")
+        self.metric_battery_grid_charge_cost = self.get_arg("metric_battery_grid_charge_cost")
         self.metric_self_sufficiency = self.get_arg("metric_self_sufficiency")
         self.metric_future_rate_offset_import = self.get_arg("metric_future_rate_offset_import")
         self.metric_future_rate_offset_export = self.get_arg("metric_future_rate_offset_export")
