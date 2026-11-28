@@ -176,6 +176,24 @@ class TestInstrument(unittest.TestCase):
             restore()
         self.assertEqual(meter.wall_seconds, 2)
 
+    def test_instrument_fails_loudly_without_the_training_flag(self):
+        """A component without initial_training_done raises at once, rather than read as never trained until the timeout."""
+
+        class Renamed:
+            """A component whose training flag has been renamed."""
+
+            async def run(self, seconds, first):
+                """Tick."""
+                return "tick"
+
+        meter, _ = make_meter(wall=[0, 1], cpu=[0, 1])
+        restore = load_ml_driver.instrument(Renamed, meter)
+        try:
+            with self.assertRaises(AttributeError):
+                asyncio.run(Renamed().run(0, True))
+        finally:
+            restore()
+
 
 class TestBuildResult(unittest.TestCase):
     """The result is ok only for a clean run whose training finished with an active model and a forecast."""
@@ -221,15 +239,24 @@ class TestBuildResult(unittest.TestCase):
 
 
 class TestLog(unittest.TestCase):
-    """The log check is the memory benchmark's, plus LoadML's own harmless warnings."""
+    """The log check is the memory benchmark's, plus LoadML's own harmless warnings when any are listed."""
 
     def test_check_load_ml_log_reuses_the_memory_rules(self):
         """An Error line is a problem; a listed offline Octopus warning is not."""
         log = "2026-11-27 19:00:00.1: Error: something broke\n2026-11-27 19:00:01.0: Warn: OctopusAPI: Failed to retrieve auth token\n"
         self.assertEqual(load_ml_driver.check_load_ml_log(log), ["Error: something broke"])
 
-    def test_load_ml_benign_warnings_each_carry_a_reason(self):
-        """Every LoadML warning taken as harmless says why."""
+    def test_a_listed_load_ml_warning_is_allowed(self):
+        """LOAD_ML_BENIGN_WARNINGS is empty on purpose, but an entry added to it does allow its warning, and every entry gives a reason."""
+        log = "2026-11-27 19:00:00.1: Warn: ML Component: something harmless offline\n"
+        self.assertEqual(load_ml_driver.check_load_ml_log(log), ["Warn: ML Component: something harmless offline"])
+        saved = dict(load_ml_driver.LOAD_ML_BENIGN_WARNINGS)
+        try:
+            load_ml_driver.LOAD_ML_BENIGN_WARNINGS["something harmless offline"] = "an example entry"
+            self.assertEqual(load_ml_driver.check_load_ml_log(log), [])
+        finally:
+            load_ml_driver.LOAD_ML_BENIGN_WARNINGS.clear()
+            load_ml_driver.LOAD_ML_BENIGN_WARNINGS.update(saved)
         for warning, reason in load_ml_driver.LOAD_ML_BENIGN_WARNINGS.items():
             self.assertTrue(reason.strip(), warning)
 

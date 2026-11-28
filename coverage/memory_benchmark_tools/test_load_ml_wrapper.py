@@ -84,13 +84,13 @@ class TestLoadMlWrapperChecks(unittest.TestCase):
                 self.assertIn("usage:", output)
 
     def test_clears_every_output_of_an_earlier_run(self):
-        """A run that dies before the driver writes leaves none of an earlier run's outputs behind."""
+        """A run that dies before the driver writes leaves none of an earlier run's outputs behind, its logs included."""
         with tempfile.TemporaryDirectory() as tmp:
             data = make_fixture(tmp)
             bin_dir = make_docker(tmp, "#!/bin/sh\nexit 1\n")
             out = Path(tmp) / "out"
             out.mkdir()
-            stale = ("result.json", "modules.txt", "tracemalloc.txt", "profile.txt", "forecast.json")
+            stale = ("result.json", "modules.txt", "tracemalloc.txt", "profile.txt", "forecast.json", "predbat.log", "kernel_build.log")
             for name in stale:
                 (out / name).write_text("from an earlier run")
             code, output = run_wrapper(REPO, out, data=data, bin_dir=bin_dir, lock=Path(tmp) / "lock")

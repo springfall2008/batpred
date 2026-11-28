@@ -62,8 +62,9 @@ if [ -z "${LOAD_ML_BENCHMARK_LOCKED:-}" ]; then
 fi
 mkdir -p "$2"
 OUT="$(cd "$2" && pwd)"
-# Every output the driver writes, so a run that dies early never leaves an earlier run's figures or reports behind
-rm -f "$OUT/result.json" "$OUT/modules.txt" "$OUT/tracemalloc.txt" "$OUT/profile.txt" "$OUT/forecast.json"
+# Every output a run writes (the driver's, and the logs container_run.sh copies out), so a run that dies early never leaves
+# an earlier run's figures, reports or log behind for the failure message below to point at
+rm -f "$OUT/result.json" "$OUT/modules.txt" "$OUT/tracemalloc.txt" "$OUT/profile.txt" "$OUT/forecast.json" "$OUT/predbat.log" "$OUT/kernel_build.log"
 
 # The frozen clock: the fixture's T0 in UTC, in the absolute form libfaketime freezes at (no "@", which would tick)
 T0="$(python3 -c 'import json, sys; from datetime import datetime, timezone; t = datetime.fromisoformat(json.load(open(sys.argv[1]))["t0"]); print(t.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))' "$DATA/manifest.json")"

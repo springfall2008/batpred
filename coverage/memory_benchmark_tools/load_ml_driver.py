@@ -32,7 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from driver import ALLOWED_WARNINGS, BENIGN_WARNINGS, READY_COMPONENTS, check_log, finish_profile, read_status_kb, wait_ready, write_module_report  # noqa: E402
 
-# Warnings LoadML is known to log in a clean offline benchmark run, each with the reason it is harmless here
+# Warnings LoadML is known to log in a clean offline benchmark run, each with the reason it is harmless here. Empty on
+# purpose: the clean runs so far logged none, so any LoadML warning is a problem until a real run shows one is harmless
 LOAD_ML_BENIGN_WARNINGS = {}
 
 PROFILE_TOP = 40
@@ -49,7 +50,7 @@ def forecast_digest(predictions):
 
 
 def check_load_ml_log(text):
-    """Return the problems in a predbat.log: the memory benchmark's rules, with LoadML's harmless warnings allowed too."""
+    """Return the problems in a predbat.log: the memory benchmark's rules, also allowing LoadML's harmless warnings when any are listed."""
     return check_log(text, ALLOWED_WARNINGS, {**BENIGN_WARNINGS, **LOAD_ML_BENIGN_WARNINGS})
 
 
@@ -168,7 +169,8 @@ def instrument(component_class, meter):
         try:
             return await original(self, seconds, first)
         finally:
-            meter.end(trained=bool(getattr(self, "initial_training_done", False)))
+            # Read directly: LoadMLComponent always sets it, and a rename must fail here, not read as "never trained" until the timeout
+            meter.end(trained=bool(self.initial_training_done))
 
     component_class.run = run
 
