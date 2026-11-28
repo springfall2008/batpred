@@ -400,6 +400,9 @@ def run_test_plan_why_reason(my_predbat):
     elif "Charging up to 80" not in _render(row, templates) or "{}kW".format(expected_charge_rate_kw) not in _render(row, templates):
         print("ERROR: Chrg rendered text unexpected: {}".format(_render(row, templates)))
         failed = True
+    elif "&#x1F40C;" in row["state_html"]:
+        print("ERROR: a full rate Chrg slot should not show the snail, got: {}".format(row["state_html"]))
+        failed = True
 
     # --- Test 2: HoldChrg ---
     print("Test HoldChrg reason")
@@ -451,6 +454,10 @@ def run_test_plan_why_reason(my_predbat):
     # dynamically via find_charge_rate() rather than a fixed fraction like export's snail encoding) ---
     print("Test Chrg low power reason shows the throttled rate_kw, not the nameplate max")
     low_power_window = [{"start": minutes_now, "end": minutes_now + 60, "average": 10.0}]
+    saved_predict_soc_best = my_predbat.predict_soc_best
+    saved_low_power_pv_threshold_w = my_predbat.low_power_pv_threshold_w
+    saved_inverter_hybrid = my_predbat.inverter_hybrid
+    saved_battery_rate_max_charge_dc = my_predbat.battery_rate_max_charge_dc
     my_predbat.charge_window_best = low_power_window
     my_predbat.charge_limit_best = [8.0]  # small gap above the 7.9 current SoC - easily reached even throttled
     my_predbat.predict_soc_best = _flat_soc(my_predbat, 7.9)
@@ -469,7 +476,88 @@ def run_test_plan_why_reason(my_predbat):
     elif "{:.2f}kW".format(rate_kw) not in _render(row, templates):
         print("ERROR: Chrg low power rendered text missing the throttled rate: {}".format(_render(row, templates)))
         failed = True
+    elif row["state_html"] != "Chrg&nearr;&#x1F40C;":
+        print("ERROR: Chrg low power state cell should show the snail like a slow export does (#5352), got: {}".format(row["state_html"]))
+        failed = True
+
+    # --- Test 4c: low power mode on but the target needs the full rate - not a slow charge, no snail ---
+    print("Test Chrg low power at the full rate shows no snail")
+    my_predbat.charge_limit_best = [10.0]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)  # too far from the target to throttle within the window
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: Chrg low power full rate reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif "&#x1F40C;" in row["state_html"]:
+        print("ERROR: Chrg low power at the full rate should not show the snail, got: {}".format(row["state_html"]))
+        failed = True
+
+    # --- Test 4d: PV that only arrives after the window's last whole step must not abandon low power,
+    # the prediction engine floors the window end to a step boundary and so never counts it ---
+    print("Test Chrg low power ignores PV past the floored window end")
+    my_predbat.charge_window_best = [{"start": minutes_now, "end": minutes_now + 62, "average": 10.0}]
+    my_predbat.charge_limit_best = [8.0]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 7.9)
+    my_predbat.low_power_pv_threshold_w = 100
+    pv_step[60] = 0.25  # 3kW for the step starting at the floored window end
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: Chrg low power floored window reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif "&#x1F40C;" not in row["state_html"]:
+        print("ERROR: Chrg low power should stay throttled when the only PV is past the floored window end, got: {}".format(row["state_html"]))
+        failed = True
+    pv_step[60] = 0
+    my_predbat.low_power_pv_threshold_w = saved_low_power_pv_threshold_w
+
+    # --- Test 4f: a window that starts part-way through the row is timed from its own start, as the
+    # prediction engine does - from the row start it would get extra minutes and look throttled ---
+    print("Test Chrg low power times a window that starts mid-row from the window start")
+    my_predbat.charge_window_best = [{"start": minutes_now + 15, "end": minutes_now + 60, "average": 10.0}]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)
+    # 42 minutes at full rate, with the 10 minute low power margin: fits in the 50 minutes left from the
+    # row start (so it would throttle), not in the 35 left from the window start (so it needs full rate)
+    my_predbat.charge_low_power_margin = 10
+    my_predbat.charge_limit_best = [2.0 + 0.7 * max_rate_kw]
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: Chrg mid-row window reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif "&#x1F40C;" in row["state_html"]:
+        print("ERROR: Chrg mid-row window needs the full rate from its own start, so no snail, got: {}".format(row["state_html"]))
+        failed = True
+    elif row["reasons"][0]["params"]["rate_kw"] != "{:.2f}".format(max_rate_kw):
+        print("ERROR: Chrg mid-row window rate_kw should be the full {}kW, got {}".format(max_rate_kw, row["reasons"][0]["params"]["rate_kw"]))
+        failed = True
     my_predbat.set_charge_low_power = False
+
+    # --- Test 4e: hybrid inverter with a DC charge rate above the AC one charges through bright PV at
+    # the combined rate, as the prediction engine does - that is the maximum, so no snail ---
+    print("Test Chrg on a hybrid inverter in bright PV shows the combined AC+DC rate")
+    my_predbat.charge_window_best = low_power_window
+    my_predbat.charge_limit_best = [10.0]
+    my_predbat.predict_soc_best = _flat_soc(my_predbat, 2.0)
+    my_predbat.inverter_hybrid = True
+    my_predbat.battery_rate_max_charge_dc = my_predbat.battery_rate_max_charge * 2
+    pv_step[0] = my_predbat.battery_rate_max_charge * 3 * 5  # PV at three times the AC charge rate
+    _, raw_plan = render()
+    row = _get_row(raw_plan, minutes_now)
+    if row is None or _codes(row) != ["charge_low_rate"]:
+        print("ERROR: hybrid Chrg reasons unexpected: {}".format(row and _codes(row)))
+        failed = True
+    elif row["reasons"][0]["params"]["rate_kw"] != "{:.2f}".format(max_rate_kw * 2):
+        print("ERROR: hybrid Chrg rate_kw should be the combined {}kW, got {}".format(max_rate_kw * 2, row["reasons"][0]["params"]["rate_kw"]))
+        failed = True
+    elif "&#x1F40C;" in row["state_html"]:
+        print("ERROR: hybrid Chrg at the combined rate should not show the snail, got: {}".format(row["state_html"]))
+        failed = True
+    pv_step[0] = 0
+    my_predbat.inverter_hybrid = saved_inverter_hybrid
+    my_predbat.battery_rate_max_charge_dc = saved_battery_rate_max_charge_dc
+    my_predbat.predict_soc_best = saved_predict_soc_best
     my_predbat.charge_window_best = window
     my_predbat.charge_limit_best = [8.0]
 
@@ -494,6 +582,25 @@ def run_test_plan_why_reason(my_predbat):
             elif row["reasons"][0]["params"].get("rate_kw") != expected_rate_kw:
                 print("ERROR: Chrg rate_kw not capped at the inverter limit (hybrid {}, pv {} kW): expected {}, got {}".format(hybrid, pv[0] * 12, expected_rate_kw, row["reasons"][0]["params"].get("rate_kw")))
                 failed = True
+
+        # Low power asking for more than the inverter can pass still charges at the inverter's full rate, so no
+        # snail; asking for less than it can pass is a slow charge (#5352)
+        print("Test Chrg low power above the inverter limit shows no snail")
+        my_predbat.inverter_hybrid = False
+        my_predbat.set_charge_low_power = True
+        my_predbat.charge_low_power_margin = 10
+        for target_kwh, expect_snail in [(2.5, False), (2.25, True)]:
+            my_predbat.charge_limit_best = [target_kwh]
+            _, raw_plan = my_predbat.publish_html_plan(pv_step, pv_step, load_step, load_step, my_predbat.end_record, publish=False)
+            row = _get_row(raw_plan, minutes_now)
+            if row is None or _codes(row) != ["charge_low_rate"]:
+                print("ERROR: Chrg low power inverter-limited reasons unexpected (target {}): {}".format(target_kwh, row and _codes(row)))
+                failed = True
+            elif ("&#x1F40C;" in row["state_html"]) != expect_snail:
+                print("ERROR: Chrg low power snail should be {} for target {}kWh behind a {}kW inverter, got: {} at {}kW".format(expect_snail, target_kwh, 0.96, row["state_html"], row["reasons"][0]["params"].get("rate_kw")))
+                failed = True
+        my_predbat.set_charge_low_power = False
+        my_predbat.charge_limit_best = [8.0]
     finally:
         my_predbat.inverter_hybrid, my_predbat.inverter_limit, my_predbat.inverter_loss, my_predbat.battery_rate_max_charge = saved
 
