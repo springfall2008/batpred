@@ -278,6 +278,198 @@ def _test_full_combine(my_predbat):
     return failed
 
 
+def _run_swap_with_penalties(my_predbat, later_price, blended_penalty, central_penalty, pv90_penalty=0.0):
+    """Run the swap pass on an export in window 0 with an idle later window at later_price, adding
+    blended_penalty to every trial's blended metric, central_penalty to its central gate metric and
+    pv90_penalty to its PV90 gate metric. Returns the final export limits.
+
+    The penalties stand in for a scenario mix where the move is worse under the PV10 forecast than
+    under the central one (#4292), without having to build a load profile that produces it. PV90 is
+    simulated (pv_metric90_weight > 0) so that its gate is read."""
+    now = my_predbat.minutes_now
+    export_window_best = [
+        {"start": now, "end": now + 30, "average": 15.0},
+        {"start": now + 30, "end": now + 60, "average": later_price},
+    ]
+    saved_pv90_weight = my_predbat.pv_metric90_weight
+    my_predbat.pv_metric90_weight = 0.1
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_FULL, EXPORT_OFF])
+    real_get = my_predbat.get_run_prediction_metric
+    real_gates = my_predbat.get_run_prediction_gates
+
+    def get(handles):
+        """Read a trial's metric, made worse by blended_penalty"""
+        result = list(real_get(handles))
+        result[0] += blended_penalty
+        return tuple(result)
+
+    def gates(handles):
+        """Read the central and PV90 gate metrics, a trial's (it has a PV10 handle) made worse by the penalties"""
+        gate, gate90 = real_gates(handles)
+        if handles[1] is not None:
+            gate += central_penalty
+            gate90 += pv90_penalty
+        return gate, gate90
+
+    my_predbat.get_run_prediction_metric = get
+    my_predbat.get_run_prediction_gates = gates
+    try:
+        my_predbat.optimise_swap_export(0, len(export_window_best))
+    finally:
+        del my_predbat.get_run_prediction_metric
+        del my_predbat.get_run_prediction_gates
+        my_predbat.pv_metric90_weight = saved_pv90_weight
+    return my_predbat.export_limits_best
+
+
+def _test_equal_price_judged_on_central(my_predbat):
+    """Moving an export to a later window at the same price is judged on the central forecast and PV90,
+    not PV10 (#4292).
+
+    The PV10 scenario runs the plan with no replanning, so it charges a later export for running the
+    battery dry under high load although the next replan would stop it. A move that is no worse on the
+    central forecast and PV90 must be kept however much worse the blended metric says it is; a move to a
+    differently priced window, or one that is worse on the central forecast or PV90, still is not."""
+    failed = False
+    limits = _run_swap_with_penalties(my_predbat, later_price=15.0, blended_penalty=1.0, central_penalty=0.0)
+    if [export_mode_of(limit) for limit in limits] != [EXPORT_MODE_IDLE, EXPORT_MODE_TARGET]:
+        print("ERROR: an equal-price move no worse on the central forecast should be kept despite a worse blended metric, got limits {}".format(limits))
+        failed = True
+
+    limits = _run_swap_with_penalties(my_predbat, later_price=15.0, blended_penalty=1.0, central_penalty=1.0)
+    if [export_mode_of(limit) for limit in limits] != [EXPORT_MODE_TARGET, EXPORT_MODE_IDLE]:
+        print("ERROR: an equal-price move worse on the central forecast should be refused, got limits {}".format(limits))
+        failed = True
+
+    limits = _run_swap_with_penalties(my_predbat, later_price=15.0, blended_penalty=1.0, central_penalty=0.0, pv90_penalty=1.0)
+    if [export_mode_of(limit) for limit in limits] != [EXPORT_MODE_TARGET, EXPORT_MODE_IDLE]:
+        print("ERROR: an equal-price move worse in the PV90 scenario (clipping replanning cannot recover) should be refused, got limits {}".format(limits))
+        failed = True
+
+    limits = _run_swap_with_penalties(my_predbat, later_price=14.0, blended_penalty=1.0, central_penalty=0.0)
+    if [export_mode_of(limit) for limit in limits] != [EXPORT_MODE_TARGET, EXPORT_MODE_IDLE]:
+        print("ERROR: a move to a differently priced window should still be judged on the blended metric, got limits {}".format(limits))
+        failed = True
+    return failed
+
+
+def _test_equal_price_move_refused_when_it_clips_in_pv90(my_predbat):
+    """A same-price later move that leaves the battery full through a PV90 solar surplus must be refused (#4292).
+
+    Replanning can stop a later export when load runs high, but it cannot recover solar clipped against the
+    export limit while the battery is held full. With no solar in the central forecast the move costs nothing
+    there; in PV90 the morning export makes room for the midday surplus and the afternoon one does not."""
+    failed = False
+    now = my_predbat.minutes_now
+    export_window_best = [
+        {"start": now, "end": now + 30, "average": 15.0},
+        {"start": now + 300, "end": now + 330, "average": 15.0},
+    ]
+    reset_inverter(my_predbat)
+    changed = ("pv_metric90_weight", "export_limit", "inverter_limit", "pv_forecast_minute90_step", "load_minutes_step90", "prediction")
+    saved = {name: my_predbat.__dict__[name] for name in changed if name in my_predbat.__dict__}
+    my_predbat.pv_metric90_weight = 0.5
+    try:
+        setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_FULL, EXPORT_OFF])
+        my_predbat.export_limit = 6.0 / 60.0
+        my_predbat.inverter_limit = 20.0 / 60.0
+        pv_step = my_predbat.pv_forecast_minute_step
+        pv90_step = {}
+        for minute in range(0, my_predbat.forecast_minutes, 5):
+            pv90_step[minute] = 10.0 / (60 / 5) if 60 <= minute < 240 else 0.0
+        my_predbat.pv_forecast_minute90_step = pv90_step
+        my_predbat.load_minutes_step90 = my_predbat.load_minutes_step
+        my_predbat.prediction = Prediction(my_predbat, pv_step, pv_step, my_predbat.load_minutes_step, my_predbat.load_minutes_step, pv90_step, my_predbat.load_minutes_step)
+        my_predbat.optimise_swap_export(0, len(export_window_best))
+        limits = my_predbat.export_limits_best
+        if [export_mode_of(limit) for limit in limits] != [EXPORT_MODE_TARGET, EXPORT_MODE_IDLE]:
+            print("ERROR: a same-price later move that clips solar in PV90 should be refused, got limits {}".format(limits))
+            failed = True
+    finally:
+        for name in changed:
+            if name in saved:
+                setattr(my_predbat, name, saved[name])
+            else:
+                my_predbat.__dict__.pop(name, None)
+    return failed
+
+
+def _test_equal_price_move_does_not_preempt_a_better_partner(my_predbat):
+    """A same-price later move judged on the central forecast must not take a target from a partner the
+    blended metric keeps (#4292).
+
+    The pass keeps the first partner that passes for each target. Window 0 (15p) moving into the idle
+    window 2 (15p) is refused on the blended metric but passes on the central forecast; window 1 (14p)
+    moving there gains on the blended metric. Window 1's move must win although window 0 is read first."""
+    now = my_predbat.minutes_now
+    export_window_best = [
+        {"start": now, "end": now + 30, "average": 15.0},
+        {"start": now + 30, "end": now + 60, "average": 14.0},
+        {"start": now + 60, "end": now + 90, "average": 15.0},
+    ]
+    saved_pv90_weight = my_predbat.pv_metric90_weight
+    my_predbat.pv_metric90_weight = 0.1
+    setup_swap_export(my_predbat, export_window_best, export_limits_best=[EXPORT_FULL, EXPORT_FULL, EXPORT_OFF])
+    real_launch = my_predbat.launch_run_prediction_metric
+    real_get = my_predbat.get_run_prediction_metric
+    window0_idle = set()
+
+    def launch(charge_limit, charge_window, export_window, export_limits, end_record):
+        """Queue a trial, noting the ones that turn window 0 off"""
+        handles = real_launch(charge_limit, charge_window, export_window, export_limits, end_record)
+        if export_mode_of(export_limits[0]) == EXPORT_MODE_IDLE:
+            window0_idle.add(id(handles[0]))
+        return handles
+
+    def get(handles):
+        """Read a trial's metric, made much worse when it turns window 0 off"""
+        result = list(real_get(handles))
+        if id(handles[0]) in window0_idle:
+            result[0] += 10.0
+        return tuple(result)
+
+    my_predbat.launch_run_prediction_metric = launch
+    my_predbat.get_run_prediction_metric = get
+    try:
+        my_predbat.optimise_swap_export(0, len(export_window_best))
+    finally:
+        del my_predbat.launch_run_prediction_metric
+        del my_predbat.get_run_prediction_metric
+        my_predbat.pv_metric90_weight = saved_pv90_weight
+    modes = [export_mode_of(limit) for limit in my_predbat.export_limits_best]
+    if modes != [EXPORT_MODE_TARGET, EXPORT_MODE_IDLE, EXPORT_MODE_TARGET]:
+        print("ERROR: the 14p export should move into the later 15p window ahead of the same-price one, got limits {}".format(my_predbat.export_limits_best))
+        return True
+    return False
+
+
+def _test_gates_include_metric_keep(my_predbat):
+    """The equal-price swap check counts the best_soc_keep penalty, which export_gate_metric leaves out (#4292).
+
+    Without it a same-price later move that takes the battery below keep would look free on the central forecast."""
+
+    class _Handle:
+        """A queued prediction whose result is already known."""
+
+        def __init__(self, cost, metric_keep):
+            """Hold a prediction result with the given cost and keep penalty."""
+            self.result = (cost, 0.0, 0.0, 0.0, 0.0, 5.0, 0.0, 0.0, metric_keep, 0.0, 0.0)
+
+        def get(self):
+            """Return the held prediction result."""
+            return self.result
+
+    without_keep = my_predbat.get_run_prediction_gates((_Handle(100.0, 0.0), None, _Handle(50.0, 0.0)))
+    with_keep = my_predbat.get_run_prediction_gates((_Handle(100.0, 3.0), None, _Handle(50.0, 2.0)))
+    if abs(with_keep[0] - without_keep[0] - 3.0) > 1e-6 or abs(with_keep[1] - without_keep[1] - 2.0) > 1e-6:
+        print("ERROR: get_run_prediction_gates should add each scenario's metric_keep, got {} without keep and {} with".format(without_keep, with_keep))
+        return True
+    if my_predbat.get_run_prediction_gates((_Handle(100.0, 0.0), None, None))[1] is not None:
+        print("ERROR: get_run_prediction_gates should return None for PV90 when it is not simulated")
+        return True
+    return False
+
+
 def run_optimise_swap_export_tests(my_predbat):
     """Run the pairwise export-window swap optimisation tests and return True on failure."""
     print("**** Running Optimise swap export tests ****")
@@ -360,6 +552,14 @@ def run_optimise_swap_export_tests(my_predbat):
     # Full combine: a trimmed target with room for the whole partner absorbs it
     # ---------------------------------------------------------------------------------------------
     failed |= _test_full_combine(my_predbat)
+
+    # ---------------------------------------------------------------------------------------------
+    # Equal-price later moves are judged on the central forecast and PV90, leaving out the no-replan PV10 scenario (#4292)
+    # ---------------------------------------------------------------------------------------------
+    failed |= _test_equal_price_judged_on_central(my_predbat)
+    failed |= _test_equal_price_move_refused_when_it_clips_in_pv90(my_predbat)
+    failed |= _test_gates_include_metric_keep(my_predbat)
+    failed |= _test_equal_price_move_does_not_preempt_a_better_partner(my_predbat)
 
     # ---------------------------------------------------------------------------------------------
     # Ordering regression (#4478): the export swap must run after every pass that can enable an
