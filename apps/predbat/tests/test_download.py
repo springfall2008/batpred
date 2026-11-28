@@ -1929,9 +1929,10 @@ def _test_update_event_install_entity_forms(my_predbat):
     from userinterface import UserInterface
 
     class DummyPredBat:
-        def __init__(self):
+        def __init__(self, version_entity):
             self.releases = {"latest": "v9.9.9"}
             self.installed = []
+            self.config_index = {"version": {"entity": version_entity}}
 
         def log(self, *_args, **_kwargs):
             return None
@@ -1941,15 +1942,20 @@ def _test_update_event_install_entity_forms(my_predbat):
             return True
 
     cases = [
-        ("update.predbat_version", ["v9.9.9"]),
-        (["update.predbat_version"], ["v9.9.9"]),
-        (["update.other_update"], []),
+        ("update.predbat_version", "update.predbat_version", ["v9.9.9"]),
+        ("update.predbat_version", ["update.predbat_version"], ["v9.9.9"]),
+        ("update.predbat_version", ["update.other_update"], []),
+        # A non-default prefix renames the entity, which must still be recognised, and the default name no longer matches
+        ("update.custom_version", ["update.custom_version"], ["v9.9.9"]),
+        ("update.custom_version", ["update.predbat_version"], []),
+        # Before the config items are loaded there is no entity to match
+        (None, ["update.predbat_version"], []),
     ]
-    for entity_id, expected in cases:
-        dummy = DummyPredBat()
+    for version_entity, entity_id, expected in cases:
+        dummy = DummyPredBat(version_entity)
         data = {"domain": "update", "service": "install", "service_data": {"entity_id": entity_id}}
         asyncio.run(UserInterface.update_event(dummy, "install", data, None))
-        assert dummy.installed == expected, "entity_id {} installed {} expected {}".format(entity_id, dummy.installed, expected)
+        assert dummy.installed == expected, "version entity {} entity_id {} installed {} expected {}".format(version_entity, entity_id, dummy.installed, expected)
     return 0
 
 
@@ -2069,6 +2075,18 @@ def _test_update_entity_skip(my_predbat):
             my_predbat.releases = {"latest": newer, "latest_body": "Notes"}
             call("skip", target="update.other")
             assert my_predbat.predbat_skipped_version is None, "skip for another entity should be ignored"
+
+            # With a non-default prefix the entity is update.<prefix>_version, and skip / clear_skipped must still reach it
+            version_item = my_predbat.config_index["version"]
+            default_entity = version_item["entity"]
+            try:
+                version_item["entity"] = "update.custom_version"
+                call("skip", target="update.custom_version")
+                assert my_predbat.predbat_skipped_version == newer, "skip for a prefixed entity should remember {}, got {}".format(newer, my_predbat.predbat_skipped_version)
+                call("clear_skipped", target="update.custom_version")
+                assert my_predbat.predbat_skipped_version is None, "clear_skipped for a prefixed entity should forget the skip"
+            finally:
+                version_item["entity"] = default_entity
     finally:
         my_predbat.releases, my_predbat.components, my_predbat.predbat_skipped_version, my_predbat.predbat_skipped_version_loaded = saved
         shutil.rmtree(tmpdir, ignore_errors=True)

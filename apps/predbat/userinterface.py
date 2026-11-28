@@ -2379,7 +2379,9 @@ class UserInterface:
         if isinstance(entities, str):
             entities = [entities]
 
-        if "update.predbat_version" not in entities:
+        # The entity id carries the configured prefix (update.<prefix>_version), so match the config item's own entity
+        version_entity = self.config_index.get("version", {}).get("entity")
+        if not version_entity or version_entity not in entities:
             return
 
         if service == "install":

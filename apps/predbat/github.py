@@ -102,7 +102,7 @@ class GitHub:
         only the in-memory value is known, so the load is tried again on the next call.
         """
         if not self.predbat_skipped_version_loaded:
-            components = getattr(self, "components", None)
+            components = self.components
             storage = components.get_component("storage") if components else None
             if storage:
                 self.predbat_skipped_version_loaded = True
@@ -120,7 +120,7 @@ class GitHub:
         """Remember the Predbat release skipped from the HA update entity, or forget it with None, and persist it to storage (GH#5489)."""
         self.predbat_skipped_version = version
         self.predbat_skipped_version_loaded = True
-        components = getattr(self, "components", None)
+        components = self.components
         storage = components.get_component("storage") if components else None
         if not storage:
             return
