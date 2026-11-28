@@ -18,10 +18,28 @@ from utils import services_send_power
 from control_monitor import ControlMonitor, MODE_CHARGING, MODE_EXPORTING, GRACE_S
 
 
+class _TestDispatchOff:
+    """Stand-in for InverterDispatch on this light fixture: dispatch is never configured."""
+
+    active = False
+
+    def enabled(self):
+        """This fixture never has dispatch configured."""
+        return False
+
+    def disable_dispatch(self):
+        """Nothing to disable."""
+        return False
+
+
 class ActiveTestInverter:
     def __init__(self, id, soc_kw, soc_max, now_utc):
         self.soc_target = -1
         self.id = id
+        # A real Inverter always carries the helper; execute_plan() reads it when it sizes the
+        # control-monitor expectation.
+        self.dispatch = _TestDispatchOff()
+
         self.isCharging = False
         self.isExporting = False
         self.pause_charge = False
