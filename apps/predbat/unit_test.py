@@ -83,6 +83,7 @@ from tests.test_rate_min_forward_calc import test_rate_min_forward_calc
 from tests.test_battery_rate_grid import run_battery_rate_grid_tests
 from tests.test_battery_rate_grid_scan import run_battery_rate_grid_scan_tests
 from tests.test_battery_rate_grid_update import run_battery_rate_grid_update_tests
+from tests.test_battery_thermal import run_battery_thermal_tests
 from tests.test_find_battery_size import run_find_battery_size_tests
 from tests.test_optimise_all_windows import run_optimise_all_windows_kernel_tests
 from tests.test_optimise_solar import run_optimise_solar_tests
@@ -364,6 +365,7 @@ from tests.test_validate_config import test_validate_config, test_validate_confi
 from tests.test_get_arg_missing_index import test_get_arg_missing_index_uses_default_quietly
 from tests.test_get_arg_combine_units import test_get_arg_combine_units
 from tests.test_plan_json_rate_adjust import run_test_plan_json_rate_adjust
+from tests.test_plan_battery_temperature import run_test_plan_battery_temperature
 from tests.test_plan_why_reason import run_test_plan_why_reason
 from tests.test_plan_scenarios import run_test_plan_scenarios
 from tests.test_plan_scenario_summary import run_test_plan_scenario_summary
@@ -837,6 +839,7 @@ def main():
         ("battery_rate_grid", run_battery_rate_grid_tests, "Battery rate grids: manual grid, isotonic fit, lookup", False),
         ("battery_rate_grid_scan", run_battery_rate_grid_scan_tests, "Battery rate grids: full-rate runs scanned into segments", False),
         ("battery_rate_grid_update", run_battery_rate_grid_update_tests, "Battery rate grids: storage, fallback to manual curves, sensors", False),
+        ("battery_thermal", run_battery_thermal_tests, "Battery thermal model: fit and forecast of battery temperature (GH#5919)", False),
         ("find_battery_size", run_find_battery_size_tests, "Find battery size tests", False),
         ("energydataservice", run_energydataservice_tests, "Energy data service tests", False),
         ("saving_session", test_saving_session, "Saving session tests", False),
@@ -954,6 +957,7 @@ def main():
         ("control_failures_metrics", test_control_failures_metrics_round_trip, "Metrics dashboard control_failures round-trip tests", False),
         ("control_failures_dashboard", test_control_failures_dashboard_renders_section, "Metrics dashboard control_failures section render tests", False),
         ("plan_json_rate_adjust", run_test_plan_json_rate_adjust, "Plan JSON rate adjust type field tests", False),
+        ("plan_battery_temperature", run_test_plan_battery_temperature, "Plan debug battery temperature column (GH#5919)", False),
         ("plan_why_reason", run_test_plan_why_reason, "Plan JSON per-slot 'why' reason text tests", False),
         ("plan_scenarios", run_test_plan_scenarios, "Plan table PV10/PV90 scenario values and tooltips (#5871)", False),
         ("plan_scenario_summary", run_test_plan_scenario_summary, "Plan scenario_summary_state export-limit tuple regression test", False),

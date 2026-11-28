@@ -7210,6 +7210,7 @@ def get_plan_renderer_js():
                 load: 'Predicted house electricity consumption for this slot, from historical data.',
                 clip: "Solar energy predicted to be lost - the inverter can't handle all the PV generated, or an export limit is set.",
                 xload: 'Extra load added externally via load_forecast settings (e.g. PredAI, PredHeat).',
+                batt_temp: 'Forecast battery temperature the plan uses at the start of this slot; in brackets, the thermal model forecast while the plan does not use it.',
                 car: 'Predicted car charging energy for this slot.',
                 iboost: 'Energy planned for the solar diverter (iBoost, MyEnergi Eddi, etc) this slot.',
                 soc: 'Estimated battery state of charge at the start of this slot.',
@@ -7245,6 +7246,10 @@ def get_plan_renderer_js():
             }
             if (showDebug && jsonData.rows.some(r => r.extra_load !== undefined)) {
                 html += th('xload', 'XLoad kWh');
+            }
+            const showTemperature = showDebug && jsonData.show_temperature;
+            if (showTemperature) {
+                html += th('batt_temp', 'Batt °C (thermal)');
             }
             if (jsonData.num_cars > 0) {
                 html += th('car', 'Car kWh');
@@ -7392,6 +7397,15 @@ def get_plan_renderer_js():
                     html += `<td id=extra bgcolor=${row.extra_color || '#FFFFFF'}>${xloadVal}</td>`;
                 }
 
+                // Battery temperature (only if debug, on the live plan)
+                if (showTemperature) {
+                    let tempText = row.battery_temperature !== undefined ? row.battery_temperature : '&#9866;';
+                    if (row.battery_temperature_thermal !== undefined) {
+                        tempText += ` (${row.battery_temperature_thermal})`;
+                    }
+                    html += `<td id=batt_temp bgcolor=#FFFFFF>${tempText}</td>`;
+                }
+
                 // Car charging (conditional)
                 if (jsonData.num_cars > 0) {
                     // A slot dynamic load cancelled (car not charging) still shows its kWh, with a "?"
@@ -7519,6 +7533,11 @@ def get_plan_renderer_js():
                 // XLoad (if debug and exists)
                 if (showDebug && totals.extra_load !== undefined) {
                     html += `<td bgcolor=#FFFFFF><b>${totals.extra_load}</b></td>`;
+                }
+
+                // Battery temperature has no total
+                if (showTemperature) {
+                    html += '<td></td>';
                 }
 
                 // Car charging (if enabled)

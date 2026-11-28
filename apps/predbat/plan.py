@@ -6164,6 +6164,8 @@ class Plan:
 
             if save and save == "best":
                 self.log("Saving plan best values to HA entities")
+                # The next cycle's battery temperature forecast warms the battery by this plan's charging and discharging (GH#5919)
+                self.battery_power_plan_best = predict_battery_power
                 self.dashboard_item(
                     self.prefix + ".best_battery_hours_left",
                     state=dp2(hours_left),
