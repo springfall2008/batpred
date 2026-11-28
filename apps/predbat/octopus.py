@@ -13,6 +13,7 @@ data. Delegates caching to the StorageComponent with stale-while-revalidate
 semantics for multi-pod deployments.
 """
 
+import array
 import asyncio
 import math
 from http_sync import http_get, HttpError, HttpJSONDecodeError
@@ -78,6 +79,183 @@ DATE_TIME_STR_FORMAT = "%Y-%m-%dT%H:%M:%S%z"
 # Sentinel distinguishing "attribute not present on the entity" from a genuinely empty list,
 # since both would otherwise look the same (falsy) to callers.
 _ATTRIBUTE_UNSET = object()
+
+# Where the URL cache (rate series and free sessions per URL) is kept between restarts. JSON with each run of
+# minutes held as a start and a list loads without building a YAML node per value, which took tens of MB at
+# startup and left that memory with the process. Earlier versions wrote a YAML mapping with one line per minute
+# under OCTOPUS_URL_CACHE_LEGACY_NAME. That file is read only when there is no JSON cache, which is the first
+# start after upgrading, and is saved straight away as JSON. It stops loading 8 hours after the old version last
+# saved it, and the storage cleanup then removes it.
+OCTOPUS_URL_CACHE_MODULE = "octopus_free"
+OCTOPUS_URL_CACHE_NAME = "url_cache_json"
+OCTOPUS_URL_CACHE_LEGACY_NAME = "url_cache"
+
+
+class PackedUrlCacheRates:
+    """
+    One cached run of minute -> rate held as a start minute and an array of doubles.
+
+    A rate URL's data is around 10,000 consecutive minutes. As a dict that costs an int key, a float and a hash
+    slot per minute (about 0.7 MB), held for the life of the process; this keeps 8 bytes a minute. The cache
+    hands out to_dict(), a new dict for each read, so a caller can change what it gets without reaching the cache.
+    """
+
+    __slots__ = ("start", "rates")
+
+    def __init__(self, start, rates):
+        """Hold the rate for minute `start + index` in rates[index], an array of doubles."""
+        self.start = start
+        self.rates = rates
+
+    def __len__(self):
+        """Return the number of minutes held."""
+        return len(self.rates)
+
+    def __eq__(self, other):
+        """Equal to another packed run with the same minutes and rates, or to the dict it stands for."""
+        if isinstance(other, PackedUrlCacheRates):
+            return self.start == other.start and self.rates == other.rates
+        if isinstance(other, dict):
+            return self.to_dict() == other
+        return NotImplemented
+
+    __hash__ = None
+
+    def __repr__(self):
+        """Show the start and length rather than every rate."""
+        return "PackedUrlCacheRates(start={}, minutes={})".format(self.start, len(self.rates))
+
+    def to_dict(self):
+        """Return a new minute -> rate dict holding the same data, minutes ascending."""
+        return dict(zip(range(self.start, self.start + len(self.rates)), self.rates))
+
+    @classmethod
+    def from_run(cls, start, rates):
+        """Hold the list `rates` for the minutes from `start` packed when every rate is a float, else return the dict it stands for."""
+        if rates and all(type(rate) is float for rate in rates):
+            return cls(start, array.array("d", rates))
+        return {start + index: rate for index, rate in enumerate(rates)}
+
+    @classmethod
+    def pack_copy(cls, data):
+        """
+        Return what the cache should hold for `data`, never `data` itself when it is a dict: packed when it is a
+        run of consecutive int minutes (in any order) with float rates, otherwise a copy of the dict. Anything else
+        (the free session list) is returned as it is.
+        """
+        if not isinstance(data, dict):
+            return data
+        if data and all(type(minute) is int for minute in data):
+            start = min(data)
+            end = max(data)
+            # The keys are distinct ints, so as many keys as minutes in the span means none is missing. Downloaded
+            # rates arrive newest half hour first (the Octopus API's order), so the run is read in ascending order.
+            if end - start + 1 == len(data):
+                rates = [data[minute] for minute in range(start, end + 1)]
+                if all(type(rate) is float for rate in rates):
+                    return cls(start, array.array("d", rates))
+        return dict(data)
+
+    @staticmethod
+    def unpack(data):
+        """Return cached data as the caller's own: a new dict for a packed run or a minute dict, anything else as it is."""
+        if isinstance(data, PackedUrlCacheRates):
+            return data.to_dict()
+        if isinstance(data, dict):
+            return dict(data)
+        return data
+
+
+def _encode_url_cache_data(data):
+    """
+    Encode one cache entry's data for JSON
+    A minute -> rate dict that holds every minute from its first to its last becomes {"start", "rates"}, whatever
+    order the minutes were added in, any other minute dict {"minutes": [[minute, rate], ...]}, and anything else
+    (the free session list) {"value": data}. Downloaded rates arrive newest half hour first (the Octopus API's
+    order), so the run is written in ascending order and reloads ascending, as the old YAML cache did.
+    A packed run (PackedUrlCacheRates) is written as {"start", "rates"} without being unpacked.
+    """
+    if isinstance(data, PackedUrlCacheRates):
+        return {"start": data.start, "rates": data.rates.tolist()}
+    if isinstance(data, dict) and data and all(type(minute) is int for minute in data):
+        start = min(data)
+        end = max(data)
+        # The keys are distinct ints, so as many keys as minutes in the span means none is missing
+        if end - start + 1 == len(data):
+            return {"start": start, "rates": [data[minute] for minute in range(start, end + 1)]}
+        return {"minutes": [[minute, rate] for minute, rate in data.items()]}
+    return {"value": data}
+
+
+def _decode_url_cache_data(encoded, packed=False):
+    """
+    Decode what _encode_url_cache_data() produced, back to the dict or value it was made from
+    With packed=True a run of float rates comes back as PackedUrlCacheRates, without building the dict first.
+    """
+    if "rates" in encoded:
+        start = encoded["start"]
+        if packed:
+            return PackedUrlCacheRates.from_run(start, encoded["rates"])
+        return {start + index: rate for index, rate in enumerate(encoded["rates"])}
+    if "minutes" in encoded:
+        return {minute: rate for minute, rate in encoded["minutes"]}
+    return encoded["value"]
+
+
+def encode_octopus_url_cache(cache):
+    """
+    Return the URL cache as JSON-ready data: the stamp and midnight_utc as ISO strings and the data compacted
+    """
+    encoded = {}
+    for url, entry in cache.items():
+        midnight_utc = entry.get("midnight_utc")
+        encoded[url] = {
+            "stamp": entry["stamp"].isoformat(),
+            "midnight_utc": midnight_utc.isoformat() if midnight_utc is not None else None,
+            "data": _encode_url_cache_data(entry.get("data")),
+        }
+    return encoded
+
+
+def decode_octopus_url_cache(encoded, log=None, packed=False):
+    """
+    Rebuild the URL cache from encode_octopus_url_cache() output, skipping (and logging) any entry that cannot be read
+    With packed=True each run of float rates is held as PackedUrlCacheRates, as the in-memory cache keeps it.
+    """
+    cache = {}
+    for url, entry in encoded.items():
+        try:
+            midnight_utc = entry.get("midnight_utc")
+            cache[url] = {
+                "stamp": datetime.fromisoformat(entry["stamp"]),
+                "midnight_utc": datetime.fromisoformat(midnight_utc) if midnight_utc is not None else None,
+                "data": _decode_url_cache_data(entry["data"], packed=packed),
+            }
+        except (AttributeError, KeyError, TypeError, ValueError) as e:
+            if log:
+                log("Warn: Octopus: Skipping unreadable URL cache entry for {}: {}".format(url, e))
+    return cache
+
+
+def adopt_legacy_octopus_url_cache(legacy, log=None):
+    """
+    Return the in-memory URL cache for one loaded from the YAML file earlier versions wrote
+    YAML already gives stamp and midnight_utc back as datetimes, so each entry keeps them and only its data is
+    packed, as the JSON cache holds it. An entry without a datetime stamp, or whose midnight_utc is set but is not a
+    datetime, is skipped (and logged).
+    """
+    cache = {}
+    if not isinstance(legacy, dict):
+        return cache
+    for url, entry in legacy.items():
+        midnight_utc = entry.get("midnight_utc") if isinstance(entry, dict) else None
+        if not isinstance(entry, dict) or not isinstance(entry.get("stamp"), datetime) or (midnight_utc is not None and not isinstance(midnight_utc, datetime)):
+            if log:
+                log("Warn: Octopus: Skipping unreadable entry for {} in the old URL cache".format(url))
+            continue
+        cache[url] = {"stamp": entry["stamp"], "midnight_utc": midnight_utc, "data": PackedUrlCacheRates.pack_copy(entry.get("data"))}
+    return cache
+
 
 # Night-rate window definitions: start time, end time, whether the window crosses midnight.
 # Keys: "eco7" (Economy 7), "go" (Octopus GO / generic day-night), "iog" (Intelligent GO TOU).
@@ -3520,10 +3698,19 @@ class Octopus:
             return
         try:
             self.octopus_url_cache_loaded = True
-            data = run_async(storage.load("octopus_free", "url_cache"))
+            data = run_async(storage.load(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME))
             if data:
-                self.octopus_url_cache = data
-                self.log("Octopus: Loaded URL cache from storage ({} entries)".format(len(data)))
+                self.octopus_url_cache = decode_octopus_url_cache(data, log=self.log, packed=True)
+                self.log("Octopus: Loaded URL cache from storage ({} entries)".format(len(self.octopus_url_cache)))
+                return
+            # No JSON cache: on the first start after upgrading, fall back once on the YAML file the old version wrote,
+            # so a failed first download still has rates. Saving it as JSON straight away means it is never read again.
+            legacy = run_async(storage.load(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_LEGACY_NAME))
+            if legacy:
+                self.octopus_url_cache = adopt_legacy_octopus_url_cache(legacy, log=self.log)
+                self.log("Octopus: Loaded URL cache from the previous version's YAML file ({} entries), saving it as JSON".format(len(self.octopus_url_cache)))
+                if self.octopus_url_cache:
+                    self._save_octopus_url_cache_to_storage()
         except Exception as e:
             self.log("Warn: Octopus: Failed to load URL cache from storage: {}".format(e))
 
@@ -3543,7 +3730,7 @@ class Octopus:
             self.log("Octopus: Pruned {} stale URL cache entries (older than 2 days)".format(len(stale)))
 
         try:
-            run_async(storage.save("octopus_free", "url_cache", self.octopus_url_cache, format="yaml", expiry=datetime.now(timezone.utc) + timedelta(hours=8)))
+            run_async(storage.save(OCTOPUS_URL_CACHE_MODULE, OCTOPUS_URL_CACHE_NAME, encode_octopus_url_cache(self.octopus_url_cache), format="json", expiry=datetime.now(timezone.utc) + timedelta(hours=8)))
         except Exception as e:
             self.log("Warn: Octopus: Failed to save URL cache to storage: {}".format(e))
 
@@ -3567,7 +3754,7 @@ class Octopus:
             # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale data after midnight)
             if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
                 self.log("Octopus: Return cached octopus data for {} age {} minutes".format(url, dp1(age.total_seconds() / 60)))
-                return self.octopus_url_cache[url]["data"]
+                return PackedUrlCacheRates.unpack(self.octopus_url_cache[url]["data"])
             elif cached_midnight != self.midnight_utc:
                 self.log("Octopus: Cached octopus data for {} is stale (midnight crossed), re-downloading".format(url))
 
@@ -3712,7 +3899,8 @@ class Octopus:
         if url in self.octopus_url_cache:
             stamp = self.octopus_url_cache[url]["stamp"]
             cached_midnight = self.octopus_url_cache[url].get("midnight_utc")
-            pdata = self.octopus_url_cache[url]["data"]
+            # Each read is a new dict the caller owns, so changing it cannot reach the cache
+            pdata = PackedUrlCacheRates.unpack(self.octopus_url_cache[url]["data"])
             age = now - stamp
             # Cache is valid if: age < 30 minutes AND midnight_utc hasn't changed (to avoid stale rates after midnight)
             if age.total_seconds() < (30 * 60) and cached_midnight == self.midnight_utc:
@@ -3732,7 +3920,7 @@ class Octopus:
             self.log("Warn: Octopus: Unable to download Octopus data from URL {} (data empty)".format(url))
             self.record_status("Warn: Octopus: Unable to download Octopus data from cloud", debug=url, had_errors=True)
             if url in self.octopus_url_cache:
-                pdata = self.octopus_url_cache[url]["data"]
+                pdata = PackedUrlCacheRates.unpack(self.octopus_url_cache[url]["data"])
                 return pdata
             else:
                 raise ValueError
@@ -3745,7 +3933,7 @@ class Octopus:
             self.log("Warn: Octopus: Downloaded data from URL {} has no current or future rates - the product may have been retired, check the URL in apps.yaml".format(url))
             self.record_status("Warn: Octopus: URL has no current rates, check apps.yaml", debug=url, had_errors=True)
             if url in self.octopus_url_cache:
-                pdata = self.octopus_url_cache[url]["data"]
+                pdata = PackedUrlCacheRates.unpack(self.octopus_url_cache[url]["data"])
                 return pdata
             else:
                 raise ValueError
@@ -3754,7 +3942,8 @@ class Octopus:
         self.octopus_url_cache[url] = {}
         self.octopus_url_cache[url]["stamp"] = now
         self.octopus_url_cache[url]["midnight_utc"] = self.midnight_utc
-        self.octopus_url_cache[url]["data"] = pdata
+        # Held packed (or as a copy), so the dict returned below is the caller's own
+        self.octopus_url_cache[url]["data"] = PackedUrlCacheRates.pack_copy(pdata)
         self._save_octopus_url_cache_to_storage()
         return pdata
 

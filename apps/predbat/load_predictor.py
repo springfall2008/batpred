@@ -38,6 +38,7 @@ OUTPUT_STEPS = 1  # Single step output (autoregressive)
 PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30 min)
 HIDDEN_SIZES = [512, 256, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Batch size
+ADAM_CHUNK = 131072  # Elements per chunk of the optimiser step (1 MB of float64): few enough calls to cost little, small enough to keep its buffers small
 MAX_BATCHES_PER_EPOCH = 200  # Cap on SGD batches per epoch - with importance sampling this keeps training
 # cost constant regardless of how many days of history are loaded
 
@@ -178,11 +179,6 @@ def relu(x):
     return np.maximum(0, x)
 
 
-def relu_derivative(x):
-    """Derivative of ReLU"""
-    return (x > 0).astype(np.float32)
-
-
 def huber_loss(y_true, y_pred, delta=1.0):
     """Huber loss - robust to outliers"""
     error = y_true - y_pred
@@ -237,6 +233,8 @@ class LoadPredictor:
         self.m_biases = None
         self.v_biases = None
         self.adam_t = 0
+        # Scratch arrays for _adam_update, reused across a training run's steps and freed when it ends
+        self.adam_buffers = {}
 
         # Normalization parameters
         self.feature_mean = None
@@ -331,7 +329,13 @@ class LoadPredictor:
 
         current = X
         for i, (w, b) in enumerate(zip(self.weights, self.biases)):
-            z = np.dot(current, w) + b
+            # In place on the fresh product (bit-identical to np.dot(current, w) + b, without a second array),
+            # unless adding b would promote the product's dtype, which only the expression form does
+            z = np.dot(current, w)
+            if np.result_type(z, b) == z.dtype:
+                z += b
+            else:
+                z = z + b
             pre_activations.append(z)
 
             # Apply ReLU for hidden layers, linear for output
@@ -342,7 +346,7 @@ class LoadPredictor:
                 if training and self.dropout_rate > 0.0:
                     mask = (np.random.rand(*current.shape) > self.dropout_rate).astype(np.float32)
                     mask /= 1.0 - self.dropout_rate
-                    current = current * mask
+                    current *= mask
                     dropout_masks.append(mask)
                 else:
                     dropout_masks.append(None)
@@ -387,16 +391,19 @@ class LoadPredictor:
             bias_grads.insert(0, np.sum(delta, axis=0))
 
             if i > 0:
-                # Propagate gradient to previous layer
-                delta = np.dot(delta, self.weights[i].T) * relu_derivative(pre_activations[i - 1])
+                # Propagate gradient to previous layer, masked by the ReLU's derivative (1 where the
+                # pre-activation is positive, else 0): multiplying by the boolean mask is exact
+                delta = np.dot(delta, self.weights[i].T)
+                delta *= pre_activations[i - 1] > 0
                 # Apply dropout mask: zero out gradients for dropped neurons
                 # (mask already carries the inverted scaling factor 1/(1-p))
                 if dropout_masks is not None and (i - 1) < len(dropout_masks) and dropout_masks[i - 1] is not None:
-                    delta = delta * dropout_masks[i - 1]
+                    delta *= dropout_masks[i - 1]
 
-        # Clip gradients to prevent exploding gradients and NaN weight updates
-        weight_grads = [np.clip(g, -10.0, 10.0) for g in weight_grads]
-        bias_grads = [np.clip(g, -10.0, 10.0) for g in bias_grads]
+        # Clip gradients to prevent exploding gradients and NaN weight updates. In place: every
+        # gradient is a fresh array of this pass's own, so no caller's array is changed
+        for g in weight_grads + bias_grads:
+            np.clip(g, -10.0, 10.0, out=g)
 
         return weight_grads, bias_grads
 
@@ -414,37 +421,110 @@ class LoadPredictor:
         """
         self.adam_t += 1
         effective_lr = lr if lr is not None else self.learning_rate
+        correction1 = 1 - beta1**self.adam_t
+        correction2 = 1 - beta2**self.adam_t
 
+        # AdamW-style weight decay (L2 regularisation) on the weights; none on the biases
+        decay = 1 - effective_lr * self.weight_decay if self.weight_decay > 0 else None
         for i in range(len(self.weights)):
-            # Update momentum for weights
-            self.m_weights[i] = beta1 * self.m_weights[i] + (1 - beta1) * weight_grads[i]
-            self.v_weights[i] = beta2 * self.v_weights[i] + (1 - beta2) * (weight_grads[i] ** 2)
+            self.m_weights[i], self.v_weights[i] = self._adam_step(self.weights[i], self.m_weights[i], self.v_weights[i], weight_grads[i], beta1, beta2, epsilon, correction1, correction2, effective_lr, decay)
+            self.m_biases[i], self.v_biases[i] = self._adam_step(self.biases[i], self.m_biases[i], self.v_biases[i], bias_grads[i], beta1, beta2, epsilon, correction1, correction2, effective_lr, None)
 
-            # Bias correction
-            m_hat = self.m_weights[i] / (1 - beta1**self.adam_t)
-            v_hat = self.v_weights[i] / (1 - beta2**self.adam_t)
+    def _adam_step(self, param, m, v, grad, beta1, beta2, epsilon, correction1, correction2, lr, decay):
+        """
+        Apply one Adam step to param in place, and return its new moments (m, v).
 
-            # Update weights with Adam step
-            self.weights[i] -= effective_lr * m_hat / (np.sqrt(v_hat) + epsilon)
+        Computes exactly what the expression form did, operation by operation and in the same
+        dtypes, so every bit of the result is unchanged:
 
-            # Apply weight decay (AdamW-style L2 regularization)
-            if self.weight_decay > 0:
-                self.weights[i] *= 1 - effective_lr * self.weight_decay
+            m = beta1 * m + (1 - beta1) * grad
+            v = beta2 * v + (1 - beta2) * grad**2
+            param -= lr * (m / correction1) / (sqrt(v / correction2) + epsilon)
+            param *= decay                      (weights only)
+            param = nan_to_num(param)           (non-finite values to 0)
 
-            # Update momentum for biases
-            self.m_biases[i] = beta1 * self.m_biases[i] + (1 - beta1) * bias_grads[i]
-            self.v_biases[i] = beta2 * self.v_biases[i] + (1 - beta2) * (bias_grads[i] ** 2)
+        Every operation is element-wise, so it runs over ADAM_CHUNK elements at a time through
+        small reused buffers: about ten fresh arrays the size of param per step become none,
+        and each element's sixteen operations run while its chunk is in cache. nan_to_num's
+        several masked passes are only paid for a chunk whose sum is not finite (a finite sum
+        means every element is finite). The step's dtype is whatever NumPy gives lr * m:
+        float64 when lr is a NumPy float64 (as train()'s cosine schedule passes), float32 for a
+        Python float.
 
-            # Bias correction
-            m_hat = self.m_biases[i] / (1 - beta1**self.adam_t)
-            v_hat = self.v_biases[i] / (1 - beta2**self.adam_t)
+        The in-place form needs m, v and grad to share one dtype and shape, and every array to be
+        contiguous, which is how training runs once under way (float64 throughout, from the He
+        initialisation). Otherwise, as on a float32 bias's first step, when the expression form
+        promotes its moments to float64, the expression form itself runs, so the promotion and
+        its rounding are kept.
 
-            # Update biases (no weight decay on biases)
-            self.biases[i] -= effective_lr * m_hat / (np.sqrt(v_hat) + epsilon)
+        Args:
+            param: Weight or bias array, updated in place
+            m: First moment, updated in place
+            v: Second moment, updated in place
+            grad: Gradient for param
+            beta1: First-moment decay
+            beta2: Second-moment decay
+            epsilon: Numerical-stability constant
+            correction1: 1 - beta1**t
+            correction2: 1 - beta2**t
+            lr: Learning rate for this step
+            decay: Weight-decay factor to multiply param by after the step, or None
 
-            # Ensure weights and biases remain finite
-            self.weights[i] = np.nan_to_num(self.weights[i], copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-            self.biases[i] = np.nan_to_num(self.biases[i], copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        Returns:
+            The new (m, v): the arrays passed in, updated in place, or new ones from the expression form
+        """
+        if not (m.dtype == v.dtype == grad.dtype and m.shape == grad.shape == param.shape and all(a.flags.c_contiguous for a in (param, m, v, grad))):
+            m = beta1 * m + (1 - beta1) * grad
+            v = beta2 * v + (1 - beta2) * (grad**2)
+            param -= lr * (m / correction1) / (np.sqrt(v / correction2) + epsilon)
+            if decay is not None:
+                param *= decay
+            if not np.isfinite(param.sum()):
+                np.nan_to_num(param, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            return m, v
+
+        step_dtype = np.result_type(m, lr)
+        scratch_full = self._adam_buffer("scratch", m.dtype)
+        step_full = self._adam_buffer("step", step_dtype)
+        m_hat_full = step_full if step_dtype == m.dtype else self._adam_buffer("m_hat", m.dtype)
+        flat_param, flat_m, flat_v, flat_grad = param.reshape(-1), m.reshape(-1), v.reshape(-1), grad.reshape(-1)
+        size = flat_m.size
+        for start in range(0, size, ADAM_CHUNK):
+            stop = min(start + ADAM_CHUNK, size)
+            p, mc, vc, g = flat_param[start:stop], flat_m[start:stop], flat_v[start:stop], flat_grad[start:stop]
+            scratch, step, m_hat = scratch_full[: stop - start], step_full[: stop - start], m_hat_full[: stop - start]
+            np.multiply(mc, beta1, out=mc)
+            np.multiply(g, 1 - beta1, out=scratch)
+            mc += scratch
+            np.square(g, out=scratch)
+            np.multiply(scratch, 1 - beta2, out=scratch)
+            np.multiply(vc, beta2, out=vc)
+            vc += scratch
+            # Denominator: sqrt(v_hat) + epsilon
+            denominator = scratch
+            np.divide(vc, correction2, out=denominator)
+            np.sqrt(denominator, out=denominator)
+            denominator += epsilon
+            # Step: (lr * m_hat) / denominator, in the dtype NumPy promotes lr * m_hat to; m_hat itself is
+            # rounded to m's dtype first, as the expression form computed it before promoting
+            np.divide(mc, correction1, out=m_hat)
+            np.multiply(m_hat, lr, out=step)
+            np.divide(step, denominator, out=step)
+            np.subtract(p, step, out=p)
+            if decay is not None:
+                p *= decay
+            if not np.isfinite(p.sum()):
+                np.nan_to_num(p, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        return m, v
+
+    def _adam_buffer(self, name, dtype):
+        """Return a reusable ADAM_CHUNK-element scratch array of dtype for the optimiser step, made on first use."""
+        key = (name, np.dtype(dtype))
+        buffer = self.adam_buffers.get(key)
+        if buffer is None:
+            buffer = np.empty(ADAM_CHUNK, dtype=dtype)
+            self.adam_buffers[key] = buffer
+        return buffer
 
     def _create_time_features(self, minute_of_day, day_of_week, day_of_year=1):
         """
@@ -1424,9 +1504,11 @@ class LoadPredictor:
                 best_val_loss = val_mae
                 best_val_bias = val_bias_mean
                 patience_counter = 0
-                # Checkpoint best weights
-                best_weights = [w.copy() for w in self.weights]
-                best_biases = [b.copy() for b in self.biases]
+                # Checkpoint best weights, into the checkpoint's own arrays: a fresh copy each time would
+                # hold two full checkpoints at once while the old one is released. casting="no" makes a
+                # dtype mismatch raise rather than silently narrow the checkpoint, as copy() never would
+                for best, current in zip(best_weights + best_biases, self.weights + self.biases):
+                    np.copyto(best, current, casting="no")
             else:
                 patience_counter += 1
 
@@ -1444,6 +1526,8 @@ class LoadPredictor:
                 )
             )
 
+        # The optimiser's scratch arrays are only needed while training; do not keep them for the model's lifetime
+        self.adam_buffers = {}
         self.training_timestamp = datetime.now(timezone.utc)
         self.validation_mae = best_val_loss
         self.validation_bias = float(best_val_bias)

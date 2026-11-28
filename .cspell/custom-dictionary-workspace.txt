@@ -36,6 +36,7 @@ appsyaml
 argname
 armhf
 armv
+ascontiguousarray
 ASHP
 asn
 asname
@@ -128,6 +129,7 @@ configform
 connack
 Consolas
 cooldown
+copyto
 coro
 corruptleg
 corruptplans
@@ -808,6 +810,7 @@ timestr
 timezone
 tmpfs
 tmrw
+tobytes
 tojson
 topbar
 TOTL
@@ -829,6 +832,10 @@ tzdata
 tzfile
 tzpath
 tzset
+udfff
+ufeff
+ufffe
+uffff
 unasserted
 uncalibrated
 uncancellable

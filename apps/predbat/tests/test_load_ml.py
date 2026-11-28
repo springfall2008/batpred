@@ -16,7 +16,7 @@ import tempfile
 import os
 from dateutil import parser
 
-from load_predictor import LoadPredictor, OUTPUT_STEPS, HIDDEN_SIZES, TOTAL_FEATURES, STEP_MINUTES, CHUNK_MINUTES, relu, relu_derivative, huber_loss
+from load_predictor import LoadPredictor, OUTPUT_STEPS, HIDDEN_SIZES, TOTAL_FEATURES, STEP_MINUTES, CHUNK_MINUTES, relu, huber_loss
 
 
 def test_load_ml(my_predbat=None):
@@ -34,7 +34,7 @@ def test_load_ml(my_predbat=None):
 
     # Registry of all sub-tests
     sub_tests = [
-        ("relu_functions", _test_relu_functions, "ReLU activation and derivative"),
+        ("relu_functions", _test_relu_functions, "ReLU activation"),
         ("huber_loss_functions", _test_huber_loss_functions, "Huber loss computation"),
         ("forward_pass", _test_forward_pass, "Forward pass computation"),
         ("backward_pass", _test_backward_pass, "Backward pass gradient computation"),
@@ -103,17 +103,12 @@ def test_load_ml(my_predbat=None):
 
 
 def _test_relu_functions():
-    """Test ReLU activation and derivative"""
+    """Test ReLU activation"""
     # Test ReLU
     x = np.array([-2, -1, 0, 1, 2])
     expected = np.array([0, 0, 0, 1, 2])
     result = relu(x)
     assert np.allclose(result, expected), f"ReLU output mismatch: {result} vs {expected}"
-
-    # Test ReLU derivative
-    expected_deriv = np.array([0, 0, 0, 1, 1])
-    result_deriv = relu_derivative(x)
-    assert np.allclose(result_deriv, expected_deriv), f"ReLU derivative mismatch: {result_deriv} vs {expected_deriv}"
 
 
 def _test_huber_loss_functions():

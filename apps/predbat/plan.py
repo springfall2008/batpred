@@ -2885,6 +2885,11 @@ class Plan:
         metrics().planning_duration_seconds.observe(self.plan_last_duration_seconds)
         self.log("Plan calculation took {:.2f} seconds".format(self.plan_last_duration_seconds))
 
+        # The search and its publishing are over, so the memoised simulations are dead weight until the next plan builds a
+        # new Prediction. Released here rather than by a caller so that every route into a plan - the cycle's own, the
+        # recompute of an aged plan, compare and the annual run - gives the memory back
+        self.prediction.release_caches()
+
         # Return if we recomputed or not
         return recompute
 
@@ -6290,7 +6295,7 @@ class Plan:
                 self.dashboard_item(
                     self.prefix + ".soc_kw_best_h12",
                     state=dp3(self.predict_soc[60 * 12]),
-                    attributes={"friendly_name": "Predicted SoC kWh best + 12h", "state_class": "measurement", "unit _of_measurement": "kWh", "icon": "mdi:battery"},
+                    attributes={"friendly_name": "Predicted SoC kWh best + 12h", "state_class": "measurement", "unit_of_measurement": "kWh", "icon": "mdi:battery"},
                 )
                 self.dashboard_item(
                     self.prefix + ".best_soc_min_kwh",

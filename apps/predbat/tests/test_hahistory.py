@@ -8,6 +8,7 @@
 # pylint: disable=line-too-long
 # pylint: disable=attribute-defined-outside-init
 
+import array
 import pytz
 from datetime import datetime, timedelta
 from ha import HAHistory, EntityHistory
@@ -1294,6 +1295,124 @@ def test_hahistory_refresh_window_quiet_store(my_predbat=None):
     return failed
 
 
+def test_entity_history_packed_attributes(my_predbat=None):
+    """Per-record attribute variations are stored packed (shared key tuple, array or tuple of values) and read back as equal dicts"""
+    print("\n=== Testing EntityHistory packed attribute exceptions ===")
+    failed = 0
+    base_time = datetime(2025, 12, 25, 10, 0, 0, tzinfo=pytz.UTC)
+
+    def stamp(minutes):
+        """ISO timestamp for the record that many minutes after the base time"""
+        return (base_time + timedelta(minutes=minutes)).isoformat()
+
+    mixed_one = {"count": 3, "flag": True, "name": "a", "nested": [1, 2]}
+    mixed_two = {"count": 4, "flag": False, "name": "b", "nested": [3]}
+    records = [
+        {"state": "1", "last_updated": stamp(0), "attributes": {"cost": 1.5, "energy": 2.5}},
+        {"state": "Demand", "last_updated": stamp(5), "attributes": {"cost": 2.5, "energy": 3.5}},
+        {"state": "Demand", "last_updated": stamp(10), "attributes": {"cost": 2.5, "energy": 3.5}},
+        {"state": "".join(["Dem", "and"]), "last_updated": stamp(15), "attributes": {"energy": 9.0, "cost": 8.0}},
+        {"state": "2", "last_updated": stamp(20), "attributes": {"cost": 1, "energy": 2.5}},
+        {"state": "3", "last_updated": stamp(25), "attributes": mixed_one},
+        {"state": "4", "last_updated": stamp(30), "attributes": mixed_two},
+        {"state": "5", "last_updated": stamp(35), "attributes": {}},
+        {"state": "6", "last_updated": stamp(40), "attributes": {"cost": float("nan")}},
+    ]
+    store = EntityHistory.from_records(records)
+
+    # Test 1: every record reads back equal, with the same key order, through to_records, indexing and iteration
+    output = store.to_records()
+    for index, record in enumerate(records):
+        wanted = record["attributes"]
+        for source, got in (("to_records", output[index]["attributes"]), ("getitem", store[index]["attributes"])):
+            if index == 8:
+                same = list(got) == list(wanted) and got["cost"] != got["cost"]
+            else:
+                same = got == wanted and list(got) == list(wanted)
+            if not same:
+                print(f"ERROR: Record {index} attributes via {source}: expected {wanted}, got {got}")
+                failed += 1
+    if [entry["attributes"] for entry in store][:8] != [record["attributes"] for record in records][:8]:
+        print("ERROR: Iterating the store did not return the stored attributes")
+        failed += 1
+    else:
+        print("✓ Packed attributes round-trip equal, with key order")
+
+    # Test 2: value types are kept - ints stay ints, bools stay bools, only all-float values are held as doubles
+    if type(output[4]["attributes"]["cost"]) is not int or output[5]["attributes"]["flag"] is not True:
+        print(f"ERROR: Types were not preserved: {output[4]['attributes']} {output[5]['attributes']}")
+        failed += 1
+    elif not isinstance(store.attribute_exceptions[store.epochs[1]][1], array.array) or not isinstance(store.attribute_exceptions[store.epochs[4]][1], tuple):
+        print("ERROR: Expected all-float attributes held as an array and mixed types as a tuple")
+        failed += 1
+    else:
+        print("✓ Value types preserved, floats held as an array")
+
+    # Test 3: records with the same key sequence share one key tuple, a different order does not
+    keys_one = store.attribute_exceptions[store.epochs[1]][0]
+    keys_two = store.attribute_exceptions[store.epochs[2]][0]
+    keys_three = store.attribute_exceptions[store.epochs[3]][0]
+    if keys_one is not keys_two or keys_one is keys_three or len(store.attribute_schemas) != 5:
+        print(f"ERROR: Key tuples not shared as expected ({len(store.attribute_schemas)} schemas)")
+        failed += 1
+    else:
+        print("✓ Key tuples shared across records with the same keys")
+
+    # Test 4: repeated string states share one object
+    if store.state_exceptions[store.epochs[1]] is not store.state_exceptions[store.epochs[3]]:
+        print("ERROR: Equal string states were not shared")
+        failed += 1
+    else:
+        print("✓ Repeated string states are shared")
+
+    # Test 5: a materialised dict is fresh and mutating it does not change the store, nor another record's dict
+    first = store.to_records()[1]["attributes"]
+    first["cost"] = 99.0
+    first["extra"] = 1
+    again = store.to_records()
+    if again[1]["attributes"] != {"cost": 2.5, "energy": 3.5} or again[2]["attributes"] != {"cost": 2.5, "energy": 3.5}:
+        print(f"ERROR: Mutating a materialised attributes dict changed the store: {again[1]['attributes']}")
+        failed += 1
+    else:
+        print("✓ Materialised attribute dicts are independent of the store")
+
+    # Test 6: pruning keeps the packed exceptions of the records it keeps, and a merge of older data rebuilds them
+    store.prune((base_time + timedelta(minutes=12)).timestamp())
+    kept = store.to_records()
+    if [entry["attributes"] for entry in kept[:2]] != [{"cost": 2.5, "energy": 3.5}, {"energy": 9.0, "cost": 8.0}]:
+        print(f"ERROR: Prune lost the packed attributes: {[entry['attributes'] for entry in kept]}")
+        failed += 1
+    else:
+        rebuilt = EntityHistory.from_records(records[:1] + kept[1:])
+        if rebuilt.to_records()[1]["attributes"] != {"energy": 9.0, "cost": 8.0}:
+            print("ERROR: Rebuilding from materialised records lost the attributes")
+            failed += 1
+        else:
+            print("✓ Pruning and rebuilding keep the packed attributes")
+
+    # Test 7: string states are shared through a per-store table, not the process-wide intern table, and
+    # prune() drops the strings it no longer holds so a sensor with a new string every record cannot grow it
+    unique_states = ["".join(["reading-", str(minute)]) for minute in (0, 5, 10)]
+    store = EntityHistory.from_records([{"state": state, "last_updated": stamp(minute), "attributes": {}} for state, minute in zip(unique_states, (0, 5, 10))])
+    if not hasattr(store, "state_intern") or sorted(store.state_intern) != sorted(unique_states):
+        print("ERROR: String states are not held in a per-store intern table")
+        failed += 1
+    else:
+        store.prune((base_time + timedelta(minutes=7)).timestamp())
+        if sorted(store.state_intern) != sorted(unique_states[1:]):
+            print(f"ERROR: Prune kept strings that no record holds: {sorted(store.state_intern)}")
+            failed += 1
+        else:
+            store.append_record({"state": "".join(["reading-", "10"]), "last_updated": stamp(15), "attributes": {}})
+            if store.state_exceptions[store.epochs[-1]] is not store.state_exceptions[store.epochs[-2]]:
+                print("ERROR: A string state appended after prune did not share the kept object")
+                failed += 1
+            else:
+                print("✓ String states share a per-store table that prune trims")
+
+    return failed
+
+
 def run_hahistory_tests(my_predbat):
     """Run all HAHistory unit tests"""
     print("\n" + "=" * 80)
@@ -1304,6 +1423,7 @@ def run_hahistory_tests(my_predbat):
 
     # Basic functionality tests
     failed += test_entity_history_store(my_predbat)
+    failed += test_entity_history_packed_attributes(my_predbat)
     failed += test_hahistory_initialize(my_predbat)
     failed += test_hahistory_add_entity(my_predbat)
 

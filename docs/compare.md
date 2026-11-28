@@ -146,6 +146,11 @@ A tariff whose rates match the ones you are on now is marked **Existing**. The m
 free electricity session, Axle event or Intelligent dispatch does not stop your own tariff being recognised, and neither does a
 `rates_import_override`/`rates_export_override` or manual rate override on the live rates.
 
+Axle VPP events are applied to every tariff in the comparison, because Axle is independent of your energy supplier: on an event day the
+event payment is added to each compared tariff's rates for the event period, as it is to your own (see [Axle VPP](energy-rates.md#axle-vpp)).
+Octopus saving sessions, free electricity sessions and Intelligent dispatch slots are specific to your current tariff, so they are only
+applied to your own rates and to a compared tariff that reuses them.
+
 ![image](images/web-interface-compare-view.png)
 
 ## Comparison sensors

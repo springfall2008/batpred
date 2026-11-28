@@ -729,6 +729,8 @@ Once signed up to Axle, Predbat's [Axle Energy VPP component](https://springfall
 
 During an Axle export event, **axle_pence_per_kwh** is added to both your export rate and your import rate for the event period. This reflects that importing (charging) instead of exporting during the event carries the same opportunity cost as missing out on the payment, so Predbat will not plan to charge cheaply through an event just because your normal import rate happens to be low at that time.
 
+The same boost is applied to every tariff in the [tariff comparison](compare.md#running-a-comparison), so an Axle event doesn't make your current tariff look better than the others.
+
 The following configuration options for the Axle VPP can be set in `apps.yaml`:
 
 - **axle_api_key** - Sets your API key to communicate with the Axle Energy VPP (Virtual Power Plant) service

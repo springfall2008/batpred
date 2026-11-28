@@ -1096,6 +1096,170 @@ def test_sigenergy_automatic_config_keeps_user_battery_min_soc(my_predbat):
     return failed
 
 
+def test_sigenergy_load_lifetime_includes_ac_charger(my_predbat):
+    """load_lifetime is TO_LOAD plus the AC EV charger (TO_EVAC), which is also published on its own.
+
+    Figures from a live lifetime sankey: TO_LOAD 3899.57 and TO_EVAC 1291.47 kWh, the two kept apart by
+    the API although grid import and the MQTT-derived live load both include the charger.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.systems = {"SIG001": {"systemName": "Home"}, "SIG002": {"systemName": "Office"}}
+    api.history_totals = {"SIG001": {"TO_LOAD": 3899.57, "TO_EVAC": 1291.47, "FROM_GRID": 4292.8}, "SIG002": {"TO_LOAD": 987.6}}
+
+    for system_id in api.systems:
+        run_async(api.publish_system_entities(system_id))
+
+    load_with_charger = api.dashboard_items["sensor.predbat_sigenergy_sig001_load_lifetime"]["state"]
+    assert abs(load_with_charger - 5191.04) < 0.001, "load_lifetime should be TO_LOAD + TO_EVAC = 5191.04, got {}".format(load_with_charger)
+    charger = api.dashboard_items["sensor.predbat_sigenergy_sig001_ac_ev_charge_lifetime"]
+    assert abs(charger["state"] - 1291.47) < 0.001, "ac_ev_charge_lifetime should be TO_EVAC, got {}".format(charger["state"])
+    assert charger["attributes"]["unit_of_measurement"] == "kWh" and charger["attributes"]["state_class"] == "total_increasing", charger["attributes"]
+
+    # A system with no AC charger keeps load_lifetime as TO_LOAD alone, and its charger total reads 0
+    load_only = api.dashboard_items["sensor.predbat_sigenergy_sig002_load_lifetime"]["state"]
+    assert abs(load_only - 987.6) < 0.001, "load_lifetime without TO_EVAC should be TO_LOAD, got {}".format(load_only)
+    assert api.dashboard_items["sensor.predbat_sigenergy_sig002_ac_ev_charge_lifetime"]["state"] == 0, "No TO_EVAC node publishes 0"
+
+    return failed
+
+
+def test_sigenergy_automatic_config_maps_ac_charger_energy(my_predbat):
+    """car_charging_energy is bound to the AC charger lifetime of only the systems whose history lists TO_EVAC."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}, "SIG002": {"systemName": "Office"}}
+    api.history_totals = {"SIG001": {"TO_LOAD": 987.6}, "SIG002": {"TO_LOAD": 3899.57, "TO_EVAC": 1291.47}}
+
+    run_async(api.automatic_config())
+
+    assert api.set_args.get("car_charging_energy") == ["sensor.predbat_sigenergy_sig002_ac_ev_charge_lifetime"], "car_charging_energy should name SIG002's charger only, got {}".format(api.set_args.get("car_charging_energy"))
+    # load_today is unchanged: the same load_lifetime sensors, which now carry the charger themselves
+    assert api.set_args.get("load_today") == ["sensor.predbat_sigenergy_sig001_load_lifetime", "sensor.predbat_sigenergy_sig002_load_lifetime"], api.set_args.get("load_today")
+
+    return failed
+
+
+def test_sigenergy_automatic_config_no_ac_charger(my_predbat):
+    """With no TO_EVAC in any system's history, car_charging_energy is left unset so the threshold heuristic still applies."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.history_totals = {"SIG001": {"TO_LOAD": 987.6, "TO_EVDC": 0.0}}
+
+    run_async(api.automatic_config())
+
+    assert "car_charging_energy" not in api.set_args, "car_charging_energy must not be set without an AC charger, got {}".format(api.set_args.get("car_charging_energy"))
+
+    return failed
+
+
+def test_sigenergy_automatic_config_keeps_user_car_charging_energy(my_predbat):
+    """A car_charging_energy the user set in apps.yaml survives automatic_config() rather than being replaced."""
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.history_totals = {"SIG001": {"TO_LOAD": 3899.57, "TO_EVAC": 1291.47}}
+    api.base.args_from_apps_yaml = {"car_charging_energy": "sensor.my_charger_energy"}
+    api.args["car_charging_energy"] = "sensor.my_charger_energy"
+
+    run_async(api.automatic_config())
+
+    assert "car_charging_energy" not in api.set_args, "automatic_config must not set car_charging_energy over the user's own, got {}".format(api.set_args.get("car_charging_energy"))
+    assert api.args["car_charging_energy"] == "sensor.my_charger_energy", api.args["car_charging_energy"]
+    # The log must not claim the charger was mapped, and must say how to add it to the user's own list
+    assert not any("mapped to its lifetime energy" in message for message in api.log_messages), api.log_messages
+    assert any("apps.yaml" in message and "sensor.predbat_sigenergy_sig001_ac_ev_charge_lifetime" in message for message in api.log_messages), api.log_messages
+
+    return failed
+
+
+def test_sigenergy_automatic_config_zero_ac_charger(my_predbat):
+    """A TO_EVAC node reading 0 does not bind car_charging_energy, so the threshold heuristic still covers any other charger.
+
+    Whether the API omits TO_EVAC on a system with no AC charger or returns it at 0 is not known, so the
+    binding must not depend on the node merely being present. The log must not claim the user's own
+    car_charging_energy was left unset either.
+    """
+    failed = False
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.history_totals = {"SIG001": {"TO_LOAD": 987.6, "TO_EVDC": 0.0, "TO_EVAC": 0.0}}
+
+    run_async(api.automatic_config())
+
+    assert "car_charging_energy" not in api.set_args, "a zero TO_EVAC must not bind car_charging_energy, got {}".format(api.set_args.get("car_charging_energy"))
+
+    # No charger, but the user set their own car_charging_energy: the log must not say it is unset
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {"SIG001": {"systemName": "Home"}}
+    api.history_totals = {"SIG001": {"TO_LOAD": 987.6}}
+    api.base.args_from_apps_yaml = {"car_charging_energy": "sensor.my_charger_energy"}
+    api.args["car_charging_energy"] = "sensor.my_charger_energy"
+
+    run_async(api.automatic_config())
+
+    assert api.args["car_charging_energy"] == "sensor.my_charger_energy", api.args["car_charging_energy"]
+    assert not any("left unset" in message for message in api.log_messages), api.log_messages
+
+    return failed
+
+
+def test_sigenergy_run_binds_ac_charger_after_history_refresh(my_predbat):
+    """car_charging_energy is bound when a later history refresh first shows the AC charger, not only at startup.
+
+    automatic_config() runs once, on the first run, and can see a history_totals cache restored from
+    before the charger was read (or a failed first fetch). The binding is re-checked whenever a history
+    refresh lands, and logged only when it changes.
+    """
+    failed = False
+    sid = "SIG001"
+    api = MockSigenergyAPI()
+    api.automatic = True
+    api.systems = {sid: {"systemName": "Home", "deviceList": []}}
+    api.current_mode = {sid: SIGENERGY_MODE_VPP}
+    api.system_id_filter = {sid}
+    task = MagicMock()
+    task.done = MagicMock(return_value=False)
+    api._mqtt_task = task
+    api._manage_vpp_registration = AsyncMock(return_value=True)
+    api.fetch_inverter_realtime = AsyncMock(return_value=True)
+    api.fetch_energy_flow = AsyncMock(return_value=True)
+    api.fetch_daily_summary = AsyncMock(return_value=True)
+    api.publish_system_entities = AsyncMock()
+    api.apply_controls = AsyncMock()
+
+    # First run: the restored cache predates TO_EVAC, so nothing is bound
+    api.history_totals = {sid: {"TO_LOAD": 3899.57}}
+    run_async(api.automatic_config())
+    assert "car_charging_energy" not in api.set_args, api.set_args.get("car_charging_energy")
+
+    async def _fetch_history(system_id):
+        """Stand in for a history fetch that now reports the AC charger."""
+        api.history_totals[system_id] = {"TO_LOAD": 3899.57, "TO_EVAC": 1291.47}
+        return True
+
+    api.fetch_history_totals = AsyncMock(side_effect=_fetch_history)
+    run_async(api.run(seconds=300, first=False))
+
+    assert api.set_args.get("car_charging_energy") == ["sensor.predbat_sigenergy_sig001_ac_ev_charge_lifetime"], api.set_args.get("car_charging_energy")
+    mapped_logs = [message for message in api.log_messages if "mapped to its lifetime energy" in message]
+    assert len(mapped_logs) == 1, mapped_logs
+
+    # A further refresh with the same chargers neither rebinds nor logs again
+    api.data_age = {}
+    run_async(api.run(seconds=600, first=False))
+    mapped_logs = [message for message in api.log_messages if "mapped to its lifetime energy" in message]
+    assert len(mapped_logs) == 1, mapped_logs
+
+    return failed
+
+
 def test_sigenergy_battery_reserve_min_live_change_message(my_predbat):
     """The live change message's backupCutOffSOC% (16%) is published as the battery reserve min sensor in %."""
     failed = False
@@ -1485,6 +1649,259 @@ def test_sigenergy_auth_concurrent_callers_single_login(my_predbat):
     return failed
 
 
+def _oauth_sigenergy_api(answers):
+    """A SigenergyAPI in oauth mode whose refresh service answers from the list in turn; records each call."""
+    api = MockSigenergyAPI()
+    api.initialize(app_key="test_app_key", auth_method="oauth", mqtt_host="mqtt.invalid")
+    api._command_delay = 0
+    calls = []
+
+    async def refresh_provider(instance_id, provider, token_hash, **kwargs):
+        calls.append({"provider": provider, "token_hash": token_hash, **kwargs})
+        return answers[min(len(calls), len(answers)) - 1]
+
+    api.base.oauth_refresh_provider = refresh_provider
+    return api, calls
+
+
+OAUTH_CLOCK_WALL = VirtualClock().wall
+
+
+def _oauth_answer(token, token_hash, hours=6):
+    """A successful oauth-refresh reply for token, expiring hours after VirtualClock's starting wall time."""
+    expires = datetime.fromtimestamp(OAUTH_CLOCK_WALL, timezone.utc) + timedelta(hours=hours)
+    return {"success": True, "access_token": token, "expires_at": expires.isoformat(), "token_hash": token_hash}
+
+
+def _no_login_session(*args, **kwargs):
+    """ClientSession stand-in for oauth mode: any HTTP use at all is a failure."""
+    raise AssertionError("oauth mode must not call the Sigenergy login endpoint")
+
+
+def test_sigenergy_oauth_token_from_refresh_service(my_predbat):
+    """In oauth mode the token comes from the refresh service, is cached until near expiry, and no login is posted."""
+    failed = False
+    api, calls = _oauth_sigenergy_api([_oauth_answer("shared", "h1")])
+    clock = VirtualClock()
+    assert api.app_secret is None, "no app secret is needed"
+    with _api_clock(api, clock), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
+        assert run_async_real(api.get_access_token()) == "shared"
+        assert run_async_real(api.get_access_token()) == "shared"
+    assert len(calls) == 1, "one refresh for two token reads, got {}".format(len(calls))
+    assert calls[0]["provider"] == "sigenergy" and "force" not in calls[0], "a routine refresh is not forced: {}".format(calls[0])
+    assert api.token_hash == "h1", "the service's token hash is kept to echo back"
+    return failed
+
+
+def test_sigenergy_oauth_no_token_holds_off(my_predbat):
+    """A refresh that gives no token (rate_limited) is not asked again until the cooldown has passed."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    api, calls = _oauth_sigenergy_api([{"success": False, "error": "rate_limited", "retry_after": 60}, _oauth_answer("shared", "h1")])
+    clock = VirtualClock()
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
+        assert run_async_real(api.get_access_token()) is None
+        for _ in range(5):
+            assert run_async_real(api.get_access_token()) is None, "no token inside the cooldown"
+        assert len(calls) == 1, "the service is not polled inside the cooldown, got {} calls".format(len(calls))
+        clock.mono += backoff[0]
+        assert run_async_real(api.get_access_token()) == "shared", "asked again once the cooldown passed"
+    assert len(calls) == 2
+    assert not api.oauth_failed, "rate_limited must never latch oauth_failed"
+    return failed
+
+
+def _sequenced_get_session(statuses_and_bodies, seen_auth):
+    """ClientSession factory whose GETs answer in turn, recording each Authorization header."""
+    state = {"n": 0}
+
+    def factory(*args, **kwargs):
+        status, body = statuses_and_bodies[min(state["n"], len(statuses_and_bodies) - 1)]
+        state["n"] += 1
+        session = _make_mock_session(_make_mock_response(status=status, json_data=body))
+        inner_get = session.get
+
+        def get(url, headers=None, params=None):
+            seen_auth.append(headers.get("Authorization"))
+            return inner_get(url, headers=headers, params=params)
+
+        session.get = get
+        return session
+
+    return factory
+
+
+def test_sigenergy_oauth_401_forces_refresh_and_retries(my_predbat):
+    """A 401 in oauth mode forces one refresh naming the rejected token, then retries with the new token."""
+    failed = False
+    api, calls = _oauth_sigenergy_api([_oauth_answer("old", "h-old"), _oauth_answer("new", "h-new")])
+    clock = VirtualClock()
+    seen = []
+    factory = _sequenced_get_session([(401, {}), (200, {"code": 0, "data": {"ok": 1}})], seen)
+    with _api_clock(api, clock), patch("sigenergy.aiohttp.ClientSession", factory):
+        result = run_async_real(api._request("GET", "/openapi/test"))
+    assert result == {"ok": 1}, "request retried after the refresh, got {}".format(result)
+    assert seen == ["Bearer old", "Bearer new"], "retried with the new token: {}".format(seen)
+    assert len(calls) == 2 and calls[1].get("force") is True and calls[1].get("reason") == "401", "second refresh forced: {}".format(calls)
+    assert calls[1]["token_hash"] == "h-old", "the forced refresh names the rejected token"
+    return failed
+
+
+def test_sigenergy_oauth_401_after_another_task_refreshed(my_predbat):
+    """A 401 on a token another task has already replaced retries with the replacement, without forcing again."""
+    failed = False
+    api, calls = _oauth_sigenergy_api([_oauth_answer("new", "h-new")])
+    api.access_token = "new"
+    api.token_hash = "h-new"
+    api.token_expires_at = OAUTH_CLOCK_WALL + 6 * 3600
+    clock = VirtualClock()
+    with _api_clock(api, clock):
+        token = run_async_real(api._oauth_after_401("old"))
+    assert token == "new", "the replacement token is used"
+    assert calls == [], "no forced refresh for a token that is no longer held, got {}".format(calls)
+    api._oauth_rejected_token = "new"
+    with _api_clock(api, clock):
+        assert run_async_real(api._oauth_after_401("old")) is None, "a replacement that was itself refused is not handed out"
+    assert calls == []
+    return failed
+
+
+def test_sigenergy_oauth_failed_forced_refresh_holds_off(my_predbat):
+    """A 401 whose forced refresh fails drops the rejected token and sends nothing until the cooldown has passed."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    limited = {"success": False, "error": "rate_limited", "retry_after": 60}
+    api, calls = _oauth_sigenergy_api([_oauth_answer("old", "h-old"), limited, limited, _oauth_answer("new", "h-new")])
+    clock = VirtualClock()
+    seen = []
+    factory = _sequenced_get_session([(401, {}), (200, {"code": 0, "data": {"ok": 1}})], seen)
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", factory):
+        assert run_async_real(api._request("GET", "/openapi/test")) is None, "no retry without a new token"
+        for _ in range(3):
+            assert run_async_real(api._request("GET", "/openapi/test")) is None
+        assert seen == ["Bearer old"], "the rejected token is not sent again, got {}".format(seen)
+        assert len(calls) == 2, "no refresh inside the cooldown, got {}".format(calls)
+        clock.mono += backoff[0]
+        assert run_async_real(api._request("GET", "/openapi/test")) is None, "still throttled"
+        assert len(calls) == 3 and calls[2].get("force") is True and calls[2]["token_hash"] == "h-old", "one forced refresh after the cooldown, still naming the refused token: {}".format(calls)
+        clock.mono += backoff[0]
+        assert run_async_real(api._request("GET", "/openapi/test")) == {"ok": 1}
+    assert seen == ["Bearer old", "Bearer new"], "recovered with the new token: {}".format(seen)
+    return failed
+
+
+def test_sigenergy_oauth_forced_refresh_same_token_keeps_asking(my_predbat):
+    """A forced refresh that hands back the refused token is not used, and is asked again once per cooldown until a new token comes."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    old = _oauth_answer("old", "h-old")
+    api, calls = _oauth_sigenergy_api([old, old, old, _oauth_answer("new", "h-new")])
+    clock = VirtualClock()
+    seen = []
+    factory = _sequenced_get_session([(401, {}), (200, {"code": 0, "data": {"ok": 1}})], seen)
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", factory):
+        assert run_async_real(api._request("GET", "/openapi/test")) is None
+        assert run_async_real(api.get_access_token()) is None, "the refused token is never handed out"
+        assert len(calls) == 2
+        clock.mono += backoff[0]
+        clock.wall += backoff[0]
+        assert run_async_real(api.get_access_token()) is None, "same token again: still refused"
+        assert len(calls) == 3 and calls[2].get("force") is True
+        clock.mono += backoff[0]
+        clock.wall += backoff[0]
+        assert run_async_real(api.get_access_token()) == "new", "recovers once the service has a new token"
+        assert run_async_real(api._request("GET", "/openapi/test")) == {"ok": 1}
+    assert len(calls) == 4, "one refresh per cooldown, got {}".format(len(calls))
+    assert seen == ["Bearer old", "Bearer new"], "the refused token is never sent again: {}".format(seen)
+    return failed
+
+
+def test_sigenergy_oauth_throttled_renewal_keeps_held_token(my_predbat):
+    """A held token inside the refresh window is still used while renewal is throttled, and the service is asked once per cooldown."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    api, calls = _oauth_sigenergy_api([{"success": False, "error": "rate_limited", "retry_after": 60}])
+    api.access_token = "held"
+    api.token_expires_at = OAUTH_CLOCK_WALL + 10 * 60
+    clock = VirtualClock()
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
+        for _ in range(6):
+            assert run_async_real(api.get_access_token()) == "held"
+        assert len(calls) == 1, "one refresh per cooldown, got {}".format(len(calls))
+        clock.mono += backoff[0]
+        assert run_async_real(api.get_access_token()) == "held"
+        assert len(calls) == 2
+        clock.wall += 10 * 60
+        assert run_async_real(api.get_access_token()) is None, "the held token expires on the component clock inside the cooldown"
+    assert len(calls) == 2, "no extra refresh inside the cooldown, got {}".format(len(calls))
+    return failed
+
+
+def test_sigenergy_oauth_needs_reauth_stops_refreshing(my_predbat):
+    """A needs_reauth answer is terminal: no further refreshes, after a cooldown or a 401, and no token handed out."""
+    failed = False
+    from sigenergy import SIGENERGY_AUTH_REJECT_BACKOFF as backoff
+
+    api, calls = _oauth_sigenergy_api([{"success": False, "error": "needs_reauth"}, _oauth_answer("late", "h-late")])
+    clock = VirtualClock()
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
+        assert run_async_real(api.get_access_token()) is None
+        assert api.oauth_failed and api.oauth_failed_reason == "needs_reauth"
+        for _ in range(3):
+            clock.mono += backoff[0]
+            assert run_async_real(api.get_access_token()) is None
+            assert run_async_real(api._oauth_after_401("anything")) is None
+    assert len(calls) == 1, "needs_reauth is not retried, got {} calls".format(len(calls))
+    return failed
+
+
+def test_sigenergy_oauth_near_expiry_answer_holds_off(my_predbat):
+    """A refresh answered with a token already inside the refresh window is used, and not asked again until the cooldown has passed."""
+    failed = False
+    api, calls = _oauth_sigenergy_api([_oauth_answer("short", "h-short", hours=0.2)])
+    clock = VirtualClock()
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0), patch("sigenergy.aiohttp.ClientSession", _no_login_session):
+        for _ in range(5):
+            assert run_async_real(api.get_access_token()) == "short"
+    assert len(calls) == 1, "one refresh per cooldown, got {}".format(len(calls))
+    return failed
+
+
+def test_sigenergy_oauth_expired_held_token_not_used(my_predbat):
+    """A held token past its expiry is never handed out while the renewal is throttled."""
+    failed = False
+    api, calls = _oauth_sigenergy_api([{"success": False, "error": "rate_limited", "retry_after": 60}])
+    api.access_token = "expired"
+    api.token_expires_at = OAUTH_CLOCK_WALL - 1
+    clock = VirtualClock()
+    with _api_clock(api, clock), patch("sigenergy.random.random", return_value=0.0):
+        assert run_async_real(api.get_access_token()) is None
+        assert run_async_real(api.get_access_token()) is None
+    assert len(calls) == 1
+    return failed
+
+
+def test_sigenergy_app_secret_optional_in_component_args(my_predbat):
+    """The component registry must start Sigenergy without an app secret, which oauth mode does not use."""
+    failed = False
+    from components import COMPONENT_LIST
+
+    args = COMPONENT_LIST["sigenergy"]["args"]
+    assert args["app_secret"]["required"] is False
+    assert args["auth_method"]["config"] == "sigenergy_auth_method" and args["auth_method"]["default"] == "api_key"
+    from config import APPS_SCHEMA
+
+    for spec in args.values():
+        assert spec["config"] in APPS_SCHEMA, "{} missing from APPS_SCHEMA".format(spec["config"])
+    api = MockSigenergyAPI()
+    assert api.auth_method == "api_key" and api.token_expires_at == 0.0, "api_key mode keeps the monotonic expiry"
+    return failed
+
+
 def test_sigenergy_auth_rejection_cooldown_is_jittered(my_predbat):
     """The cooldown carries up to SIGENERGY_AUTH_REJECT_JITTER extra so many clients do not retry in lockstep."""
     failed = False
@@ -1581,6 +1998,7 @@ def test_sigenergy_fetch_history_totals(my_predbat):
                     {"id": "FROM_GRID", "value": 500.5},
                     {"id": "TO_LOAD", "value": 987.6},
                     {"id": "TO_GRID", "value": 400.4},
+                    {"id": "TO_EVAC", "value": 1291.47},
                 ],
                 "links": [],
             },
@@ -1596,6 +2014,7 @@ def test_sigenergy_fetch_history_totals(my_predbat):
     assert ok is True, "fetch_history_totals should return True, got {}".format(ok)
     totals = api.history_totals.get("SIG001", {})
     assert totals.get("TO_LOAD") == 987.6, "TO_LOAD lifetime total captured"
+    assert totals.get("TO_EVAC") == 1291.47, "TO_EVAC (AC EV charger) lifetime total captured"
     assert totals.get("FROM_GRID") == 500.5, "FROM_GRID lifetime total captured"
     assert totals.get("TO_GRID") == 400.4, "TO_GRID lifetime total captured"
     assert totals.get("FROM_SOLAR") == 1234.5, "FROM_SOLAR lifetime total captured"
@@ -6458,6 +6877,12 @@ def run_sigenergy_tests(my_predbat):
         ("apply_controls_export_stops_at_backup_cutoff", test_sigenergy_apply_controls_export_stops_at_backup_cutoff),
         ("automatic_config_battery_min_soc", test_sigenergy_automatic_config_battery_min_soc),
         ("automatic_config_keeps_user_battery_min_soc", test_sigenergy_automatic_config_keeps_user_battery_min_soc),
+        ("load_lifetime_includes_ac_charger", test_sigenergy_load_lifetime_includes_ac_charger),
+        ("automatic_config_maps_ac_charger_energy", test_sigenergy_automatic_config_maps_ac_charger_energy),
+        ("automatic_config_no_ac_charger", test_sigenergy_automatic_config_no_ac_charger),
+        ("automatic_config_keeps_user_car_charging_energy", test_sigenergy_automatic_config_keeps_user_car_charging_energy),
+        ("automatic_config_zero_ac_charger", test_sigenergy_automatic_config_zero_ac_charger),
+        ("run_binds_ac_charger_after_history_refresh", test_sigenergy_run_binds_ac_charger_after_history_refresh),
         ("battery_reserve_min_live_change_message", test_sigenergy_battery_reserve_min_live_change_message),
         ("battery_reserve_min_zero", test_sigenergy_battery_reserve_min_zero),
         ("battery_reserve_min_unknown", test_sigenergy_battery_reserve_min_unknown),
@@ -6475,6 +6900,17 @@ def run_sigenergy_tests(my_predbat):
         ("auth_rejection_backoff_escalates_and_resets", test_sigenergy_auth_rejection_backoff_escalates_and_resets),
         ("auth_rejection_cooldown_is_jittered", test_sigenergy_auth_rejection_cooldown_is_jittered),
         ("auth_concurrent_callers_single_login", test_sigenergy_auth_concurrent_callers_single_login),
+        ("oauth_token_from_refresh_service", test_sigenergy_oauth_token_from_refresh_service),
+        ("oauth_no_token_holds_off", test_sigenergy_oauth_no_token_holds_off),
+        ("oauth_401_forces_refresh_and_retries", test_sigenergy_oauth_401_forces_refresh_and_retries),
+        ("oauth_401_after_another_task_refreshed", test_sigenergy_oauth_401_after_another_task_refreshed),
+        ("oauth_failed_forced_refresh_holds_off", test_sigenergy_oauth_failed_forced_refresh_holds_off),
+        ("oauth_forced_refresh_same_token_keeps_asking", test_sigenergy_oauth_forced_refresh_same_token_keeps_asking),
+        ("oauth_throttled_renewal_keeps_held_token", test_sigenergy_oauth_throttled_renewal_keeps_held_token),
+        ("oauth_expired_held_token_not_used", test_sigenergy_oauth_expired_held_token_not_used),
+        ("oauth_needs_reauth_stops_refreshing", test_sigenergy_oauth_needs_reauth_stops_refreshing),
+        ("oauth_near_expiry_answer_holds_off", test_sigenergy_oauth_near_expiry_answer_holds_off),
+        ("app_secret_optional_in_component_args", test_sigenergy_app_secret_optional_in_component_args),
         ("listener_waits_out_login_cooldown", test_sigenergy_listener_waits_out_login_cooldown),
         ("fetch_system_list", test_sigenergy_fetch_system_list),
         ("fetch_system_list_with_filter", test_sigenergy_fetch_system_list_with_filter),
