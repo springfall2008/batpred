@@ -36,6 +36,7 @@ appsyaml
 argname
 armhf
 armv
+ascontiguousarray
 ASHP
 asn
 asname
@@ -70,6 +71,7 @@ batteri
 batteryb
 batusecap
 beforeunload
+benchid
 bierner
 bisectable
 Bitwarden
@@ -127,6 +129,7 @@ configform
 connack
 Consolas
 cooldown
+copyto
 coro
 corruptleg
 corruptplans
@@ -190,6 +193,7 @@ dlimit
 dlopen
 dnoregion
 docstrings
+DONT
 dschg
 dstamp
 dstart
@@ -208,6 +212,7 @@ edfenergy
 edfgb
 edgecolor
 efgh
+EINVAL
 elif
 elinter
 eload
@@ -254,11 +259,13 @@ evenodd
 evergen
 evilspringfall
 evse
+executemany
 exog
 expmsg
 exportlimit
 exportvalue
 facecolor
+faketime
 fdpwr
 fdsoc
 feedin
@@ -281,8 +288,11 @@ foxess
 foxesscloud
 frameon
 freephase
+frombuffer
 fromisoformat
 fronius
+frozenlist
+fsmonitor
 funcs
 futurerate
 gaierror
@@ -362,6 +372,7 @@ idxs
 iess
 iflux
 importlimit
+importtime
 inday
 Indevolt
 indra
@@ -413,8 +424,10 @@ labelnames
 ladybugdb
 Lanmate
 larr
+lastrowid
 libbi
 libc
+libfaketime
 libyaml
 LIFEPO
 linebreak
@@ -451,6 +464,7 @@ mdi
 mdlrc
 measurand
 measurands
+memray
 metacharacters
 Meteo
 Meteoalarm
@@ -477,6 +491,7 @@ misdetection
 mispairing
 Mixergy
 mkdocs
+mktemp
 mlugg
 Modbus
 mogons
@@ -486,6 +501,7 @@ Mosquitto
 mousedown
 mpan
 mpans
+mpip
 mppt
 mprn
 mpxn
@@ -493,10 +509,12 @@ mqtt
 mtok
 mult
 multiarray
+multidict
 myaccount
 myenergi
 mypy
 nanmean
+nanosleep
 nanstd
 nattribute
 nbytes
@@ -574,10 +592,12 @@ percnt
 peterhaban
 pgrid
 photovoltaics
+pipefail
 pitem
 pkwh
 plenticore
 pload
+plotly
 plugncharge
 pmeter
 poinv
@@ -599,6 +619,8 @@ predheat
 preseed
 preseeded
 prevs
+procps
+propcache
 protobuf
 pseudonymisation
 pseudonymise
@@ -623,6 +645,7 @@ pypi
 pyproject
 pytest
 pythonhashseed
+PYTHONPATH
 pytz
 Quattro
 Qwen
@@ -693,6 +716,8 @@ sigen
 sigencloud
 sigenergy
 sigenstor
+sitecustomize
+sizeof
 skynet
 Slee
 slugified
@@ -732,6 +757,7 @@ stdlib
 stepline
 stevekirtley
 Storion
+strftime
 Stromligning
 strptime
 strtod
@@ -784,10 +810,12 @@ timestr
 timezone
 tmpfs
 tmrw
+tobytes
 tojson
 topbar
 TOTL
 tottime
+tracemalloc
 trapezoidally
 trapz
 Trefor
@@ -804,8 +832,13 @@ tzdata
 tzfile
 tzpath
 tzset
+udfff
+ufeff
+ufffe
+uffff
 unasserted
 uncalibrated
+uncancellable
 uncompilable
 unconfigured
 underivable
@@ -824,6 +857,7 @@ unpushed
 unreachability
 unredacted
 unregisters
+unrelate
 unrepresentable
 unreproduced
 unsmoothed
@@ -858,6 +892,7 @@ workmode
 workstream
 workstreams
 worktree
+worktrees
 writeonly
 wrongsha
 WRONLY
@@ -874,6 +909,7 @@ xtest
 xticks
 xxabcdefyy
 yanchor
+yarl
 yaxis
 yaxistooltip
 yday

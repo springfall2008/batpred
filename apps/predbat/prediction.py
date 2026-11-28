@@ -32,9 +32,10 @@ from utils import (
     export_target_of,
     pack_export_limit,
 )
+from car_cancel import cancelled_mask, step_reverted
 from prediction_batch import EXPORT_FLOOR_SCENARIOS, PredictionBatch, export_end_soc_from_series, floor_export_limits, prediction_cache_key
 from battery_rate_grid import rate_grid_curve
-from prediction_kernel import create_kernel_context, kernel_supported, run_prediction_kernel
+from prediction_kernel import create_kernel_context, kernel_supported, release_export_limit_buffers, run_prediction_kernel
 
 # The limit an inactive export window reads as. Built once at import rather than per minute:
 # run_prediction consults it on every step of the horizon for every simulation.
@@ -86,6 +87,7 @@ class Prediction(PredictionBatch):
         soc_max=None,
         kernel_static_cache=None,
         car_charging_slots=None,
+        car_cancel=None,
     ):
         """Build a Prediction, optionally copying simulation state from a base PredBat instance.
 
@@ -97,7 +99,12 @@ class Prediction(PredictionBatch):
 
         car_charging_slots, when given, replaces base.car_charging_slots - the live plan passes
         car_charging_slots_model() so a car charging now outside its plan is modelled too.
+
+        car_cancel, when given, is the car_cancel.CarCancelTable for those slots: a target export over a slot in
+        it cancels that slot in the prediction. Only the live plan passes one; None leaves the engine unchanged.
         """
+        # Set before the kernel context is built below, which copies the table into it
+        self.car_cancel = car_cancel
         if base:
             self.minutes_now = base.minutes_now
             self.log = base.log
@@ -229,6 +236,19 @@ class Prediction(PredictionBatch):
         # prediction_cache (whose entries drop the SoC series)
         self.prediction_cache_export_end = {}
 
+    def release_caches(self):
+        """Drop the memoised results of the plan search once it is over.
+
+        The caches only serve the search that built them: calculate_plan builds a new Prediction every cycle, so
+        nothing reads them in a later cycle, and a run after this simply simulates again (the same engine gives the
+        same result). Dropping them now, rather than when the next cycle replaces this object, lets the rest of
+        the cycle reuse their memory - about 8 MB of small tuples and SoC lists on a typical plan.
+        """
+        self.prediction_cache = {}
+        self.prediction_cache_export_end = {}
+        self.trial_memo = {}
+        release_export_limit_buffers()
+
     def _prepare_single(self, charge_limit, export_limits):
         """Copy the caller's limit lists for a single-scenario trial - shared by thread_run_prediction_single and the batch path.
 
@@ -237,6 +257,11 @@ class Prediction(PredictionBatch):
         will eventually be simulated from rather than share the caller's list.
         """
         return list(charge_limit), list(export_limits)
+
+    def _prepare_single_queued(self, charge_limit, export_limits):
+        """_prepare_single for a queued trial: copied once per batch and shared by the trial's scenarios (see shared_trial)"""
+        key = ("single", id(charge_limit), id(export_limits))
+        return self.shared_trial(key, (charge_limit, export_limits), lambda: self._prepare_single(charge_limit, export_limits))
 
     def _prepare_charge(self, try_soc, window_n, charge_limit, all_n):
         """Build the trial charge limits - shared by thread_run_prediction_charge/_charge_min_max and the batch path"""
@@ -294,7 +319,7 @@ class Prediction(PredictionBatch):
         The window lists and dicts are read at flush time, not now, so the caller must not mutate
         anything it passed in before calling get() on the returned handle.
         """
-        charge_limit, export_limits = self._prepare_single(charge_limit, export_limits)
+        charge_limit, export_limits = self._prepare_single_queued(charge_limit, export_limits)
         return self.enqueue_prediction(charge_limit, charge_window, export_window, export_limits, pv_scenario, end_record, step, self.prediction_cache_enable)
 
     def thread_run_prediction_charge(self, try_soc, window_n, charge_limit, charge_window, export_window, export_limits, pv_scenario, all_n, end_record):
@@ -591,6 +616,21 @@ class Prediction(PredictionBatch):
                     self.prediction_cache[sim_hash] = kernel_result[:11] + ([], []) + kernel_result[13:]
                 return kernel_result
 
+        # The car slots this plan's target exports cancel, read from the limits as passed in: flooring never
+        # changes a window's mode. With no table or nothing cancelled the engine runs exactly as without one.
+        car_cancel = self.car_cancel
+        cancel_mask = 0
+        if car_cancel is not None:
+            cancel_mask = cancelled_mask(car_cancel.slots, export_window, export_limits)
+            if not cancel_mask:
+                car_cancel = None
+        cancel_n_steps = car_cancel.n_steps if car_cancel is not None else 0
+        cancel_slot_flat = car_cancel.slot_flat if car_cancel is not None else None
+        cancel_penalty_rate = car_cancel.penalty_rate if car_cancel is not None else 0
+        cancel_floor_kw = car_cancel.floor_kw if car_cancel is not None else None
+        # The energy each car would have bought in its cancelled slots so far, which the room left in it caps
+        car_cancelled_kwh = [0.0] * self.num_cars if car_cancel is not None else None
+
         if export_floor_soc is not None:
             export_limits = floor_export_limits(export_limits, export_floor_soc, self.soc_max)
 
@@ -795,6 +835,11 @@ class Prediction(PredictionBatch):
             dispatch_rate = import_rate
             dispatch_gone = io_adjusted.get(minute_absolute, 0) and pv_scenario == PV_SCENARIO_PV10 and minute > 30
             dispatch_risk = 0
+            if car_cancel is not None and step_reverted(car_cancel, minute // PREDICT_STEP, cancel_mask):
+                # Every dispatch here is cancelled, so the half hour is billed at peak, and it is no longer a dispatch that can go away
+                import_rate = car_cancel.revert_rate[minute // PREDICT_STEP]
+                dispatch_rate = import_rate
+                dispatch_gone = False
             if dispatch_gone and io_confirmed_credit.get(minute_absolute, 0):
                 # The car is charging in this run (io_confirmed_credit_update()), so a dispatch that goes away is seen
                 # within a Predbat cycle: the dispatch is kept, and the house and battery pay RUN_EVERY minutes of each
@@ -941,6 +986,17 @@ class Prediction(PredictionBatch):
                     if car_load[car_n] > 0.0:
                         car_load_scale = car_load[car_n] * step / 60.0
                         car_load_scale = car_load_scale * self.car_charging_loss
+                        if car_cancel is not None:
+                            cancel_j = cancel_slot_flat[car_n * cancel_n_steps + minute // PREDICT_STEP]
+                            if cancel_j >= 0 and (cancel_mask >> cancel_j) & 1:
+                                # Cancelled for an export: the car buys nothing here and keeps its room for later, but the
+                                # energy it would have bought - at least its full charge rate, capped by the room left - must be bought back at peak (score only).
+                                # A later uncancelled slot may refill that room, so the penalty can double-count: a deliberate conservative bias
+                                car_load_scale = max(car_load_scale, cancel_floor_kw[cancel_j] * step / 60.0 * self.car_charging_loss)
+                                car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n] - car_cancelled_kwh[car_n]), 0)
+                                car_cancelled_kwh[car_n] += car_load_scale
+                                metric_keep += car_load_scale / self.car_charging_loss * cancel_penalty_rate
+                                continue
                         car_load_scale = max(min(car_load_scale, self.car_charging_limit[car_n] - car_soc[car_n]), 0)
                         car_soc[car_n] = car_soc[car_n] + car_load_scale
 
@@ -1374,6 +1430,9 @@ class Prediction(PredictionBatch):
                 if force_charging and io_confirmed_credit:
                     # Bird in hand: score only credit for what a charge window stores in a confirmed dispatch run
                     credit = io_confirmed_credit.get(minute_absolute, 0)
+                    if credit and car_cancel is not None and step_reverted(car_cancel, minute // PREDICT_STEP, cancel_mask):
+                        # The dispatch is cancelled, so there is no confirmed run to bank
+                        credit = 0
                     if credit:
                         metric_keep -= min(-battery_draw * battery_loss, soc_max - soc) * credit
                 soc = min(soc - battery_draw * battery_loss, soc_max)

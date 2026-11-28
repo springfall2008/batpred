@@ -5,13 +5,20 @@ on:
   # while every PR can read main's, so without this the pre-commit environments were rebuilt on every run
   push:
     branches: [main]
+  # Nightly on main (scheduled runs use the default branch), so a failure that comes from the date or from a new
+  # dependency release, rather than from a merge, shows on main before it shows up on the next unrelated PR (#6244).
+  # Just after midnight UTC, when a test written against "today" first goes wrong. kernel-binaries only runs on a PR
+  # from this repo, so a scheduled run skips it.
+  schedule:
+  - cron: "17 0 * * *"
+  workflow_dispatch:
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-python@v5
+    - uses: actions/checkout@v6
+    - uses: actions/setup-python@v6
       with:
         # Pinned rather than 3.x: a new Python lands on the runners before numpy (pinned in requirements.txt) ships
         # wheels for it, and pip then builds numpy from source - 3.15 made that 4+ minutes of every run
@@ -22,8 +29,15 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-    - uses: pre-commit/action@v3.0.1
-    - uses: pre-commit-ci/lite-action@v1.1.0
+    - name: Install pre-commit
+      run: python -m pip install pre-commit
+    - uses: actions/cache@v5
+      with:
+        path: ~/.cache/pre-commit
+        key: pre-commit-3|${{ env.pythonLocation }}|${{ hashFiles('.pre-commit-config.yaml') }}
+    - name: Run pre-commit
+      run: pre-commit run --show-diff-on-failure --color=always --all-files
+    - uses: pre-commit-ci/lite-action@v1.2.0
       # Pushes fixes back to a PR branch, so there is nothing for it to do on main
       if: always() && github.event_name == 'pull_request'
     - name: Build prediction kernel
@@ -48,7 +62,7 @@ jobs:
       contents: write
     if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         ref: ${{ github.head_ref }}
     - uses: mlugg/setup-zig@v2

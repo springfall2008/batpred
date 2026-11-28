@@ -13,8 +13,10 @@ from gecloud import GECloudDirect, GECloudData, regname_to_ha
 from gecloud import GE_API_ACCOUNT, GE_API_DEVICES, GE_API_EVC_SEND_COMMAND, GE_API_INVERTER_READ_SETTING, GE_API_INVERTER_WRITE_SETTING, GE_API_SITE
 from gecloud import EVCCommandFailed, GECloudTerminalError, SITE_MAX_AGE_MINUTES, parse_site_export_limit
 from gecloud import CONTROL_SETTINGS_REFRESH_SECONDS, DEVICE_REFRESH_SECONDS, find_ems_slot_overrides, normalise_register_time
+from gecloud import ems_load_balance, ems_today_counters
 from gecloud import DEVICE_HOLD_INITIAL_SECONDS, DEVICE_HOLD_MAX_SECONDS, DEVICE_TIMEOUT_ATTEMPTS
 from utils import dp4
+from control_monitor import CONFIRM_READINGS, GRACE_S, MODE_EXPORTING, ControlMonitor
 import asyncio
 import copy
 import json
@@ -56,6 +58,8 @@ class MockGECloudDirect(GECloudDirect):
         self.status = {}
         self.live_display_samples = {}
         self.meter = {}
+        self.ems_device = None
+        self.ems_load_state = {}
         self.info = {}
         self.device_list = []
         self.evc_device_list = []
@@ -81,6 +85,8 @@ class MockGECloudDirect(GECloudDirect):
         self.control_reread_reason = None
         self.control_failures_seen = None
         self.control_failure_reread_stamp = None
+        self.control_reread_left_read_only = False
+        self.control_failure_follow_up_at = None
         self.read_only_seen = None
         self.last_success_timestamp = None
         self.devices_dict = {}
@@ -335,13 +341,21 @@ def test_ge_cloud(my_predbat=None):
         ("device_timeout_capped", _test_device_timeout_retries_capped, "Device timeouts are retried a capped number of times"),
         ("api_bare_code", _test_async_get_inverter_data_terminal_code_without_success_flag, "Terminal code without a success flag is a failure"),
         ("api_negative_value", _test_async_get_inverter_data_negative_value_other_endpoint, "Negative value outside the setting endpoints is data"),
+        ("reread_restored_total", _test_control_reread_restored_total_is_not_a_failure, "Restored control failure total is not a new failure"),
+        ("reread_follow_up", _test_control_reread_follow_up, "Control failure still failing after 30 minutes is re-read once more"),
+        ("reread_follow_up_hold_off", _test_control_reread_follow_up_ignores_hold_off, "Follow-up re-read is not blocked by the 4 hour hold-off"),
+        ("reread_unrestored_total", _test_control_reread_unrestored_total_still_a_failure, "First failure on a fresh install is re-read though the publish marks the monitor restored"),
+        ("reread_follow_up_not_pushed_back", _test_control_reread_follow_up_not_pushed_back, "Failures counted while a follow-up is pending do not push it back"),
+        ("reread_reason_left_read_only", _test_control_reread_reason_kept_on_leaving_read_only, "Control failure reason kept when Predbat leaves read only in the same cycle"),
         ("switch_event", _test_switch_event, "Switch event handler"),
+        ("switch_event_writeonly_action", _test_switch_event_writeonly_action, "Write-only action register writes its exact value, nothing on turn_off"),
         ("number_event", _test_number_event, "Number event handler"),
         ("select_event", _test_select_event, "Select event handler"),
         ("select_event_bracketed_options", _test_select_event_bracketed_options, "Select event with bracketed or unparseable option validation"),
         ("parse_validation_options", _test_parse_validation_options, "Parse options from validation text"),
         ("publish_status", _test_publish_status, "Publish status"),
         ("publish_meter", _test_publish_meter, "Publish meter"),
+        ("ems_load_today", _test_ems_load_today, "EMS load_today by energy balance across the midnight reset"),
         ("publish_info", _test_publish_info, "Publish info"),
         ("publish_info_soh", _test_publish_info_soh, "Publish info SOH calculation"),
         ("publish_registers", _test_publish_registers, "Publish registers"),
@@ -4814,6 +4828,181 @@ def _test_async_get_inverter_data_negative_value_other_endpoint(my_predbat):
 # =============================================================================
 
 
+def _reread_trigger_setup(start):
+    """A GE Cloud mock with a real control monitor, Predbat not in read only, its clock at start"""
+    ge_cloud = MockGECloudDirect()
+    monitor = ControlMonitor()
+    ge_cloud.base.control_monitor = monitor
+    ge_cloud.base.set_read_only = False
+    ge_cloud._now_utc_exact = start
+    return ge_cloud, monitor
+
+
+def _reread_check_at(ge_cloud, when, first=False):
+    """Run the re-read triggers at when and return the reason they set, clearing it as the control read does"""
+    ge_cloud._now_utc_exact = when
+    ge_cloud.check_control_reread_triggers(first)
+    reason = ge_cloud.control_reread_reason
+    ge_cloud.control_reread_reason = None
+    return reason
+
+
+def _confirm_export_failure(monitor, start):
+    """Fail an Exporting slot for inverter 0 from start (epoch seconds) and return when it was confirmed"""
+    monitor.set_expectation(0, MODE_EXPORTING, start, start + 3 * 60 * 60, 15.0, start)
+    confirmed = None
+    for reading in range(CONFIRM_READINGS):
+        confirmed = start + GRACE_S + reading * 60
+        monitor.observe(0, 0, 60.0, 0, 2525, confirmed)
+    return confirmed
+
+
+def _test_control_reread_restored_total_is_not_a_failure(my_predbat):
+    """
+    The lifetime failure total read back after a restart is not a new control failure.
+
+    GE Cloud takes its baseline on its first run, which comes before the plan cycle restores the
+    total. Counting the jump to the restored total as a failure started the 4 hour hold-off at
+    start-up, so a real failure 2.5 hours later was never re-read and a reverted reserve stayed wrong
+    for hours.
+    """
+    start = datetime(2026, 11, 27, 13, 55, tzinfo=timezone.utc)
+    ge_cloud, monitor = _reread_trigger_setup(start)
+    if _reread_check_at(ge_cloud, start, first=True) is not None:
+        print("ERROR: start-up asked for a control re-read")
+        return 1
+    monitor.restore([], 36)
+    reason = _reread_check_at(ge_cloud, start + timedelta(minutes=1))
+    if reason is not None or ge_cloud.control_failure_reread_stamp is not None:
+        print("ERROR: the restored total was taken as a control failure: reason {} stamp {}".format(reason, ge_cloud.control_failure_reread_stamp))
+        return 1
+    # A real failure that afternoon is re-read straight away
+    monitor.total += 1
+    reason = _reread_check_at(ge_cloud, start + timedelta(hours=2, minutes=33))
+    if reason != "control failure":
+        print("ERROR: a control failure after the restore was not re-read, reason {}".format(reason))
+        return 1
+    return 0
+
+
+def _test_control_reread_unrestored_total_still_a_failure(my_predbat):
+    """
+    A first failure on a fresh install is re-read, though the publish then marks the monitor restored.
+
+    publish_control_failures() sets restored when it first writes a total it never read back, so
+    restored flipping is not a sign of a restore; only what restore() added is.
+    """
+    start = datetime(2026, 11, 27, 13, 55, tzinfo=timezone.utc)
+    ge_cloud, monitor = _reread_trigger_setup(start)
+    _reread_check_at(ge_cloud, start, first=True)
+    # The total entity read unknown, so nothing was restored, and a real failure is counted
+    monitor.restore([], None)
+    monitor.total += 1
+    # As publish_control_failures() does once it writes a total above zero
+    monitor.restored = True
+    reason = _reread_check_at(ge_cloud, start + timedelta(minutes=10))
+    if reason != "control failure" or ge_cloud.control_failure_follow_up_at is None:
+        print("ERROR: a first failure on a fresh install was not re-read: reason {} follow-up {}".format(reason, ge_cloud.control_failure_follow_up_at))
+        return 1
+    return 0
+
+
+def _test_control_reread_follow_up_not_pushed_back(my_predbat):
+    """Failures counted while a follow-up is pending do not push it back - a stream of new slots must not postpone it forever."""
+    start = datetime(2026, 11, 27, 16, 20, tzinfo=timezone.utc)
+    ge_cloud, monitor = _reread_trigger_setup(start)
+    _reread_check_at(ge_cloud, start, first=True)
+    confirmed = _confirm_export_failure(monitor, start.timestamp())
+    seen = datetime.fromtimestamp(confirmed, timezone.utc)
+    _reread_check_at(ge_cloud, seen)
+    # New failures every 10 minutes, as a mode flip between Exporting and Freeze exporting makes
+    for minutes in (10, 20):
+        monitor.total += 1
+        _reread_check_at(ge_cloud, seen + timedelta(minutes=minutes))
+    monitor.observe(0, 0, 60.0, 0, 2525, confirmed + 25 * 60)
+    reason = _reread_check_at(ge_cloud, seen + timedelta(minutes=30))
+    if reason != "control failure follow-up":
+        print("ERROR: later failures pushed the follow-up back: reason at 30 minutes {}".format(reason))
+        return 1
+    return 0
+
+
+def _test_control_reread_reason_kept_on_leaving_read_only(my_predbat):
+    """A control failure seen as Predbat leaves read only keeps its reason in the log, and the eco check still runs."""
+    start = datetime(2026, 11, 27, 13, 55, tzinfo=timezone.utc)
+    ge_cloud, monitor = _reread_trigger_setup(start)
+    ge_cloud.base.set_read_only = True
+    _reread_check_at(ge_cloud, start, first=True)
+    _reread_check_at(ge_cloud, start + timedelta(minutes=1))
+    monitor.total += 1
+    ge_cloud.base.set_read_only = False
+    ge_cloud._now_utc_exact = start + timedelta(minutes=2)
+    ge_cloud.check_control_reread_triggers(False)
+    if ge_cloud.control_reread_reason != "control failure, left read only" or not ge_cloud.control_reread_left_read_only:
+        print("ERROR: leaving read only replaced the control failure reason: reason {} left read only {}".format(ge_cloud.control_reread_reason, ge_cloud.control_reread_left_read_only))
+        return 1
+    return 0
+
+
+def _test_control_reread_follow_up(my_predbat):
+    """A control failure still failing 30 minutes after it was first seen is re-read once more; one that cleared is not."""
+    for cleared in (False, True):
+        start = datetime(2026, 11, 27, 16, 20, tzinfo=timezone.utc)
+        ge_cloud, monitor = _reread_trigger_setup(start)
+        _reread_check_at(ge_cloud, start, first=True)
+        confirmed = _confirm_export_failure(monitor, start.timestamp())
+        seen = datetime.fromtimestamp(confirmed, timezone.utc)
+        if _reread_check_at(ge_cloud, seen) != "control failure":
+            print("ERROR: the control failure was not re-read")
+            return 1
+        # Clears, or goes on failing, before the follow-up is due
+        monitor.observe(0, 2525 if cleared else 0, 60.0, 0, 2525, confirmed + 10 * 60)
+        if _reread_check_at(ge_cloud, seen + timedelta(minutes=29)) is not None:
+            print("ERROR: a follow-up re-read came before 30 minutes (cleared {})".format(cleared))
+            return 1
+        reason = _reread_check_at(ge_cloud, seen + timedelta(minutes=30))
+        expected = None if cleared else "control failure follow-up"
+        if reason != expected:
+            print("ERROR: 30 minutes after a failure that {} the re-read reason was {}, expected {}".format("cleared" if cleared else "kept failing", reason, expected))
+            return 1
+        # Once only - the 12 hour cadence and later failures take it from there
+        monitor.observe(0, 0, 60.0, 0, 2525, confirmed + 60 * 60)
+        reason = _reread_check_at(ge_cloud, seen + timedelta(hours=1, minutes=1))
+        if reason is not None:
+            print("ERROR: a second follow-up re-read, reason {} (cleared {})".format(reason, cleared))
+            return 1
+    return 0
+
+
+def _test_control_reread_follow_up_ignores_hold_off(my_predbat):
+    """A new failure inside the 4 hour hold-off is not re-read at once, but is followed up if still failing 30 minutes later."""
+    start = datetime(2026, 11, 27, 13, 0, tzinfo=timezone.utc)
+    ge_cloud, monitor = _reread_trigger_setup(start)
+    _reread_check_at(ge_cloud, start, first=True)
+    # An earlier failure, long cleared, started the hold-off
+    monitor.total += 1
+    if _reread_check_at(ge_cloud, start + timedelta(minutes=1)) != "control failure":
+        print("ERROR: the first control failure was not re-read")
+        return 1
+    # Its follow-up falls due with nothing failing, so it reads nothing
+    if _reread_check_at(ge_cloud, start + timedelta(minutes=31)) is not None:
+        print("ERROR: a follow-up re-read with nothing failing")
+        return 1
+    # The real one, two hours later, inside the hold-off
+    later = start + timedelta(hours=2)
+    confirmed = _confirm_export_failure(monitor, later.timestamp())
+    seen = datetime.fromtimestamp(confirmed, timezone.utc)
+    if _reread_check_at(ge_cloud, seen) is not None:
+        print("ERROR: a failure inside the hold-off was re-read at once")
+        return 1
+    monitor.observe(0, 0, 60.0, 0, 2525, confirmed + 20 * 60)
+    reason = _reread_check_at(ge_cloud, seen + timedelta(minutes=30))
+    if reason != "control failure follow-up":
+        print("ERROR: a failure inside the hold-off still failing after 30 minutes was not followed up, reason {}".format(reason))
+        return 1
+    return 0
+
+
 def _test_switch_event(my_predbat):
     """Test switch event handler"""
 
@@ -4855,6 +5044,64 @@ def _test_switch_event(my_predbat):
                 return 1
             if write_calls[1]["value"] is not False:
                 print("ERROR: Expected value=False for turn_off, got {}".format(write_calls[1]["value"]))
+                return 1
+
+        return 0
+
+    return run_async(test())
+
+
+def _test_switch_event_writeonly_action(my_predbat):
+    """A write-only action register (Restart Inverter) writes its exact value on turn_on and nothing on turn_off"""
+
+    async def test():
+        ge_cloud = MockGECloudDirect()
+
+        # As GivEnergy lists it: {"id": 83, "name": "Restart Inverter", "validation": "Value can only be 100", "validation_rules": ["writeonly", "exact:100"]}
+        restart_entity = "switch.predbat_gecloud_test123_restart_inverter"
+        ge_cloud.register_entity_map[restart_entity] = {"key": 83, "device": "test123"}
+        # A write-only register without an exact value, to check it still writes True
+        action_entity = "switch.predbat_gecloud_test123_some_action"
+        ge_cloud.register_entity_map[action_entity] = {"key": 99, "device": "test123"}
+        ge_cloud.settings["test123"] = {
+            83: {"name": "Restart Inverter", "value": None, "validation": "Value can only be 100", "validation_rules": ["writeonly", "exact:100"]},
+            99: {"name": "Some Action", "value": None, "validation_rules": ["writeonly"]},
+        }
+
+        write_calls = []
+
+        async def mock_write(serial, setting_id, value):
+            write_calls.append({"serial": serial, "id": setting_id, "value": value})
+            # What the API answers for a successful write-only write
+            return {"value": "Set"}
+
+        async def mock_publish(*args, **kwargs):
+            pass
+
+        with patch("gecloud.asyncio.sleep", new_callable=AsyncMock):
+            ge_cloud.async_write_inverter_setting = mock_write
+            ge_cloud.publish_registers = mock_publish
+
+            await ge_cloud.switch_event(restart_entity, "turn_on")
+            if write_calls != [{"serial": "test123", "id": 83, "value": "100"}]:
+                print("ERROR: Expected one write of '100' to setting 83 on turn_on, got {}".format(write_calls))
+                return 1
+
+            # A write-only register has no state to turn off, so nothing is written
+            await ge_cloud.switch_event(restart_entity, "turn_off")
+            if len(write_calls) != 1:
+                print("ERROR: Expected no write on turn_off of a write-only register, got {}".format(write_calls))
+                return 1
+
+            # Toggle fires the action again, however the last write left the stored value
+            await ge_cloud.switch_event(restart_entity, "toggle")
+            if len(write_calls) != 2 or write_calls[1]["value"] != "100":
+                print("ERROR: Expected toggle to write '100' to setting 83, got {}".format(write_calls))
+                return 1
+
+            await ge_cloud.switch_event(action_entity, "turn_on")
+            if len(write_calls) != 3 or write_calls[2]["value"] is not True:
+                print("ERROR: Expected a write-only register without an exact value to write True, got {}".format(write_calls))
                 return 1
 
         return 0
@@ -5127,6 +5374,133 @@ def _test_publish_meter(my_predbat):
     if ge_cloud.dashboard_items["sensor.predbat_gecloud_test123_consumption_total"]["state"] != 21566.6:
         print("ERROR: Expected consumption_total=21566.6")
         return 1
+
+    return 0
+
+
+def _ems_today(grid_import, grid_export, solar, discharge, charge):
+    """An EMS meter 'today' section with the given daily counters."""
+    return {"solar": solar, "grid": {"import": grid_import, "export": grid_export}, "battery": {"charge": charge, "discharge": discharge}, "consumption": 0}
+
+
+def _test_ems_load_today(my_predbat):
+    """
+    The EMS's load_today is the energy balance of its daily counters, held steady when GivEnergy resets those
+    counters at different moments around midnight.
+    """
+    entity = "sensor.predbat_gecloud_ems001_consumption_derived_today"
+    tz = pytz.timezone("Europe/London")
+
+    def at(day, hour, minute):
+        """A local time on November <day>."""
+        return tz.localize(datetime(2026, 11, day, hour, minute))
+
+    def fresh():
+        """A component whose EMS is ems001."""
+        ge_cloud = MockGECloudDirect()
+        ge_cloud.ems_device = "ems001"
+        return ge_cloud
+
+    def load(ge_cloud):
+        """The published energy-balance load."""
+        return ge_cloud.dashboard_items[entity]["state"]
+
+    # The balance itself: import - export + solar + discharge - charge, never below 0
+    assert ems_load_balance(ems_today_counters(_ems_today(47.0, 30.1, 9.2, 32.8, 40.5))) == 47.0 - 30.1 + 9.2 + 32.8 - 40.5
+    assert ems_load_balance(ems_today_counters(_ems_today(0, 0, 0, 22.6, 23.4))) == 0.0, "a negative balance is clamped to 0"
+    assert ems_today_counters({"solar": 1.0}) is None, "no grid counters, nothing to balance"
+    assert ems_today_counters({"grid": {"import": "bad"}}) is None, "an unreadable counter gives no balance"
+    assert ems_today_counters({"grid": {"import": 2.0}}) == {"import": 2.0, "export": 0.0, "solar": 0.0, "discharge": 0.0, "charge": 0.0}, "a counter left out counts as 0"
+
+    # Published from publish_meter for the EMS only: a day that came to 18.4kWh, against 47kWh of grid import that was mostly battery charging
+    ge_cloud = fresh()
+    meter = {"today": _ems_today(47.0, 30.1, 9.2, 32.8, 40.5), "total": {"consumption": 21566.6}}
+    run_async(ge_cloud.publish_meter("ems001", meter))
+    assert load(ge_cloud) == 18.4, "expected 18.4 got {}".format(load(ge_cloud))
+    run_async(ge_cloud.publish_meter("battery001", meter))
+    assert "sensor.predbat_gecloud_battery001_consumption_derived_today" not in ge_cloud.dashboard_items, "only the EMS publishes the energy-balance load"
+    run_async(ge_cloud.publish_meter("ems001", {"today": {"solar": 1.0}}))
+    assert load(ge_cloud) == 18.4, "a section with no grid counters leaves the sensor alone"
+
+    # Grid and solar reset five minutes before the battery counters: the balance never runs away, and the new day starts from 0
+    ge_cloud = fresh()
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50)))
+    assert load(ge_cloud) == 82.8
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0, 0, 0, 22.6, 23.4), now=at(13, 23, 55)))
+    assert load(ge_cloud) == 0.0, "partly reset: reads 0 until every counter has reset"
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.5, 0, 0, 0.2, 0.3), now=at(14, 0, 0)))
+    assert load(ge_cloud) == 0.4, "expected the new day's 0.4 got {}".format(load(ge_cloud))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.3, 0, 0, 0.2, 1.7), now=at(14, 0, 20)))
+    assert load(ge_cloud) == 1.8
+
+    # The other way round: the battery counters reset first. A plain balance would jump to 83.8kWh here
+    ge_cloud = fresh()
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50)))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 0.0, 0.1), now=at(13, 23, 55)))
+    assert load(ge_cloud) == 0.0, "battery counters reset first: must not jump to {}".format(ems_load_balance(ems_today_counters(_ems_today(68.5, 1.3, 16.6, 0.0, 0.1))))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.4, 0, 0, 0.0, 0.2), now=at(14, 0, 0)))
+    assert load(ge_cloud) == 0.2
+
+    # A counter that falls during the day is a glitch, not a reset: each counter keeps its high point
+    ge_cloud = fresh()
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(30.0, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 0)))
+    assert load(ge_cloud) == 17.0
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(28.5, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 5)))
+    assert load(ge_cloud) == 17.0, "a midday fall in import must not lower the load"
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(31.0, 2.0, 5.0, 4.0, 20.0), now=at(14, 12, 10)))
+    assert load(ge_cloud) == 18.0
+
+    # A counter that never resets: after the window the new readings are taken as they are
+    ge_cloud = fresh()
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(40.0, 2.0, 5.0, 4.0, 20.0), now=at(13, 23, 50)))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.1, 0.0, 0.0, 0.0, 20.0), now=at(14, 0, 0)))
+    assert load(ge_cloud) == 0.0
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(1.5, 0.0, 0.0, 0.0, 20.0), now=at(14, 0, 30)))
+    assert load(ge_cloud) == 0.0, "still inside the window"
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.0, 0.0, 0.0, 0.0, 20.5), now=at(14, 1, 0)))
+    assert load(ge_cloud) == 0.0, "a stuck counter gives a 0 balance until it moves, never a jump"
+    assert ge_cloud.ems_load_state["ems001"]["reset_from"] is None, "the reset ends once the window has passed"
+
+    # A restart part-way through a reset: the hold is kept in storage, so the new process carries on at 0 rather
+    # than publishing the partly reset counters' balance (83.7kWh here), which history would count as a second day's load
+    with tempfile.TemporaryDirectory() as tmpdir:
+        storage = StorageLocalFiles(tmpdir, print)
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 22.3, 23.3), now=at(13, 23, 50)))
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 0.0, 0.1), now=at(13, 23, 55)))
+        assert load(ge_cloud) == 0.0
+        assert "ems001" in run_async(storage.load("gecloud", "ems_load_reset")), "a reset in progress is kept in storage"
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(68.5, 1.3, 16.6, 0.0, 0.1), now=at(13, 23, 57)))
+        assert load(ge_cloud) == 0.0, "after a restart mid-reset the sensor must not rise to {}".format(ems_load_balance(ems_today_counters(_ems_today(68.5, 1.3, 16.6, 0.0, 0.1))))
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(0.4, 0, 0, 0.0, 0.2), now=at(14, 0, 0)))
+        assert load(ge_cloud) == 0.2, "the restored reset completes as it would have"
+        assert run_async(storage.load("gecloud", "ems_load_reset")) == {}, "a completed reset is cleared from storage"
+
+        # A reset kept from long ago has run its window: a restart takes the counters as they are
+        run_async(storage.save("gecloud", "ems_load_reset", {"ems001": {"reset_from": {"import": 68.5, "export": 1.3, "solar": 16.6, "discharge": 22.3, "charge": 23.3}, "reset_since": at(13, 23, 55).isoformat()}}, format="json"))
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.0, 0.0, 0.0, 1.0, 1.5), now=at(14, 9, 0)))
+        assert load(ge_cloud) == 2.5, "a stale reset in storage is ignored, got {}".format(load(ge_cloud))
+
+        # Nothing usable in storage: the counters are taken as they are
+        run_async(storage.save("gecloud", "ems_load_reset", {"ems001": {"reset_from": "bad", "reset_since": "bad"}}, format="json"))
+        ge_cloud = fresh()
+        ge_cloud._mock_storage = storage
+        run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(3.0, 0.0, 0.0, 1.0, 1.5), now=at(13, 23, 57)))
+        assert load(ge_cloud) == 2.5
+
+    # Polling stalled across midnight: the first reading of the new day is mid-morning, still taken as the reset
+    ge_cloud = fresh()
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(40.0, 2.0, 5.0, 4.0, 20.0), now=at(13, 22, 0)))
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(4.0, 0.0, 0.0, 1.0, 3.0), now=at(14, 9, 0)))
+    assert load(ge_cloud) == 2.0, "expected 2.0 got {}".format(load(ge_cloud))
+    # ...but a later fall that day is still a glitch
+    run_async(ge_cloud.publish_ems_load_today("ems001", _ems_today(2.5, 0.0, 0.0, 1.0, 3.0), now=at(14, 10, 0)))
+    assert load(ge_cloud) == 2.0
 
     return 0
 
@@ -5649,7 +6023,7 @@ def _test_async_automatic_config(my_predbat):
         assert ge.config_args.get("discharge_end_time") == ["select.predbat_gecloud_ems001_export_end_time_slot_1"]
 
         # EMS-specific sensors
-        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_ems001_consumption_total"]
+        assert ge.config_args.get("load_today") == ["sensor.predbat_gecloud_ems001_consumption_derived_today"], "EMS load_today is the energy balance, not consumption_total which counts battery grid charging as load"
         assert ge.config_args.get("pv_today") == ["sensor.predbat_gecloud_ems001_solar_total"]
         assert ge.config_args.get("import_today") == ["sensor.predbat_gecloud_ems001_grid_import_total"]
         assert ge.config_args.get("export_today") == ["sensor.predbat_gecloud_ems001_grid_export_total"]

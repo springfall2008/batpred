@@ -163,12 +163,10 @@ def rescan_rate_windows(my_predbat, verbose=True):
 
     # Find discharging windows
     if my_predbat.rate_export:
-        my_predbat.high_export_rates, export_lowest, export_highest = my_predbat.rate_scan_window(my_predbat.rate_export, 5, my_predbat.rate_export_cost_threshold, True, alt_rates=my_predbat.rate_import)
+        threshold = my_predbat.rate_export_cost_threshold
+        export_lowest, export_highest = my_predbat.scan_export_windows(alt_rates=my_predbat.rate_import)
         if verbose:
-            print("High export rate found rates in range {} to {} based on threshold {}".format(export_lowest, export_highest, my_predbat.rate_export_cost_threshold))
-        # Update threshold automatically
-        if my_predbat.rate_high_threshold == 0 and export_lowest <= my_predbat.rate_export_max:
-            my_predbat.rate_export_cost_threshold = export_lowest
+            print("High export rate found rates in range {} to {} based on threshold {}, {} export candidate window(s)".format(export_lowest, export_highest, threshold, len(my_predbat.high_export_rates)))
 
     # Find charging windows
     if my_predbat.rate_import:
@@ -266,7 +264,7 @@ def run_single_debug(test_name, my_predbat, debug_file, expected_file=None, comp
         print("Run compare")
         compare_tariffs = [
             {"name": "Fixed exports", "rates_export": [{"rate": 15.0}], "config": {"load_scaling": 2.0}},
-            {"name": "Agile export", "rates_export_octopus_url": "https://api.octopus.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"},
+            {"name": "Agile export", "rates_export_octopus_url": "https://api.oegb-kraken.energy/v1/products/AGILE-OUTGOING-BB-23-02-28/electricity-tariffs/E-1R-AGILE-OUTGOING-BB-23-02-28-A/standard-unit-rates/"},
         ]
         my_predbat.args["compare"] = compare_tariffs
         compare = Compare(my_predbat)

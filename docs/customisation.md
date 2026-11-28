@@ -363,6 +363,7 @@ These are described in detail in [Car Charging](car-charging.md) and are listed 
 - **switch.predbat_car_charging_plan_smart** - allows Predbat to allocate car charging slots to the cheapest times rather than all low-rate slots in time order (default On)
 - **input_number.predbat_car_charging_plan_max_price** - maximum price per kWh to pay when charging your car
 - **switch.predbat_car_charging_from_battery** - when On, allows the car to drain the home battery when charging; when Off (the default), Predbat holds the battery while the car charges
+- **switch.predbat_car_charging_cancel_for_export** - when On, lets the plan export over a car charging slot, which cancels the slot, when the export is worth more than buying the car's energy back (default Off), see [Cancelling a car slot for an export](car-charging.md#cancelling-a-car-slot-for-an-export)
 - **switch.predbat_car_charging_manual_soc** - ignore the **car_charging_soc** car SoC sensor set in `apps.yaml` and use the manual SoC instead (car 0)
 - **switch.predbat_car_charging_manual_soc_1/2/3** - ignore the **car_charging_soc** car SoC sensor for cars 1/2/3
 - **input_number.predbat_car_charging_manual_soc_kwh** - manually maintained car SoC in kWh (car 0), used when the switch above is on, or when **car_charging_soc** is not set for the car and its charger has energy and plugged-in (**car_charging_plugged**) sensors. Otherwise, with a car SoC sensor, it shows the sensor's reading
@@ -479,8 +480,11 @@ e.g. setting to 0.8 = 80% of the average rate.<BR>
 If you set this too low you might not get enough charge slots. If it's too high you might get too many in the
 24-hour period which makes optimisation harder.
 
-**input_number.predbat_rate_high_threshold** (_expert mode_) When set to 0 (the default) Predbat will automatically look at the future export rates in the plan
-and determine the threshold above which a slot can be considered a potential exporting slot.<BR>
+**input_number.predbat_rate_high_threshold** (_expert mode_) When set to 0 (the default) every future export slot, the cheapest included, is a potential
+exporting slot, and the optimiser decides which are worth using. The cheapest rate matters on a dual-rate export tariff with an export limit: a battery
+still holding energy at dawn before a sunny day can export it at the night rate rather than have the solar that displaces it clipped later.
+Predbat still works out a high-rate threshold automatically, and only the slots above it are published as high-rate export slots
+(**predbat.high_rate_export_start** and the related entities).<BR>
 If rate_high_threshold is set to a non-zero value this will set the threshold above future average export rates as the minimum export rate to consider exporting for,
 e.g. setting to 1.2 = 20% above average rate.<BR>
 If you set this too high you might not get any export slots. If it's too low you might get too many in the 24-hour period.
@@ -713,7 +717,7 @@ Predbat has an 'iBoost model' that, instead of exporting excess solar to the gri
 
 - **switch.predbat_iboost_on_export** Whether iBoost will run when the battery is forced to export to the grid - default False.
 
-- **switch.predbat_iboost_prevent_discharge** Stops the battery from discharging to the diverter when iBoost is active. Not recommended when iBoost solar mode is enabled as battery discharge will be prevented during excess solar periods. This could cause additional imports due to passing clouds - default False.
+- **switch.predbat_iboost_prevent_discharge** Stops the battery from discharging to the diverter when iBoost is active. Not recommended when iBoost solar mode is enabled as battery discharge will be prevented during excess solar periods. This could cause additional imports due to passing clouds. The hold does not apply while the battery is charging or exporting, so it does not stop a planned export window draining the battery, and it should not be combined with **switch.predbat_iboost_on_export** - default False.
 
 - **switch.predbat_iboost_smart** Whether Predbat will pick the lowest import rate slots within the forecast horizon (48 hours by default) to achieve the desired energy for each day, as specified by **input_number.predbat_iboost_max_energy**. Can be combined with the Solar and Battery modes - default False.
 

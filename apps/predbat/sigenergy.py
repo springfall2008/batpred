@@ -62,6 +62,7 @@ import asyncio
 import base64
 import json
 import math
+import random
 import ssl
 import tempfile
 import traceback
@@ -86,6 +87,7 @@ from axle import fetch_axle_active
 from component_base import ComponentBase, writes
 from coordinator import inverter_record
 from mock_base import MockBase as SharedMockBase
+from oauth_mixin import OAuthMixin, TOKEN_REFRESH_THRESHOLD
 from predbat_metrics import record_api_call
 
 
@@ -143,6 +145,12 @@ SIGENERGY_MQTT_FRESH_SECONDS = 450
 SIGENERGY_VPP_RECLAIM_INTERVAL = 60   # re-assert VPP ownership every minute (see _manage_vpp_registration)
 SIGENERGY_DEVICE_POLL_INTERVAL = 1800  # device list refresh every 30 minutes
 SIGENERGY_RATE_LIMIT_BACKOFF = [15, 30, 60, 120, 480]  # seconds to wait after code 1201
+# Seconds before the login endpoint is tried again after it rejects the key (1201 Access restriction,
+# 2036 requested too frequently, bad credentials). Every request, MQTT command and broker login needs a
+# token, so without this each one re-posted the login at once - several times a minute per client, which
+# keeps a throttled key throttled. Escalates per consecutive rejection, capped at the last step.
+SIGENERGY_AUTH_REJECT_BACKOFF = [60, 120, 300]  # the cap bounds how long control stays lost after the key is accepted again
+SIGENERGY_AUTH_REJECT_JITTER = 0.2  # up to this fraction added to each cooldown so many clients do not retry in lockstep
 SIGENERGY_BATTERY_NOMINAL_VOLTAGE_V = 28.8  # 8S LiFePO4 pack: 8 × 3.6V; used to convert ratedEnergy (Ah) → kWh
 SIGENERGY_RATED_ENERGY_AH_THRESHOLD = 100.0  # a ratedEnergy above this is Ah (e.g. 314), below it kWh (e.g. 9.04) - see _get_battery_capacity_kwh
 SIGENERGY_MQTT_PORT = 8883             # TLS MQTT port on the Sigenergy broker
@@ -248,7 +256,17 @@ SIGENERGY_HISTORY_NODES = [
     ("FROM_BATTERY", "battery_discharge_lifetime", "Battery Discharge Lifetime"),
     ("TO_EVDC", "ev_charge_lifetime", "EV Charge Lifetime"),
     ("FROM_EVDC", "ev_discharge_lifetime", "EV Discharge Lifetime"),
+    # The Sigen EV AC charger (EVAC). Published as 0 when a system's history has no such node.
+    ("TO_EVAC", "ac_ev_charge_lifetime", "AC EV Charge Lifetime"),
 ]
+
+# Sankey nodes summed into the published load_lifetime. TO_LOAD leaves the AC charger out - a
+# lifetime sankey balanced only with TO_EVAC beside it, and an hour holding an 8-minute 22kW charge
+# showed import 6.48 = TO_LOAD 2.43 + battery charge 1.33 + 2.72 kWh that the charger's own meter
+# recorded. But grid import and the live load power (MQTT derives it as pv + battery - grid) both
+# include the charger, so it is added back: load history then agrees with them, and
+# car_charging_energy (bound to TO_EVAC by bind_car_charging_energy()) subtracts the car exactly once.
+SIGENERGY_LOAD_NODES = ("TO_LOAD", "TO_EVAC")
 
 # Lifetime kWh a PV source (FROM_SOLAR or FROM_THIRD_PARTY_INV) must have produced to count as
 # fitted. Keeps a few stray Wh of native PV on an AC-coupled install (seen: 0.08kWh) from reading
@@ -466,7 +484,7 @@ def command_probe_verdict(report):
     return ok, lines
 
 
-class SigenergyAPI(ComponentBase):
+class SigenergyAPI(ComponentBase, OAuthMixin):
     """Sigenergy Cloud API component for Predbat.
 
     Polls the Sigenergy OpenAPI for realtime energy-flow data and battery
@@ -474,12 +492,13 @@ class SigenergyAPI(ComponentBase):
     control commands on behalf of Predbat's planner.
     """
 
-    def initialize(self, app_key, app_secret, base_url=None, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None, system_id=None, automatic=False, enable_controls=True, **kwargs):
+    def initialize(self, app_key, app_secret=None, base_url=None, mqtt_host=None, ca_cert=None, client_cert=None, client_key=None, system_id=None, automatic=False, enable_controls=True, auth_method=None, **kwargs):
         """Initialise the Sigenergy API component.
 
         Args:
             app_key: Sigenergy Application Key (from Control Center → Settings).
-            app_secret: Sigenergy Application Secret.
+            app_secret: Sigenergy Application Secret. Required for the default
+                        "api_key" auth method, unused with "oauth".
             base_url: Override the API base URL (default: SIGENERGY_DEFAULT_BASE_URL).
             mqtt_host: Override the MQTT broker hostname (default: derived from SIGENERGY_DEFAULT_MQTT_HOST
                        by replacing the regional prefix to match *base_url*).
@@ -492,6 +511,11 @@ class SigenergyAPI(ComponentBase):
             automatic: When True, call set_arg() to wire Predbat config to the
                        published entity IDs on first run.
             enable_controls: When True, apply charge/discharge commands.
+            auth_method: "api_key" (default) logs in with app_key + app_secret.
+                         "oauth" never logs in: the access token comes from the
+                         oauth-refresh service (see OAuthMixin), which can share
+                         one token between many clients of the same app key.
+                         The first token is fetched on first use.
         """
 
         if not HAS_AIOHTTP:
@@ -527,9 +551,16 @@ class SigenergyAPI(ComponentBase):
         else:
             self.system_id_filter = {str(system_id)}
 
-        # Token state
+        # Token state. With auth_method "oauth" OAuthMixin owns both, and token_expires_at is then
+        # UNIX time (the refresh service's expiry), not monotonic.
         self.access_token = None
         self.token_expires_at = 0.0  # monotonic time (see monotonic()), not a UNIX timestamp
+        self._init_oauth(auth_method, None, None, "sigenergy")
+        self._oauth_rejected_token = None  # oauth: the token last refused with 401, never handed out again
+        if self.auth_method != "oauth":
+            self.token_expires_at = 0.0
+            if not app_secret:
+                self.log("Warn: SigenergyAPI: sigenergy_app_secret is not set, logins will fail (set it, or use sigenergy_auth_method: oauth)")
 
         # Data stores keyed by systemId
         self.systems = {}         # systemId → system info dict
@@ -541,6 +572,7 @@ class SigenergyAPI(ComponentBase):
         self.system_status = {}   # systemId → latest systemStatus dict
         self.daily_summary = {}   # systemId → latest summary dict
         self.history_totals = {}  # systemId → {sankey node id: lifetime kWh total}
+        self.car_energy_slugs = None  # system slugs whose AC EV charger car_charging_energy was last bound to (None until first checked)
         self.mqtt_period_raw = {}  # systemId → merged raw 'period' fields (MQTT only sends fields that changed)
         self.current_mode = {}    # systemId → energyStorageOperationMode int
         self.last_contended_by = {}  # systemId → mode name of the controller that last displaced Predbat
@@ -569,6 +601,11 @@ class SigenergyAPI(ComponentBase):
         # Rate-limit tracking
         self._last_request_time = 0.0
 
+        # Login cooldown after the auth endpoint rejects the key (see SIGENERGY_AUTH_REJECT_BACKOFF)
+        self._auth_retry_at = 0.0  # monotonic time before which no login is attempted
+        self._auth_failures = 0  # consecutive rejections, indexes the backoff schedule
+        self._auth_lock = asyncio.Lock()  # one login in flight at a time
+
         # Delay between mode-switch and battery command (seconds); set to 0 in tests
         self._command_delay = 1.0
 
@@ -595,17 +632,112 @@ class SigenergyAPI(ComponentBase):
         of expiry (default 12 h lifetime).
 
         Transient network errors (timeout, connection error, bad HTTP status)
-        are retried up to SIGENERGY_MAX_RETRIES times.  API-level rejections
-        (wrong credentials, code != 0) are not retried as they are permanent.
+        are retried up to SIGENERGY_MAX_RETRIES times.  An API-level rejection
+        (code != 0, e.g. 1201 Access restriction or wrong credentials) is not
+        retried in-call; instead no login is attempted again until a cooldown
+        from SIGENERGY_AUTH_REJECT_BACKOFF has passed, and calls made in the
+        meantime return None without touching the network.
+
+        With auth_method "oauth" no login is made here: the token is fetched
+        from the oauth-refresh service (see _get_oauth_token).
 
         Returns:
             Access token string on success, None on failure.
         """
+        if self.auth_method == "oauth":
+            return await self._get_oauth_token()
         now = self.monotonic()
         if self.access_token and now < self.token_expires_at - SIGENERGY_TOKEN_EXPIRY_BUFFER:
             return self.access_token
+        if now < self._auth_retry_at:
+            return None
 
-        raw_key = "{}:{}".format(self.app_key, self.app_secret)
+        # Single-flight: the MQTT listener and the REST paths run as separate tasks, so without the
+        # lock both could post a login when the token lapses and double-count one rejection.
+        async with self._auth_lock:
+            now = self.monotonic()
+            if self.access_token and now < self.token_expires_at - SIGENERGY_TOKEN_EXPIRY_BUFFER:
+                return self.access_token
+            if now < self._auth_retry_at:
+                return None
+            return await self._login_with_key(now)
+
+    def _hold_off_oauth(self):
+        """Wait one cooldown before asking the refresh service again after it gave no fresh token."""
+        wait = SIGENERGY_AUTH_REJECT_BACKOFF[0]
+        wait += wait * SIGENERGY_AUTH_REJECT_JITTER * random.random()
+        self._auth_retry_at = self.monotonic() + wait
+        self.log("Warn: SigenergyAPI: The OAuth refresh service gave no fresh token - asking again in {:.0f}s".format(wait))
+
+    def _oauth_token_usable(self):
+        """The held oauth token, unless it was refused with 401 or has reached its expiry (UNIX time in oauth mode)."""
+        token = self.access_token
+        if token and token != self._oauth_rejected_token and self.token_expires_at and self.wall_time() < self.token_expires_at:
+            return token
+        return None
+
+    def _oauth_needs_renewal(self):
+        """True once the held oauth token is inside the refresh window, on the component clock."""
+        return not self.token_expires_at or self.wall_time() > self.token_expires_at - TOKEN_REFRESH_THRESHOLD
+
+    def _oauth_needs_reauth(self):
+        """True once the refresh service answered needs_reauth: only a reconnect fixes that, so stop asking."""
+        return self.oauth_failed and self.oauth_failed_reason == "needs_reauth"
+
+    async def _oauth_refresh(self, force):
+        """One refresh through the refresh service; True if it produced a fresh token.
+
+        Fresh means usable (not the token that was refused, not expired) and outside the refresh
+        window. Anything else - a failure, no token, the refused token handed back, or one about to
+        expire - holds off further refreshes for a cooldown. A needs_reauth answer is terminal
+        and stops refreshes altogether (see _oauth_needs_reauth). That cooldown is the only backoff in
+        oauth mode, so the refresh service is asked at most once per cooldown however many requests,
+        401s and MQTT reconnects want a token. force names the refused token to the service (its
+        token_hash), so it logs in again rather than serving it back.
+        """
+        await self._do_refresh(reason="401" if force else None)
+        if self._oauth_needs_reauth():
+            return False
+        if self._oauth_token_usable() and not self._oauth_needs_renewal():
+            self._oauth_rejected_token = None
+            return True
+        self._hold_off_oauth()
+        return False
+
+    async def _get_oauth_token(self):
+        """The access token in oauth mode, refreshed through the refresh service when needed.
+
+        While a cooldown runs, a held token that is still usable is handed out and nothing is asked.
+        """
+        if self._oauth_needs_reauth() or self.monotonic() < self._auth_retry_at:
+            return self._oauth_token_usable()
+        async with self._auth_lock:
+            if self._oauth_needs_reauth() or self.monotonic() < self._auth_retry_at:
+                return self._oauth_token_usable()
+            if self._oauth_token_usable() and not self._oauth_needs_renewal():
+                return self.access_token
+            # Still holding the refused token: keep asking for a replacement, not for the same one.
+            await self._oauth_refresh(force=bool(self.access_token) and self.access_token == self._oauth_rejected_token)
+            return self._oauth_token_usable()
+
+    async def _oauth_after_401(self, rejected_token):
+        """A request was refused with 401 in oauth mode. Returns the token to retry with, or None."""
+        async with self._auth_lock:
+            if self.access_token and self.access_token != rejected_token:
+                # Another task already replaced the refused token while this one waited for the lock;
+                # forcing again would report the new token as refused. Use it only if it is not itself
+                # refused or expired since.
+                return self._oauth_token_usable()
+            self._oauth_rejected_token = rejected_token
+            if self._oauth_needs_reauth() or self.monotonic() < self._auth_retry_at:
+                return None
+            if await self._oauth_refresh(force=True):
+                return self.access_token
+            return None
+
+    async def _login_with_key(self, now):
+        """POST the key to the login endpoint and cache the token; the retry loop for get_access_token."""
+        raw_key ="{}:{}".format(self.app_key, self.app_secret)
         encoded_key = base64.b64encode(raw_key.encode()).decode()
         url = "{}/openapi/auth/login/key".format(self.base_url)
         payload = {"key": encoded_key}
@@ -634,8 +766,12 @@ class SigenergyAPI(ComponentBase):
 
                 code = data.get("code", -1)
                 if code != 0:
-                    # Permanent API-level failure (e.g. wrong credentials) — do not retry
-                    self.log("Warn: SigenergyAPI: Auth failed, code={}, msg={}".format(code, data.get("msg", "unknown")))
+                    # API-level rejection — do not retry now; hold off further logins on an escalating cooldown
+                    self._auth_failures += 1
+                    wait = SIGENERGY_AUTH_REJECT_BACKOFF[min(self._auth_failures, len(SIGENERGY_AUTH_REJECT_BACKOFF)) - 1]
+                    wait += wait * SIGENERGY_AUTH_REJECT_JITTER * random.random()
+                    self._auth_retry_at = self.monotonic() + wait
+                    self.log("Warn: SigenergyAPI: Auth failed, code={}, msg={} - next login attempt in {:.0f}s".format(code, data.get("msg", "unknown"), wait))
                     self.access_token = None
                     return None
 
@@ -649,6 +785,7 @@ class SigenergyAPI(ComponentBase):
                 self.access_token = token_data.get("accessToken")
                 expires_in = _safe_int(token_data.get("expiresIn", 43200), 43200)
                 self.token_expires_at = now + expires_in
+                self._auth_failures = 0
                 self.log("SigenergyAPI: Token obtained, expires in {} s".format(expires_in))
                 return self.access_token
 
@@ -723,8 +860,11 @@ class SigenergyAPI(ComponentBase):
                         if response.status == 401:
                             self.log("Warn: SigenergyAPI: 401 Unauthorised — refreshing token")
                             record_api_call("sigenergy", False, "auth_error")
-                            self.access_token = None
-                            token = await self.get_access_token()
+                            if self.auth_method == "oauth":
+                                token = await self._oauth_after_401(token)
+                            else:
+                                self.access_token = None
+                                token = await self.get_access_token()
                             if not token:
                                 return None
                             headers["Authorization"] = "Bearer {}".format(token)
@@ -1184,7 +1324,8 @@ class SigenergyAPI(ComponentBase):
         The Sigenergy Cloud API has no native "today" load/import/export sensor,
         so this polls the history endpoint at level=Lifetime for the ever-growing
         Sankey node totals (TO_LOAD, FROM_GRID, TO_GRID, FROM_SOLAR,
-        FROM_THIRD_PARTY_INV, TO_BATTERY, FROM_BATTERY, TO_EVDC, FROM_EVDC).
+        FROM_THIRD_PARTY_INV, TO_BATTERY, FROM_BATTERY, TO_EVDC, FROM_EVDC,
+        TO_EVAC).
         Predbat derives "today" energy from these by diffing against midnight —
         the same pattern already used for lifetime energy counters on other
         inverter brands.
@@ -2264,8 +2405,10 @@ class SigenergyAPI(ComponentBase):
             try:
                 token = await self.get_access_token()
                 if not token:
-                    self.log("Warn: SigenergyAPI: MQTT token refresh failed; retrying in {}s".format(reconnect_delay))
-                    await self.sleep(reconnect_delay)
+                    # Wait out any login cooldown rather than re-asking every few seconds for a token that cannot come yet
+                    wait = max(reconnect_delay, self._auth_retry_at - self.monotonic())
+                    self.log("Warn: SigenergyAPI: MQTT token refresh failed; retrying in {:.0f}s".format(wait))
+                    await self.sleep(wait)
                     continue
 
                 # Refresh system list for subscription if not yet known
@@ -2534,9 +2677,14 @@ class SigenergyAPI(ComponentBase):
         # --- Lifetime energy totals (kWh, from /v1/history level=Lifetime) ---
         history = self.history_totals.get(system_id, {})
         for node_id, node_slug, friendly in SIGENERGY_HISTORY_NODES:
+            if node_id == "TO_LOAD":
+                # House load plus the AC EV charger, see SIGENERGY_LOAD_NODES
+                value = sum(_safe_float(history.get(load_node, 0)) for load_node in SIGENERGY_LOAD_NODES)
+            else:
+                value = _safe_float(history.get(node_id, 0))
             self.dashboard_item(
                 "sensor.{}_sigenergy_{}_{}".format(self.prefix, slug, node_slug),
-                state=round(_safe_float(history.get(node_id, 0)), 3),
+                state=round(value, 3),
                 attributes={
                     "friendly_name": "Sigenergy {} {}".format(system_name, friendly),
                     "unit_of_measurement": "kWh",
@@ -2862,6 +3010,8 @@ class SigenergyAPI(ComponentBase):
         self.set_arg("export_today", ["sensor.{}_sigenergy_{}_grid_export_lifetime".format(self.prefix, s) for s in slugs])
         self.set_arg("inverter_time", ["sensor.{}_sigenergy_{}_time".format(self.prefix, s) for s in slugs])
 
+        self.bind_car_charging_energy()
+
         # Control entities
         self.set_arg("charge_start_time", ["select.{}_sigenergy_{}_charge_start_time".format(self.prefix, s) for s in slugs])
         self.set_arg("charge_end_time", ["select.{}_sigenergy_{}_charge_end_time".format(self.prefix, s) for s in slugs])
@@ -2878,6 +3028,41 @@ class SigenergyAPI(ComponentBase):
         await self.apply_hybrid_verdict()
 
         self.log("SigenergyAPI: automatic_config complete")
+
+    def bind_car_charging_energy(self):
+        """Bind car_charging_energy to the AC EV charger lifetime of each system whose charger has recorded energy.
+
+        Called by automatic_config() and again whenever a history refresh lands, because the first run
+        can see a restored cache from before the charger was read or a failed fetch. Only a TO_EVAC
+        above 0 counts: whether the API omits the node on a system with no AC charger or returns it at
+        0 is not established, and a permanently-zero sensor would read as a charger that is never used,
+        which stops the car_charging_threshold heuristic covering any charger Predbat cannot read. A
+        fitted charger that has never charged has nothing to subtract yet; it is bound once its first
+        charge reaches the totals, and its recorder history then covers that charge too. The lifetime
+        totals only grow, so the set of systems never shrinks. A list is right here:
+        minute_data_import_export() sums however many entities it is given. The user's own
+        car_charging_energy, such as a charger integration's, is kept (overwrite=False).
+        """
+        ev_slugs = [self._system_slug(sid) for sid in self.systems if _safe_float(self.history_totals.get(sid, {}).get("TO_EVAC", 0)) > 0]
+        if ev_slugs == self.car_energy_slugs:
+            return
+        self.car_energy_slugs = ev_slugs
+        user_value = (getattr(self.base, "args_from_apps_yaml", None) or {}).get("car_charging_energy")
+        if not ev_slugs:
+            if user_value is None:
+                self.log("SigenergyAPI: no AC EV charger energy in the lifetime history yet, so car_charging_energy is left unset")
+            return
+        entities = ["sensor.{}_sigenergy_{}_ac_ev_charge_lifetime".format(self.prefix, s) for s in ev_slugs]
+        self.set_arg_auto("car_charging_energy", entities, overwrite=False)
+        if user_value is not None and user_value != entities:
+            # set_arg_auto() kept the user's own entry, but load_today now includes the Sigen AC charger
+            self.log(
+                "SigenergyAPI: AC EV charger found on {} system(s), but car_charging_energy is set in apps.yaml so it is kept. load_today includes this charger, so add {} to your car_charging_energy list or its charging stays in the load history.".format(
+                    len(ev_slugs), ", ".join(entities)
+                )
+            )
+        else:
+            self.log("SigenergyAPI: AC EV charger found on {} system(s), car_charging_energy mapped to its lifetime energy. It only affects the plan once car_charging_hold is enabled.".format(len(ev_slugs)))
 
     # -----------------------------------------------------------------------
     # Controls
@@ -3869,6 +4054,11 @@ class SigenergyAPI(ComponentBase):
                 await self._save_cache("daily_summary", self.daily_summary)
             if history_updated:
                 await self._save_cache("history_totals", self.history_totals)
+                # automatic_config() only runs on the first run, which can see a history_totals cache
+                # from before an AC charger recorded energy (or from before TO_EVAC was read), or a
+                # failed first fetch, so re-check the car_charging_energy binding on fresh totals
+                if self.automatic and not first:
+                    self.bind_car_charging_energy()
 
         # Publish entities
         if first or seconds % SIGENERGY_POLL_INTERVAL == 0:

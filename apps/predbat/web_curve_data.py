@@ -29,14 +29,16 @@ def curves_chart_data(base, prefix, now_utc):
         high = min(int(max(temperatures)) + 5, BATTERY_RATE_GRID_TEMP_MAX) if temperatures else 30
         degrees = list(range(low, high + 1))
         item = dashboard.get("binary_sensor.{}_battery_{}_rate_grid".format(prefix, kind), {})
-        result.append({
-            "kind": kind,
-            "state": item.get("state"),
-            "attributes": item.get("attributes", {}) or {},
-            "soc": list(range(101)),
-            "temperature": degrees,
-            "z": [[round(value, 3) for value in rate_grid_curve(grid, degree if degree != 0 else 0.5)[:101]] for degree in degrees],
-            "evidence": [[entry[0], entry[1] if entry[1] is not None else BATTERY_RATE_GRID_UNKNOWN_TEMP, entry[2]] for entry in evidence],
-            "table": rate_grid_table(grid),
-        })
+        result.append(
+            {
+                "kind": kind,
+                "state": item.get("state"),
+                "attributes": item.get("attributes", {}) or {},
+                "soc": list(range(101)),
+                "temperature": degrees,
+                "z": [[round(value, 3) for value in rate_grid_curve(grid, degree if degree != 0 else 0.5)[:101]] for degree in degrees],
+                "evidence": [[entry[0], entry[1] if entry[1] is not None else BATTERY_RATE_GRID_UNKNOWN_TEMP, entry[2]] for entry in evidence],
+                "table": rate_grid_table(grid),
+            }
+        )
     return {"chart": "curves", "ready": True, "max_rate": BATTERY_RATE_GRID_MAX, "grids": result}

@@ -37,6 +37,9 @@ class DatabaseEngine:
 
         self.db = sqlite3.connect(self.base.config_root + "/predbat.db")
         self.db_cursor = self.db.cursor()
+        # SQLite keeps up to 2 MiB of pages per connection by default; the history reads here are
+        # indexed and small, so cap it at 256 KiB (a negative cache_size is in KiB)
+        self.db_cursor.execute("PRAGMA cache_size=-256")
         self.entity_id_cache = {}
 
         self._cleanup_db()

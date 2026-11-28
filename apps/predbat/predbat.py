@@ -36,7 +36,7 @@ import hass as hass
 import pytz
 import asyncio
 
-THIS_VERSION = "v9.9.0"
+THIS_VERSION = "v9.10.2"
 THIS_VERSION_DISPLAY = THIS_VERSION
 
 from download import predbat_update_move, predbat_update_download, check_install, read_deploy_git_version, is_valid_predbat_branch, parse_predbat_branch_option, DEFAULT_PREDBAT_REPOSITORY
@@ -91,6 +91,7 @@ from utils import (
     dp2,
     dp3,
     find_unmasked_secret_paths,
+    secret_reference_yaml_loader,
     is_entity_id,
     normalise_entity_prefix,
     mask_secret_args,
@@ -101,7 +102,6 @@ from utils import (
     export_limits_from_stored,
     next_aligned_run,
 )
-from predheat import PredHeat
 from octopus import Octopus
 from energydataservice import Energidataservice
 from stromligning import Stromligning
@@ -475,6 +475,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.low_rates = []
         self.low_rates_tariff = []
         self.high_export_rates = []
+        self.high_export_rates_tariff = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.octopus_free_slots = []
@@ -507,6 +508,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.rate_max_base = 0
         self.rate_import_tariff_max = 0
         self.rate_export_cost_threshold = 99
+        self.rate_export_candidate_threshold = 99
         self.rate_import_cost_threshold = 99
         self.rate_import_pre_event_end = None
         self.rate_import_pre_event_threshold = None
@@ -601,6 +603,15 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.car_charging_threshold = 99
         self.car_charging_energy = {}
         self.car_charging_energy_warned = False
+        # The record of the time no car charged in (octopus_cap_record()), as last saved, and its latest reading
+        self.octopus_cap_runs = []
+        self.octopus_cap_saved = None
+        self.octopus_cap_last = None
+        self.octopus_cap_published = False  # Whether predbat.octopus_cap_used has been published, so it is cleared once
+        # The past minutes no car charged in, read each cycle, and why there are none, as last logged (octopus_cap_idle_load())
+        self.octopus_cap_idle = None
+        self.octopus_cap_idle_midnight = None
+        self.octopus_cap_idle_reason = None
         # Which component's automatic_config() owns octopus_ready_time/octopus_charge_limit.
         # Both OctopusAPI and OhmeAPI can wire them, and Octopus re-runs its automatic_config
         # whenever the tariff or intelligent device set moves - without a claim it silently takes the
@@ -608,6 +619,16 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # does not cover octopus_intelligent_slot: Octopus goes on wiring its dispatch sensor there
         # as the record of completed dispatches, and Ohme adds octopus_intelligent_planned_slot (#5413).
         self.car_slot_owner = None
+        # Cars a charger component is force-holding off: car_n -> end of the hold (UTC, aware). Empty when none
+        self.car_force_hold_until = {}
+        # Cars whose slots Predbat planned this cycle (plan_car_charging), so an export may cancel them
+        self.car_planned_by_predbat = set()
+        # Cars a charger component can force-hold off: car_n -> the component's log name
+        self.car_force_holdable = {}
+        # (car_n, index) of the car slots an export may cancel this cycle, see calculate_plan()
+        self.car_cancel_keys = frozenset()
+        # car_n -> (start, end) of the car slots the plan cancels for an export, set by publish_car_plan()
+        self.car_cancelled_for_export = {}
         self.octopus_intelligent_charging = False
         self.octopus_intelligent_ignore_unplugged = False
         self.octopus_intelligent_consider_full = False
@@ -615,6 +636,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.octopus_intelligent_dynamic = True
         self.notify_devices = ["notify"]
         self.octopus_url_cache = {}
+        # apps.yaml URLs already warned about naming the old Octopus API address (GH#5786)
+        self.octopus_url_migrated = set()
         self.dispatch_timeline_last = {}
         self.dispatch_timeline_pending = []
         self.octopus_charge_target_base = {}
@@ -731,6 +754,7 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.low_rates = []
         self.low_rates_tariff = []
         self.high_export_rates = []
+        self.high_export_rates_tariff = []
         self.axle_sessions = []
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
@@ -776,7 +800,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.low_rates = []
         self.low_rates_tariff = []
         self.high_export_rates = []
+        self.high_export_rates_tariff = []
         self.octopus_slots = [[] for _ in range(8)]
+        self.octopus_smart_control_off_logged = {}
         self.cost_today_sofar = 0
         self.carbon_today_sofar = 0
         self.import_today = {}
@@ -2354,8 +2380,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
 
     def check_apps_yaml_secrets(self, apps_yaml_path=None):
         """
-        Re-read apps.yaml with the ruamel round-trip loader (the same one the web config
-        editors use) and warn about credential-like values stored in plain text instead of
+        Re-read apps.yaml with the parser Predbat loads it with, keeping '!secret' references
+        unresolved, and warn about credential-like values stored in plain text instead of
         via a '!secret' reference into secrets.yaml.
 
         By the time apps.yaml reaches self.args, '!secret' has already been resolved to its
@@ -2363,13 +2389,13 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         this re-reads the raw file to recover that distinction. Populates self.arg_warnings
         rather than self.arg_errors: an inline credential is not an invalid configuration, so
         it should not turn the same red "apps.yaml has N errors" banner on for a large
-        fraction of existing installs.
+        fraction of existing installs. PyYAML rather than ruamel, which Predbat has loaded
+        already: only the web config editors need ruamel, so a Predbat that never opens one
+        never loads it.
         """
+        import yaml
+
         self.arg_warnings = {}
-        try:
-            from ruamel.yaml import YAML
-        except ImportError:
-            return
 
         if apps_yaml_path is None:
             apps_yaml_path = hass.resolve_apps_yaml_path(self.apps_file)
@@ -2377,9 +2403,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             return
 
         try:
-            yaml_loader = YAML(typ="rt")
             with open(apps_yaml_path, "r") as handle:
-                data = yaml_loader.load(handle)
+                data = yaml.load(handle, Loader=secret_reference_yaml_loader())  # nosec B506 - a SafeLoader subclass
         except Exception as e:
             self.log("Warn: Unable to re-read {} to check for unmasked secrets: {}".format(apps_yaml_path, e))
             return
@@ -2612,6 +2637,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.load_plan()
             # And the Octopus Intelligent dispatch state, so a restart part-way through a dispatch carries on from it
             self.dynamic_load_car_load()
+            # And the record of the time no car charged in, which the Octopus Intelligent daily cap is counted from
+            self.octopus_cap_load()
             # And the half hours Octopus Intelligent dispatches ran in, so they keep the dispatch rate
             self.octopus_held_load()
             # And the half hours a dispatch was seen covering, so a stale rate feed is still checked after a restart
@@ -2646,6 +2673,9 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         # Predheat
         predheat = self.args.get("predheat", {})
         if predheat:
+            # Imported here so an install without PredHeat configured never loads the module
+            from predheat import PredHeat
+
             self.predheat = PredHeat(self)
             self.predheat.initialize()
 
@@ -2683,6 +2713,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
             self.dynamic_load_car_poll()
             # A car starting or stopping charging - apply or release "Hold for car" now, not in 5 minutes
             self.car_charging_now_poll()
+            # The time no car charged in, which uses none of the Octopus Intelligent daily cap
+            self.octopus_cap_poll()
         if self.update_pending and not self.prediction_started:
             # Full update required
             self.update_pending = False

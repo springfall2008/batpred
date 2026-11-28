@@ -47,6 +47,19 @@ repos:
     entry: python tools/test_triage_replay.py
     files: ^tools/(triage_replay\.py|test_triage_replay\.py)$
     pass_filenames: false
+  - id: memory-benchmark-tools-tests
+    name: memory benchmark tools unit tests
+    language: python
+    additional_dependencies: [pyyaml, aiofiles, aiohttp, pytz]
+    entry: python -m unittest discover -s coverage/memory_benchmark_tools
+    files: ^coverage/memory_benchmark_tools/
+    pass_filenames: false
+  - id: board-predbat-memory-tests
+    name: board predbat-memory measurement tests
+    language: python
+    entry: python -m unittest discover -s boards/predbat-memory
+    files: ^boards/predbat-memory/
+    pass_filenames: false
   - id: owner-gate-tests
     name: owner gate workflow tests
     language: python

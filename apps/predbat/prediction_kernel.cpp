@@ -62,7 +62,11 @@
 // ABI 11: the ten scalar PkResult fields from final_metric to final_carbon_g are returned already
 // rounded to 4dp (round4_fast), and Python no longer rounds them. The layout is unchanged, but a binary
 // from before this returns them unrounded, so it must be refused rather than read.
-#define PK_ABI_VERSION 12
+// ABI 12 (car cancel branch): the car slot cancel table (cancel_count to cancel_penalty_rate) follows car_rate_flat in PkContext.
+// ABI 13 (car cancel branch): both of the above, plus cancel_floor_kw, each cancellable slot's car charge rate, after cancel_penalty_rate in PkContext.
+// ABI 12 (main): the charge and discharge curves are rate grid curve rows of PK_CURVE_WIDTH (the battery rate grids).
+// ABI 14: the car cancel branch's ABI 13 merged with main's ABI 12 - the cancel table and the PK_CURVE_WIDTH curve rows.
+#define PK_ABI_VERSION 14
 #define PK_CURVE_WIDTH 103 // a rate grid curve row: 101 SoC percents, the rated rate, then the absolute temperature cap
 // Parity 14: the explicit (mode, target, power) fields replace the packed double throughout the hot
 // loop (see the ABI 6 note); the floor a target exports to now reads the target field, matching
@@ -76,13 +80,20 @@
 // rate, without saving session or Axle rewards) and the slot's own rate (#5163).
 // Parity 18: energy a charge window stores in a confirmed Intelligent dispatch run (io_credit) earns a score
 // only credit off metric_keep.
-// Parity 19: in PV10, a dispatch minute of a confirmed run (io_credit set) is no longer assumed gone: the
+// Parity 19 (main): in PV10, a dispatch minute of a confirmed run (io_credit set) is no longer assumed gone: the
 // dispatch is kept and the non-car import pays PK_RUN_EVERY minutes of each half hour at the worst-case rate.
-// Parity 20: below a manual_soc or alert floor the keep penalty's import rate, and above a manual_soc_max
+// Parity 19 (car cancel branch): an export over a cancellable car slot cancels it - car load off, buy-back penalty, dispatch rate reverted.
+// Parity 20 (car cancel branch): a cancelled step is charged the buy-back penalty on at least the car's full charge rate (cancel_floor_kw).
+// Parity 21 (car cancel branch): both of the above together; a cancelled step is not a confirmed run's dispatch, so it carries no dispatch_risk.
+// Parity 20 (main): below a manual_soc or alert floor the keep penalty's import rate, and above a manual_soc_max
 // ceiling its export rate, is at least PK_KEEP_TARGET_MIN_RATE, so a target in a free or negative-price
 // slot still costs something to miss (#5162).
-#define PK_PARITY_REVISION 23
+// Parity 22 (car cancel branch): the car cancel branch's parity 21 merged with main's parity 20.
+// Parity 21 to 23 (main): the battery rate grids - each step's charge and discharge rate from a rate grid curve row.
+// Parity 24: the car cancel branch's parity 22 merged with main's parity 23.
+#define PK_PARITY_REVISION 24
 #define PK_MAX_CARS 8
+#define PK_CANCEL_MAX_SLOTS 64 // Must equal car_cancel.py CAR_CANCEL_MAX_SLOTS (it sizes PkContext's cancel arrays), so a change to either needs an ABI bump - the cancelled set is a 64-bit mask
 #define PK_RUN_EVERY 5 // const.py RUN_EVERY
 #define PK_KEEP_TARGET_MIN_RATE 1.0 // const.py KEEP_TARGET_MIN_RATE
 #define PK_EXPORT_MODE_TARGET 0 // const.py EXPORT_MODE_TARGET
@@ -110,7 +121,7 @@ inline bool pk_export_is_freeze(int32_t mode) { return mode == PK_EXPORT_MODE_FR
 // Mirror of CPython round(x, n): correctly-rounded decimal rounding (ties to even).
 // snprintf performs a correctly-rounded binary->decimal conversion and strtod a
 // correctly-rounded decimal->binary conversion, matching CPython's _Py_dg_dtoa path.
-double round_py(double value, int ndigits)
+double round_py_slow(double value, int ndigits)
 {
     if (!std::isfinite(value)) {
         return value;
@@ -118,6 +129,32 @@ double round_py(double value, int ndigits)
     char buf[64];
     snprintf(buf, sizeof(buf), "%.*f", ndigits, value);
     return strtod(buf, nullptr);
+}
+
+// round_py with the snprintf+strtod round trip (~96ns, the most expensive thing in the SoC-range and
+// window-end loops) replaced by arithmetic wherever that provably gives the same double.
+//
+// With p = 10^ndigits (exact), y = value * p carries at most half an ulp of error. The correctly
+// rounded decimal snprintf prints is the integer k nearest the EXACT value * p; nearbyint(y) is the
+// integer nearest y. The two agree whenever y is further than half an ulp from a half-integer, and the
+// guard below demands 1e-6, well above half an ulp of any |y| < 1e9. The string then denotes k / p,
+// and strtod returns the double nearest k / p - which is exactly what the IEEE division k / p returns,
+// as k and p are both exact. Anything near a tie, large, or non-finite takes the original path.
+// pk_verify_round_py compares the two bit for bit, ties and signed zeros included.
+__attribute__((noinline)) double round_py(double value, int ndigits)
+{
+    static const double pow10[] = {1.0, 10.0, 100.0, 1000.0, 10000.0, 100000.0, 1000000.0};
+    if (ndigits >= 0 && ndigits <= 6 && std::isfinite(value)) {
+        const double p = pow10[ndigits];
+        const double y = value * p;
+        if (std::fabs(y) < 1e9) {
+            const double distance = std::fabs((y - std::floor(y)) - 0.5);
+            if (distance > 1e-6) {
+                return std::nearbyint(y) / p;
+            }
+        }
+    }
+    return round_py_slow(value, ndigits);
 }
 
 // The 4dp rounding the result fields are returned with (Python's kernel_result_tuple used to apply
@@ -152,6 +189,25 @@ int32_t calc_percent_limit(double charge_limit, double soc_max)
 int32_t percent_via_round(double soc, double soc_max)
 {
     return calc_percent_limit(round_py(soc, 1), soc_max);
+}
+
+// The number of entries of table[1..100] that are <= soc, for the non-decreasing table
+// build_soc_percent_thresholds makes - exactly what std::upper_bound over table[1..] returns. The answer
+// is the one p with (p == 0 or table[p] <= soc) and (p == 100 or table[p + 1] > soc), so walking from any
+// starting p until both hold gives it; the hint only decides how far the walk goes. A battery's SoC
+// moves a few percent at most between 5 minute steps, so starting from the previous step's percent is
+// one or two comparisons where the binary search cost seven, each a hard-to-predict branch. soc must
+// not be NaN (the caller only takes this path for soc >= 0), and table must hold 101 entries.
+inline int32_t soc_percent_walk(const double *table, double soc, int32_t hint)
+{
+    int32_t p = hint;
+    while (p < 100 && table[p + 1] <= soc) {
+        p++;
+    }
+    while (p > 0 && table[p] > soc) {
+        p--;
+    }
+    return p;
 }
 
 // Smallest SoC whose percent_via_round() reaches p, found by bisecting the double's bit pattern.
@@ -209,6 +265,36 @@ void build_soc_percent_thresholds(std::vector<double> &out, double soc_max)
     }
 }
 
+// build_soc_percent_thresholds costs about half a millisecond - 100 exact bisections, each step a
+// round_py - and its table depends on nothing but soc_max, yet every context used to build its own:
+// about 31 per plan, nearly all of them for the marginal cost matrix. Contexts now copy a table
+// memoised on soc_max's bit pattern. A hit returns exactly what a fresh build would, so no result
+// changes. Guarded by its own mutex because contexts may be created from any thread, and bounded so a
+// long-lived process that sees many battery sizes cannot grow it without limit.
+std::mutex g_soc_table_mutex;
+std::map<uint64_t, std::vector<double>> g_soc_table_cache;
+constexpr size_t SOC_TABLE_CACHE_MAX = 16;
+
+void cached_soc_percent_thresholds(std::vector<double> &out, double soc_max)
+{
+    uint64_t key;
+    std::memcpy(&key, &soc_max, sizeof(key));
+    {
+        std::lock_guard<std::mutex> lock(g_soc_table_mutex);
+        auto it = g_soc_table_cache.find(key);
+        if (it != g_soc_table_cache.end()) {
+            out = it->second;
+            return;
+        }
+    }
+    build_soc_percent_thresholds(out, soc_max);
+    std::lock_guard<std::mutex> lock(g_soc_table_mutex);
+    if (g_soc_table_cache.size() >= SOC_TABLE_CACHE_MAX) {
+        g_soc_table_cache.clear();
+    }
+    g_soc_table_cache[key] = out;
+}
+
 // Per-plan static context passed from Python, arrays are all n_steps long
 // (index k covers relative minute k*5) unless stated otherwise.
 // Field order MUST match the ctypes Structure in prediction_kernel.py exactly.
@@ -234,6 +320,18 @@ struct PkContext {
     const double *iboost_plan_load;   // iBoost plan load kW per step (in_iboost_slot)
     const double *car_load_flat;      // car charging load kW, num_cars * n_steps (in_car_slot)
     const double *car_rate_flat;      // car premium rate, num_cars * n_steps (in_car_slot)
+
+    // Car slot cancel table - car_cancel.py CarCancelTable; cancel_count is 0 and the pointers null without one
+    int32_t cancel_count;                     // cancellable slots, at most PK_CANCEL_MAX_SLOTS; bit j of a mask is slot j
+    int32_t cancel_start[PK_CANCEL_MAX_SLOTS]; // slot j's start, absolute minutes
+    int32_t cancel_end[PK_CANCEL_MAX_SLOTS];   // slot j's end, absolute minutes
+    uint64_t cancel_forced_mask;              // the slots a charger is force-holding off, cancelled whatever the plan does
+    const int32_t *cancel_slot_flat;          // num_cars * n_steps: the slot j in_car_slot() picks for that car and step, or -1
+    const uint64_t *cancel_need_mask;         // per step: the cancellable dispatches covering it (rounded out to half hours)
+    const int32_t *cancel_trusted;            // per step: 1 when a dispatch that cannot be cancelled covers it
+    const double *cancel_revert_rate;         // per step: the rate a cancelled dispatch reverts to, or negative when it cannot
+    double cancel_penalty_rate;               // what each cancelled kWh costs to buy back (rate_max_base times the margin)
+    double cancel_floor_kw[PK_CANCEL_MAX_SLOTS]; // slot j's car charge rate: a cancelled step is charged on at least this
 
     double soc_kw;
     double soc_max;
@@ -406,6 +504,8 @@ struct PkBatchResult {
 // Counts PkScratch constructions for the life of the library, for pk_scratch_construct_count(). The
 // suite asserts this stops growing with the number of batches rather than trusting the reuse.
 std::atomic<int64_t> g_scratch_constructions{0};
+// Counts pk_run_batch calls; each call's jobs carry its value so per-thread window setup is never reused across calls
+std::atomic<uint64_t> g_batch_epoch{0};
 
 // Counts worker threads started for the life of the library, for pk_worker_thread_count(). Thread
 // creation measured 7.5us each and a benchmark plan used to start 201,545 of them - 1.5s of a 26s
@@ -418,6 +518,24 @@ struct PkScratch {
     std::vector<double> clipped_limit;
     std::vector<int32_t> export_end_at_step;
     std::vector<int32_t> export_floor_percent;
+    // Window setup carried from one job to the next within one pk_run_batch call - see pk_run_one. The
+    // keys are the addresses of the job's buffers, which identify their contents only while the batch's
+    // buffers are all alive and unmodified, so setup_epoch ties every entry to the single batch call that
+    // made it (0 is "never cache": pk_run).
+    uint64_t setup_epoch = 0;
+    bool export_setup_valid = false;
+    const int32_t *export_key_start = nullptr;
+    const int32_t *export_key_end = nullptr;
+    const PkExportLimit *export_key_limits = nullptr;
+    int32_t export_key_n = 0;
+    std::vector<std::pair<int32_t, int32_t>> export_active;
+    bool charge_setup_valid = false;
+    const int32_t *charge_key_start = nullptr;
+    const int32_t *charge_key_end = nullptr;
+    int32_t charge_key_n = 0;
+    std::vector<uint8_t> charge_enabled_key; // which charge windows have a limit above zero, the only way a limit changes the clipping
+    std::vector<uint8_t> charge_enabled_now;
+    std::vector<int32_t> clipped_src;
 
     PkScratch()
     {
@@ -453,6 +571,9 @@ struct ContextStore {
     std::vector<double> charge_curves, discharge_curves;
     std::vector<double> carbon, gas_rate, iboost_plan_load;
     std::vector<double> car_load_flat, car_rate_flat;
+    std::vector<int32_t> cancel_slot_flat, cancel_trusted;
+    std::vector<uint64_t> cancel_need_mask;
+    std::vector<double> cancel_revert_rate;
     std::vector<double> soc_percent_threshold; // see build_soc_percent_thresholds
     PkContext ctx;
 };
@@ -511,11 +632,9 @@ inline double rate_curve(double soc_key, double rate_setting, double rate_max, c
 // arithmetically but remove nothing, so they must not count as clipped.
 //
 // PARITY: any change here must be mirrored in utils.remove_intersecting_windows and vice versa.
-static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, std::vector<int32_t> &out_end, std::vector<double> &out_limit, int32_t n_charge, const int32_t *charge_start, const int32_t *charge_end, const double *charge_limit, int32_t n_export, const int32_t *export_start,
-                                             const int32_t *export_end, const PkExportLimit *export_limits)
+static void build_export_active(std::vector<std::pair<int32_t, int32_t>> &export_active, int32_t n_export, const int32_t *export_start, const int32_t *export_end, const PkExportLimit *export_limits)
 {
-    // Enabled export windows only - the sole candidates for clipping anything - in start order
-    std::vector<std::pair<int32_t, int32_t>> export_active;
+    export_active.clear();
     export_active.reserve(n_export);
     for (int32_t n = 0; n < n_export; n++) {
         if (!pk_export_is_idle(export_limits[n].mode)) {
@@ -523,22 +642,37 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
         }
     }
     std::sort(export_active.begin(), export_active.end());
+}
 
-    out_start.clear();
-    out_end.clear();
-    out_limit.clear();
-    out_start.reserve(n_charge);
-    out_end.reserve(n_charge);
-    out_limit.reserve(n_charge);
-
-    if (export_active.empty()) {
-        for (int32_t n = 0; n < n_charge; n++) {
-            out_start.push_back(charge_start[n]);
-            out_end.push_back(charge_end[n]);
-            out_limit.push_back(charge_limit[n]);
+// out_src[i] is the index of the charge window that out_*[i] came from, so a caller that has cached the
+// clipped windows can refresh just the limits when only the limit values change.
+static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, std::vector<int32_t> &out_end, std::vector<double> &out_limit, std::vector<int32_t> &out_src, int32_t n_charge, const int32_t *charge_start, const int32_t *charge_end, const double *charge_limit,
+                                             const std::vector<std::pair<int32_t, int32_t>> &export_active)
+{
+    // The outputs are written by index rather than with push_back, which was a call per segment and the
+    // clip is a visible share of a job. Most charge windows yield one or two segments, so the outputs
+    // start at two per charge window, but a charge window with k enabled export windows strictly inside
+    // it yields k + 1, so emit grows them whenever they are full
+    size_t capacity = static_cast<size_t>(n_charge) * 2;
+    out_start.resize(capacity);
+    out_end.resize(capacity);
+    out_limit.resize(capacity);
+    out_src.resize(capacity);
+    size_t count = 0;
+    auto emit = [&](int32_t start, int32_t end, double limit, int32_t src) {
+        if (count == capacity) {
+            capacity = capacity * 2 + 2;
+            out_start.resize(capacity);
+            out_end.resize(capacity);
+            out_limit.resize(capacity);
+            out_src.resize(capacity);
         }
-        return;
-    }
+        out_start[count] = start;
+        out_end[count] = end;
+        out_limit[count] = limit;
+        out_src[count] = src;
+        count++;
+    };
 
     for (int32_t n = 0; n < n_charge; n++) {
         int32_t start = charge_start[n];
@@ -547,9 +681,7 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
 
         if (!(limit > 0.0)) {
             // A disabled charge window can never be clipped
-            out_start.push_back(start);
-            out_end.push_back(end);
-            out_limit.push_back(limit);
+            emit(start, end, limit, n);
             continue;
         }
 
@@ -557,7 +689,12 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
         for (const auto &dw : export_active) {
             const int32_t dstart = dw.first;
             const int32_t dend = dw.second;
-            if ((dstart < end) && (dend >= start)) {
+            // export_active is sorted by start and a window's end only ever moves down while it is clipped, so
+            // once an export window starts at or after the end none that follow can overlap it either
+            if (dstart >= end) {
+                break;
+            }
+            if (dend >= start) {
                 if (dstart <= start) {
                     if (start != dend) {
                         start = dend;
@@ -571,9 +708,7 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
                 } else {
                     // Two segments - emit the head now, carry on clipping the tail
                     if ((dstart - start) >= 5) {
-                        out_start.push_back(start);
-                        out_end.push_back(dstart);
-                        out_limit.push_back(limit);
+                        emit(start, dstart, limit, n);
                     }
                     start = dend;
                     clipped = true;
@@ -582,11 +717,13 @@ static void clip_intersecting_charge_windows(std::vector<int32_t> &out_start, st
         }
 
         if (!clipped || ((end - start) >= 5)) {
-            out_start.push_back(start);
-            out_end.push_back(end);
-            out_limit.push_back(limit);
+            emit(start, end, limit, n);
         }
     }
+    out_start.resize(count);
+    out_end.resize(count);
+    out_limit.resize(count);
+    out_src.resize(count);
 }
 
 // Shared with the charge side, which has a bare kWh limit and no mode - hence both arrays, with
@@ -629,11 +766,11 @@ int32_t pk_parity_revision(void)
 // Create a per-plan context; deep-copies all arrays. Returns a handle (>0) or 0 on error.
 int64_t pk_context_create(const PkContext *in)
 {
-    if (!in || in->n_steps <= 0 || in->num_cars < 0 || in->num_cars > PK_MAX_CARS) {
+    if (!in || in->n_steps <= 0 || in->num_cars < 0 || in->num_cars > PK_MAX_CARS || in->cancel_count < 0 || in->cancel_count > PK_CANCEL_MAX_SLOTS) {
         return 0;
     }
     auto store = std::make_unique<ContextStore>();
-    build_soc_percent_thresholds(store->soc_percent_threshold, in->soc_max);
+    cached_soc_percent_thresholds(store->soc_percent_threshold, in->soc_max);
     size_t n = static_cast<size_t>(in->n_steps);
     store->rate_import.assign(in->rate_import, in->rate_import + n);
     store->rate_export.assign(in->rate_export, in->rate_export + n);
@@ -662,6 +799,14 @@ int64_t pk_context_create(const PkContext *in)
         store->car_load_flat.assign(in->car_load_flat, in->car_load_flat + n_car);
         store->car_rate_flat.assign(in->car_rate_flat, in->car_rate_flat + n_car);
     }
+    if (in->cancel_count > 0) {
+        if (n_car > 0) {
+            store->cancel_slot_flat.assign(in->cancel_slot_flat, in->cancel_slot_flat + n_car);
+        }
+        store->cancel_need_mask.assign(in->cancel_need_mask, in->cancel_need_mask + n);
+        store->cancel_trusted.assign(in->cancel_trusted, in->cancel_trusted + n);
+        store->cancel_revert_rate.assign(in->cancel_revert_rate, in->cancel_revert_rate + n);
+    }
     store->ctx = *in;
     store->ctx.rate_import = store->rate_import.data();
     store->ctx.rate_export = store->rate_export.data();
@@ -684,6 +829,10 @@ int64_t pk_context_create(const PkContext *in)
     store->ctx.iboost_plan_load = store->iboost_plan_load.data();
     store->ctx.car_load_flat = store->car_load_flat.data();
     store->ctx.car_rate_flat = store->car_rate_flat.data();
+    store->ctx.cancel_slot_flat = in->cancel_count > 0 ? store->cancel_slot_flat.data() : nullptr;
+    store->ctx.cancel_need_mask = in->cancel_count > 0 ? store->cancel_need_mask.data() : nullptr;
+    store->ctx.cancel_trusted = in->cancel_count > 0 ? store->cancel_trusted.data() : nullptr;
+    store->ctx.cancel_revert_rate = in->cancel_count > 0 ? store->cancel_revert_rate.data() : nullptr;
 
     std::lock_guard<std::mutex> lock(g_context_mutex);
     int64_t handle = g_next_handle++;
@@ -722,7 +871,7 @@ static const ContextStore *lookup_context(int64_t handle)
 // soc_out may be null (see PkBatchJob). soc_range_min/max are optional out-params: when non-null and
 // soc_range_start_step >= 0, they receive the min/max of the rounded SoC over that inclusive step
 // range, mirroring the predict_soc scan in Prediction.thread_run_prediction_charge_min_max.
-static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResult *out, int32_t soc_range_start_step, int32_t soc_range_end_step, double *soc_range_min_out, double *soc_range_max_out, double *export_end_soc_out, PkScratch &scratch)
+static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResult *out, int32_t soc_range_start_step, int32_t soc_range_end_step, double *soc_range_min_out, double *soc_range_max_out, double *export_end_soc_out, PkScratch &scratch, uint64_t setup_epoch)
 {
     const PkContext *c = &store->ctx;
     const std::vector<double> &soc_pct_threshold = store->soc_percent_threshold;
@@ -751,11 +900,52 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     std::vector<int32_t> &clipped_start = scratch.clipped_start;
     std::vector<int32_t> &clipped_end = scratch.clipped_end;
     std::vector<double> &clipped_limit = scratch.clipped_limit;
-    clip_intersecting_charge_windows(clipped_start, clipped_end, clipped_limit, s->n_charge, s->charge_start, s->charge_end, s->charge_limit, s->n_export, s->export_start, s->export_end, s->export_limits);
-    const int32_t n_charge_clipped = static_cast<int32_t>(clipped_start.size());
-
-    build_window_membership(charge_window_optimised, n_charge_clipped, clipped_start.data(), clipped_end.data(), clipped_limit.data(), nullptr, false, c->minutes_now, n_steps);
-    build_window_membership(export_window_optimised, s->n_export, s->export_start, s->export_end, nullptr, s->export_limits, true, c->minutes_now, n_steps);
+    // Within one pk_run_batch call most jobs share their window buffers (a charge fan-out reuses the
+    // windows and export plan and changes one limit; an export trial's scenarios share everything), so
+    // the setup below is carried over from the previous job on the same thread whenever it would come
+    // out the same. A buffer address names its contents for the length of one batch (Python keeps every
+    // buffer alive and unwritten until pk_run_batch returns), so the keys are addresses and the epoch
+    // drops everything when a new batch starts.
+    //  - export side: depends on the export windows and which export limits are idle - the buffers
+    //  - charge side: also on the charge windows and on which charge limits are above zero (a disabled
+    //    window is never clipped and never a member); the limit values themselves only come through as
+    //    clipped_limit, which is refreshed from the source window every job
+    const bool use_setup_cache = setup_epoch != 0;
+    if (!use_setup_cache || scratch.setup_epoch != setup_epoch) {
+        scratch.setup_epoch = setup_epoch;
+        scratch.export_setup_valid = false;
+        scratch.charge_setup_valid = false;
+    }
+    const bool export_hit = use_setup_cache && scratch.export_setup_valid && scratch.export_key_start == s->export_start && scratch.export_key_end == s->export_end && scratch.export_key_limits == s->export_limits && scratch.export_key_n == s->n_export;
+    if (!export_hit) {
+        build_export_active(scratch.export_active, s->n_export, s->export_start, s->export_end, s->export_limits);
+        build_window_membership(export_window_optimised, s->n_export, s->export_start, s->export_end, nullptr, s->export_limits, true, c->minutes_now, n_steps);
+        scratch.export_setup_valid = use_setup_cache;
+        scratch.export_key_start = s->export_start;
+        scratch.export_key_end = s->export_end;
+        scratch.export_key_limits = s->export_limits;
+        scratch.export_key_n = s->n_export;
+        scratch.charge_setup_valid = false;
+    }
+    std::vector<uint8_t> &charge_enabled_now = scratch.charge_enabled_now;
+    charge_enabled_now.resize(s->n_charge);
+    for (int32_t n = 0; n < s->n_charge; n++) {
+        charge_enabled_now[n] = (s->charge_limit[n] > 0.0) ? 1 : 0;
+    }
+    const bool charge_hit = use_setup_cache && export_hit && scratch.charge_setup_valid && scratch.charge_key_start == s->charge_start && scratch.charge_key_end == s->charge_end && scratch.charge_key_n == s->n_charge && scratch.charge_enabled_key == charge_enabled_now;
+    if (charge_hit) {
+        for (size_t i = 0; i < scratch.clipped_src.size(); i++) {
+            clipped_limit[i] = s->charge_limit[scratch.clipped_src[i]];
+        }
+    } else {
+        clip_intersecting_charge_windows(clipped_start, clipped_end, clipped_limit, scratch.clipped_src, s->n_charge, s->charge_start, s->charge_end, s->charge_limit, scratch.export_active);
+        build_window_membership(charge_window_optimised, static_cast<int32_t>(clipped_start.size()), clipped_start.data(), clipped_end.data(), clipped_limit.data(), nullptr, false, c->minutes_now, n_steps);
+        scratch.charge_setup_valid = use_setup_cache;
+        scratch.charge_key_start = s->charge_start;
+        scratch.charge_key_end = s->charge_end;
+        scratch.charge_key_n = s->n_charge;
+        scratch.charge_enabled_key = charge_enabled_now;
+    }
 
     // The step each export window ends at, for export_end_soc_out - looked up per step rather than
     // scanning the windows inside the hot loop. The first window to end at a step owns the slot; any
@@ -796,6 +986,25 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             }
         }
     }
+
+    // The car slots this plan's target exports cancel - prediction.py car_cancel / car_cancel.cancelled_mask(). Read
+    // from the scenario's limits as passed in: the export floor never changes a window's mode. With no table or
+    // nothing cancelled the run is exactly as without one.
+    uint64_t cancel_mask = 0;
+    if (c->cancel_count > 0) {
+        cancel_mask = c->cancel_forced_mask;
+        for (int32_t j = 0; j < c->cancel_count; j++) {
+            for (int32_t i = 0; i < s->n_export; i++) {
+                if (s->export_limits[i].mode == PK_EXPORT_MODE_TARGET && s->export_start[i] < c->cancel_end[j] && s->export_end[i] > c->cancel_start[j]) {
+                    cancel_mask |= uint64_t(1) << j;
+                    break;
+                }
+            }
+        }
+    }
+    const bool car_cancel = cancel_mask != 0;
+    // The energy each car would have bought in its cancelled slots so far, which the room left in it caps
+    double car_cancelled_kwh[PK_MAX_CARS] = {0};
 
     // Initial state - prediction.py:435-490
     double soc = c->soc_kw;
@@ -860,6 +1069,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
     const double *pv_step = is_pv10 ? c->pv10 : (is_pv90 ? c->pv90 : c->pv);
     const double *load_step = is_pv10 ? c->load10 : (is_pv90 ? c->load90 : c->load);
 
+    // The SoC percent of the previous step (-1 before the first), the starting point of the next lookup
+    int32_t soc_percent_hint = -1;
     // Simulate each forward step - prediction.py:570-1200
     for (int32_t k = 0; k < n_steps; k++) {
         const int32_t minute = k * step;
@@ -869,9 +1080,17 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
 
         // Rates - prediction.py:577-580
         double import_rate = c->rate_import[k];
-        const double dispatch_rate = import_rate;
+        double dispatch_rate = import_rate;
         bool dispatch_gone = c->io_flag[k] && is_pv10 && minute > 30;
         double dispatch_risk = 0.0;
+        // car_cancel.step_reverted(): the step can revert, nothing trusted covers it, and every dispatch covering it is cancelled
+        const bool cancel_reverted = car_cancel && c->cancel_revert_rate[k] >= 0 && !c->cancel_trusted[k] && c->cancel_need_mask[k] != 0 && (c->cancel_need_mask[k] & ~cancel_mask) == 0;
+        if (cancel_reverted) {
+            // Every dispatch here is cancelled, so the half hour is billed at peak, and it is no longer a dispatch that can go away
+            import_rate = c->cancel_revert_rate[k];
+            dispatch_rate = import_rate;
+            dispatch_gone = false;
+        }
         if (dispatch_gone && c->io_credit[k] != 0.0) {
             // The car is charging in this run, so a dispatch that goes away is seen within a Predbat cycle: the
             // dispatch is kept, and the house and battery pay PK_RUN_EVERY minutes of each half hour at the
@@ -995,6 +1214,19 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
                 if (car_load_now > 0.0) {
                     double car_load_scale = car_load_now * step / 60.0;
                     car_load_scale = car_load_scale * c->car_charging_loss;
+                    if (car_cancel) {
+                        const int32_t cancel_j = c->cancel_slot_flat[car_n * n_steps + k];
+                        if (cancel_j >= 0 && ((cancel_mask >> cancel_j) & 1)) {
+                            // Cancelled for an export: the car buys nothing here and keeps its room for later, but the
+                            // energy it would have bought - at least its full charge rate, capped by the room left - must be bought back at peak (score only).
+                            // A later uncancelled slot may refill that room, so the penalty can double-count: a deliberate conservative bias
+                            car_load_scale = std::max(car_load_scale, c->cancel_floor_kw[cancel_j] * step / 60.0 * c->car_charging_loss);
+                            car_load_scale = std::max(std::min(car_load_scale, c->car_charging_limit[car_n] - car_soc[car_n] - car_cancelled_kwh[car_n]), 0.0);
+                            car_cancelled_kwh[car_n] += car_load_scale;
+                            metric_keep += car_load_scale / c->car_charging_loss * c->cancel_penalty_rate;
+                            continue;
+                        }
+                    }
                     car_load_scale = std::max(std::min(car_load_scale, c->car_charging_limit[car_n] - car_soc[car_n]), 0.0);
                     car_soc[car_n] = car_soc[car_n] + car_load_scale;
 
@@ -1107,7 +1339,19 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
         // Python rounds SoC to 1dp here purely to quantise an lru_cache key, but the rounding moves
         // the percent at bucket edges so it is observable. The precomputed bucket boundaries give
         // the identical percent from a binary search, with no round_py in the loop at all.
-        const int32_t soc_percent_round1 = soc >= 0.0 ? static_cast<int32_t>(std::upper_bound(soc_pct_threshold.begin() + 1, soc_pct_threshold.end(), soc) - (soc_pct_threshold.begin() + 1)) : percent_via_round(soc, soc_max);
+        int32_t soc_percent_round1;
+        if (soc >= 0.0) {
+            // Walks from the previous step's percent (see soc_percent_walk); the first step starts at the
+            // percent soc/soc_max suggests, which only has to be near
+            if (soc_percent_hint < 0) {
+                soc_percent_hint = (soc_max > 0.0 && soc < soc_max * 1.5) ? static_cast<int32_t>(soc * 100.0 / soc_max) : 0;
+                soc_percent_hint = std::min(std::max(soc_percent_hint, 0), 100);
+            }
+            soc_percent_round1 = soc_percent_walk(soc_pct_threshold.data(), soc, soc_percent_hint);
+            soc_percent_hint = soc_percent_round1;
+        } else {
+            soc_percent_round1 = percent_via_round(soc, soc_max);
+        }
         // The step's battery ceiling curves, picked for its forecast temperature (rate grid rows)
         const double *charge_row = c->charge_curves + PK_CURVE_WIDTH * static_cast<size_t>(c->charge_curve_row[k]);
         const double *discharge_row = c->discharge_curves + PK_CURVE_WIDTH * static_cast<size_t>(c->discharge_curve_row[k]);
@@ -1411,7 +1655,8 @@ static int32_t pk_run_one(const ContextStore *store, const PkScenario *s, PkResu
             soc = std::max(soc - battery_draw / battery_loss_discharge, reserve_expected);
         } else {
             // Bird in hand: score only credit for what a charge window stores in a confirmed dispatch run - prediction.py
-            if (force_charging && c->io_credit[k] != 0.0) {
+            // A reverted step's dispatch is cancelled, so there is no confirmed run to bank
+            if (force_charging && c->io_credit[k] != 0.0 && !cancel_reverted) {
                 metric_keep -= std::min(-battery_draw * battery_loss, soc_max - soc) * c->io_credit[k];
             }
             soc = std::min(soc - battery_draw * battery_loss, soc_max);
@@ -1607,7 +1852,7 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
     if (!c) {
         return 1;
     }
-    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, nullptr, thread_scratch());  // c is the store
+    return pk_run_one(c, s, out, -1, -1, nullptr, nullptr, nullptr, thread_scratch(), 0);  // c is the store
 }
 
 // Run n_jobs scenarios against one context in a single call.
@@ -1621,7 +1866,7 @@ int32_t pk_run(int64_t handle, const PkScenario *s, PkResult *out)
 // malformed scenario cannot discard the rest of the fan-out.
 // Simulate one batched scenario into its result slot. Split out so the serial and threaded paths
 // below share exactly one copy of the marshalling.
-static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchResult &out, PkScratch &scratch)
+static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchResult &out, PkScratch &scratch, uint64_t epoch)
 {
     PkScenario scenario;
     scenario.charge_limit = job.charge_limit;
@@ -1640,7 +1885,7 @@ static void run_batch_job(const ContextStore *c, const PkBatchJob &job, PkBatchR
     out.soc_range_min = 0.0;
     out.soc_range_max = 0.0;
     out.pad = 0;
-    out.status = pk_run_one(c, &scenario, &out.result, job.soc_range_start_step, job.soc_range_end_step, &out.soc_range_min, &out.soc_range_max, job.export_end_soc_out, scratch);
+    out.status = pk_run_one(c, &scenario, &out.result, job.soc_range_start_step, job.soc_range_end_step, &out.soc_range_min, &out.soc_range_max, job.export_end_soc_out, scratch, epoch);
 }
 
 
@@ -1679,7 +1924,7 @@ class PkThreadPool {
 
     // Run jobs[0..n_jobs) across `use` lanes, the calling thread taking lane 0. `use` must be at
     // least 1 and no more than worker_count() + 1.
-    void run(const ContextStore *c, const PkBatchJob *jobs, int32_t n_jobs, PkBatchResult *results, int32_t use)
+    void run(const ContextStore *c, const PkBatchJob *jobs, int32_t n_jobs, PkBatchResult *results, int32_t use, uint64_t epoch)
     {
         {
             std::lock_guard<std::mutex> lock(mutex);
@@ -1688,6 +1933,7 @@ class PkThreadPool {
             cur_results = results;
             cur_n_jobs = n_jobs;
             cur_use = use;
+            cur_epoch = epoch;
             outstanding = use - 1;
             // Each worker has its own flag and its own condition variable, so exactly the lanes this
             // batch needs are woken. Broadcasting instead would wake every worker in the pool - with
@@ -1703,7 +1949,7 @@ class PkThreadPool {
 
         PkScratch &scratch = thread_scratch();
         for (int32_t i = 0; i < n_jobs; i += use) {
-            run_batch_job(c, jobs[i], results[i], scratch);
+            run_batch_job(c, jobs[i], results[i], scratch, epoch);
         }
 
         std::unique_lock<std::mutex> lock(mutex);
@@ -1730,11 +1976,12 @@ class PkThreadPool {
             PkBatchResult *results = cur_results;
             const int32_t n_jobs = cur_n_jobs;
             const int32_t use = cur_use;
+            const uint64_t epoch = cur_epoch;
             lock.unlock();
 
             PkScratch &scratch = thread_scratch();
             for (int32_t i = lane; i < n_jobs; i += use) {
-                run_batch_job(c, jobs[i], results[i], scratch);
+                run_batch_job(c, jobs[i], results[i], scratch, epoch);
             }
 
             lock.lock();
@@ -1751,6 +1998,7 @@ class PkThreadPool {
     PkBatchResult *cur_results = nullptr;
     int32_t cur_n_jobs = 0;
     int32_t cur_use = 1;
+    uint64_t cur_epoch = 0;
     int32_t outstanding = 0;
     std::vector<std::unique_ptr<Worker>> workers;
 };
@@ -1818,7 +2066,7 @@ static PkThreadPool *pool_singleton()
 // aborting the batch, so one malformed scenario cannot discard the rest of the fan-out.
 // Run one phase of a batch. Scenarios within a phase are independent - each reads the shared const
 // context and writes only its own result slot - so they are split across threads by stride.
-static void run_batch_phase(const ContextStore *c, const PkBatchJob *jobs, int32_t n_jobs, PkBatchResult *results, int32_t n_threads)
+static void run_batch_phase(const ContextStore *c, const PkBatchJob *jobs, int32_t n_jobs, PkBatchResult *results, int32_t n_threads, uint64_t epoch)
 {
     if (n_jobs <= 0) {
         return;
@@ -1834,13 +2082,13 @@ static void run_batch_phase(const ContextStore *c, const PkBatchJob *jobs, int32
             use = lanes;
         }
         if (use > 1) {
-            pool->run(c, jobs, n_jobs, results, use);
+            pool->run(c, jobs, n_jobs, results, use, epoch);
             return;
         }
         // No workers available - fall through and run the phase inline.
     }
     for (int32_t i = 0; i < n_jobs; i++) {
-        run_batch_job(c, jobs[i], results[i], thread_scratch());
+        run_batch_job(c, jobs[i], results[i], thread_scratch(), epoch);
     }
 }
 
@@ -1866,8 +2114,11 @@ int32_t pk_run_batch(int64_t handle, const PkBatchJob *jobs, int32_t n_jobs, PkB
             return 3;
         }
     }
-    run_batch_phase(c, jobs, split, results, n_threads);
-    run_batch_phase(c, jobs + split, n_jobs - split, results + split, n_threads);
+    // One epoch per call: a job buffer's address names its contents only for as long as this call lasts, so
+    // the window setup a thread carries between jobs (pk_run_one) is never carried into another call
+    const uint64_t epoch = g_batch_epoch.fetch_add(1, std::memory_order_relaxed) + 1;
+    run_batch_phase(c, jobs, split, results, n_threads, epoch);
+    run_batch_phase(c, jobs + split, n_jobs - split, results + split, n_threads, epoch);
     return 0;
 }
 
@@ -1930,6 +2181,148 @@ int32_t pk_verify_soc_percent_table(double soc_max, int32_t samples)
                 bad++;
             }
         }
+    }
+    return bad;
+}
+
+// Test hook: confirm soc_percent_walk gives exactly std::upper_bound's answer from every starting hint, over
+// a dense SoC sweep, either side of every bucket boundary, and random jumps between consecutive lookups.
+// Returns the number of disagreements (0 = identical).
+int32_t pk_verify_soc_percent_walk(double soc_max, int32_t samples, uint64_t seed)
+{
+    std::vector<double> table;
+    build_soc_percent_thresholds(table, soc_max);
+    uint64_t state = seed ? seed : 0x9E3779B97F4A7C15ull;
+    auto next = [&state]() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return state;
+    };
+    int32_t bad = 0;
+    auto check = [&](double soc, int32_t hint) {
+        const int32_t want = static_cast<int32_t>(std::upper_bound(table.begin() + 1, table.end(), soc) - (table.begin() + 1));
+        if (soc_percent_walk(table.data(), soc, hint) != want) {
+            bad++;
+        }
+    };
+    const double hi = soc_max * 1.2 + 0.5;
+    int32_t previous = 0;
+    for (int32_t i = 0; i <= samples; i++) {
+        const double soc = hi * static_cast<double>(i) / static_cast<double>(samples);
+        check(soc, 0);
+        check(soc, 100);
+        check(soc, static_cast<int32_t>(next() % 101));
+        check(soc, previous);
+        previous = static_cast<int32_t>(std::upper_bound(table.begin() + 1, table.end(), soc) - (table.begin() + 1));
+    }
+    for (int32_t p = 1; p <= 100; p++) {
+        const double edge = table[p];
+        if (!std::isfinite(edge)) {
+            continue;
+        }
+        double below = edge;
+        double above = edge;
+        for (int32_t d = 0; d < 3; d++) {
+            below = std::nextafter(below, -1.0);
+            above = std::nextafter(above, 1e18);
+            for (int32_t hint = 0; hint <= 100; hint += 25) {
+                check(edge, hint);
+                if (below >= 0.0) {
+                    check(below, hint);
+                }
+                check(above, hint);
+            }
+        }
+    }
+    check(0.0, 0);
+    check(0.0, 100);
+    check(1e300, 0);
+    check(1e300, 100);
+    check(std::numeric_limits<double>::infinity(), 50);
+    return bad;
+}
+
+// Test hook: confirm a context's SoC percent table - copied from the soc_max memo - is exactly what
+// a fresh build for that context's soc_max gives. Returns the number of differing entries, -1 for an
+// unknown handle (0 = identical).
+int32_t pk_verify_context_soc_table(int64_t handle)
+{
+    const ContextStore *store = lookup_context(handle);
+    if (!store) {
+        return -1;
+    }
+    std::vector<double> fresh;
+    build_soc_percent_thresholds(fresh, store->ctx.soc_max);
+    if (fresh.size() != store->soc_percent_threshold.size()) {
+        return static_cast<int32_t>(fresh.size() + store->soc_percent_threshold.size());
+    }
+    int32_t bad = 0;
+    for (size_t i = 0; i < fresh.size(); i++) {
+        if (std::memcmp(&fresh[i], &store->soc_percent_threshold[i], sizeof(double)) != 0) {
+            bad++;
+        }
+    }
+    return bad;
+}
+
+// Test hook: compare round_py's arithmetic path with the snprintf+strtod original, bit for bit,
+// over random values of every magnitude the kernel rounds, values a few representable steps either side of every
+// decimal tie, exact binary ties (odd multiples of 1/16 and 1/2048) and signed zeros, for ndigits 0-6.
+// Returns the number of disagreements (0 = identical).
+int32_t pk_verify_round_py(int32_t samples, uint64_t seed)
+{
+    uint64_t state = seed ? seed : 0x9E3779B97F4A7C15ull;
+    auto next = [&state]() {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        return state;
+    };
+    auto same = [](double a, double b) { return std::memcmp(&a, &b, sizeof(double)) == 0; };
+    int32_t bad = 0;
+    auto check = [&](double v, int nd) {
+        if (!same(round_py(v, nd), round_py_slow(v, nd))) {
+            bad++;
+        }
+    };
+    static const double scales[] = {1e-6, 1e-3, 0.1, 1.0, 10.0, 100.0, 1000.0, 1e5};
+    for (int32_t i = 0; i < samples; i++) {
+        const int nd = static_cast<int>(next() % 7);
+        const double unit = static_cast<double>(next() >> 11) / 9007199254740992.0;
+        const double scale = scales[next() % 8];
+        double v = unit * scale;
+        if (next() & 1) {
+            v = -v;
+        }
+        check(v, nd);
+        // A few representable steps either side of the nearest decimal tie at this precision
+        const double p = std::pow(10.0, nd);
+        const double tie = (std::floor(v * p) + 0.5) / p;
+        double probe = tie;
+        for (int32_t d = 0; d < 4; d++) {
+            check(probe, nd);
+            probe = std::nextafter(probe, 1e300);
+        }
+        probe = tie;
+        for (int32_t d = 0; d < 4; d++) {
+            probe = std::nextafter(probe, -1e300);
+            check(probe, nd);
+        }
+    }
+    for (int32_t m = -4001; m <= 4001; m += 2) {
+        for (int nd = 0; nd <= 6; nd++) {
+            check(m / 16.0, nd);
+            check(m / 2048.0, nd);
+        }
+    }
+    for (int nd = 0; nd <= 6; nd++) {
+        check(0.0, nd);
+        check(-0.0, nd);
+        check(-1e-12, nd);
+        check(1e-12, nd);
+        check(2e9, nd);
+        check(-2e9, nd);
     }
     return bad;
 }

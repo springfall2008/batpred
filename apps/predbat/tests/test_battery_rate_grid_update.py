@@ -334,6 +334,27 @@ def run_battery_rate_grid_update_tests(my_predbat_unused=None):
         my_predbat.battery_rate_grid_update(inv, False)
         failed |= _check("t11 the window never exceeds the history setting", inv.days[False][-1] == 14, inv.days)
 
+        print("Test 12: an upgrade rescans the history - stored days it covers are replaced, older ones are kept")
+        # Discharge evidence stored by a version that measured exports at an export cap just under the discharge rating as a
+        # dip (0.96). After the restart the first scan reads the full window and finds the same days at 1.0.
+        my_predbat = _make()
+        storage = make_test_storage(my_predbat, tmpdir + "/t12")
+        covered = [charge_day(my_predbat.now_utc, d * 24 * 60 + 60, my_predbat.local_tz) for d in range(6)]
+        partial_day = charge_day(my_predbat.now_utc, 6 * 24 * 60 + 60, my_predbat.local_tz)
+        old_day = charge_day(my_predbat.now_utc, 12 * 24 * 60 + 60, my_predbat.local_tz)
+        stale = {day: [[60.0, 15.0, 0.96]] for day in covered + [old_day]}
+        run_async(storage.save("predbat", "battery_rate_grid_discharge", {"samples": stale, "updated": None}, format="json"))
+        my_predbat.components = MockStorageComponents(storage)
+        inv = FakeInverter()
+        inv.scan[True] = {day: [[60.0, 15.0, 1.0]] for day in covered}
+        inv.curve_scan_coverage = {"grid_discharge": partial_day}  # the history reached part way into this day
+        my_predbat.battery_rate_grid_update(inv, True)
+        failed |= _check("t12 the first scan after a restart reads the full window", inv.days.get(True) == [28], inv.days)
+        saved = run_async(storage.load("predbat", "battery_rate_grid_discharge"))
+        saved_samples = (saved or {}).get("samples", {})
+        failed |= _check("t12 covered days replaced", all(saved_samples.get(day) == [[60.0, 15.0, 1.0]] for day in covered), saved_samples)
+        failed |= _check("t12 a day past the history is kept", saved_samples.get(old_day) == [[60.0, 15.0, 0.96]], saved_samples)
+
         print("Test 7: the options")
         failed |= _check("t7 new option", "battery_rate_grid_auto" in APPS_SCHEMA and "battery_rate_grid_history_days" in APPS_SCHEMA and "battery_rate_grid_scan_days" in APPS_SCHEMA)
         failed |= _check("t7 removed option", "battery_temperature_charge_curve_auto" not in APPS_SCHEMA)

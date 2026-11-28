@@ -7,7 +7,8 @@
 """Shared photovoltaic conversion model.
 
 Converts Open-Meteo global tilted irradiance (GTI) into PV energy, applying a
-SAPM/PVWatts cell-temperature derate and integrating each hourly sample pair.
+SAPM/PVWatts cell-temperature derate to each hourly sample, which covers the
+preceding hour.
 Shared by the live Solcast/Open-Meteo forecast path and the annual prediction
 tool so the two cannot drift apart.
 """
@@ -72,18 +73,22 @@ def _temperature_efficiency(gti, temp, wind):
 def gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, system_loss, shading_factors=None, band_ratio=None, p10_fallback=_DEFAULT_P10_FALLBACK, p90_fallback=_DEFAULT_P90_FALLBACK):
     """Convert hourly GTI samples into per-hour PV energy for a single array.
 
-    Open-Meteo returns point-in-time irradiance (W/m2) at the start of each hour, so the
-    samples are integrated trapezoidally across each adjacent pair rather than treated as
-    period energy.
+    Open-Meteo's hourly radiation is the mean over the PRECEDING hour ("Solar radiation is averaged
+    over the past hour"), so the sample stamped t is the energy of the hour from t - 1h to t, and is
+    returned keyed by that hour's start. Reading it as an instant at t and averaging neighbouring
+    samples, as this function used to, placed the forecast half an hour late. Temperature and wind
+    are instants, so the hour is derated with the average of the values at its two ends (or the
+    value at t alone when the previous sample is missing); band_ratio entries are keyed by the same
+    sample timestamps, so a ratio follows its sample.
 
     Args:
         times: list of ISO timestamp strings, "%Y-%m-%dT%H:%M", assumed UTC
-        gti_values: list of global tilted irradiance values in W/m2, aligned to times
+        gti_values: list of global tilted irradiance values in W/m2 (preceding-hour means), aligned to times
         temp_values: list of air temperatures in degC, aligned to times
         wind_values: list of wind speeds in m/s, aligned to times
         kwp: array peak power in kW
         system_loss: fractional system loss, e.g. 0.05 for 95% efficiency
-        shading_factors: optional list of 12 per-month multipliers
+        shading_factors: optional list of 12 per-month multipliers, by the month the hour starts in
         band_ratio: optional dict of timestamp string to (p10_ratio, p90_ratio), each relative to P50
         p10_fallback: multiplier applied to P50 when band_ratio has no entry
         p90_fallback: multiplier applied to P50 when band_ratio is given but has no entry
@@ -92,51 +97,44 @@ def gti_hourly_to_period_kwh(times, gti_values, temp_values, wind_values, kwp, s
         dict of tz-aware UTC hour-start datetime to {"pv_estimate": kWh, "pv_estimate10": kWh},
         plus "pv_estimate90": kWh when band_ratio is given
     """
-    instant_kw = {}
-    instant_stamps = []
-
+    period_data = {}
+    prev_stamp = prev_temp = prev_wind = None
     for idx, ts in enumerate(times):
         if idx >= len(gti_values):
             break
-        gti = gti_values[idx]
-        if gti is None:
-            gti = 0.0
-        temp = temp_values[idx] if idx < len(temp_values) and temp_values[idx] is not None else _DEFAULT_TEMP_C
-        wind = wind_values[idx] if idx < len(wind_values) and wind_values[idx] is not None else _DEFAULT_WIND_MS
-        eta_temp = _temperature_efficiency(gti, temp, wind)
-        pv50_inst = dp4((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
-        # The ratios scale the already derated P50, held to the side of it they belong on
-        p10_ratio, p90_ratio = band_ratio.get(ts, (p10_fallback, p90_fallback)) if band_ratio else (p10_fallback, p90_fallback)
-        pv10_inst = dp4(pv50_inst * min(max(p10_ratio, 0.0), 1.0))
-        pv90_inst = dp4(pv50_inst * max(p90_ratio, 1.0))
         try:
             stamp = datetime.strptime(ts, "%Y-%m-%dT%H:%M")
             stamp = stamp.replace(tzinfo=pytz.utc)
         except (ValueError, TypeError):
             continue
-        instant_kw[stamp] = (pv50_inst, pv10_inst, pv90_inst)
-        instant_stamps.append(stamp)
+        gti = gti_values[idx]
+        if gti is None:
+            gti = 0.0
+        temp = temp_values[idx] if idx < len(temp_values) and temp_values[idx] is not None else _DEFAULT_TEMP_C
+        wind = wind_values[idx] if idx < len(wind_values) and wind_values[idx] is not None else _DEFAULT_WIND_MS
+        temp_now, wind_now = temp, wind
+        if prev_stamp is not None and stamp - prev_stamp == timedelta(hours=1):
+            # Temperature and wind are instants, so the hour the irradiance covers is the average of its two ends
+            temp = 0.5 * (prev_temp + temp)
+            wind = 0.5 * (prev_wind + wind)
+        prev_stamp, prev_temp, prev_wind = stamp, temp_now, wind_now
+        eta_temp = _temperature_efficiency(gti, temp, wind)
+        # A mean power over one hour is that hour's energy in kWh
+        pv50 = dp4((gti / 1000.0) * kwp * eta_temp * (1.0 - system_loss))
+        # The ratios scale the already derated P50, held to the side of it they belong on
+        p10_ratio, p90_ratio = band_ratio.get(ts, (p10_fallback, p90_fallback)) if band_ratio else (p10_fallback, p90_fallback)
+        pv10 = dp4(pv50 * min(max(p10_ratio, 0.0), 1.0))
+        pv90 = dp4(pv50 * max(p90_ratio, 1.0))
 
-    period_data = {}
-    for i in range(len(instant_stamps) - 1):
-        stamp = instant_stamps[i]
-        next_stamp = instant_stamps[i + 1]
-        if (next_stamp - stamp) != timedelta(hours=1):
-            continue
-        pv50_start, pv10_start, pv90_start = instant_kw[stamp]
-        pv50_end, pv10_end, pv90_end = instant_kw[next_stamp]
-        pv50 = dp4(0.5 * (pv50_start + pv50_end))
-        pv10 = dp4(0.5 * (pv10_start + pv10_end))
-        pv90 = dp4(0.5 * (pv90_start + pv90_end))
-
+        hour_start = stamp - timedelta(hours=1)
         if shading_factors and len(shading_factors) == 12:
-            shading_month = shading_factors[stamp.month - 1]
+            shading_month = shading_factors[hour_start.month - 1]
             pv50 = dp4(pv50 * shading_month)
             pv10 = dp4(pv10 * shading_month)
             pv90 = dp4(pv90 * shading_month)
 
-        period_data[stamp] = {"pv_estimate": pv50, "pv_estimate10": pv10}
+        period_data[hour_start] = {"pv_estimate": pv50, "pv_estimate10": pv10}
         if band_ratio is not None:
-            period_data[stamp]["pv_estimate90"] = pv90
+            period_data[hour_start]["pv_estimate90"] = pv90
 
     return period_data

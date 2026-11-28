@@ -1,2 +1,11 @@
 source setup.csh
-python3 -m pre_commit run --all-files && ./run_all --quick
+# Usage: ./run_pre_commit             - pre-commit checks on all files, then the quick test suite
+#        ./run_pre_commit --checks-only - pre-commit checks only, e.g. after a documentation-only change
+if [ "$1" = "--checks-only" ]; then
+    python3 -m pre_commit run --all-files
+elif [ -n "$1" ]; then
+    echo "ERROR: unknown option '$1' - use --checks-only to skip the test suite, or no option to run the checks and the quick tests"
+    exit 1
+else
+    python3 -m pre_commit run --all-files && ./run_all --quick
+fi
