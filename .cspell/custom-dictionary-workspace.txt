@@ -551,7 +551,7 @@ oninput
 onmouseout
 onmouseover
 openapi
-openblas
+OPENBLAS
 openrouter
 openweathermap
 Opticaster
