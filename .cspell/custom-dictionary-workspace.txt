@@ -80,12 +80,14 @@ boostable
 Bottlecap
 brickatius
 britkat1980
+bunx
 bwignore
 byok
 cadata
 calcsize
 calib
 callees
+calvind
 Cantarell
 cbat
 CDLL
@@ -96,6 +98,7 @@ ceyyyy
 CGNAT
 Chae
 Chaf
+charg
 chargedischarge
 chargeenergytotal
 chargefreeze
@@ -103,6 +106,7 @@ chargehold
 chargelater
 chargelimit
 chargepower
+chartjs
 CHECKCODE
 chg
 Chrg
@@ -135,6 +139,7 @@ creds
 crosscharge
 ctrdis
 ctypes
+cubone
 customauthorizer
 customisation
 Customise
@@ -251,6 +256,7 @@ euids
 EVAC
 evc
 EVDC
+evenodd
 evergen
 evilspringfall
 evse
@@ -382,6 +388,7 @@ inva
 invb
 invbatpower
 invname
+invopop
 iot
 IPPROTO
 isinstance
@@ -400,6 +407,7 @@ kaiming
 keepalive
 kellerza
 keydb
+keymap
 khtml
 killall
 Kiritimati
@@ -427,6 +435,8 @@ libfaketime
 libyaml
 LIFEPO
 linebreak
+linecap
+linejoin
 linestyle
 Liskov
 lmt
@@ -459,6 +469,7 @@ mdlrc
 measurand
 measurands
 memray
+metacharacters
 Meteo
 Meteoalarm
 meterpoint
@@ -535,6 +546,8 @@ notgithub
 notsn
 nrgheat
 numpy
+nums
+Nunito
 OCPP
 octo
 octoplus
@@ -568,6 +581,8 @@ pac
 packettypes
 paho
 parseable
+partlycloudy
+pathlib
 pava
 pbat
 pbgw
@@ -587,6 +602,7 @@ pitem
 pkwh
 plenticore
 pload
+plotly
 plugncharge
 pmeter
 poinv
@@ -696,6 +712,8 @@ setstate
 SFMB
 sg05lp1
 sharex
+shiki
+shikijs
 showlegend
 SIGALRM
 sigcloud
@@ -753,6 +771,7 @@ suback
 subclassing
 submessage
 substep
+subvalue
 sunspec
 sunsynk
 supabase
@@ -799,6 +818,7 @@ tmrw
 tobytes
 tojson
 topbar
+TOTL
 tottime
 tracemalloc
 trapezoidally
@@ -806,6 +826,7 @@ trapz
 Trefor
 treforsiphone
 treforsouthwell
+TRGT
 triggerable
 trydan
 tunables
@@ -858,6 +879,7 @@ Vallery
 varh
 venv
 Victron
+VIEWBOX
 Viridis
 visibilitychange
 vvwwxxabcdefyyzzuu
@@ -886,6 +908,7 @@ xaxistooltip
 xlabel
 xlim
 xload
+Xmark
 xrtkq
 xtest
 xticks

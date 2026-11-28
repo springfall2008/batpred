@@ -70,6 +70,10 @@ def test_validate_config(my_predbat):
     """Comprehensive validator tests covering every validation type in APPS_SCHEMA."""
     print("**** test_validate_config ****")
 
+    print("  [prefix] invalid Home Assistant characters are normalised")
+    assert normalise_entity_prefix("Predbat-Dev") == "predbat_dev"
+    assert normalise_entity_prefix("123 test") == "predbat_123_test"
+
     # ==========================================================================
     # STRING type  (gateway_mqtt_host: {"type": "string", "empty": False})
     # ==========================================================================
@@ -337,6 +341,20 @@ def test_validate_config(my_predbat):
     print("  [sensor] entity_id without a dot fails")
     _run(my_predbat, {"pv_forecast_today": "no_dot_entity"}, expect_errors=["pv_forecast_today"])
 
+    print("  [per-inverter integer] scalar and list forms pass")
+    for name in ("inverter_battery_rate_min", "inverter_reserve_max"):
+        _run(my_predbat, {name: 10, "num_inverters": 1}, expect_clean=[name])
+        _run(my_predbat, {name: [10, 20], "num_inverters": 2}, expect_clean=[name])
+
+    print("  [per-car sensor] sensor and literal lists pass")
+    _run(
+        my_predbat,
+        {"car_charging_limit": ["sensor.test_car_limit_one", "sensor.test_car_limit_two"], "num_cars": 2},
+        extra_states={"sensor.test_car_limit_one": 80, "sensor.test_car_limit_two": 90},
+        expect_clean=["car_charging_limit"],
+    )
+    _run(my_predbat, {"car_charging_limit": [80, 90], "num_cars": 2}, expect_clean=["car_charging_limit"])
+
     # ==========================================================================
     # SENSOR_LIST with sensor_type "none|string"
     # (pause_start_time: {"type": "sensor_list", "sensor_type": "none|string",
@@ -394,6 +412,19 @@ def test_validate_config(my_predbat):
         extra_states={"sensor.predbat_charge_rate": 2.5},
         expect_clean=["charge_rate"],
     )
+
+    print("  [sensor_list modify] generated controls respect a custom Predbat prefix")
+    saved_prefix = my_predbat.prefix
+    try:
+        my_predbat.prefix = "battery_site"
+        _run(
+            my_predbat,
+            {"charge_rate": ["sensor.battery_site_GS_0_charge_rate"], "num_inverters": 1},
+            extra_states={"sensor.battery_site_GS_0_charge_rate": 2.5},
+            expect_clean=["charge_rate"],
+        )
+    finally:
+        my_predbat.prefix = saved_prefix
 
     print("  [sensor_list modify] a placeholder named with a custom prefix is exempt too (#5242)")
     saved_prefix = my_predbat.prefix

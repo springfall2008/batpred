@@ -32,6 +32,7 @@ class CarbonAPI(ComponentBase):
         """Initialise the CarbonAPI component"""
         self.postcode = postcode
         self.automatic = automatic
+        self.last_fetch_error = None
         self.failures_total = 0
         self.last_updated_timestamp = None
         self.carbon_data_points = []
@@ -41,9 +42,9 @@ class CarbonAPI(ComponentBase):
         Fetch the latest carbon data, update only if data is at least 4 hours old
         """
         last_updated = self.last_updated_timestamp
-        if last_updated is not None and datetime.now(timezone.utc) - last_updated < timedelta(hours=4):
+        if last_updated is not None and datetime.now(timezone.utc) - last_updated < timedelta(hours=4) and any(strptime_aware(point["to"], TIME_FORMAT_HA) > datetime.now(timezone.utc) for point in self.carbon_data_points):
             self.update_success_timestamp()
-            return
+            return True
 
         self.log("Carbon API: Fetching latest carbon data for postcode {}".format(self.postcode))
 
@@ -59,10 +60,11 @@ class CarbonAPI(ComponentBase):
             postcode = postcode.split(" ")[0]
 
         collected_data = []
+        self.last_fetch_error = None
 
         url = f"https://api.carbonintensity.org.uk/regional/intensity/{date_from}/fw48h/postcode/{postcode}"
+        timeout = aiohttp.ClientTimeout(total=30, connect=10, sock_read=20)
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
             async with self.http_session(timeout=timeout) as session:
                 async with session.get(url) as response:
                     if response.status == 200:
@@ -71,9 +73,6 @@ class CarbonAPI(ComponentBase):
                             if data:
                                 data_points = data.get("data", {}).get("data", [])
                                 if data_points:
-                                    record_api_call("carbon")
-                                    self.update_success_timestamp()
-                                    self.last_updated_timestamp = self.last_updated_time()
                                     for point in data_points:
                                         from_time = point.get("from", None)
                                         to_time = point.get("to", None)
@@ -85,27 +84,35 @@ class CarbonAPI(ComponentBase):
                                         except Exception:
                                             from_time = None
                                             to_time = None
-                                        if from_time and to_time and intensity is not None:
+                                        if from_time and to_time and to_time > from_time and isinstance(intensity, (int, float)) and not isinstance(intensity, bool) and 0 <= intensity < float("inf"):
                                             # Store using string of TIME_FORMAT_HA
                                             collected_data.append({"from": from_time.strftime(TIME_FORMAT_HA), "to": to_time.strftime(TIME_FORMAT_HA), "intensity": intensity})
+                                        else:
+                                            raise ValueError("Invalid carbon forecast point")
                                 else:
-                                    self.failures_total += 1
                                     self.log("Warn: Carbon API: No data points found in response for postcode {} and date {}".format(postcode, date_from))
                             else:  # Carbon API returns 200 but no data if the postcode or date can't be found
-                                self.failures_total += 1
                                 self.log("Error: Carbon API: No carbon data returned for postcode {} and date {}".format(postcode, date_from))
+                        except (asyncio.TimeoutError, aiohttp.ClientError):
+                            raise
                         except Exception as e:
-                            self.log(f"Warn: Carbon API: Failed to parse JSON response: {e}")
+                            collected_data = []
+                            self.last_fetch_error = f"{type(e).__name__}: {e!r}"
+                            self.log(f"Warn: Carbon API: Failed to parse JSON response: {self.last_fetch_error}")
                             record_api_call("carbon", False, "decode_error")
                     else:
-                        self.failures_total += 1
+                        self.last_fetch_error = f"HTTP {response.status}"
                         self.log(f"Warn: Carbon API: Failed to fetch data, API status code {response.status}")
                         record_api_call("carbon", False, "server_error")
-        except (aiohttp.ClientError, Exception) as e:
-            self.failures_total += 1
-            self.log(f"Warn: Carbon API: Request failed: {e}")
+        except Exception as e:
+            self.last_fetch_error = f"{type(e).__name__}: {e!r}"
+            self.log(f"Warn: Carbon API: Request failed: {self.last_fetch_error}; total timeout={timeout.total}s, connect={timeout.connect}s, read={timeout.sock_read}s; URL={url}")
             record_api_call("carbon", False, "connection_error")
         if collected_data:
+            self.last_fetch_error = None
+            record_api_call("carbon")
+            self.update_success_timestamp()
+            self.last_updated_timestamp = self.last_updated_time()
             self.carbon_data_points = collected_data
             self.publish_carbon_data()
             self.log("Carbon API: Successfully fetched {} data points".format(len(collected_data)))
@@ -115,6 +122,23 @@ class CarbonAPI(ComponentBase):
             hours_ahead = (last_to - datetime.now(timezone.utc)).total_seconds() / 3600.0
             if hours_ahead < CARBON_FETCH_SHORT_HOURS:
                 self.log("Warn: Carbon API: Forecast for postcode {} only reaches {:.1f} hours ahead, short of the 48 hours the API normally publishes - the rest of the plan will repeat the previous day".format(postcode, hours_ahead))
+
+            return True
+        if self.last_fetch_error is None:
+            record_api_call("carbon", False, "decode_error")
+        self.failures_total += 1
+        self.last_fetch_error = self.last_fetch_error or "No usable forecast returned (see Carbon API log)"
+        self.log("Warn: Carbon API: Refresh failed; retaining previous forecast from {}".format(self.last_updated_timestamp))
+        return False
+
+    def is_alive(self):
+        """Report refresh failures and expired forecasts even while the worker is running."""
+        now = datetime.now(timezone.utc)
+        return self.api_started and self.last_fetch_error is None and any(strptime_aware(point["from"], TIME_FORMAT_HA) <= now < strptime_aware(point["to"], TIME_FORMAT_HA) for point in self.carbon_data_points)
+
+    def health_message(self):
+        """Explain a failed refresh or missing current forecast in the run status."""
+        return self.last_fetch_error or "No current carbon forecast"
 
     def publish_carbon_data(self):
         """
@@ -128,7 +152,13 @@ class CarbonAPI(ComponentBase):
             if now_utc >= from_time and now_utc < to_time:
                 value_now = point["intensity"]
 
-        self.dashboard_item("sensor." + self.prefix + "_carbon_intensity", state=value_now, app="carbon", attributes={"unit_of_measurement": "gCO2/kWh", "friendly_name": "Carbon Intensity", "forecast": self.carbon_data_points})
+        forecast = self.carbon_data_points if any(strptime_aware(point["to"], TIME_FORMAT_HA) > now_utc for point in self.carbon_data_points) else []
+        self.dashboard_item(
+            "sensor." + self.prefix + "_carbon_intensity",
+            state=value_now,
+            app="carbon",
+            attributes={"unit_of_measurement": "gCO2/kWh", "friendly_name": "Carbon Intensity", "forecast": forecast, "last_updated": self.last_updated_timestamp.isoformat() if self.last_updated_timestamp else None, "refresh_error": self.last_fetch_error},
+        )
 
     def build_discovery(self):
         """
@@ -166,8 +196,10 @@ class CarbonAPI(ComponentBase):
         """
         Main run loop
         """
-        if first or (seconds % (15 * 60) == 0):  # Every 15 minutes
-            await self.fetch_carbon_data()
+        success = True
+        if first or (seconds % (15 * 60) == 0):  # Existing startup backoff, then retry failed refreshes every 15 minutes
+            success = await self.fetch_carbon_data()
+        self.publish_carbon_data()
 
         if first and self.automatic:
             await self.automatic_config()
@@ -176,7 +208,7 @@ class CarbonAPI(ComponentBase):
         # loop and never raises.
         self.refresh_discovery()
 
-        return True
+        return success
 
 
 class MockBase(SharedMockBase):  # pragma: no cover

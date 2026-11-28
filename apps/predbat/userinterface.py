@@ -21,6 +21,7 @@ import os
 from datetime import timedelta
 from utils import get_override_time_from_string, mask_secret_args, is_debug_excluded_key, export_limits_from_stored, export_limits_to_stored, is_secret_key, SECRET_MASK, RepeatLogGate, MinuteArray, PackedRates
 import array
+from utils import collect_log_secret_values, compile_log_secret_pattern, redact_log_line
 import functools
 import io
 import itertools
@@ -258,10 +259,18 @@ class DebugYamlDumper(yaml.Dumper):
     ("found duplicate anchor"). Sharing the counter keeps every anchor in the stream unique.
     """
 
-    def __init__(self, stream, anchor_ids=None, **kwargs):
-        """anchor_ids is the shared itertools.count(); without one this is a plain yaml.Dumper"""
+    def __init__(self, stream, anchor_ids=None, secret_pattern=None, **kwargs):
+        """Configure shared anchor numbering and optional scalar redaction for diagnostic output."""
         super().__init__(stream, **kwargs)
         self.anchor_ids = anchor_ids
+        self.secret_pattern = secret_pattern
+
+    def represent_scalar(self, tag, value, style=None):
+        """Redact scalar contents before YAML quoting, escaping or wrapping can hide a match."""
+        redacted = redact_log_line(value, self.secret_pattern)
+        if redacted != value:
+            tag = "tag:yaml.org,2002:str"
+        return super().represent_scalar(tag, redacted, style)
 
     def generate_anchor(self, node):
         """Name the next anchor from the shared counter rather than this dumper's own"""
@@ -516,7 +525,7 @@ def write_debug_value(key, value, stream):
     return True
 
 
-def dump_debug_yaml(debug, stream):
+def dump_debug_yaml(debug, stream, secret_pattern=None):
     """
     Write the debug dict to stream as one YAML document, one top-level key at a time.
 
@@ -535,10 +544,10 @@ def dump_debug_yaml(debug, stream):
     A packed rate series (PackedRates) is written as the minute -> rate dict it stands for, by either path, so the
     dump reads exactly as it did when those series were dicts.
     """
-    dumper = functools.partial(DebugYamlDumper, anchor_ids=itertools.count(1))
+    dumper = functools.partial(DebugYamlDumper, anchor_ids=itertools.count(1), secret_pattern=secret_pattern)
     for key in sorted(debug):
         value = debug[key]
-        if not write_debug_value(key, value, stream):
+        if secret_pattern or not write_debug_value(key, value, stream):
             yaml.dump({key: value}, stream, Dumper=dumper)
 
 
@@ -1457,14 +1466,16 @@ class UserInterface:
             except Exception as e:
                 self.log("Warn: Failed to add the discovery catalogue to the debug dump: {}".format(e))
 
+        secret_values = collect_log_secret_values(self.args, getattr(self, "secrets", None), self.args.get("redact_strings"), self.args.get("redact_strings_labelled"))
+        secret_pattern = compile_log_secret_pattern(secret_values)
         if write_file:
             with open(filename, "w") as file:
-                dump_debug_yaml(debug, file)
+                dump_debug_yaml(debug, file, secret_pattern)
             self.log("Wrote debug yaml to {}".format(filename_p))
         else:
             # Return the debug yaml as a string
             text = io.StringIO()
-            dump_debug_yaml(debug, text)
+            dump_debug_yaml(debug, text, secret_pattern)
             return text.getvalue()
 
     def create_entity_list(self):

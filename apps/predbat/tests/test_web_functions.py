@@ -10,7 +10,9 @@
 
 import asyncio
 import os
-from unittest.mock import MagicMock, patch
+from aiohttp.web import FileResponse, Application
+from tests.test_web_modern_ui import run_web_modern_ui_tests
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from web import WebInterface, is_data_numerical
 from web_helper import get_plan_renderer_js
@@ -36,6 +38,37 @@ def run_web_functions_tests(my_predbat):
 
     web = make_web(my_predbat)
     prefix = my_predbat.prefix
+    failed += run_web_modern_ui_tests()
+
+    modern_response = asyncio.run(web.html_modern_ui(None))
+    if modern_response.status != 200 or not isinstance(modern_response, FileResponse):
+        print("  ERROR: modern interface is unavailable")
+        failed += 1
+
+    print("Test: both interfaces register together without a configuration selector")
+    app = Application()
+    runner = MagicMock(setup=AsyncMock(), cleanup=AsyncMock())
+    site = MagicMock(start=AsyncMock())
+    old_stop = web.api_stop
+    web.api_stop = True
+    try:
+        with patch("web.web.Application", return_value=app), patch("web.web.AppRunner", return_value=runner), patch("web.web.TCPSite", return_value=site):
+            asyncio.run(web.start())
+        routes = {(route.method, route.resource.canonical): route.handler for route in app.router.routes()}
+        for path, handler in (
+            ("/", web.html_default),
+            ("/plan", web.html_plan_legacy),
+            ("/apps", web.html_apps),
+            ("/ui/plan", web.html_modern_ui),
+            ("/ui/apps", web.html_modern_ui),
+            ("/annual", web.annual_page.html_annual),
+            ("/chat", web.chat_page.html_chat),
+        ):
+            assert routes[("GET", path)] == handler, path
+        assert routes[("POST", "/apps")] == web.html_apps_post
+        assert not any(path.startswith("/legacy_") for _, path in routes)
+    finally:
+        web.api_stop = old_stop
 
     charging_entity = "binary_sensor." + prefix + "_charging"
     exporting_entity = "binary_sensor." + prefix + "_exporting"
@@ -327,6 +360,10 @@ def run_compare_empty_state_tests(my_predbat, web):
     if "7 day rolling average chart loading (please wait)" in text:
         print(f"  ERROR: should not show the stuck '7 day rolling average' message when nothing is configured")
         failed += 1
+    data = web.get_compare_data()
+    if data["configured"] or data["ready"] or data["tariffs"]:
+        print(f"  ERROR: modern Compare API should return a clean unconfigured state")
+        failed += 1
 
     # -------------------------------------------------------------------------
     print("Test: a configured but not-yet-computed compare_list keeps the genuine loading message")
@@ -338,6 +375,10 @@ def run_compare_empty_state_tests(my_predbat, web):
         failed += 1
     if "Loading chart (please wait)" not in text:
         print(f"  ERROR: expected the genuine loading message when compare_list is set but not yet computed")
+        failed += 1
+    data = web.get_compare_data()
+    if not data["configured"] or data["ready"] or data["tariffs"][0]["name"] != "Test tariff":
+        print(f"  ERROR: modern Compare API should expose configured tariffs before results exist")
         failed += 1
 
     # -------------------------------------------------------------------------

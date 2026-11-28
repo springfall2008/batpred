@@ -1,0 +1,42 @@
+name: Shipped prediction kernel
+on:
+  pull_request:
+    paths:
+      - apps/predbat/prediction_kernel*
+      - apps/predbat/build_kernel*.sh
+      - apps/predbat/verify_kernel_binary.py
+      - apps/predbat/tests/test_kernel_parity.py
+      - requirements.txt
+      - .github/workflows/kernel-binary-check.yml
+  push:
+    branches: [main, feature/modern-web-ui]
+    paths:
+      - apps/predbat/prediction_kernel*
+      - apps/predbat/build_kernel*.sh
+      - apps/predbat/verify_kernel_binary.py
+      - apps/predbat/tests/test_kernel_parity.py
+      - requirements.txt
+      - .github/workflows/kernel-binary-check.yml
+permissions:
+  contents: read
+jobs:
+  verify-shipped-kernel:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
+        with:
+          python-version: '3.12'
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Verify the shipped binary without rebuilding it
+        working-directory: coverage
+        run: |
+          test -s ../apps/predbat/prediction_kernel_lib_x86_64.so
+          python ../apps/predbat/verify_kernel_binary.py ../apps/predbat/prediction_kernel_lib_x86_64.so > kernel-binary-check.log 2>&1
+      - name: Upload verification log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kernel-binary-check
+          path: coverage/kernel-binary-check.log

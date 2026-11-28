@@ -22,6 +22,7 @@ rejected at load time rather than producing divergent results.
 
 import array
 import ctypes
+import math
 import struct
 import os
 import platform
@@ -802,6 +803,8 @@ def create_kernel_context(pred, static_cache=None):
         return 0
 
     try:
+        if not math.isfinite(pred.soc_kw) or not math.isfinite(pred.soc_max) or pred.soc_max <= 0 or not 0 <= pred.soc_kw <= pred.soc_max:
+            return 0
         forecast_minutes = pred.forecast_minutes
         minutes_now = pred.minutes_now
         num_cars = pred.num_cars
