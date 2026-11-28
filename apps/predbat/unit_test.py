@@ -411,6 +411,7 @@ from tests.test_car_charger_control import run_car_charger_control_tests
 from tests.test_car_cancel import run_car_cancel_tests
 from tests.test_component_base import test_component_base_all
 from tests.test_components import test_components_all
+from tests.test_openblas_env import test_openblas_env
 from tests.test_coordinator import test_coordinator_all
 from tests.test_discovery_contract import run_discovery_contract_tests
 from tests.test_discovery_catalogue import test_discovery_catalogue_all
@@ -1009,6 +1010,7 @@ def main():
         # ComponentBase lifecycle tests
         ("component_base", test_component_base_all, "ComponentBase tests (all)", False),
         ("components", test_components_all, "Components registry tests (all)", False),
+        ("openblas_env", test_openblas_env, "OPENBLAS_THREAD_TIMEOUT set before NumPy loads", False),
         ("coordinator", test_coordinator_all, "Discovery catalogue coordinator tests", False),
         ("discovery_contract", run_discovery_contract_tests, "Discovery reporter contract checks", False),
         ("discovery_catalogue", test_discovery_catalogue_all, "End-to-end discovery catalogue assembly and the observe-only invariant", False),
