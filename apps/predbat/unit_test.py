@@ -420,6 +420,7 @@ from tests.test_load_ml import test_load_ml
 from tests.test_load_ml_rollout import run_load_ml_rollout_tests
 from tests.test_ml_memory import run_ml_memory_tests
 from tests.test_ml_training_bitwise import run_ml_training_bitwise_tests
+from tests.test_ml_lean_inference import run_ml_lean_inference_tests
 from tests.test_ml_training_perf import run_ml_training_perf_tests
 from tests.test_temperature import test_temperature
 from tests.test_http_sync import run_http_sync_tests
@@ -1114,6 +1115,7 @@ def main():
         # ML training memory: dataset construction, normalisation dtype and statistics accuracy
         ("ml_memory", run_ml_memory_tests, "ML training memory tests", False),
         ("ml_training_bitwise", run_ml_training_bitwise_tests, "ML training bit-identity tests", False),
+        ("ml_lean_inference", run_ml_lean_inference_tests, "ML lean inference between trainings tests", False),
         # Production-scale ML training harness against a captured history fixture
         ("ml_training_perf", run_ml_training_perf_tests, "ML training performance tests", True),
         ("random", run_random_scenario_tests, "Random scenario plan regression against the committed baseline", False),
