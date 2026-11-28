@@ -294,6 +294,45 @@ def _run_plug_and_owner(my_predbat):
     return failed
 
 
+def _run_shared_device(my_predbat):
+    """
+    One Octopus device for two cars: the plug-in SoC is the base while either car is plugged in, not only car 0.
+    """
+    failed = False
+    print("Test 15: one Octopus entry for two cars holds the plug-in SoC while car 1 is the one plugged in")
+    my_predbat.octopus_charge_target_base = {}
+    _sensor(my_predbat, {"vehicle_battery_size_in_kwh": None, "charge_point_power_in_kw": 7.0})
+
+    def fetch(soc_percent, planned):
+        """Run the car fetch for two cars sharing the one entry, car 0's SoC at soc_percent, returning car 0's limit"""
+        my_predbat.num_cars = 2
+        my_predbat.car_charging_now = [False, False]
+        my_predbat.car_charging_planned = list(planned)
+        my_predbat.car_charging_manual_soc = [False, False]
+        my_predbat.car_charging_battery_size = [BATTERY_KWH, BATTERY_KWH]
+        my_predbat.car_charging_limit = [BATTERY_KWH, BATTERY_KWH]
+        my_predbat.car_charging_rate = [7.4, 7.4]
+        my_predbat.car_charging_plan_time = ["07:00:00", "07:00:00"]
+        my_predbat.car_charging_slots = [[], []]
+        my_predbat.octopus_slots = [[], []]
+        my_predbat.octopus_intelligent_charging = True
+        my_predbat.octopus_intelligent_ignore_unplugged = False
+        my_predbat.dispatch_timeline_pending = []
+        my_predbat.rate_import = {}
+        my_predbat.args["car_charging_soc"] = [soc_percent, 50]
+        my_predbat.args["car_charging_limit"] = [100, 100]
+        my_predbat.args["octopus_charge_limit"] = [40, 40]
+        my_predbat.args.pop("octopus_ready_time", None)
+        my_predbat.fetch_sensor_data_cars()
+        return my_predbat.car_charging_limit[0]
+
+    fetch(39, [False, False])
+    limit = fetch(43, [False, True])
+    failed |= _check("t15 limit held", abs(limit - (24.18 + 24.8)) < 0.01, "limit {}".format(limit))
+    failed |= _check("t15 base", my_predbat.octopus_charge_target_base == {0: 24.18}, "base {}".format(my_predbat.octopus_charge_target_base))
+    return failed
+
+
 def test_octopus_charge_target(my_predbat):
     """
     The Octopus Intelligent charge target is a percentage to add when the charger is linked (#3034).
@@ -306,6 +345,7 @@ def test_octopus_charge_target(my_predbat):
         failed |= _run_target_entity_detection(my_predbat)
         failed |= _run_plug_and_owner(my_predbat)
         failed |= _run_limit(my_predbat)
+        failed |= _run_shared_device(my_predbat)
     finally:
         for field, value in saved_state.items():
             setattr(my_predbat, field, value)

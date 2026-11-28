@@ -393,7 +393,11 @@ The `availability` lines matter with Octopus Intelligent: the [dispatch check](#
 
 With Octopus Intelligent, this works when each car is enrolled separately with its own **octopus_intelligent_slot** entry, and **octopus_intelligent_planned_slot** entry if you use one (see [below](#multiple-cars-with-octopus-intelligent-go-iog)).
 With **octopus_automatic**, suspending or removing a car can move the other car to a different index (see [how Predbat picks which car goes in which slot](#how-predbat-picks-which-car-goes-in-which-slot-octopus_automatic)), so check that your `input_select` options still name the right car afterwards.
-When only the charger is enrolled, its dispatches belong to the car whose **octopus_intelligent_slot** entry it is, normally car 0. While the other car is selected, the enrolled car reads 0W, so Predbat can cancel the dispatch - and with **switch.predbat_octopus_intelligent_ignore_unplugged** On it also reads as unplugged, so the dispatch is ignored. This recipe does not suit that setup.
+When only the charger is enrolled, its dispatches belong to the car whose **octopus_intelligent_slot** entry it is, normally car 0. While the other car is selected, the enrolled car reads 0W, so Predbat can cancel the dispatch. This recipe does not suit that setup.
+
+With fewer **octopus_intelligent_slot** entries than cars, one Octopus device covers several cars, and Predbat cannot tell which of them is on it. **switch.predbat_octopus_intelligent_ignore_unplugged** then keeps the dispatches while *any* car reads plugged in (**car_charging_planned**) or charging (**car_charging_now**), rather than only the car the entry is listed for. The dispatches are still planned against that car's state of charge.
+
+This is decided by the number of entries, not by which charger each car is on, so it has two limits. A second car that is not on Octopus Intelligent, with its own **car_charging_planned** sensor on a different charger, also keeps the first car's dispatches while it is plugged in. And a setup with one entry per car, but a plug sensor wired to one car only, is not covered.
 
 ### Multiple cars with Octopus Intelligent Go (IOG)
 
