@@ -24,6 +24,8 @@ import numpy as np
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, wait
+
+from utils import available_cpu_count
 from datetime import datetime, timezone, timedelta
 
 # Architecture constants (not user-configurable)
@@ -40,10 +42,6 @@ PREDICT_HORIZON = 48 * (60 // CHUNK_MINUTES)  # 48 hours of predictions (96 * 30
 HIDDEN_SIZES = [512, 256, 64]  # Deeper network with more capacity
 BATCH_SIZE = 128  # Batch size
 ADAM_CHUNK = 131072  # Elements per chunk of the optimiser step (1 MB of float64): few enough calls to cost little, small enough to keep its buffers small
-# The optimiser step is element-wise, and NumPy runs element-wise operations on one core (only BLAS calls such as np.dot
-# are threaded), so a large parameter's step is split into ADAM_THREADS slices run in parallel: NumPy releases the GIL in
-# its inner loops. Natively 3 threads ran the step 2.0x faster, 2 gave 1.6x and 4 gave 1.8x, being bound by memory bandwidth
-ADAM_THREADS = max(1, min(3, os.cpu_count() or 1))
 ADAM_SPLIT_MIN = 32768  # Parameters with fewer elements stay on one thread, where the hand-off would cost more than it saves
 _ADAM_POOL = None  # Worker threads for the optimiser step, made on a training's first step and shut down when it ends
 MAX_BATCHES_PER_EPOCH = 200  # Cap on SGD batches per epoch - with importance sampling this keeps training
@@ -67,6 +65,22 @@ TOTAL_FEATURES = NUM_LOAD_FEATURES + NUM_PV_FEATURES + NUM_TEMP_FEATURES + NUM_I
 # of this and made one case's forecast far too flat. The limit is part of the input transform a model is trained under, so
 # save() records it and load() discards a model saved under a different one
 FEATURE_Z_LIMIT = 5.0
+
+
+def adam_thread_count():
+    """
+    Return how many threads the optimiser step should split a large parameter across.
+
+    The step is element-wise, and NumPy runs element-wise operations on one core (only BLAS calls
+    such as np.dot are threaded), so a large parameter's step is split into slices run in parallel:
+    NumPy releases the GIL in its inner loops. Natively 3 threads ran the step 2.0x faster, 2 gave
+    1.6x and 4 gave 1.8x, being bound by memory bandwidth, so at most 3 - and never more than the
+    CPUs this process may use, which in a container is its quota rather than the host's cores.
+    """
+    return max(1, min(3, available_cpu_count()))
+
+
+ADAM_THREADS = adam_thread_count()
 
 
 def _adam_pool():
@@ -159,15 +173,22 @@ class WindowedFeatures:
         array is genuinely wanted.
         """
         out = np.empty((len(self.targets), TOTAL_FEATURES), dtype=np.float32)
-        self._assemble(self.targets, out)
-        if self.mean is not None and self.std is not None:
-            out -= self.mean
-            out /= self.std
-            np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
-            bound_normalised(out)
-        else:
-            np.nan_to_num(out, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+        self._normalise_and_clean(self._assemble(self.targets, out))
         return out.astype(dtype) if dtype is not None and dtype != np.float32 else out
+
+    def _normalise_and_clean(self, rows):
+        """Normalise assembled rows in place by mean and std when set, zero any non-finite value and bound them; return rows.
+
+        The one transform both training batches and the materialised matrix go through, so the two cannot drift apart.
+        """
+        if self.mean is not None and self.std is not None:
+            rows -= self.mean
+            rows /= self.std
+            zero_non_finite(rows)
+            bound_normalised(rows)
+        else:
+            zero_non_finite(rows)
+        return rows
 
     def _assemble(self, target_chunks, out):
         """Write the feature rows for the given target chunks into out."""
@@ -198,14 +219,7 @@ class WindowedFeatures:
         rows = len(target_chunks)
         if self._scratch is None or len(self._scratch) < rows:
             self._scratch = np.empty((rows, TOTAL_FEATURES), dtype=np.float32)
-        batch = self._assemble(target_chunks, self._scratch)
-        if self.mean is not None and self.std is not None:
-            batch -= self.mean
-            batch /= self.std
-            zero_non_finite(batch)
-            bound_normalised(batch)
-        else:
-            zero_non_finite(batch)
+        batch = self._normalise_and_clean(self._assemble(target_chunks, self._scratch))
         return batch[0] if scalar else batch
 
 
@@ -514,8 +528,7 @@ class LoadPredictor:
             param -= lr * (m / correction1) / (np.sqrt(v / correction2) + epsilon)
             if decay is not None:
                 param *= decay
-            if not np.isfinite(param.sum()):
-                np.nan_to_num(param, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            zero_non_finite(param)
             return m, v
 
         step_dtype = np.result_type(m, lr)
@@ -580,8 +593,7 @@ class LoadPredictor:
             np.subtract(p, step, out=p)
             if decay is not None:
                 p *= decay
-            if not np.isfinite(p.sum()):
-                np.nan_to_num(p, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+            zero_non_finite(p)
 
     def _adam_buffer(self, name, dtype, part=0):
         """Return a reusable ADAM_CHUNK-element scratch array of dtype for slice part of the optimiser step, made on first use."""
@@ -1342,7 +1354,20 @@ class LoadPredictor:
 
         return predictions
 
-    def train(
+    def train(self, *args, **kwargs):
+        """
+        Train or fine-tune the model: the arguments and the return value are _train()'s.
+
+        The optimiser's buffers and worker threads are released however training ends, including
+        when it raises after its first step, so neither outlives the run.
+        """
+        try:
+            return self._train(*args, **kwargs)
+        finally:
+            self.adam_buffers = {}
+            release_adam_pool()
+
+    def _train(
         self,
         load_minutes,
         now_utc,
@@ -1592,9 +1617,6 @@ class LoadPredictor:
                 )
             )
 
-        # The optimiser's scratch arrays are only needed while training; do not keep them for the model's lifetime
-        self.adam_buffers = {}
-        release_adam_pool()
         self.training_timestamp = datetime.now(timezone.utc)
         self.validation_mae = best_val_loss
         self.validation_bias = float(best_val_bias)

@@ -21,6 +21,7 @@ import re
 import array
 import ctypes
 import os
+from multiprocessing import cpu_count
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone, time
 from email.utils import parsedate_to_datetime
@@ -66,6 +67,53 @@ PREDBAT_LOG_FILE = "predbat.log"
 PREDBAT_LOG_COUNT_DEFAULT = 10
 PREDBAT_LOG_COUNT_MIN = 2
 PREDBAT_LOG_COUNT_MAX = 100
+
+
+def available_cpu_count():
+    """Return how many CPUs this process may actually use.
+
+    cpu_count() reports the machine's cores, which is the wrong number inside a container. A Docker
+    --cpus or a Kubernetes CPU limit is a cgroup bandwidth quota, and the host's full core count
+    stays visible through both cpu_count() and sched_getaffinity() - so 'auto' sizes the pool to the
+    host and the CFS scheduler then throttles it. Measured on a Kubernetes pod with a 4-core limit on
+    a 12-core node: cpu_count() reports 12, cpu.max reports "400000 100000", and the pod sat pegged
+    at its quota with twelve lanes contending for four cores.
+
+    Falls back to cpu_count() on bare metal, in a container with no limit set, and on any platform
+    without cgroups, so behaviour outside a constrained container is unchanged.
+    """
+    quota = None
+
+    # cgroup v2: "$MAX $PERIOD", where $MAX is the string "max" when unlimited.
+    try:
+        with open("/sys/fs/cgroup/cpu.max") as handle:
+            field_max, field_period = handle.read().split()
+        if field_max != "max":
+            period = int(field_period)
+            if period > 0:
+                quota = int(field_max) / period
+    except (OSError, ValueError):
+        pass
+
+    # cgroup v1: a quota of -1 means unlimited.
+    if quota is None:
+        try:
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us") as handle:
+                cfs_quota = int(handle.read())
+            with open("/sys/fs/cgroup/cpu/cpu.cfs_period_us") as handle:
+                cfs_period = int(handle.read())
+            if cfs_quota > 0 and cfs_period > 0:
+                quota = cfs_quota / cfs_period
+        except (OSError, ValueError):
+            pass
+
+    host_count = max(cpu_count() or 1, 1)
+    if quota is None:
+        return host_count
+
+    # Round down - a 3.5-core quota sustains three fully-busy lanes - but never below one, and never
+    # above what the host actually has.
+    return max(1, min(host_count, int(quota)))
 
 
 def predbat_log_name(number):

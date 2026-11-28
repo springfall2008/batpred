@@ -470,11 +470,84 @@ def test_batch_rows_match_the_reference(my_predbat=None):
             if not _same_bytes(live, expected):
                 print("ERROR: {} {} batch differs from the reference".format(label, "normalised" if normalised else "raw"))
                 failed += 1
+            np.nan_to_num = lambda *args, **kwargs: (calls.append(1), real(*args, **kwargs))[1]
+            try:
+                matrix = np.asarray(windows)
+            finally:
+                np.nan_to_num = real
+            if not _same_bytes(matrix, _reference_batch(windows, np.arange(len(windows.targets)))):
+                print("ERROR: {} {} materialised matrix differs from the reference".format(label, "normalised" if normalised else "raw"))
+                failed += 1
             if not poison and calls:
                 print("ERROR: a finite {} batch still ran nan_to_num".format("normalised" if normalised else "raw"))
                 failed += 1
     if not failed:
-        print("✓ batch rows match the reference with and without non-finite inputs, and finite batches skip nan_to_num")
+        print("✓ batch rows and the materialised matrix match the reference with and without non-finite inputs, and finite ones skip nan_to_num")
+    return failed
+
+
+def test_adam_threads_follow_the_usable_cpus(my_predbat=None):
+    """The optimiser step uses at most 3 threads, and no more than the CPUs this process may use (a container's quota, not the host's cores)"""
+    print("\n=== Testing the optimiser's thread count follows the usable CPUs ===")
+    failed = 0
+    real = load_predictor.available_cpu_count
+    try:
+        for usable, expected in ((1, 1), (2, 2), (3, 3), (12, 3)):
+            load_predictor.available_cpu_count = lambda usable=usable: usable
+            got = load_predictor.adam_thread_count()
+            if got != expected:
+                print("ERROR: with {} usable CPUs the optimiser would use {} threads, expected {}".format(usable, got, expected))
+                failed += 1
+    finally:
+        load_predictor.available_cpu_count = real
+    if not failed:
+        print("✓ 1, 2, 3 and 12 usable CPUs give 1, 2, 3 and 3 optimiser threads")
+    return failed
+
+
+def test_training_that_raises_releases_the_pool(my_predbat=None):
+    """A training that raises after its first optimiser step still shuts the worker pool down and drops the step's buffers"""
+    print("\n=== Testing a training that raises releases the optimiser's pool and buffers ===")
+    from datetime import datetime, timezone
+
+    from tests.test_load_ml import _create_synthetic_load_data
+
+    failed = 0
+    now_utc = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
+    np.random.seed(42)
+    load_data = _create_synthetic_load_data(n_days=5, now_utc=now_utc)
+    predictor = LoadPredictor(log_func=lambda message: None, learning_rate=0.01, weight_decay=0.01, dropout_rate=0.1)
+    real_backward = predictor._backward
+    calls = []
+
+    def failing_backward(*args, **kwargs):
+        """Fail the second backward pass, after the first optimiser step has made the pool."""
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("injected failure")
+        return real_backward(*args, **kwargs)
+
+    predictor._backward = failing_backward
+    saved = load_predictor.ADAM_THREADS
+    try:
+        load_predictor.ADAM_THREADS = 3
+        try:
+            predictor.train(load_data, now_utc, is_initial=True, epochs=3, time_decay_days=7)
+            print("ERROR: the injected failure did not propagate")
+            failed += 1
+        except RuntimeError:
+            pass
+        if load_predictor._ADAM_POOL is not None:
+            print("ERROR: the optimiser's thread pool outlived a training that raised")
+            failed += 1
+        if predictor.adam_buffers:
+            print("ERROR: {} optimiser buffers outlived a training that raised".format(len(predictor.adam_buffers)))
+            failed += 1
+    finally:
+        load_predictor.ADAM_THREADS = saved
+        load_predictor.release_adam_pool()
+    if not failed:
+        print("✓ a training that raises after its first step leaves no pool and no buffers")
     return failed
 
 
@@ -492,4 +565,6 @@ def run_ml_training_bitwise_tests(my_predbat=None):
     failed += test_early_stopping_restores_the_best_epoch(my_predbat)
     failed += test_threaded_adam_update_matches_the_reference(my_predbat)
     failed += test_batch_rows_match_the_reference(my_predbat)
+    failed += test_adam_threads_follow_the_usable_cpus(my_predbat)
+    failed += test_training_that_raises_releases_the_pool(my_predbat)
     return failed
