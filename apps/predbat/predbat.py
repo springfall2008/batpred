@@ -32,6 +32,13 @@ import threading
 
 IS_COMPILED = getattr(sys, "frozen", False)
 
+# OpenBLAS (NumPy's BLAS on Linux) keeps its worker threads busy-waiting after every matrix product. In a LoadML training
+# that spin was 43% of all CPU used (1173 s of CPU against 674 s with this, for the same 299 s of training), taken from
+# whatever else shares the machine, and it held the cores the optimiser step's own threads wanted. 4 is OpenBLAS's
+# shortest spin before sleeping. It is read once when OpenBLAS loads, so it must be set before anything imports NumPy
+# (only components that need it do, lazily); a value already in the environment is kept
+os.environ.setdefault("OPENBLAS_THREAD_TIMEOUT", "4")
+
 import hass as hass
 import pytz
 import asyncio
