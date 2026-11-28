@@ -55,6 +55,7 @@ from tests.test_predheat_climate_scheduler import test_predheat_climate_schedule
 from tests.test_debug_enable_auto_scope import test_debug_enable_auto_scope
 from tests.test_temperature_units import test_temperature_unit_conversion
 from tests.test_charge_hold import run_charge_hold_tests
+from tests.test_car_solar import run_car_solar_tests
 from tests.test_octopus_slots import run_load_octopus_slots_tests, run_octopus_slot_max_default_tests
 from tests.test_multi_car_iog import run_multi_car_iog_tests
 from tests.test_octopus_smart_control import run_octopus_smart_control_tests
@@ -230,6 +231,8 @@ from tests.test_manual_api import run_test_manual_api
 from tests.test_manual_soc import run_test_manual_soc
 from tests.test_manual_soc_max import run_test_manual_soc_max
 from tests.test_manual_times import run_test_manual_times
+from tests.test_car_away import run_car_away_tests
+from tests.test_car_deadline import run_car_deadline_tests
 from tests.test_manual_select import run_test_manual_select
 from tests.test_minute_array import test_minute_array
 from tests.test_minute_data import test_minute_data, test_minute_data_load, test_minute_data_no_smoothing_backwards, test_minute_data_no_smoothing_forward
@@ -654,6 +657,7 @@ def main():
         ("predheat_climate_scheduler", test_predheat_climate_scheduler, "Predheat Climate Scheduler regression tests", False),
         ("debug_enable_auto_scope", test_debug_enable_auto_scope, "debug_enable auto-disable-after-N-hours tests (#4438 review)", False),
         ("charge_hold", run_charge_hold_tests, "Charge freeze hold modelling tests", False),
+        ("car_solar", run_car_solar_tests, "Solar car charging and car/export trade-off tests", False),
         ("basic_rates", test_basic_rates, "Basic rates tests", False),
         ("clock", run_clock_tests, "update_time clock tests", False),
         ("clock_change_day", test_clock_change_day, "Today's figures and yesterday's on a clock-change day (GH#5760)", False),
@@ -755,6 +759,8 @@ def main():
         ("manual_soc", run_test_manual_soc, "Manual SOC target tests", False),
         ("manual_soc_max", run_test_manual_soc_max, "Manual SOC maximum (ceiling) target tests (issue #1578)", False),
         ("manual_times", run_test_manual_times, "Manual times tests", False),
+        ("car_away", run_car_away_tests, "manual_car_away per-slot override tests", False),
+        ("car_deadline", run_car_deadline_tests, "manual_car_deadline one-off ready-by level tests", False),
         ("manual_select", run_test_manual_select, "Manual select tests", False),
         ("web_if", run_test_web_if, "Web interface tests", False),
         ("web_apps_edit", run_web_apps_edit_tests, "Apps.yaml editor add/delete tests (issue #4714)", False),

@@ -2807,6 +2807,7 @@ chart.render();
         manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
         manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
         manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_car_away_times = self.base.manual_times("manual_car_away", update=False)
         manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
         manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
         manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
@@ -2819,6 +2820,8 @@ chart.render();
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
         manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
+        manual_car_deadline_keep = self.base.manual_rates("manual_car_deadline", default_rate=self.base.get_arg("manual_car_deadline_value"), update=False)
+        manual_car_deadline_list = [{"minutes": k, "target": v} for k, v in manual_car_deadline_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2827,11 +2830,13 @@ chart.render();
             "manual_freeze_charge_times": manual_freeze_charge_times,
             "manual_freeze_export_times": manual_freeze_export_times,
             "manual_demand_times": manual_demand_times,
+            "manual_car_away_times": manual_car_away_times,
             "manual_import_rates": manual_import_rates_list,
             "manual_export_rates": manual_export_rates_list,
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
             "manual_soc_max": manual_soc_max_list,
+            "manual_car_deadline": manual_car_deadline_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -2940,6 +2945,7 @@ chart.render();
         manual_freeze_charge_times = self.base.manual_times("manual_freeze_charge", update=False)
         manual_freeze_export_times = self.base.manual_times("manual_freeze_export", update=False)
         manual_demand_times = self.base.manual_times("manual_demand", update=False)
+        manual_car_away_times = self.base.manual_times("manual_car_away", update=False)
         manual_import_rates = self.base.manual_rates("manual_import_rates", update=False)
         manual_export_rates = self.base.manual_rates("manual_export_rates", update=False)
         manual_load_adjust = self.base.manual_rates("manual_load_adjust", update=False)
@@ -2952,6 +2958,8 @@ chart.render();
         manual_load_adjust_list = [{"minutes": k, "adjustment": v} for k, v in manual_load_adjust.items()]
         manual_soc_list = [{"minutes": k, "target": v} for k, v in manual_soc_keep.items()]
         manual_soc_max_list = [{"minutes": k, "target": v} for k, v in manual_soc_max_keep.items()]
+        manual_car_deadline_keep = self.base.manual_rates("manual_car_deadline", default_rate=self.base.get_arg("manual_car_deadline_value"), update=False)
+        manual_car_deadline_list = [{"minutes": k, "target": v} for k, v in manual_car_deadline_keep.items()]
 
         # Build overrides object
         overrides = {
@@ -2960,11 +2968,13 @@ chart.render();
             "manual_freeze_charge_times": manual_freeze_charge_times,
             "manual_freeze_export_times": manual_freeze_export_times,
             "manual_demand_times": manual_demand_times,
+            "manual_car_away_times": manual_car_away_times,
             "manual_import_rates": manual_import_rates_list,
             "manual_export_rates": manual_export_rates_list,
             "manual_load_adjust": manual_load_adjust_list,
             "manual_soc": manual_soc_list,
             "manual_soc_max": manual_soc_max_list,
+            "manual_car_deadline": manual_car_deadline_list,
         }
 
         # Calculate hash of overrides for change detection
@@ -5512,6 +5522,17 @@ chart.render();
                 actual_rate = manual_soc_max.get(minutes_from_midnight, rate)
                 clear_option = "[{}={}]".format(override_time.strftime("%a %H:%M"), actual_rate)
                 await self.base.async_manual_select("manual_soc_max", clear_option)
+            elif action == "Set Car Deadline":
+                # One deadline at a time: a new one replaces the old rather than promising two levels
+                rate = max(0.0, min(100.0, rate))
+                item = self.base.config_index.get("manual_car_deadline_value", {})
+                await self.set_state_external(item.get("entity", None), rate)
+                await self.base.async_manual_select("manual_car_deadline", "off")
+                await self.base.async_manual_select("manual_car_deadline", "{}={}".format(override_time.strftime("%a %H:%M"), rate))
+            elif action == "Clear Car Deadline":
+                # There is only ever one, and a slot picked from the HA dropdown is stored without its level,
+                # so rebuilding the exact "[time=level]" string to toggle it off would not always match
+                await self.base.async_manual_select("manual_car_deadline", "off")
             else:
                 self.log("ERROR: Unknown action for rate override")
                 return web.json_response({"success": False, "message": "Unknown action"}, status=400)
@@ -5560,6 +5581,9 @@ chart.render();
             if action == "Clear":
                 await self.base.async_manual_select("manual_demand", selection_option)
                 await self.base.async_manual_select("manual_demand", clear_option)
+                # Clear has to reach every select the slot could be set on, not just demand, or a
+                # Car Away marker can be set from the plan and never removed from it
+                await self.base.async_manual_select("manual_car_away", clear_option)
             else:
                 if action == "Manual Demand":
                     await self.base.async_manual_select("manual_demand", selection_option)
@@ -5571,6 +5595,8 @@ chart.render();
                     await self.base.async_manual_select("manual_freeze_charge", selection_option)
                 elif action == "Manual Freeze Export":
                     await self.base.async_manual_select("manual_freeze_export", selection_option)
+                elif action == "Car Away":
+                    await self.base.async_manual_select("manual_car_away", selection_option)
                 else:
                     return web.json_response({"success": False, "message": "Unknown action"}, status=400)
 
