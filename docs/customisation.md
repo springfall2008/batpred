@@ -135,7 +135,8 @@ See [prediction_kernel_enable](apps-yaml.md#prediction_kernel_enable) for detail
 
 **input_number.predbat_inverter_loss** is an assumed percentage figure for  energy lost during the conversion within the inverter from DC to AC or AC to DC, the default 0.04 is 4%.
 
-_TIP:_ Make sure you set the losses correctly, they are decimal percentages, so don't set them to '4' thinking it'll be 4%, Predbat will take this as being 400% and your plan will be very strange!
+_TIP:_ Make sure you set the losses correctly, they are decimal percentages, so don't set them to '4' thinking it'll be 4%, Predbat will read that as 400%, which it cannot use, so it falls back to a 99% loss and your plan will be very strange!
+Each loss is limited to between 0 and 0.99, and Predbat logs a warning if one is set above 0.5 (less than 50% efficient), as that is usually an efficiency such as 0.97 entered where the loss (0.03) was meant.
 
 **switch.predbat_inverter_hybrid** Set to On (the default) if you have a hybrid inverter so no inverter losses will be applied for DC charging from Solar generation.
 You should set it to Off if you have an AC-coupled battery and inverter losses will be applied when the battery is charging from solar.

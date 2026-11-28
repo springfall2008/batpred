@@ -486,6 +486,8 @@ class PredBat(hass.Hass, Octopus, Energidataservice, Stromligning, Fetch, Plan, 
         self.battery_loss = 1.0
         self.battery_loss_discharge = 1.0
         self.inverter_loss = 1.0
+        # Loss setting name -> the implausible value last warned about, so loss_setting_efficiency() warns once per value
+        self.loss_setting_warned = {}
         self.inverter_freeze_export_discharge_rate = 0.0
         self.inverter_hybrid = True
         self.pv_ac_limit = 0
