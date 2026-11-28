@@ -203,6 +203,32 @@ def test_restore_falls_back_when_the_file_changed(my_predbat=None):
     return failed
 
 
+def test_release_refuses_once_the_state_moves_on_from_the_file(my_predbat=None):
+    """After training or re-initialising without a save, the file no longer holds the state, so release refuses rather than roll it back"""
+    print("\n=== Testing release refuses once the state differs from the model file ===")
+    failed = 0
+    now_utc = datetime.now(timezone.utc)
+    for change in ("fine-tune", "re-initialise"):
+        predictor, load_data = _trained(now_utc)
+        with tempfile.TemporaryDirectory() as folder:
+            predictor.save(os.path.join(folder, "model.npz"))
+            if change == "fine-tune":
+                np.random.seed(7)
+                predictor.train(load_data, now_utc, is_initial=False, epochs=1, time_decay_days=7)
+            else:
+                predictor._initialize_weights()
+            state = copy.deepcopy(_training_state(predictor))
+            if predictor.release_training_state():
+                print("ERROR: after a {} with no save, release went ahead and would restore the file's older model".format(change))
+                failed += 1
+            elif not _all_same(_training_state(predictor), state):
+                print("ERROR: a refused release after a {} still changed the state".format(change))
+                failed += 1
+    if not failed:
+        print("✓ release refuses after a fine-tune or a re-initialisation that was not saved")
+    return failed
+
+
 class _MockBase:
     """Minimal base for constructing a LoadMLComponent against a config folder."""
 
@@ -278,6 +304,9 @@ def test_component_releases_after_saving_a_training(my_predbat=None):
             component.ml_curriculum_window_days = 7
             component.ml_curriculum_step_days = 1
             component.ml_validation_threshold = 2.0
+            if not with_file:
+                # A predictor whose state is in a file it could release to, so only the component's own guard keeps it
+                predictor.save(os.path.join(folder, "held.npz"))
             component.model_filepath = os.path.join(folder, "predbat_ml_model.npz") if with_file else None
             component.model_valid = False
             component.model_status = "not_initialized"
@@ -301,6 +330,7 @@ def run_ml_lean_inference_tests(my_predbat=None):
     failed += test_fine_tune_after_release_matches_bitwise(my_predbat)
     failed += test_save_after_release_writes_full_precision(my_predbat)
     failed += test_restore_falls_back_when_the_file_changed(my_predbat)
+    failed += test_release_refuses_once_the_state_moves_on_from_the_file(my_predbat)
     failed += test_component_releases_after_loading_a_model(my_predbat)
     failed += test_component_releases_after_saving_a_training(my_predbat)
     return failed

@@ -297,6 +297,7 @@ class LoadPredictor:
         self.adam_t = 0
         self.model_initialized = True
         self.training_state_released = False
+        self._forget_state_file()  # fresh weights: a file saved or loaded earlier holds another model
 
     def _file_stamp(self, filepath):
         """Size and modification time of a file, or None if it cannot be read: enough to tell it has been rewritten."""
@@ -310,6 +311,11 @@ class LoadPredictor:
         """Record that filepath now holds this model's full training state, as saved or loaded."""
         self.state_filepath = filepath
         self.state_file_stamp = self._file_stamp(filepath)
+
+    def _forget_state_file(self):
+        """Record that no model file holds the current state any more: it has changed (or is about to) since the last save or load."""
+        self.state_filepath = None
+        self.state_file_stamp = None
 
     def _state_file_matches(self):
         """Whether the model file last saved or loaded is still there and unchanged since."""
@@ -1417,6 +1423,9 @@ class LoadPredictor:
         """
         self.log("ML Predictor: Starting {} training with {} epochs".format("initial" if is_initial else "fine-tune", epochs))
         self._restore_training_state()
+        # From here the weights move on from the model file, even if training then fails or raises, so it no longer
+        # holds the state: only the next successful save() makes releasing safe again
+        self._forget_state_file()
 
         # Create dataset with train/validation split
         result = self._create_dataset(
