@@ -96,7 +96,8 @@ COMPONENT_LIST = {
         "can_restart": False,
         "phase": 0,
     },
-    "ha_history": {"class": "ha.HAHistory", "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0},
+    # depends: components that must have constructed for this one to be able to start, see Components.start()
+    "ha_history": {"class": "ha.HAHistory", "name": "Home Assistant History", "args": {}, "can_restart": False, "phase": 0, "depends": ["ha"]},
     "web": {
         "class": "web.WebInterface",
         "name": "Web Interface",
@@ -1062,6 +1063,14 @@ class Components:
             component = self.components.get(component_name)
             if component:
                 if component_info.get("phase", 0) != phase:
+                    continue
+                # A component whose dependency never constructed cannot start, so waiting out its wait_api_started() timeout only delays the failure.
+                # HAInterface raising after its startup retry limit (or at once on a rejected ha_key) leaves HAHistory holding startup for the full 10 minute
+                # timeout before Predbat could restart and retry (GH#5134).
+                missing = [dependency for dependency in component_info.get("depends", []) if not self.components.get(dependency)]
+                if missing:
+                    self.log(f"Error: {component_info['name']} interface not started, it needs {', '.join(missing)} which is not available")
+                    failed = True
                     continue
                 if self.component_tasks.get(component_name, None) and self.component_tasks[component_name].is_alive():
                     self.log(f"Info: {component_info['name']} interface already started")
